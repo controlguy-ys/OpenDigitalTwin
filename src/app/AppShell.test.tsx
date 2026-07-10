@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { App } from './App'
 import { AppShell } from './AppShell'
 
 describe('AppShell', () => {
@@ -37,5 +38,13 @@ describe('AppShell', () => {
     expect(getByLabelText('Scene Assets')).toHaveClass('is-open')
     expect(getByLabelText('Inspector')).toHaveClass('is-open')
     expect(getByLabelText('Timeline and Events')).toHaveClass('is-open')
+  })
+
+  it('keeps the loading message as a screen-reader-only status', () => {
+    render(<App />)
+
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('Preparing 3D workcell…')
+    expect(status).toHaveClass('visually-hidden')
   })
 })
