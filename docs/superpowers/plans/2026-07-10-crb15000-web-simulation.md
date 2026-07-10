@@ -313,6 +313,8 @@ import 'fake-indexeddb/auto'
 Set `.node-version` to `22.15.1`. Set `.gitignore` to exactly these generated paths while keeping source STEP and generated runtime GLBs trackable:
 
 ```gitignore
+.worktrees/
+.superpowers/
 node_modules/
 dist/
 coverage/
