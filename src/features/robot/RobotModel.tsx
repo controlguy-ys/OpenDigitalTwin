@@ -68,8 +68,6 @@ export function createRobotRigRegistration(
       }
     })
 
-    const slot = id === CRB15000_DEFINITION.baseLink ? rig.baseSlot : rig.linkSlots[id]
-    slot.add(link)
     links[id] = link
   }
 
@@ -78,6 +76,27 @@ export function createRobotRigRegistration(
     linkSlots: rig.linkSlots,
     toolFrame: rig.toolFrame,
     links,
+  }
+}
+
+export function attachRobotRigRegistration(
+  registration: RobotRigRegistration,
+): void {
+  for (const { id } of ROBOT_LINK_ASSETS) {
+    const link = registration.links[id]
+    const slot = registration.linkSlots[id]
+
+    if (link.parent !== slot) {
+      slot.add(link)
+    }
+  }
+}
+
+export function detachRobotRigRegistration(
+  registration: RobotRigRegistration,
+): void {
+  for (const { id } of ROBOT_LINK_ASSETS) {
+    registration.links[id].removeFromParent()
   }
 }
 
@@ -124,9 +143,7 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   }, [j1, j2, j3, j4, j5, j6, rig])
 
   useLayoutEffect(() => {
-    for (const { id } of ROBOT_LINK_ASSETS) {
-      registration.linkSlots[id].add(registration.links[id])
-    }
+    attachRobotRigRegistration(registration)
 
     if (!isCompleteRobotRigRegistration(registration)) {
       throw new Error('Robot rig registration requires all seven links')
@@ -136,9 +153,7 @@ export function RobotModel({ registerRig }: RobotModelProps) {
 
     return () => {
       registerRig?.(null)
-      for (const { id } of ROBOT_LINK_ASSETS) {
-        registration.linkSlots[id].remove(registration.links[id])
-      }
+      detachRobotRigRegistration(registration)
     }
   }, [registerRig, registration])
 
