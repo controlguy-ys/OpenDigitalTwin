@@ -5,6 +5,7 @@ import type {
   EquipmentSourceUnit,
 } from '../../domain/equipment/equipment'
 import type { OcctSuccessResult } from '../../lib/cad/occt-types'
+import { WORKBENCH_TOP_Z } from '../scene/workcell-constants'
 import {
   detectStepUnit,
   postImportScaleForUnit,
@@ -17,7 +18,6 @@ import {
 } from './occt-to-three'
 
 export const MAX_STEP_FILE_BYTES = 100 * 1024 * 1024
-const WORKBENCH_TOP_Z = 1.08
 
 export interface ImportStepController {
   import(source: ArrayBuffer | Uint8Array): Promise<OcctSuccessResult>

@@ -1,4 +1,4 @@
-import { useLoader } from '@react-three/fiber'
+import { createPortal, useLoader, type ThreeEvent } from '@react-three/fiber'
 import { useLayoutEffect, useMemo } from 'react'
 import { Mesh, type Object3D } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -12,6 +12,8 @@ import {
   type RobotRig,
 } from '../../domain/robot/kinematics'
 import { jointAngleSelectors, useRobotStore } from '../joints/robot-store'
+import { useInteractionStore } from '../interaction/interaction-store'
+import { ROBOT_LINK_COLLISION_BOUNDS } from '../interaction/robot-collision-bounds'
 import { RobotGripper } from './RobotGripper'
 
 export const ROBOT_LINK_ASSETS = [
@@ -137,6 +139,12 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   const j4 = useRobotStore(jointAngleSelectors[3])
   const j5 = useRobotStore(jointAngleSelectors[4])
   const j6 = useRobotStore(jointAngleSelectors[5])
+  const selection = useInteractionStore((state) => state.selection)
+  const activeCollisionPairs = useInteractionStore(
+    (state) => state.activeCollisionPairs,
+  )
+  const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
+  const selectRobotLink = useInteractionStore((state) => state.selectRobotLink)
 
   useLayoutEffect(() => {
     setRigAngles(rig, [j1, j2, j3, j4, j5, j6])
@@ -157,10 +165,88 @@ export function RobotModel({ registerRig }: RobotModelProps) {
     }
   }, [registerRig, registration])
 
+  useLayoutEffect(() => {
+    rig.root.visible = !hiddenEntityIds.includes('robot')
+    for (const { id } of ROBOT_LINK_ASSETS) {
+      registration.links[id].visible = !hiddenEntityIds.includes(id)
+    }
+  }, [hiddenEntityIds, registration.links, rig.root])
+
+  const linkInteractionPortals = ROBOT_LINK_ASSETS.flatMap(({ id }) => {
+    if (hiddenEntityIds.includes(id)) {
+      return []
+    }
+    const bounds = ROBOT_LINK_COLLISION_BOUNDS[id]
+    const selected =
+      selection?.kind === 'robot-link' && selection.linkId === id
+    const collisionEntity = `robot-link:${id}`
+    const collision = activeCollisionPairs.some(
+      (pair) =>
+        pair.startsWith(`${collisionEntity}|`) ||
+        pair.endsWith(`|${collisionEntity}`),
+    )
+    return [
+      createPortal(
+        <group name={`${id}-interaction`}>
+          <mesh
+            name={`${id}-selection-target`}
+            onPointerDown={(event: ThreeEvent<PointerEvent>) => {
+              event.stopPropagation()
+              selectRobotLink(id)
+            }}
+            position={bounds.center}
+            userData={{ robotLinkId: id, selected, collision }}
+          >
+            <boxGeometry
+              args={[
+                bounds.halfExtents[0] * 2,
+                bounds.halfExtents[1] * 2,
+                bounds.halfExtents[2] * 2,
+              ]}
+            />
+            <meshBasicMaterial
+              depthWrite={false}
+              opacity={0}
+              transparent
+            />
+          </mesh>
+          {selected || collision ? (
+            <mesh
+              name={`${id}-${collision ? 'collision' : 'selection'}-outline`}
+              position={bounds.center}
+              renderOrder={1000}
+              userData={{
+                robotLinkId: id,
+                outline: collision ? 'collision' : 'selection',
+              }}
+            >
+              <boxGeometry
+                args={[
+                  bounds.halfExtents[0] * 2.04,
+                  bounds.halfExtents[1] * 2.04,
+                  bounds.halfExtents[2] * 2.04,
+                ]}
+              />
+              <meshBasicMaterial
+                color={collision ? '#ff3b30' : '#4da3ff'}
+                depthTest={false}
+                opacity={0.86}
+                transparent
+                wireframe
+              />
+            </mesh>
+          ) : null}
+        </group>,
+        registration.linkSlots[id],
+      ),
+    ]
+  })
+
   return (
     <>
       <primitive dispose={null} object={rig.root} />
       <RobotGripper toolFrame={rig.toolFrame} />
+      {linkInteractionPortals}
     </>
   )
 }

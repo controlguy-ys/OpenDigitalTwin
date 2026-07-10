@@ -8,6 +8,8 @@ import {
   isCompleteRobotRigRegistration,
   type RobotRigRegistration,
 } from '../robot/RobotModel'
+import type { InteractionRuntimeController } from '../interaction/GraspController'
+import { useInteractionStore } from '../interaction/interaction-store'
 import { RobotStatusOverlay } from '../robot/RobotStatusOverlay'
 import { SceneErrorBoundary } from './SceneErrorBoundary'
 import { Workcell } from './Workcell'
@@ -17,11 +19,15 @@ export type SceneRenderStatus = 'loading' | 'ready' | 'error'
 export interface SceneCanvasProps {
   onStatusChange?: (status: SceneRenderStatus) => void
   registerRig?: (registration: RobotRigRegistration | null) => void
+  registerInteractionController?: (
+    controller: InteractionRuntimeController | null,
+  ) => void
 }
 
 export function SceneCanvas({
   onStatusChange,
   registerRig,
+  registerInteractionController,
 }: SceneCanvasProps) {
   const [sceneKey, setSceneKey] = useState(0)
   const [status, setStatus] = useState<SceneRenderStatus>('loading')
@@ -81,11 +87,17 @@ export function SceneCanvas({
             camera.up.set(0, 0, 1)
             camera.lookAt(0.15, 0, 1.55)
           }}
+          onPointerMissed={() => {
+            useInteractionStore.getState().clearSelection()
+          }}
           shadows
         >
           <Suspense fallback={null}>
             <Physics gravity={[0, 0, 0]}>
-              <Workcell registerRig={handleRigRegistration} />
+              <Workcell
+                registerInteractionController={registerInteractionController}
+                registerRig={handleRigRegistration}
+              />
             </Physics>
           </Suspense>
         </Canvas>

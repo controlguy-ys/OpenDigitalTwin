@@ -14,11 +14,13 @@ import { jointAngleSelectors, useRobotStore } from './robot-store'
 export interface JointInspectorProps {
   disabled?: boolean
   source?: SimulationJointSource
+  onReset?: () => void | Promise<void>
 }
 
 export function JointInspector({
   disabled = false,
   source = simulationJointSource,
+  onReset,
 }: JointInspectorProps) {
   const j1 = useRobotStore(jointAngleSelectors[0])
   const j2 = useRobotStore(jointAngleSelectors[1])
@@ -176,9 +178,17 @@ export function JointInspector({
           disabled={disabled}
           onClick={() => {
             stopPlayback()
-            clearKeyframes()
-            setGripperOpen(true)
-            source.setAngles(ZERO_JOINT_ANGLES)
+            const finishReset = () => {
+              clearKeyframes()
+              setGripperOpen(true)
+              source.setAngles(ZERO_JOINT_ANGLES)
+            }
+            const interactionReset = onReset?.()
+            if (interactionReset instanceof Promise) {
+              void interactionReset.then(finishReset)
+            } else {
+              finishReset()
+            }
           }}
           type="button"
         >

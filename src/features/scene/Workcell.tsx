@@ -1,14 +1,28 @@
 import { OrbitControls } from '@react-three/drei/core/OrbitControls.js'
+import { forwardRef, useCallback, useRef, useState } from 'react'
+import type { Group, Object3D } from 'three'
 import { EquipmentScene } from '../equipment/EquipmentScene'
+import { CollisionSystem } from '../interaction/CollisionSystem'
+import {
+  GraspController,
+  type InteractionRuntimeController,
+} from '../interaction/GraspController'
 import type { RobotRigRegistration } from '../robot/RobotModel'
 import { RobotModel } from '../robot/RobotModel'
+import {
+  WORKBENCH_TOP_THICKNESS,
+  WORKBENCH_TOP_Z,
+} from './workcell-constants'
+
+export { WORKBENCH_TOP_Z } from './workcell-constants'
 
 interface WorkcellProps {
   registerRig: (registration: RobotRigRegistration | null) => void
+  registerInteractionController?:
+    | ((controller: InteractionRuntimeController | null) => void)
+    | undefined
 }
 
-const WORKBENCH_TOP_Z = 1.08
-const WORKBENCH_TOP_THICKNESS = 0.1
 const WORKBENCH_LEGS = [
   [-0.78, -0.48],
   [-0.78, 0.48],
@@ -16,9 +30,9 @@ const WORKBENCH_LEGS = [
   [0.78, 0.48],
 ] as const
 
-function Workbench() {
+const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
   return (
-    <group name="workbench">
+    <group name="workbench" ref={ref}>
       <mesh
         castShadow
         name="workbench-top"
@@ -41,9 +55,24 @@ function Workbench() {
       ))}
     </group>
   )
-}
+})
 
-export function Workcell({ registerRig }: WorkcellProps) {
+export function Workcell({
+  registerRig,
+  registerInteractionController,
+}: WorkcellProps) {
+  const [rig, setRig] = useState<RobotRigRegistration | null>(null)
+  const [orbitEnabled, setOrbitEnabled] = useState(true)
+  const equipmentObjectsRef = useRef(new Map<string, Object3D>())
+  const workbenchObjectRef = useRef<Group>(null)
+  const handleRigRegistration = useCallback(
+    (registration: RobotRigRegistration | null) => {
+      setRig(registration)
+      registerRig(registration)
+    },
+    [registerRig],
+  )
+
   return (
     <>
       <ambientLight intensity={0.68} />
@@ -64,13 +93,30 @@ export function Workcell({ registerRig }: WorkcellProps) {
         position={[0, 0, 0.002]}
         rotation={[Math.PI / 2, 0, 0]}
       />
-      <Workbench />
-      <EquipmentScene />
+      <Workbench ref={workbenchObjectRef} />
+      <EquipmentScene
+        equipmentObjectsRef={equipmentObjectsRef}
+        onDraggingChange={(dragging) => setOrbitEnabled(!dragging)}
+      />
       <group name="robot-workbench-mount" position={[0, 0, WORKBENCH_TOP_Z]}>
-        <RobotModel registerRig={registerRig} />
+        <RobotModel registerRig={handleRigRegistration} />
       </group>
+      <CollisionSystem
+        equipmentObjectsRef={equipmentObjectsRef}
+        rig={rig}
+        workbenchObjectRef={workbenchObjectRef}
+      />
+      {rig === null ? null : (
+        <GraspController
+          equipmentObjectsRef={equipmentObjectsRef}
+          registerController={registerInteractionController}
+          rig={rig}
+          workbenchTopZ={WORKBENCH_TOP_Z}
+        />
+      )}
       <OrbitControls
         enableDamping
+        enabled={orbitEnabled}
         makeDefault
         maxDistance={5}
         minDistance={0.8}

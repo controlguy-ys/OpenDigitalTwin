@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { createStore } from 'zustand/vanilla'
 import type {
   EquipmentRecord,
+  SerializableTransform,
   EquipmentStatus,
 } from '../../domain/equipment/equipment'
 import { isEquipmentRecord } from '../../domain/equipment/equipment'
@@ -74,6 +75,8 @@ export interface EquipmentStoreState {
   warnings: readonly string[]
   hydrate(): Promise<void>
   upsertEquipment(record: EquipmentRecord): Promise<void>
+  previewEquipmentTransform(id: string, transform: SerializableTransform): void
+  commitEquipmentTransform(id: string): Promise<void>
   setEquipmentStatus(id: string, status: EquipmentStatus): Promise<void>
   removeEquipment(id: string): Promise<void>
 }
@@ -252,6 +255,35 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           return { records }
         })
         await persistRecord(nextRecord)
+      },
+      previewEquipmentTransform: (id, transform) => {
+        const currentRecord = get().records.find((record) => record.id === id)
+        if (currentRecord === undefined) {
+          return
+        }
+        const nextRecord: EquipmentRecord = {
+          ...currentRecord,
+          transform: {
+            position: [...transform.position],
+            quaternion: [...transform.quaternion],
+            scale: [...transform.scale],
+          },
+        }
+        if (!isEquipmentRecord(nextRecord)) {
+          throw new Error('Invalid equipment transform; no changes were applied.')
+        }
+        set((state) => ({
+          records: state.records.map((record) =>
+            record.id === id ? nextRecord : record,
+          ),
+        }))
+      },
+      commitEquipmentTransform: async (id) => {
+        await hydrate()
+        const currentRecord = get().records.find((record) => record.id === id)
+        if (currentRecord !== undefined) {
+          await persistRecord(currentRecord)
+        }
       },
       setEquipmentStatus: async (id, status) => {
         await hydrate()

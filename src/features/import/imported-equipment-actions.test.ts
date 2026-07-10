@@ -5,6 +5,9 @@ describe('deleteImportedEquipment', () => {
   it('removes persistence before invalidating geometry and clearing matching selection', async () => {
     const calls: string[] = []
     const dependencies = {
+      releaseHeldEquipment: vi.fn(async () => {
+        calls.push('release')
+      }),
       removeEquipment: vi.fn(async () => {
         calls.push('record')
       }),
@@ -19,7 +22,7 @@ describe('deleteImportedEquipment', () => {
 
     await deleteImportedEquipment('imported-01', dependencies)
 
-    expect(calls).toEqual(['record', 'geometry', 'selection'])
+    expect(calls).toEqual(['release', 'record', 'geometry', 'selection'])
   })
 
   it('leaves cache and selection unchanged when record removal rejects', async () => {
@@ -28,6 +31,7 @@ describe('deleteImportedEquipment', () => {
 
     await expect(
       deleteImportedEquipment('imported-01', {
+        releaseHeldEquipment: vi.fn(async () => undefined),
         removeEquipment: vi.fn(async () => {
           throw new Error('remove failed')
         }),
@@ -39,5 +43,25 @@ describe('deleteImportedEquipment', () => {
 
     expect(invalidateGeometry).not.toHaveBeenCalled()
     expect(clearSelection).not.toHaveBeenCalled()
+  })
+
+  it('aborts removal when release persistence rejects', async () => {
+    const removeEquipment = vi.fn(async () => undefined)
+    const invalidateGeometry = vi.fn()
+
+    await expect(
+      deleteImportedEquipment('imported-01', {
+        releaseHeldEquipment: vi.fn(async () => {
+          throw new Error('release persistence failed')
+        }),
+        removeEquipment,
+        invalidateGeometry,
+        getSelectedEquipmentId: () => 'imported-01',
+        clearSelection: vi.fn(),
+      }),
+    ).rejects.toThrow('release persistence failed')
+
+    expect(removeEquipment).not.toHaveBeenCalled()
+    expect(invalidateGeometry).not.toHaveBeenCalled()
   })
 })

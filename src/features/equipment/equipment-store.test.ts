@@ -1,6 +1,9 @@
 import Dexie from 'dexie'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { EquipmentRecord } from '../../domain/equipment/equipment'
+import type {
+  EquipmentRecord,
+  SerializableTransform,
+} from '../../domain/equipment/equipment'
 import { EquipmentDatabase } from './equipment-db'
 import {
   BUILT_IN_EQUIPMENT,
@@ -85,6 +88,32 @@ describe('built-in equipment', () => {
 })
 
 describe('equipment persistence', () => {
+  it('applies many transform previews in memory and persists one explicit commit', async () => {
+    const database = createDatabase('transform-preview')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    const put = vi.spyOn(database.equipment, 'put')
+    const transforms: SerializableTransform[] = [1, 2, 3].map((x) => ({
+      position: [x, -x, 1.15],
+      quaternion: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    }))
+
+    for (const transform of transforms) {
+      store.getState().previewEquipmentTransform('cup-01', transform)
+    }
+
+    expect(put).not.toHaveBeenCalled()
+    expect(
+      store.getState().records.find(({ id }) => id === 'cup-01')?.transform,
+    ).toEqual(transforms[2])
+
+    await store.getState().commitEquipmentTransform('cup-01')
+
+    expect(put).toHaveBeenCalledTimes(1)
+    expect(put.mock.calls[0]?.[0].transform).toEqual(transforms[2])
+  })
+
   it('restores imported source bytes, status, and transform in a recreated store', async () => {
     const firstDatabase = createDatabase('restore')
     const firstStore = createEquipmentStore(firstDatabase)

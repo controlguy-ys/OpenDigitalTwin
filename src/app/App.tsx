@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { EquipmentAssetList } from '../features/equipment/EquipmentAssetList'
 import { useEquipmentStore } from '../features/equipment/equipment-store'
 import { useInteractionStore } from '../features/interaction/interaction-store'
+import type { InteractionRuntimeController } from '../features/interaction/GraspController'
 import { ImportStepDialog } from '../features/import/ImportStepDialog'
 import { stepImportClient } from '../features/import/StepImportClient'
 import { deleteImportedEquipment } from '../features/import/imported-equipment-actions'
@@ -20,6 +21,9 @@ export function App() {
   const [sceneStatus, setSceneStatus] =
     useState<SceneRenderStatus>('loading')
   const [isImportOpen, setIsImportOpen] = useState(false)
+  const interactionControllerRef = useRef<InteractionRuntimeController | null>(
+    null,
+  )
   const sourceQuality = useRobotStore((state) => state.sourceQuality)
   const hydrateEquipment = useEquipmentStore((state) => state.hydrate)
   const equipmentRecords = useEquipmentStore((state) => state.records)
@@ -63,6 +67,20 @@ export function App() {
   const handleRemoveEquipment = useCallback(
     (id: string) =>
       deleteImportedEquipment(id, {
+        releaseHeldEquipment: async (equipmentId) => {
+          const controller = interactionControllerRef.current
+          const heldEquipmentId =
+            useInteractionStore.getState().heldEquipmentId
+          if (controller === null) {
+            if (heldEquipmentId === equipmentId) {
+              throw new Error(
+                'The held equipment cannot be released while the 3D scene is unavailable.',
+              )
+            }
+            return
+          }
+          await controller.releaseHeldEquipment(equipmentId)
+        },
         removeEquipment,
         invalidateGeometry: (equipmentId) => {
           importedGeometryRepository.invalidate(equipmentId)
@@ -73,6 +91,15 @@ export function App() {
       }),
     [clearSelection, removeEquipment],
   )
+
+  const handleResetInteraction = useCallback(async () => {
+    const controller = interactionControllerRef.current
+    if (controller === null) {
+      useInteractionStore.getState().resetInteraction()
+      return
+    }
+    await controller.resetInteraction()
+  }, [])
 
   return (
     <>
@@ -95,12 +122,20 @@ export function App() {
         inspector={
           <JointInspector
             disabled={controlsDisabled}
+            onReset={handleResetInteraction}
             source={simulationJointSource}
           />
         }
         onOpenStepImport={() => setIsImportOpen(true)}
         sourceQuality={sourceQuality}
-        viewport={<SceneCanvas onStatusChange={setSceneStatus} />}
+        viewport={
+          <SceneCanvas
+            onStatusChange={setSceneStatus}
+            registerInteractionController={(controller) => {
+              interactionControllerRef.current = controller
+            }}
+          />
+        }
         viewportBusy={sceneStatus === 'loading'}
       />
       <ImportStepDialog
