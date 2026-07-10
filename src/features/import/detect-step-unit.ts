@@ -28,6 +28,7 @@ export function detectStepUnit(
   source: ArrayBuffer | Uint8Array,
 ): DetectedStepUnit {
   const bytes = asBytes(source)
+  const evidence = new Set<KnownStepUnit>()
 
   for (let offset = 0; offset < bytes.byteLength; offset += SCAN_CHUNK_BYTES) {
     const start = Math.max(0, offset - SCAN_OVERLAP_BYTES)
@@ -36,11 +37,21 @@ export function detectStepUnit(
 
     for (const [unit, pattern] of UNIT_PATTERNS) {
       if (pattern.test(chunk)) {
-        return unit
+        evidence.add(unit)
       }
+    }
+
+    if (evidence.has('inch')) {
+      return 'inch'
     }
   }
 
+  if (evidence.has('millimeter')) {
+    return 'millimeter'
+  }
+  if (evidence.has('meter')) {
+    return 'meter'
+  }
   return 'unknown'
 }
 

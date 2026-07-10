@@ -181,6 +181,20 @@ button {
   border: 0;
 }
 
+.equipment-delete:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.equipment-remove-error {
+  grid-column: 1 / -1;
+  padding: 4px 8px 7px 23px;
+  margin: 0;
+  color: var(--color-fault);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .equipment-select {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);

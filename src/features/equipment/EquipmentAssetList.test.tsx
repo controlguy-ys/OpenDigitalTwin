@@ -55,4 +55,43 @@ describe('EquipmentAssetList', () => {
     expect(onSelect).toHaveBeenCalledWith('cup-01')
     expect(onRemove).toHaveBeenCalledWith(IMPORTED.id)
   })
+
+  it('shows deletion failure, blocks duplicate pending calls, and clears the error on retry', async () => {
+    const user = userEvent.setup()
+    let rejectFirst: ((error: Error) => void) | undefined
+    const firstRemoval = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject
+    })
+    const onRemove = vi
+      .fn<(id: string) => Promise<void>>()
+      .mockReturnValueOnce(firstRemoval)
+      .mockResolvedValueOnce(undefined)
+    render(
+      <EquipmentAssetList
+        onRemove={onRemove}
+        onSelect={vi.fn()}
+        records={[IMPORTED]}
+        selectedEquipmentId={null}
+      />,
+    )
+    const deleteButton = screen.getByRole('button', {
+      name: 'Delete Imported Fixture',
+    })
+
+    await user.click(deleteButton)
+    expect(deleteButton).toBeDisabled()
+    await user.click(deleteButton)
+    expect(onRemove).toHaveBeenCalledTimes(1)
+
+    rejectFirst?.(new Error('IndexedDB delete failed'))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /could not delete Imported Fixture/i,
+    )
+    expect(deleteButton).toBeEnabled()
+
+    await user.click(deleteButton)
+    expect(onRemove).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(deleteButton).toBeEnabled()
+  })
 })
