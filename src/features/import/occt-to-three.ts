@@ -29,6 +29,16 @@ export interface ThreeImportOptions {
   originMode?: ImportOriginMode
 }
 
+export interface OcctGeometryBudget {
+  readonly maxVertices: number
+  readonly maxTriangles: number
+}
+
+export interface OcctGeometryTotals {
+  readonly vertices: number
+  readonly triangles: number
+}
+
 export interface ImportedThreeAsset {
   group: Group
   bounds: ImportedBounds
@@ -43,6 +53,10 @@ interface MaterialIndexGroup {
 
 export const MAX_IMPORTED_VERTICES = 5_000_000
 export const MAX_IMPORTED_TRIANGLES = 10_000_000
+export const DEFAULT_OCCT_GEOMETRY_BUDGET: OcctGeometryBudget = {
+  maxVertices: MAX_IMPORTED_VERTICES,
+  maxTriangles: MAX_IMPORTED_TRIANGLES,
+}
 const MAX_ABSOLUTE_COORDINATE_METERS = 1_000_000
 const DEFAULT_COLOR = [0.68, 0.72, 0.74] as const
 
@@ -62,13 +76,9 @@ function validateColor(color: OcctColor, meshName: string): void {
   }
 }
 
-function materialGroups(mesh: OcctMesh, triangleCount: number): MaterialIndexGroup[] {
+function validateMaterialMetadata(mesh: OcctMesh, triangleCount: number): void {
   const fallbackColor = mesh.color ?? DEFAULT_COLOR
   validateColor(fallbackColor, mesh.name)
-  const triangleColors: OcctColor[] = Array.from(
-    { length: triangleCount },
-    () => fallbackColor,
-  )
 
   for (const face of mesh.brep_faces) {
     if (
@@ -85,6 +95,21 @@ function materialGroups(mesh: OcctMesh, triangleCount: number): MaterialIndexGro
 
     const faceColor = face.color ?? fallbackColor
     validateColor(faceColor, mesh.name)
+  }
+}
+
+function materialGroups(
+  mesh: OcctMesh,
+  triangleCount: number,
+): MaterialIndexGroup[] {
+  const fallbackColor = mesh.color ?? DEFAULT_COLOR
+  const triangleColors: OcctColor[] = Array.from(
+    { length: triangleCount },
+    () => fallbackColor,
+  )
+
+  for (const face of mesh.brep_faces) {
+    const faceColor = face.color ?? fallbackColor
     for (let triangle = face.first; triangle <= face.last; triangle += 1) {
       triangleColors[triangle] = faceColor
     }
@@ -107,32 +132,65 @@ function materialGroups(mesh: OcctMesh, triangleCount: number): MaterialIndexGro
   return [...groups.values()]
 }
 
-function validateMesh(
+function assertValidBudget(budget: OcctGeometryBudget): void {
+  if (
+    !Number.isSafeInteger(budget.maxVertices) ||
+    budget.maxVertices <= 0 ||
+    !Number.isSafeInteger(budget.maxTriangles) ||
+    budget.maxTriangles <= 0
+  ) {
+    throw new Error('OCCT geometry budget must use positive safe integers.')
+  }
+}
+
+export function assertOcctGeometryBudget(
+  meshes: readonly OcctMesh[],
+  budget: OcctGeometryBudget = DEFAULT_OCCT_GEOMETRY_BUDGET,
+): OcctGeometryTotals {
+  assertValidBudget(budget)
+  let vertices = 0
+  let triangles = 0
+
+  for (const mesh of meshes) {
+    const positionLength = mesh.attributes.position.array.length
+    if (positionLength === 0 || positionLength % 3 !== 0) {
+      throw new Error(`OCCT mesh ${mesh.name} has an invalid position array.`)
+    }
+
+    const indexLength = mesh.index.array.length
+    if (indexLength === 0 || indexLength % 3 !== 0) {
+      throw new Error(
+        `OCCT mesh ${mesh.name} has an invalid triangle index array.`,
+      )
+    }
+
+    vertices += positionLength / 3
+    triangles += indexLength / 3
+    if (vertices > budget.maxVertices) {
+      throw new Error(
+        `OCCT result has too many vertices; it exceeds the aggregate vertex budget of ${budget.maxVertices}.`,
+      )
+    }
+    if (triangles > budget.maxTriangles) {
+      throw new Error(
+        `OCCT result has too many triangles; it exceeds the aggregate triangle budget of ${budget.maxTriangles}.`,
+      )
+    }
+  }
+
+  return { vertices, triangles }
+}
+
+function validateMeshData(
   mesh: OcctMesh,
   postImportScale: number,
   min: number[],
   max: number[],
-): Float32Array {
+): void {
   const sourcePositions = mesh.attributes.position.array
-  if (sourcePositions.length === 0 || sourcePositions.length % 3 !== 0) {
-    throw new Error(`OCCT mesh ${mesh.name} has an invalid position array.`)
-  }
-
   const vertexCount = sourcePositions.length / 3
-  if (vertexCount > MAX_IMPORTED_VERTICES) {
-    throw new Error(`OCCT mesh ${mesh.name} has too many vertices.`)
-  }
-
   const sourceIndices = mesh.index.array
-  if (sourceIndices.length === 0 || sourceIndices.length % 3 !== 0) {
-    throw new Error(
-      `OCCT mesh ${mesh.name} has an invalid triangle index array.`,
-    )
-  }
   const triangleCount = sourceIndices.length / 3
-  if (triangleCount > MAX_IMPORTED_TRIANGLES) {
-    throw new Error(`OCCT mesh ${mesh.name} has too many triangles.`)
-  }
 
   for (const index of sourceIndices) {
     if (!Number.isInteger(index) || index < 0 || index >= vertexCount) {
@@ -140,7 +198,6 @@ function validateMesh(
     }
   }
 
-  const positions = new Float32Array(sourcePositions.length)
   for (let offset = 0; offset < sourcePositions.length; offset += 3) {
     for (let axis = 0; axis < 3; axis += 1) {
       const source = sourcePositions[offset + axis]
@@ -152,7 +209,6 @@ function validateMesh(
         throw new Error(`OCCT mesh ${mesh.name} has an unreasonable coordinate.`)
       }
 
-      positions[offset + axis] = value
       min[axis] = Math.min(min[axis]!, value)
       max[axis] = Math.max(max[axis]!, value)
     }
@@ -167,51 +223,72 @@ function validateMesh(
     throw new Error(`OCCT mesh ${mesh.name} has invalid per-vertex normals.`)
   }
 
+  validateMaterialMetadata(mesh, triangleCount)
+}
+
+function scaledPositions(
+  mesh: OcctMesh,
+  postImportScale: number,
+): Float32Array {
+  const source = mesh.attributes.position.array
+  const positions = new Float32Array(source.length)
+  for (let index = 0; index < source.length; index += 1) {
+    positions[index] = source[index]! * postImportScale
+  }
   return positions
 }
 
 function createGeometry(
   mesh: OcctMesh,
   positions: Float32Array,
+  groups: readonly MaterialIndexGroup[],
 ): { geometry: BufferGeometry; materials: MeshStandardMaterial[] } {
   const vertexCount = positions.length / 3
-  const groups = materialGroups(mesh, mesh.index.array.length / 3)
   const reorderedIndices = groups.flatMap((group) => group.indices)
   const geometry = new BufferGeometry()
-  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
-  geometry.setIndex(
-    vertexCount <= 0xffff
-      ? new Uint16BufferAttribute(reorderedIndices, 1)
-      : new Uint32BufferAttribute(reorderedIndices, 1),
-  )
-
-  const sourceNormals = mesh.attributes.normal?.array
-  if (sourceNormals === undefined) {
-    geometry.computeVertexNormals()
-  } else {
-    geometry.setAttribute(
-      'normal',
-      new Float32BufferAttribute(Float32Array.from(sourceNormals), 3),
-    )
-  }
-
   const materials: MeshStandardMaterial[] = []
-  let indexOffset = 0
-  for (const [materialIndex, group] of groups.entries()) {
-    geometry.addGroup(indexOffset, group.indices.length, materialIndex)
-    indexOffset += group.indices.length
-    materials.push(
-      new MeshStandardMaterial({
-        color: new Color(group.color[0], group.color[1], group.color[2]),
-        metalness: 0.05,
-        roughness: 0.72,
-      }),
-    )
-  }
 
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return { geometry, materials }
+  try {
+    geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
+    geometry.setIndex(
+      vertexCount <= 0xffff
+        ? new Uint16BufferAttribute(reorderedIndices, 1)
+        : new Uint32BufferAttribute(reorderedIndices, 1),
+    )
+
+    const sourceNormals = mesh.attributes.normal?.array
+    if (sourceNormals === undefined) {
+      geometry.computeVertexNormals()
+    } else {
+      geometry.setAttribute(
+        'normal',
+        new Float32BufferAttribute(Float32Array.from(sourceNormals), 3),
+      )
+    }
+
+    let indexOffset = 0
+    for (const [materialIndex, group] of groups.entries()) {
+      geometry.addGroup(indexOffset, group.indices.length, materialIndex)
+      indexOffset += group.indices.length
+      materials.push(
+        new MeshStandardMaterial({
+          color: new Color(group.color[0], group.color[1], group.color[2]),
+          metalness: 0.05,
+          roughness: 0.72,
+        }),
+      )
+    }
+
+    geometry.computeBoundingBox()
+    geometry.computeBoundingSphere()
+    return { geometry, materials }
+  } catch (error) {
+    geometry.dispose()
+    for (const material of materials) {
+      material.dispose()
+    }
+    throw error
+  }
 }
 
 function tuple(values: readonly number[]): Vector3Tuple {
@@ -221,6 +298,7 @@ function tuple(values: readonly number[]): Vector3Tuple {
 export function createThreeGroupFromOcct(
   result: OcctResult,
   options: ThreeImportOptions = {},
+  budget: OcctGeometryBudget = DEFAULT_OCCT_GEOMETRY_BUDGET,
 ): ImportedThreeAsset {
   if (result.success !== true) {
     throw new Error('OCCT could not parse this STEP file.')
@@ -228,6 +306,7 @@ export function createThreeGroupFromOcct(
   if (result.meshes.length === 0) {
     throw new Error('OCCT returned no meshes for this STEP file.')
   }
+  assertOcctGeometryBudget(result.meshes, budget)
 
   const postImportScale = options.postImportScale ?? 1
   const originMode = options.originMode ?? 'source'
@@ -248,9 +327,12 @@ export function createThreeGroupFromOcct(
     Number.NEGATIVE_INFINITY,
     Number.NEGATIVE_INFINITY,
   ]
+  for (const mesh of result.meshes) {
+    validateMeshData(mesh, postImportScale, min, max)
+  }
   const validatedMeshes = result.meshes.map((mesh) => ({
     mesh,
-    positions: validateMesh(mesh, postImportScale, min, max),
+    groups: materialGroups(mesh, mesh.index.array.length / 3),
   }))
 
   const sourceCenter = min.map((minimum, axis) => (minimum + max[axis]!) / 2)
@@ -264,25 +346,41 @@ export function createThreeGroupFromOcct(
   group.name = 'imported-step'
   const geometries: BufferGeometry[] = []
   const materials: MeshStandardMaterial[] = []
-  for (const { mesh, positions } of validatedMeshes) {
-    const converted = createGeometry(mesh, positions)
-    if (originMode === 'center') {
-      converted.geometry.translate(offset[0]!, offset[1]!, offset[2]!)
-      converted.geometry.computeBoundingBox()
-      converted.geometry.computeBoundingSphere()
-    }
+  try {
+    for (const { mesh, groups } of validatedMeshes) {
+      const converted = createGeometry(
+        mesh,
+        scaledPositions(mesh, postImportScale),
+        groups,
+      )
+      geometries.push(converted.geometry)
+      materials.push(...converted.materials)
 
-    geometries.push(converted.geometry)
-    materials.push(...converted.materials)
-    const material =
-      converted.materials.length === 1
-        ? converted.materials[0]!
-        : converted.materials
-    const threeMesh = new Mesh(converted.geometry, material)
-    threeMesh.name = mesh.name || `imported-mesh-${group.children.length}`
-    threeMesh.castShadow = true
-    threeMesh.receiveShadow = true
-    group.add(threeMesh)
+      if (originMode === 'center') {
+        converted.geometry.translate(offset[0]!, offset[1]!, offset[2]!)
+        converted.geometry.computeBoundingBox()
+        converted.geometry.computeBoundingSphere()
+      }
+
+      const material =
+        converted.materials.length === 1
+          ? converted.materials[0]!
+          : converted.materials
+      const threeMesh = new Mesh(converted.geometry, material)
+      threeMesh.name = mesh.name || `imported-mesh-${group.children.length}`
+      threeMesh.castShadow = true
+      threeMesh.receiveShadow = true
+      group.add(threeMesh)
+    }
+  } catch (error) {
+    for (const geometry of geometries) {
+      geometry.dispose()
+    }
+    for (const material of materials) {
+      material.dispose()
+    }
+    group.clear()
+    throw error
   }
 
   let disposed = false

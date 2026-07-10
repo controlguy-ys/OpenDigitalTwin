@@ -1,9 +1,10 @@
-import { BufferGeometry, Mesh, MeshStandardMaterial } from 'three'
+import { BufferGeometry, Group, Mesh, MeshStandardMaterial } from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import type { OcctResult, OcctSuccessResult } from '../../lib/cad/occt-types'
 import {
   createThreeGroupFromOcct,
   MAX_IMPORTED_TRIANGLES,
+  type OcctGeometryBudget,
 } from './occt-to-three'
 
 function resultWithMesh(
@@ -35,6 +36,35 @@ function resultWithMesh(
 }
 
 describe('createThreeGroupFromOcct', () => {
+  it.each([
+    [
+      'vertices',
+      { maxVertices: 7, maxTriangles: 4 },
+      /aggregate vertex budget/i,
+    ],
+    [
+      'triangles',
+      { maxVertices: 8, maxTriangles: 3 },
+      /aggregate triangle budget/i,
+    ],
+  ] satisfies readonly (readonly [string, OcctGeometryBudget, RegExp])[])(
+    'rejects two meshes that exceed the aggregate %s limit before allocation',
+    (_label, budget, message) => {
+      const first = resultWithMesh().meshes[0]!
+      const second = structuredClone(first)
+      second.name = 'fixture-two'
+      const result: OcctSuccessResult = {
+        success: true,
+        root: { name: 'root', meshes: [0, 1], children: [] },
+        meshes: [first, second],
+      }
+
+      expect(() => createThreeGroupFromOcct(result, {}, budget)).toThrow(
+        message,
+      )
+    },
+  )
+
   it('builds indexed Three geometry and computes missing normals', () => {
     const asset = createThreeGroupFromOcct(resultWithMesh())
     const mesh = asset.group.children[0]
@@ -142,6 +172,44 @@ describe('createThreeGroupFromOcct', () => {
 
     expect(geometryDispose).toHaveBeenCalledTimes(1)
     expect(materialDispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('disposes all earlier resources and clears the group when a later mesh step throws', () => {
+    const first = resultWithMesh().meshes[0]!
+    const second = structuredClone(first)
+    let nameReads = 0
+    Object.defineProperty(second, 'name', {
+      configurable: true,
+      get: () => {
+        nameReads += 1
+        if (nameReads === 2) {
+          throw new Error('later mesh construction failed')
+        }
+        return 'fixture-two'
+      },
+    })
+    const result: OcctSuccessResult = {
+      success: true,
+      root: { name: 'root', meshes: [0, 1], children: [] },
+      meshes: [first, second],
+    }
+    const geometryDispose = vi.spyOn(BufferGeometry.prototype, 'dispose')
+    const materialDispose = vi.spyOn(
+      MeshStandardMaterial.prototype,
+      'dispose',
+    )
+    const groupClear = vi.spyOn(Group.prototype, 'clear')
+
+    expect(() => createThreeGroupFromOcct(result)).toThrow(
+      'later mesh construction failed',
+    )
+    expect(geometryDispose).toHaveBeenCalledTimes(2)
+    expect(materialDispose).toHaveBeenCalledTimes(2)
+    expect(groupClear).toHaveBeenCalledTimes(1)
+
+    geometryDispose.mockRestore()
+    materialDispose.mockRestore()
+    groupClear.mockRestore()
   })
 
   it.each([
