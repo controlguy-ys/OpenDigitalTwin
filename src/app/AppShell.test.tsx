@@ -75,6 +75,31 @@ describe('AppShell', () => {
     expect(screen.getByRole('button', { name: 'Import STEP' })).toBeEnabled()
   })
 
+  it('opens STEP import through its typed top-bar action', async () => {
+    const user = userEvent.setup()
+    const onOpenStepImport = vi.fn()
+    render(
+      <AppShell
+        onOpenStepImport={onOpenStepImport}
+        viewport={<div>3D viewport</div>}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Import STEP' }))
+
+    expect(onOpenStepImport).toHaveBeenCalledTimes(1)
+  })
+
+  it('wires the top-bar action to the accessible import dialog', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: 'Import STEP' }))
+    expect(screen.getByRole('dialog', { name: 'Import STEP' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Close import dialog' }))
+    expect(screen.queryByRole('dialog', { name: 'Import STEP' })).not.toBeInTheDocument()
+  })
+
   it('keeps controls disabled without marking an error fallback as busy', () => {
     render(
       <AppShell

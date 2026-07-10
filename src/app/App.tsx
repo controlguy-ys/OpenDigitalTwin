@@ -1,5 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { EquipmentAssetList } from '../features/equipment/EquipmentAssetList'
 import { useEquipmentStore } from '../features/equipment/equipment-store'
+import { useInteractionStore } from '../features/interaction/interaction-store'
+import { ImportStepDialog } from '../features/import/ImportStepDialog'
+import { stepImportClient } from '../features/import/StepImportClient'
+import { deleteImportedEquipment } from '../features/import/imported-equipment-actions'
+import { importedGeometryRepository } from '../features/import/imported-geometry-repository'
 import { JointInspector } from '../features/joints/JointInspector'
 import { simulationJointSource } from '../features/joints/SimulationJointSource'
 import { useRobotStore } from '../features/joints/robot-store'
@@ -13,12 +19,33 @@ import { AppShell } from './AppShell'
 export function App() {
   const [sceneStatus, setSceneStatus] =
     useState<SceneRenderStatus>('loading')
+  const [isImportOpen, setIsImportOpen] = useState(false)
   const sourceQuality = useRobotStore((state) => state.sourceQuality)
   const hydrateEquipment = useEquipmentStore((state) => state.hydrate)
+  const equipmentRecords = useEquipmentStore((state) => state.records)
+  const upsertEquipment = useEquipmentStore((state) => state.upsertEquipment)
+  const removeEquipment = useEquipmentStore((state) => state.removeEquipment)
+  const selectedEquipmentId = useInteractionStore(
+    (state) => state.selectedEquipmentId,
+  )
+  const selectEquipment = useInteractionStore((state) => state.selectEquipment)
+  const clearSelection = useInteractionStore((state) => state.clearSelection)
   const controlsDisabled = sceneStatus !== 'ready'
 
   useEffect(() => {
-    void hydrateEquipment()
+    let active = true
+    void (async () => {
+      await hydrateEquipment()
+      if (active) {
+        await importedGeometryRepository.restore(
+          useEquipmentStore.getState().records,
+        )
+      }
+    })()
+
+    return () => {
+      active = false
+    }
   }, [hydrateEquipment])
 
   useEffect(() => {
@@ -33,24 +60,57 @@ export function App() {
     }
   }, [])
 
+  const handleRemoveEquipment = useCallback(
+    (id: string) =>
+      deleteImportedEquipment(id, {
+        removeEquipment,
+        invalidateGeometry: (equipmentId) => {
+          importedGeometryRepository.invalidate(equipmentId)
+        },
+        getSelectedEquipmentId: () =>
+          useInteractionStore.getState().selectedEquipmentId,
+        clearSelection,
+      }),
+    [clearSelection, removeEquipment],
+  )
+
   return (
-    <AppShell
-      bottomRail={
-        <Timeline
-          disabled={controlsDisabled}
-          source={simulationJointSource}
-        />
-      }
-      controlsDisabled={controlsDisabled}
-      inspector={
-        <JointInspector
-          disabled={controlsDisabled}
-          source={simulationJointSource}
-        />
-      }
-      sourceQuality={sourceQuality}
-      viewport={<SceneCanvas onStatusChange={setSceneStatus} />}
-      viewportBusy={sceneStatus === 'loading'}
-    />
+    <>
+      <AppShell
+        assetTree={
+          <EquipmentAssetList
+            onRemove={handleRemoveEquipment}
+            onSelect={selectEquipment}
+            records={equipmentRecords}
+            selectedEquipmentId={selectedEquipmentId}
+          />
+        }
+        bottomRail={
+          <Timeline
+            disabled={controlsDisabled}
+            source={simulationJointSource}
+          />
+        }
+        controlsDisabled={controlsDisabled}
+        inspector={
+          <JointInspector
+            disabled={controlsDisabled}
+            source={simulationJointSource}
+          />
+        }
+        onOpenStepImport={() => setIsImportOpen(true)}
+        sourceQuality={sourceQuality}
+        viewport={<SceneCanvas onStatusChange={setSceneStatus} />}
+        viewportBusy={sceneStatus === 'loading'}
+      />
+      <ImportStepDialog
+        cache={importedGeometryRepository}
+        client={stepImportClient}
+        onClose={() => setIsImportOpen(false)}
+        onCommit={upsertEquipment}
+        onSelect={selectEquipment}
+        open={isImportOpen}
+      />
+    </>
   )
 }

@@ -16,6 +16,14 @@ const VALID_RECORD: EquipmentRecord = {
   collisionHalfExtents: [0.1, 0.2, 0.3],
   stackLightAnchor: [0, 0, 0.4],
   sourceBytes: new Uint8Array([1, 2, 3]).buffer,
+  importMetadata: {
+    sourceFileName: 'fixture.step',
+    detectedUnit: 'unknown',
+    selectedSourceUnit: 'millimeter',
+    postImportScale: 0.001,
+    originMode: 'source',
+    colliderCenter: [0.1, 0.2, 0.3],
+  },
 }
 
 describe('equipment status lights', () => {
@@ -56,8 +64,15 @@ describe('equipment record validation', () => {
   it('accepts a complete serializable equipment record', () => {
     expect(isEquipmentRecord(VALID_RECORD)).toBe(true)
     expect(
-      isEquipmentRecord({ ...VALID_RECORD, stackLightAnchor: null, sourceBytes: undefined }),
+      isEquipmentRecord({
+        ...VALID_RECORD,
+        kind: 'cup',
+        stackLightAnchor: null,
+        sourceBytes: undefined,
+        importMetadata: undefined,
+      }),
     ).toBe(true)
+    expect(structuredClone(VALID_RECORD)).toEqual(VALID_RECORD)
   })
 
   it.each([
@@ -116,6 +131,10 @@ describe('equipment record validation', () => {
       { ...VALID_RECORD, collisionHalfExtents: [0.1, Number.NaN, 0.3] },
     ],
     [
+      'a non-positive collision extent',
+      { ...VALID_RECORD, collisionHalfExtents: [0.1, 0, 0.3] },
+    ],
+    [
       'a short stack-light anchor tuple',
       { ...VALID_RECORD, stackLightAnchor: [0, 0] },
     ],
@@ -124,6 +143,35 @@ describe('equipment record validation', () => {
       { ...VALID_RECORD, stackLightAnchor: [0, Number.NEGATIVE_INFINITY, 0] },
     ],
     ['a typed-array source instead of ArrayBuffer', { ...VALID_RECORD, sourceBytes: new Uint8Array(3) }],
+    [
+      'an imported record without reload data',
+      { ...VALID_RECORD, sourceBytes: undefined, importMetadata: undefined },
+    ],
+    [
+      'a built-in record carrying imported reload data',
+      { ...VALID_RECORD, kind: 'cup' },
+    ],
+    [
+      'an unsupported detected unit',
+      {
+        ...VALID_RECORD,
+        importMetadata: { ...VALID_RECORD.importMetadata, detectedUnit: 'yard' },
+      },
+    ],
+    [
+      'a non-positive post-import scale',
+      {
+        ...VALID_RECORD,
+        importMetadata: { ...VALID_RECORD.importMetadata, postImportScale: 0 },
+      },
+    ],
+    [
+      'an invalid collider center',
+      {
+        ...VALID_RECORD,
+        importMetadata: { ...VALID_RECORD.importMetadata, colliderCenter: [0, 0] },
+      },
+    ],
   ] satisfies readonly (readonly [string, unknown])[])('rejects %s', (_label, value) => {
     expect(isEquipmentRecord(value)).toBe(false)
   })

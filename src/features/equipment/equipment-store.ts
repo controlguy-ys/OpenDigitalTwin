@@ -75,6 +75,7 @@ export interface EquipmentStoreState {
   hydrate(): Promise<void>
   upsertEquipment(record: EquipmentRecord): Promise<void>
   setEquipmentStatus(id: string, status: EquipmentStatus): Promise<void>
+  removeEquipment(id: string): Promise<void>
 }
 
 function cloneEquipmentRecord(record: EquipmentRecord): EquipmentRecord {
@@ -97,6 +98,14 @@ function cloneEquipmentRecord(record: EquipmentRecord): EquipmentRecord {
     ...(record.sourceBytes === undefined
       ? {}
       : { sourceBytes: record.sourceBytes.slice(0) }),
+    ...(record.importMetadata === undefined
+      ? {}
+      : {
+          importMetadata: {
+            ...record.importMetadata,
+            colliderCenter: [...record.importMetadata.colliderCenter],
+          },
+        }),
   }
 }
 
@@ -225,6 +234,9 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
       warnings: [],
       hydrate,
       upsertEquipment: async (record) => {
+        if (!isEquipmentRecord(record)) {
+          throw new Error('Invalid equipment record; no changes were saved.')
+        }
         await hydrate()
         const nextRecord = cloneEquipmentRecord(record)
         set((state) => {
@@ -258,6 +270,21 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           ),
         }))
         await persistRecord(nextRecord)
+      },
+      removeEquipment: async (id) => {
+        await hydrate()
+        set((state) => ({
+          records: state.records.filter((record) => record.id !== id),
+        }))
+        if (get().persistenceStatus === 'memory-only') {
+          return
+        }
+
+        try {
+          await database.equipment.delete(id)
+        } catch {
+          enterMemoryOnlyMode()
+        }
       },
     }
   }

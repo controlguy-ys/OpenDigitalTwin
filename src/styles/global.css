@@ -136,6 +136,324 @@ button {
   border-right: 1px solid var(--color-border);
 }
 
+.equipment-assets {
+  height: 100%;
+  overflow: auto;
+}
+
+.equipment-assets h2 {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 16px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.equipment-assets ul {
+  padding: 10px 8px;
+  margin: 0;
+  list-style: none;
+}
+
+.equipment-assets li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 3px;
+  border: 1px solid transparent;
+}
+
+.equipment-assets li[aria-selected='true'] {
+  background: rgb(56 189 248 / 8%);
+  border-color: rgb(56 189 248 / 32%);
+}
+
+.equipment-select,
+.equipment-delete {
+  min-height: 36px;
+  color: var(--color-text);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+
+.equipment-select {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 0 8px;
+  align-items: center;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.equipment-select > span:nth-child(2) {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.equipment-select small {
+  grid-column: 2;
+  color: var(--color-muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.equipment-status-dot {
+  grid-row: 1 / span 2;
+  width: 7px;
+  height: 7px;
+  background: var(--color-muted);
+  border-radius: 50%;
+}
+
+.equipment-status-dot[data-status='RUNNING'] {
+  background: var(--color-running);
+}
+
+.equipment-status-dot[data-status='WARNING'] {
+  background: var(--color-warning);
+}
+
+.equipment-status-dot[data-status='FAULT'] {
+  background: var(--color-fault);
+}
+
+.equipment-delete {
+  padding: 0 8px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.equipment-select:hover,
+.equipment-delete:hover,
+.equipment-select:focus-visible,
+.equipment-delete:focus-visible {
+  color: var(--color-accent);
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.import-step-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  padding: 24px;
+  overflow: auto;
+  background: rgb(3 8 13 / 78%);
+  place-items: center;
+}
+
+.import-step-dialog {
+  width: min(680px, 100%);
+  max-height: min(820px, calc(100dvh - 48px));
+  overflow: auto;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 46%);
+}
+
+.import-step-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 70px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.import-step-dialog h2,
+.import-step-dialog p {
+  margin: 0;
+}
+
+.import-step-dialog header p {
+  margin-bottom: 5px;
+  color: var(--color-accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.import-step-dialog h2 {
+  font-size: 17px;
+}
+
+.import-step-dialog button,
+.import-step-dialog input,
+.import-step-dialog select {
+  color: var(--color-text);
+  font: 12px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.import-step-dialog button {
+  min-height: 32px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.import-step-dialog button:hover:not(:disabled),
+.import-step-dialog button:focus-visible,
+.import-step-dialog input:focus-visible,
+.import-step-dialog select:focus-visible {
+  border-color: var(--color-accent);
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.import-step-dialog button:disabled,
+.import-step-dialog input:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.import-file-field {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.import-file-field input {
+  min-height: 42px;
+  padding: 8px;
+}
+
+.import-converting {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 16px;
+  align-items: center;
+  padding: 16px 18px;
+  border-block: 1px solid var(--color-border);
+}
+
+.import-converting progress {
+  width: 100%;
+}
+
+.import-converting button {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+}
+
+.import-step-dialog [role='alert'] {
+  padding: 10px 18px;
+  color: var(--color-fault);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: rgb(239 68 68 / 8%);
+  border-block: 1px solid rgb(239 68 68 / 24%);
+}
+
+.import-config {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding: 0 18px 18px;
+}
+
+.import-result-summary {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 48px;
+  padding: 10px 12px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+}
+
+.import-result-summary span {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.import-result-summary strong {
+  color: var(--color-accent);
+  font: 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.import-config > label,
+.import-config fieldset label {
+  display: grid;
+  gap: 6px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.import-config input[type='text'],
+.import-config input[type='number'],
+.import-config select {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+}
+
+.import-config output {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--color-muted);
+  font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+}
+
+.import-config .import-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+
+.import-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-accent);
+}
+
+.import-config fieldset {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  margin: 0;
+  border: 1px solid var(--color-border);
+}
+
+.import-config legend {
+  padding: 0 6px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.import-config footer {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.import-config footer button:last-child {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
 .viewport {
   position: relative;
   display: grid;
@@ -598,5 +916,18 @@ button {
     height: 30px;
     padding-inline: 8px;
     font-size: 10px;
+  }
+
+  .import-step-backdrop {
+    padding: 8px;
+    place-items: stretch;
+  }
+
+  .import-step-dialog {
+    max-height: calc(100dvh - 16px);
+  }
+
+  .import-config {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

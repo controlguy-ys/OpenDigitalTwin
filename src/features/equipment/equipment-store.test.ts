@@ -102,6 +102,14 @@ describe('equipment persistence', () => {
       collisionHalfExtents: [0.12, 0.1, 0.08],
       stackLightAnchor: [0, 0, 0.26],
       sourceBytes: new Uint8Array([1, 3, 5, 7, 9]).buffer,
+      importMetadata: {
+        sourceFileName: 'fixture.step',
+        detectedUnit: 'millimeter',
+        selectedSourceUnit: 'millimeter',
+        postImportScale: 1,
+        originMode: 'center',
+        colliderCenter: [0, 0, 0],
+      },
     }
 
     await firstStore.getState().hydrate()
@@ -120,6 +128,7 @@ describe('equipment persistence', () => {
       id: imported.id,
       status: imported.status,
       transform: imported.transform,
+      importMetadata: imported.importMetadata,
     })
     const restoredBytes = restored?.sourceBytes
     expect(restoredBytes?.byteLength).toBe(5)
@@ -145,6 +154,14 @@ describe('equipment persistence', () => {
       collisionHalfExtents: [0.1, 0.1, 0.1],
       stackLightAnchor: null,
       sourceBytes: new Uint8Array([8, 6, 4, 2]).buffer,
+      importMetadata: {
+        sourceFileName: 'valid.step',
+        detectedUnit: 'meter',
+        selectedSourceUnit: 'meter',
+        postImportScale: 1,
+        originMode: 'source',
+        colliderCenter: [0.05, 0.05, 0.05],
+      },
     }
     const corrupt = {
       id: 'corrupt-persisted-fixture',
@@ -196,6 +213,14 @@ describe('equipment persistence', () => {
       collisionHalfExtents: [0.1, 0.1, 0.1],
       stackLightAnchor: null,
       sourceBytes: callerBytes,
+      importMetadata: {
+        sourceFileName: 'copy.step',
+        detectedUnit: 'meter',
+        selectedSourceUnit: 'meter',
+        postImportScale: 1,
+        originMode: 'center',
+        colliderCenter: [0, 0, 0],
+      },
     }
 
     await store.getState().upsertEquipment(imported)
@@ -250,5 +275,84 @@ describe('equipment persistence', () => {
     ).toBe('FAULT')
     expect(store.getState().persistenceStatus).toBe('memory-only')
     expect(store.getState().warnings).toHaveLength(1)
+  })
+
+  it('removes imported equipment from memory and IndexedDB', async () => {
+    const database = createDatabase('remove')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    const imported: EquipmentRecord = {
+      id: 'remove-me',
+      name: 'Remove Me',
+      kind: 'imported',
+      status: 'OFF',
+      transform: {
+        position: [0, 0, 1.2],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      graspable: false,
+      collisionHalfExtents: [0.1, 0.1, 0.1],
+      stackLightAnchor: null,
+      sourceBytes: new Uint8Array([1, 2]).buffer,
+      importMetadata: {
+        sourceFileName: 'remove.step',
+        detectedUnit: 'meter',
+        selectedSourceUnit: 'meter',
+        postImportScale: 1,
+        originMode: 'center',
+        colliderCenter: [0, 0, 0],
+      },
+    }
+    await store.getState().upsertEquipment(imported)
+
+    await store.getState().removeEquipment(imported.id)
+
+    expect(store.getState().records.some(({ id }) => id === imported.id)).toBe(false)
+    expect(await database.equipment.get(imported.id)).toBeUndefined()
+  })
+
+  it('keeps a removal in memory when deleting from IndexedDB fails', async () => {
+    const database = createDatabase('remove-failure')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    vi.spyOn(database.equipment, 'delete').mockRejectedValueOnce(
+      new Error('delete failed'),
+    )
+
+    await store.getState().removeEquipment('cup-01')
+
+    expect(store.getState().records.some(({ id }) => id === 'cup-01')).toBe(false)
+    expect(store.getState().persistenceStatus).toBe('memory-only')
+    expect(store.getState().warnings).toHaveLength(1)
+  })
+
+  it('rejects invalid imported reload data before mutating memory or IndexedDB', async () => {
+    const database = createDatabase('invalid-upsert')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    const put = vi.spyOn(database.equipment, 'put')
+    const invalid = {
+      id: 'invalid-imported',
+      name: 'Invalid Imported',
+      kind: 'imported',
+      status: 'OFF',
+      transform: {
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      graspable: false,
+      collisionHalfExtents: [0.1, 0.1, 0.1],
+      stackLightAnchor: null,
+      sourceBytes: new Uint8Array([1]).buffer,
+    } as unknown as EquipmentRecord
+
+    await expect(store.getState().upsertEquipment(invalid)).rejects.toThrow(
+      /invalid equipment record/i,
+    )
+
+    expect(store.getState().records.some(({ id }) => id === invalid.id)).toBe(false)
+    expect(put).not.toHaveBeenCalled()
   })
 })

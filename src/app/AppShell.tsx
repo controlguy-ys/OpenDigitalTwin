@@ -10,6 +10,7 @@ interface AppShellProps {
   controlsDisabled?: boolean
   viewportBusy?: boolean
   sourceQuality?: JointQuality
+  onOpenStepImport?: () => void
 }
 
 export function AppShell({
@@ -20,6 +21,7 @@ export function AppShell({
   controlsDisabled = false,
   viewportBusy = controlsDisabled,
   sourceQuality = 'GOOD',
+  onOpenStepImport,
 }: AppShellProps) {
   const [isAssetRailOpen, setIsAssetRailOpen] = useState(false)
   const [isInspectorOpen, setIsInspectorOpen] = useState(false)
@@ -36,7 +38,9 @@ export function AppShell({
         <span className="source-quality" data-quality={sourceQuality}>
           {sourceQuality}
         </span>
-        <button type="button">Import STEP</button>
+        <button onClick={onOpenStepImport} type="button">
+          Import STEP
+        </button>
       </header>
       <button
         aria-controls="scene-assets-panel"
