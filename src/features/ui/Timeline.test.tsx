@@ -164,6 +164,33 @@ describe('Timeline', () => {
     expect(setAngles).toHaveBeenCalledTimes(2)
   })
 
+  it('continues the Play-time snapshot when live keyframes are cleared', async () => {
+    const user = userEvent.setup()
+    const source = new SimulationJointSource()
+    const setAngles = vi.spyOn(source, 'setAngles')
+    source.subscribe((frame) => {
+      useRobotStore.getState().applyFrame(frame)
+    })
+    render(<Timeline source={source} />)
+
+    await user.click(screen.getByRole('button', { name: 'Play' }))
+    runNextFrame(0)
+    act(() => {
+      useRobotStore.getState().clearKeyframes()
+    })
+
+    expect(useRobotStore.getState().playing).toBe(true)
+    expect(frameCallbacks.size).toBe(1)
+    runNextFrame(500)
+    expect(useRobotStore.getState().anglesDeg).toEqual([50, 10, 0, 0, 0, 0])
+
+    runNextFrame(1000)
+    expect(useRobotStore.getState().anglesDeg).toEqual([100, 20, 0, 0, 0, 0])
+    expect(useRobotStore.getState().playing).toBe(false)
+    expect(frameCallbacks.size).toBe(0)
+    expect(setAngles).toHaveBeenCalledTimes(3)
+  })
+
   it('cancels for external setPlaying(false), bad quality, and a hidden document', async () => {
     const user = userEvent.setup()
     const source = new SimulationJointSource()

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION } from '../../domain/robot/crb15000'
@@ -74,6 +74,39 @@ describe('JointInspector', () => {
 
     expect(setAngles).toHaveBeenCalledTimes(1)
     expect(useRobotStore.getState().anglesDeg[0]).toBe(42)
+    unsubscribe()
+  })
+
+  it('stops on numeric focus and preserves that draft through incoming frames', async () => {
+    const user = userEvent.setup()
+    const source = new SimulationJointSource()
+    const unsubscribe = source.subscribe((frame) => {
+      useRobotStore.getState().applyFrame(frame)
+    })
+    useRobotStore.getState().setPlaying(true)
+    const initialRevision = useRobotStore.getState().playbackResetRevision
+    render(<JointInspector source={source} />)
+
+    const j3Input = screen.getByRole('spinbutton', { name: 'J3' })
+    await user.click(j3Input)
+    expect(useRobotStore.getState()).toMatchObject({
+      playing: false,
+      playbackResetRevision: initialRevision + 1,
+    })
+
+    fireEvent.change(j3Input, { target: { value: '-123' } })
+    act(() => {
+      source.setAngles([10, 20, 30, 40, 50, 60])
+    })
+
+    expect(j3Input).toHaveValue(-123)
+    expect(screen.getByRole('spinbutton', { name: 'J1' })).toHaveValue(10)
+
+    fireEvent.blur(j3Input)
+    expect(useRobotStore.getState().anglesDeg).toEqual([
+      10, 20, -123, 40, 50, 60,
+    ])
+    expect(j3Input).toHaveValue(-123)
     unsubscribe()
   })
 

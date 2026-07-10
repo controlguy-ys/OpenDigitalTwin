@@ -43,6 +43,16 @@ describe('robot keyframe timeline', () => {
     ).toBe(250)
   })
 
+  it('rejects an accumulated duration that overflows to infinity', () => {
+    expect(() =>
+      getTimelineDurationMs([
+        keyframe('a', [0, 0, 0, 0, 0, 0], Number.MAX_VALUE),
+        keyframe('b', [0, 0, 0, 0, 0, 0], Number.MAX_VALUE),
+        keyframe('c', [0, 0, 0, 0, 0, 0], 1),
+      ]),
+    ).toThrow('total duration must be finite')
+  })
+
   it('rejects malformed angles and non-finite or non-positive durations', () => {
     for (const durationMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() =>
@@ -104,5 +114,18 @@ describe('robot keyframe timeline', () => {
     )
 
     expect(sample?.anglesDeg[0]).toBeCloseTo(12.5)
+  })
+
+  it('interpolates opposite finite extremes without overflowing', () => {
+    const sample = sampleTimeline(
+      [
+        keyframe('a', [Number.MAX_VALUE, 0, 0, 0, 0, 0]),
+        keyframe('b', [-Number.MAX_VALUE, 0, 0, 0, 0, 0]),
+      ],
+      500,
+    )
+
+    expect(sample?.anglesDeg[0]).toBe(0)
+    expect(Number.isFinite(sample?.anglesDeg[0])).toBe(true)
   })
 })

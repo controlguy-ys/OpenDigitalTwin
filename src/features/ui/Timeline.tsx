@@ -69,14 +69,14 @@ export function Timeline({
   }, [cancelScheduledFrame, playbackResetRevision])
 
   useEffect(() => {
-    if (keyframes.length !== 0) {
+    if (keyframes.length !== 0 || playing) {
       return
     }
 
     cancelScheduledFrame()
     elapsedMsRef.current = 0
     setPositionMs(0)
-  }, [cancelScheduledFrame, keyframes.length])
+  }, [cancelScheduledFrame, keyframes.length, playing])
 
   useEffect(() => {
     const pauseWhenHidden = () => {

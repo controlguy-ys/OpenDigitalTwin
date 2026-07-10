@@ -56,6 +56,15 @@ function applyEasing(easing: RobotKeyframeEasing, progress: number): number {
   return progress * progress * (3 - 2 * progress)
 }
 
+function interpolateAngle(from: number, to: number, progress: number): number {
+  const angleDeg = from * (1 - progress) + to * progress
+  if (!Number.isFinite(angleDeg)) {
+    throw new Error('Robot timeline sampled angle must be finite')
+  }
+
+  return angleDeg
+}
+
 export function getTimelineDurationMs(
   keyframes: readonly RobotKeyframe[],
 ): number {
@@ -63,9 +72,20 @@ export function getTimelineDurationMs(
     validateKeyframe(keyframe)
   }
 
-  return keyframes
-    .slice(0, -1)
-    .reduce((durationMs, keyframe) => durationMs + keyframe.durationMs, 0)
+  let durationMs = 0
+  for (let index = 0; index < keyframes.length - 1; index += 1) {
+    const keyframe = keyframes[index]
+    if (keyframe === undefined) {
+      throw new Error('Robot timeline transition is incomplete')
+    }
+
+    durationMs += keyframe.durationMs
+    if (!Number.isFinite(durationMs)) {
+      throw new Error('Robot timeline total duration must be finite')
+    }
+  }
+
+  return durationMs
 }
 
 export function sampleTimeline(
@@ -109,18 +129,12 @@ export function sampleTimeline(
       const easedProgress = applyEasing(from.easing, progress)
       return {
         anglesDeg: [
-          from.anglesDeg[0] +
-            (to.anglesDeg[0] - from.anglesDeg[0]) * easedProgress,
-          from.anglesDeg[1] +
-            (to.anglesDeg[1] - from.anglesDeg[1]) * easedProgress,
-          from.anglesDeg[2] +
-            (to.anglesDeg[2] - from.anglesDeg[2]) * easedProgress,
-          from.anglesDeg[3] +
-            (to.anglesDeg[3] - from.anglesDeg[3]) * easedProgress,
-          from.anglesDeg[4] +
-            (to.anglesDeg[4] - from.anglesDeg[4]) * easedProgress,
-          from.anglesDeg[5] +
-            (to.anglesDeg[5] - from.anglesDeg[5]) * easedProgress,
+          interpolateAngle(from.anglesDeg[0], to.anglesDeg[0], easedProgress),
+          interpolateAngle(from.anglesDeg[1], to.anglesDeg[1], easedProgress),
+          interpolateAngle(from.anglesDeg[2], to.anglesDeg[2], easedProgress),
+          interpolateAngle(from.anglesDeg[3], to.anglesDeg[3], easedProgress),
+          interpolateAngle(from.anglesDeg[4], to.anglesDeg[4], easedProgress),
+          interpolateAngle(from.anglesDeg[5], to.anglesDeg[5], easedProgress),
         ],
       }
     }

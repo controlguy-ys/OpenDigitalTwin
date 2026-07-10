@@ -32,10 +32,17 @@ export function JointInspector({
   const setGripperOpen = useRobotStore((state) => state.setGripperOpen)
   const anglesDeg = [j1, j2, j3, j4, j5, j6] as const
   const [drafts, setDrafts] = useState(() => anglesDeg.map(String))
+  const [activeDraftIndex, setActiveDraftIndex] = useState<number | null>(null)
 
   useEffect(() => {
-    setDrafts(anglesDeg.map(String))
-  }, [j1, j2, j3, j4, j5, j6])
+    setDrafts((current) =>
+      anglesDeg.map((angleDeg, jointIndex) =>
+        jointIndex === activeDraftIndex
+          ? (current[jointIndex] ?? String(angleDeg))
+          : String(angleDeg),
+      ),
+    )
+  }, [activeDraftIndex, j1, j2, j3, j4, j5, j6])
 
   const applyJoint = (jointIndex: number, angleDeg: number): number => {
     stopPlayback()
@@ -103,14 +110,20 @@ export function JointInspector({
               min={joint.minDeg}
               onBlur={() => {
                 commitDraft(jointIndex)
+                setActiveDraftIndex(null)
               }}
               onChange={(event) => {
                 const value = event.currentTarget.value
+                setActiveDraftIndex(jointIndex)
                 setDrafts((current) => {
                   const next = [...current]
                   next[jointIndex] = value
                   return next
                 })
+              }}
+              onFocus={() => {
+                stopPlayback()
+                setActiveDraftIndex(jointIndex)
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
