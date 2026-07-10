@@ -22,6 +22,7 @@ describe('JointInspector', () => {
     render(<JointInspector source={source} />)
 
     const j3Input = screen.getByRole('spinbutton', { name: 'J3' })
+    fireEvent.focus(j3Input)
     fireEvent.change(j3Input, { target: { value: '-226' } })
 
     expect(j3Input).toHaveValue(-226)
@@ -107,6 +108,33 @@ describe('JointInspector', () => {
       10, 20, -123, 40, 50, 60,
     ])
     expect(j3Input).toHaveValue(-123)
+    unsubscribe()
+  })
+
+  it('resyncs a focused clean field and does not republish it on blur', async () => {
+    const user = userEvent.setup()
+    const source = new SimulationJointSource()
+    const setAngles = vi.spyOn(source, 'setAngles')
+    const unsubscribe = source.subscribe((frame) => {
+      useRobotStore.getState().applyFrame(frame)
+    })
+    render(<JointInspector source={source} />)
+
+    const j3Input = screen.getByRole('spinbutton', { name: 'J3' })
+    await user.click(j3Input)
+    act(() => {
+      source.setAngles([10, 20, 30, 40, 50, 60])
+    })
+    setAngles.mockClear()
+
+    expect(j3Input).toHaveValue(30)
+    fireEvent.blur(j3Input)
+
+    expect(setAngles).not.toHaveBeenCalled()
+    expect(useRobotStore.getState().anglesDeg).toEqual([
+      10, 20, 30, 40, 50, 60,
+    ])
+    expect(j3Input).toHaveValue(30)
     unsubscribe()
   })
 

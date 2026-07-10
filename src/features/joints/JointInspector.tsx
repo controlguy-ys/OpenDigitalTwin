@@ -32,20 +32,27 @@ export function JointInspector({
   const setGripperOpen = useRobotStore((state) => state.setGripperOpen)
   const anglesDeg = [j1, j2, j3, j4, j5, j6] as const
   const [drafts, setDrafts] = useState(() => anglesDeg.map(String))
-  const [activeDraftIndex, setActiveDraftIndex] = useState<number | null>(null)
+  const [focusedDraftIndex, setFocusedDraftIndex] = useState<number | null>(null)
+  const [dirtyDraftIndex, setDirtyDraftIndex] = useState<number | null>(null)
 
   useEffect(() => {
     setDrafts((current) =>
       anglesDeg.map((angleDeg, jointIndex) =>
-        jointIndex === activeDraftIndex
+        jointIndex === dirtyDraftIndex
           ? (current[jointIndex] ?? String(angleDeg))
           : String(angleDeg),
       ),
     )
-  }, [activeDraftIndex, j1, j2, j3, j4, j5, j6])
+  }, [dirtyDraftIndex, j1, j2, j3, j4, j5, j6])
 
-  const applyJoint = (jointIndex: number, angleDeg: number): number => {
-    stopPlayback()
+  const applyJoint = (
+    jointIndex: number,
+    angleDeg: number,
+    shouldStopPlayback = true,
+  ): number => {
+    if (shouldStopPlayback) {
+      stopPlayback()
+    }
     const currentAngles = useRobotStore.getState().anglesDeg
     const nextAngles: [number, number, number, number, number, number] = [
       currentAngles[0],
@@ -61,11 +68,24 @@ export function JointInspector({
     return clampedAngles[jointIndex] ?? currentAngles[jointIndex] ?? 0
   }
 
+  const resyncDraft = (jointIndex: number) => {
+    const committedAngle = useRobotStore.getState().anglesDeg[jointIndex]
+    if (committedAngle === undefined) {
+      return
+    }
+
+    setDrafts((current) => {
+      const next = [...current]
+      next[jointIndex] = String(committedAngle)
+      return next
+    })
+  }
+
   const commitDraft = (jointIndex: number) => {
     const draft = drafts[jointIndex]
     const angleDeg = Number(draft)
     if (draft !== undefined && draft.trim() !== '' && Number.isFinite(angleDeg)) {
-      const committedAngle = applyJoint(jointIndex, angleDeg)
+      const committedAngle = applyJoint(jointIndex, angleDeg, false)
       setDrafts((current) => {
         const next = [...current]
         next[jointIndex] = String(committedAngle)
@@ -74,14 +94,7 @@ export function JointInspector({
       return
     }
 
-    const committedAngle = useRobotStore.getState().anglesDeg[jointIndex]
-    if (committedAngle !== undefined) {
-      setDrafts((current) => {
-        const next = [...current]
-        next[jointIndex] = String(committedAngle)
-        return next
-      })
-    }
+    resyncDraft(jointIndex)
   }
 
   return (
@@ -109,12 +122,20 @@ export function JointInspector({
               max={joint.maxDeg}
               min={joint.minDeg}
               onBlur={() => {
-                commitDraft(jointIndex)
-                setActiveDraftIndex(null)
+                if (
+                  focusedDraftIndex === jointIndex &&
+                  dirtyDraftIndex === jointIndex
+                ) {
+                  commitDraft(jointIndex)
+                } else {
+                  resyncDraft(jointIndex)
+                }
+                setFocusedDraftIndex(null)
+                setDirtyDraftIndex(null)
               }}
               onChange={(event) => {
                 const value = event.currentTarget.value
-                setActiveDraftIndex(jointIndex)
+                setDirtyDraftIndex(jointIndex)
                 setDrafts((current) => {
                   const next = [...current]
                   next[jointIndex] = value
@@ -123,7 +144,8 @@ export function JointInspector({
               }}
               onFocus={() => {
                 stopPlayback()
-                setActiveDraftIndex(jointIndex)
+                setFocusedDraftIndex(jointIndex)
+                setDirtyDraftIndex(null)
               }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
