@@ -1,8 +1,12 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { AppShell } from './AppShell'
+
+vi.mock('../features/scene/SceneCanvas', () => ({
+  SceneCanvas: () => null,
+}))
 
 describe('AppShell', () => {
   it('renders the five industrial workstation regions', () => {
@@ -40,11 +44,43 @@ describe('AppShell', () => {
     expect(getByLabelText('Timeline and Events')).toHaveClass('is-open')
   })
 
-  it('keeps the loading message as a screen-reader-only status', () => {
+  it('exposes when scene-dependent controls are not ready', () => {
+    render(<AppShell controlsDisabled viewport={<div>3D viewport</div>} />)
+
+    const viewport = screen.getByLabelText('3D viewport')
+    expect(viewport).toHaveAttribute('aria-busy', 'true')
+    expect(viewport.closest('.app-shell')).toHaveAttribute(
+      'data-controls-disabled',
+      'true',
+    )
+    expect(screen.getByRole('button', { name: 'Import STEP' })).toBeEnabled()
+  })
+
+  it('keeps controls disabled without marking an error fallback as busy', () => {
+    render(
+      <AppShell
+        controlsDisabled
+        viewport={<div>3D viewport</div>}
+        viewportBusy={false}
+      />,
+    )
+
+    const viewport = screen.getByLabelText('3D viewport')
+    expect(viewport).toHaveAttribute('aria-busy', 'false')
+    expect(viewport.closest('.app-shell')).toHaveAttribute(
+      'data-controls-disabled',
+      'true',
+    )
+  })
+
+  it('keeps scene-dependent controls gated while the canvas loads', () => {
     render(<App />)
 
-    const status = screen.getByRole('status')
-    expect(status).toHaveTextContent('Preparing 3D workcell…')
-    expect(status).toHaveClass('visually-hidden')
+    const viewport = screen.getByLabelText('3D viewport')
+    expect(viewport).toHaveAttribute('aria-busy', 'true')
+    expect(viewport.closest('.app-shell')).toHaveAttribute(
+      'data-controls-disabled',
+      'true',
+    )
   })
 })

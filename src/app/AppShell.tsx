@@ -6,15 +6,27 @@ interface AppShellProps {
   assetTree?: ReactNode
   inspector?: ReactNode
   bottomRail?: ReactNode
+  controlsDisabled?: boolean
+  viewportBusy?: boolean
 }
 
-export function AppShell({ viewport, assetTree, inspector, bottomRail }: AppShellProps) {
+export function AppShell({
+  viewport,
+  assetTree,
+  inspector,
+  bottomRail,
+  controlsDisabled = false,
+  viewportBusy = controlsDisabled,
+}: AppShellProps) {
   const [isAssetRailOpen, setIsAssetRailOpen] = useState(false)
   const [isInspectorOpen, setIsInspectorOpen] = useState(false)
   const [isBottomRailOpen, setIsBottomRailOpen] = useState(false)
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      data-controls-disabled={String(controlsDisabled)}
+    >
       <header className="top-bar">
         <strong>RobotSim</strong>
         <span>SIMULATION</span>
@@ -58,7 +70,11 @@ export function AppShell({ viewport, assetTree, inspector, bottomRail }: AppShel
       >
         {assetTree}
       </aside>
-      <main aria-label="3D viewport" className="viewport">
+      <main
+        aria-busy={viewportBusy}
+        aria-label="3D viewport"
+        className="viewport"
+      >
         {viewport}
       </main>
       <aside
