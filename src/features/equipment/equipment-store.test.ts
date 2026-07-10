@@ -5,6 +5,7 @@ import { EquipmentDatabase } from './equipment-db'
 import {
   BUILT_IN_EQUIPMENT,
   createEquipmentStore,
+  EQUIPMENT_CORRUPT_ROW_WARNING,
 } from './equipment-store'
 
 const openDatabases: EquipmentDatabase[] = []
@@ -126,6 +127,92 @@ describe('equipment persistence', () => {
       throw new Error('Expected restored source bytes')
     }
     expect(Array.from(new Uint8Array(restoredBytes))).toEqual([1, 3, 5, 7, 9])
+  })
+
+  it('skips one corrupt row while retaining valid persisted equipment', async () => {
+    const database = createDatabase('corrupt-row')
+    const valid: EquipmentRecord = {
+      id: 'valid-persisted-fixture',
+      name: 'Valid Persisted Fixture',
+      kind: 'imported',
+      status: 'WARNING',
+      transform: {
+        position: [1.1, -0.2, 1.2],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      graspable: true,
+      collisionHalfExtents: [0.1, 0.1, 0.1],
+      stackLightAnchor: null,
+      sourceBytes: new Uint8Array([8, 6, 4, 2]).buffer,
+    }
+    const corrupt = {
+      id: 'corrupt-persisted-fixture',
+      name: 'Corrupt Persisted Fixture',
+      kind: 'imported',
+      status: 'RUNNING',
+      graspable: false,
+      collisionHalfExtents: [0.1, 0.1, 0.1],
+      stackLightAnchor: null,
+    } as unknown as EquipmentRecord
+    await database.open()
+    await database.equipment.bulkPut([valid, corrupt])
+    const store = createEquipmentStore(database)
+
+    await store.getState().hydrate()
+    await store.getState().hydrate()
+
+    expect(store.getState().persistenceStatus).toBe('persistent')
+    expect(store.getState().records.map(({ id }) => id)).toEqual([
+      'cup-01',
+      'cup-02',
+      'machine-01',
+      valid.id,
+    ])
+    expect(store.getState().warnings).toEqual([
+      EQUIPMENT_CORRUPT_ROW_WARNING,
+    ])
+    expect(EQUIPMENT_CORRUPT_ROW_WARNING).toMatch(/re-import/i)
+  })
+
+  it('copies caller bytes once and passes the store-owned bytes to Dexie', async () => {
+    const database = createDatabase('source-bytes-copy')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    const put = vi.spyOn(database.equipment, 'put')
+    const callerBytes = new Uint8Array([2, 4, 6, 8]).buffer
+    const callerView = new Uint8Array(callerBytes)
+    const imported: EquipmentRecord = {
+      id: 'copy-boundary-fixture',
+      name: 'Copy Boundary Fixture',
+      kind: 'imported',
+      status: 'OFF',
+      transform: {
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      graspable: false,
+      collisionHalfExtents: [0.1, 0.1, 0.1],
+      stackLightAnchor: null,
+      sourceBytes: callerBytes,
+    }
+
+    await store.getState().upsertEquipment(imported)
+
+    const storeBytes = store
+      .getState()
+      .records.find(({ id }) => id === imported.id)?.sourceBytes
+    expect(storeBytes).toBeDefined()
+    if (storeBytes === undefined) {
+      throw new Error('Expected the store to own a source byte copy')
+    }
+    expect(storeBytes).not.toBe(callerBytes)
+    expect(put.mock.calls[0]?.[0].sourceBytes).toBe(storeBytes)
+    expect(callerBytes.byteLength).toBe(4)
+    expect(Array.from(callerView)).toEqual([2, 4, 6, 8])
+    callerView[0] = 99
+    expect(Array.from(new Uint8Array(storeBytes))).toEqual([2, 4, 6, 8])
   })
 
   it('retains built-ins in memory and warns once when opening IndexedDB fails', async () => {

@@ -4,6 +4,7 @@ import type {
   EquipmentRecord,
   EquipmentStatus,
 } from '../../domain/equipment/equipment'
+import { isEquipmentRecord } from '../../domain/equipment/equipment'
 import { equipmentDb, type EquipmentDatabase } from './equipment-db'
 
 export type EquipmentPersistenceStatus =
@@ -14,6 +15,8 @@ export type EquipmentPersistenceStatus =
 
 export const EQUIPMENT_PERSISTENCE_WARNING =
   'Equipment storage is unavailable; changes will remain in memory for this session.'
+export const EQUIPMENT_CORRUPT_ROW_WARNING =
+  'Some saved equipment data was corrupt and was skipped. Re-import the affected equipment.'
 
 const IDENTITY_TRANSFORM = {
   quaternion: [0, 0, 0, 1] as [number, number, number, number],
@@ -101,18 +104,40 @@ function builtInRecords(): EquipmentRecord[] {
   return BUILT_IN_EQUIPMENT.map(cloneEquipmentRecord)
 }
 
+interface PersistedRecordMergeResult {
+  records: EquipmentRecord[]
+  corruptRecordCount: number
+}
+
 function mergePersistedRecords(
-  persistedRecords: readonly EquipmentRecord[],
-): EquipmentRecord[] {
+  persistedRecords: readonly unknown[],
+): PersistedRecordMergeResult {
   const recordsById = new Map(
     builtInRecords().map((record) => [record.id, record]),
   )
+  let corruptRecordCount = 0
 
   for (const record of persistedRecords) {
-    recordsById.set(record.id, cloneEquipmentRecord(record))
+    try {
+      if (!isEquipmentRecord(record)) {
+        corruptRecordCount += 1
+        continue
+      }
+
+      recordsById.set(record.id, cloneEquipmentRecord(record))
+    } catch {
+      corruptRecordCount += 1
+    }
   }
 
-  return [...recordsById.values()]
+  return { records: [...recordsById.values()], corruptRecordCount }
+}
+
+function appendWarning(
+  warnings: readonly string[],
+  warning: string,
+): readonly string[] {
+  return warnings.includes(warning) ? warnings : [...warnings, warning]
 }
 
 function createEquipmentStateCreator(database: EquipmentDatabase) {
@@ -130,9 +155,10 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
     const enterMemoryOnlyMode = () => {
       set((state) => ({
         persistenceStatus: 'memory-only',
-        warnings: state.warnings.includes(EQUIPMENT_PERSISTENCE_WARNING)
-          ? state.warnings
-          : [...state.warnings, EQUIPMENT_PERSISTENCE_WARNING],
+        warnings: appendWarning(
+          state.warnings,
+          EQUIPMENT_PERSISTENCE_WARNING,
+        ),
       }))
     }
 
@@ -160,10 +186,14 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
               warnings: [],
             })
           } else {
+            const mergeResult = mergePersistedRecords(persistedRecords)
             set({
-              records: mergePersistedRecords(persistedRecords),
+              records: mergeResult.records,
               persistenceStatus: 'persistent',
-              warnings: [],
+              warnings:
+                mergeResult.corruptRecordCount === 0
+                  ? []
+                  : [EQUIPMENT_CORRUPT_ROW_WARNING],
             })
           }
         } catch {
@@ -183,7 +213,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
       }
 
       try {
-        await database.equipment.put(cloneEquipmentRecord(record))
+        await database.equipment.put(record)
       } catch {
         enterMemoryOnlyMode()
       }
