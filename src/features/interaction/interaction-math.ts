@@ -129,9 +129,19 @@ export function getGraspSensorWorldTransform(
   toolFrame: Object3D,
 ): SerializableTransform {
   toolFrame.updateWorldMatrix(true, false)
-  const sensor = matrixToTransform(toolFrame.matrixWorld)
-  sensor.position[2] += GRASP_SENSOR_LOCAL_CENTER[2]
-  return sensor
+  return matrixToTransform(
+    toolFrame.matrixWorld
+      .clone()
+      .multiply(new Matrix4().makeTranslation(...GRASP_SENSOR_LOCAL_CENTER)),
+  )
+}
+
+export function getWorldColliderCenter(
+  object: Object3D,
+  localCenter: readonly [number, number, number],
+): [number, number, number] {
+  object.updateWorldMatrix(true, false)
+  return new Vector3(...localCenter).applyMatrix4(object.matrixWorld).toArray()
 }
 
 function transformedBox(

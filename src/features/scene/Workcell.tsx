@@ -3,6 +3,8 @@ import { forwardRef, useCallback, useRef, useState } from 'react'
 import type { Group, Object3D } from 'three'
 import { EquipmentScene } from '../equipment/EquipmentScene'
 import { CollisionSystem } from '../interaction/CollisionSystem'
+import { useInteractionStore } from '../interaction/interaction-store'
+import { hasActiveCollision } from '../interaction/outline-state'
 import {
   GraspController,
   type InteractionRuntimeController,
@@ -31,6 +33,13 @@ const WORKBENCH_LEGS = [
 ] as const
 
 const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
+  const activeCollisionPairs = useInteractionStore(
+    (state) => state.activeCollisionPairs,
+  )
+  const collision = hasActiveCollision(
+    'workcell:workbench',
+    activeCollisionPairs,
+  )
   return (
     <group name="workbench" ref={ref}>
       <mesh
@@ -42,6 +51,29 @@ const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
         <boxGeometry args={[1.8, 1.2, WORKBENCH_TOP_THICKNESS]} />
         <meshStandardMaterial color="#6f767c" metalness={0.8} roughness={0.34} />
       </mesh>
+      {collision ? (
+        <mesh
+          name="workbench-collision-outline"
+          position={[0, 0, WORKBENCH_TOP_Z - WORKBENCH_TOP_THICKNESS / 2]}
+          renderOrder={1000}
+          userData={{ outline: 'collision', workcellId: 'workbench' }}
+        >
+          <boxGeometry
+            args={[
+              1.8 * 1.01,
+              1.2 * 1.01,
+              WORKBENCH_TOP_THICKNESS * 1.04,
+            ]}
+          />
+          <meshBasicMaterial
+            color="#ff3b30"
+            depthTest={false}
+            opacity={0.86}
+            transparent
+            wireframe
+          />
+        </mesh>
+      ) : null}
       {WORKBENCH_LEGS.map(([x, y]) => (
         <mesh
           castShadow
@@ -72,6 +104,9 @@ export function Workcell({
     },
     [registerRig],
   )
+  const handleEquipmentDraggingChange = useCallback((dragging: boolean) => {
+    setOrbitEnabled(!dragging)
+  }, [])
 
   return (
     <>
@@ -96,7 +131,7 @@ export function Workcell({
       <Workbench ref={workbenchObjectRef} />
       <EquipmentScene
         equipmentObjectsRef={equipmentObjectsRef}
-        onDraggingChange={(dragging) => setOrbitEnabled(!dragging)}
+        onDraggingChange={handleEquipmentDraggingChange}
       />
       <group name="robot-workbench-mount" position={[0, 0, WORKBENCH_TOP_Z]}>
         <RobotModel registerRig={handleRigRegistration} />

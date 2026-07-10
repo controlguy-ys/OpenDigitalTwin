@@ -88,6 +88,46 @@ describe('built-in equipment', () => {
 })
 
 describe('equipment persistence', () => {
+  it('preserves and commits an operator preview issued during slow hydration', async () => {
+    const database = createDatabase('transform-hydration-race')
+    const actualOpen = database.open.bind(database)
+    let releaseOpen!: () => void
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve
+    })
+    vi.spyOn(database, 'open').mockImplementation(
+      (async () => {
+        await openGate
+        return actualOpen()
+      }) as typeof database.open,
+    )
+    const put = vi.spyOn(database.equipment, 'put')
+    const store = createEquipmentStore(database)
+    const operatorTransform: SerializableTransform = {
+      position: [1.4, -0.3, 1.2],
+      quaternion: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    }
+
+    const hydration = store.getState().hydrate()
+    store
+      .getState()
+      .previewEquipmentTransform('cup-01', operatorTransform)
+    const commit = store.getState().commitEquipmentTransform('cup-01')
+    expect(
+      store.getState().records.find(({ id }) => id === 'cup-01')?.transform,
+    ).toEqual(operatorTransform)
+
+    releaseOpen()
+    await Promise.all([hydration, commit])
+
+    expect(
+      store.getState().records.find(({ id }) => id === 'cup-01')?.transform,
+    ).toEqual(operatorTransform)
+    expect(put).toHaveBeenCalledTimes(1)
+    expect(put.mock.calls[0]?.[0].transform).toEqual(operatorTransform)
+  })
+
   it('applies many transform previews in memory and persists one explicit commit', async () => {
     const database = createDatabase('transform-preview')
     const store = createEquipmentStore(database)

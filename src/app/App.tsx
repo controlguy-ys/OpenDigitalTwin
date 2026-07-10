@@ -67,6 +67,13 @@ export function App() {
   const handleRemoveEquipment = useCallback(
     (id: string) =>
       deleteImportedEquipment(id, {
+        beginEquipmentRemoval: (equipmentId) =>
+          useInteractionStore
+            .getState()
+            .beginEquipmentRemoval(equipmentId),
+        endEquipmentRemoval: (equipmentId) => {
+          useInteractionStore.getState().endEquipmentRemoval(equipmentId)
+        },
         releaseHeldEquipment: async (equipmentId) => {
           const controller = interactionControllerRef.current
           const heldEquipmentId =

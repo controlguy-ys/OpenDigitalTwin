@@ -16,7 +16,7 @@ import {
   useRef,
   type RefObject,
 } from 'react'
-import { Vector3, type Object3D } from 'three'
+import { Vector3, type Group, type Object3D } from 'three'
 import type { SerializableTransform } from '../../domain/equipment/equipment'
 import {
   EquipmentOutline,
@@ -35,9 +35,12 @@ import {
   chooseNearestGraspCandidate,
   computeGripOffset,
   getGraspSensorWorldTransform,
+  getWorldColliderCenter,
   matrixToTransform,
 } from './interaction-math'
 import { useInteractionStore } from './interaction-store'
+import { updateEquipmentObjectRegistration } from './equipment-object-registry'
+import { getEquipmentOutlineState } from './outline-state'
 
 const GRASP_GROUPS = interactionGroups(3, [1])
 
@@ -73,7 +76,12 @@ export function GraspController({
   const records = useEquipmentStore((state) => state.records)
   const heldEquipmentId = useInteractionStore((state) => state.heldEquipmentId)
   const gripOffset = useInteractionStore((state) => state.gripOffset)
+  const selection = useInteractionStore((state) => state.selection)
+  const activeCollisionPairs = useInteractionStore(
+    (state) => state.activeCollisionPairs,
+  )
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
+  const heldObjectOwnerRef = useRef<Object3D>(null)
   const previousGripperOpen = useRef(true)
   const sensorPosition = useMemo(() => new Vector3(), [])
 
@@ -146,7 +154,12 @@ export function GraspController({
         return []
       }
       object.updateWorldMatrix(true, false)
-      const equipmentPosition = new Vector3().setFromMatrixPosition(object.matrixWorld)
+      const equipmentPosition = new Vector3().fromArray(
+        getWorldColliderCenter(
+          object,
+          record.importMetadata?.colliderCenter ?? [0, 0, 0],
+        ),
+      )
       return [{ equipmentId, distanceSq: equipmentPosition.distanceToSquared(sensorPosition) }]
     })
     const equipmentId = chooseNearestGraspCandidate(candidates)
@@ -210,6 +223,32 @@ export function GraspController({
     heldEquipmentId === null
       ? undefined
       : records.find(({ id }) => id === heldEquipmentId)
+  const heldSelected =
+    heldRecord !== undefined &&
+    selection?.kind === 'equipment' &&
+    selection.equipmentId === heldRecord.id
+  const heldOutlineState =
+    heldRecord === undefined
+      ? null
+      : getEquipmentOutlineState(
+          heldRecord.id,
+          heldSelected,
+          activeCollisionPairs,
+        )
+  const registerHeldObject = useCallback(
+    (object: Group | null) => {
+      if (heldRecord === undefined) {
+        return
+      }
+      updateEquipmentObjectRegistration(
+        equipmentObjectsRef.current,
+        heldRecord.id,
+        heldObjectOwnerRef,
+        object,
+      )
+    },
+    [equipmentObjectsRef, heldRecord],
+  )
 
   return (
     <>
@@ -254,11 +293,17 @@ export function GraspController({
               }}
               position={gripOffset.position}
               quaternion={gripOffset.quaternion}
+              ref={registerHeldObject}
               scale={gripOffset.scale}
               userData={{ equipmentId: heldRecord.id, held: true }}
             >
               <EquipmentVisual record={heldRecord} />
-              <EquipmentOutline collision={false} record={heldRecord} />
+              {heldOutlineState === null ? null : (
+                <EquipmentOutline
+                  collision={heldOutlineState === 'collision'}
+                  record={heldRecord}
+                />
+              )}
             </group>,
             rig.toolFrame,
           )}

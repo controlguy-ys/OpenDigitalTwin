@@ -1,7 +1,9 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION } from '../../domain/robot/crb15000'
+import { useInteractionStore } from '../interaction/interaction-store'
+import { useEventStore } from '../../state/event-store'
 import { SimulationJointSource } from './SimulationJointSource'
 import { JointInspector } from './JointInspector'
 import { useRobotStore } from './robot-store'
@@ -9,6 +11,9 @@ import { useRobotStore } from './robot-store'
 describe('JointInspector', () => {
   beforeEach(() => {
     useRobotStore.getState().reset()
+    useInteractionStore.setState({ removingEquipmentIds: [] })
+    useInteractionStore.getState().resetInteraction()
+    useEventStore.setState({ events: [] })
   })
 
   it('clamps J3 numeric editing to the manifest and stops playback', () => {
@@ -185,6 +190,59 @@ describe('JointInspector', () => {
       gripperOpen: true,
       keyframes: [],
     })
+    unsubscribe()
+  })
+
+  it('awaits held-release reset before clearing UI state and preserves collision history', async () => {
+    const user = userEvent.setup()
+    const source = new SimulationJointSource()
+    const unsubscribe = source.subscribe((frame) => {
+      useRobotStore.getState().applyFrame(frame)
+    })
+    let finishRelease!: () => void
+    const releaseGate = new Promise<void>((resolve) => {
+      finishRelease = resolve
+    })
+    const onReset = vi.fn(async () => {
+      await releaseGate
+      useInteractionStore.getState().resetInteraction()
+    })
+    useRobotStore.getState().setGripperOpen(false)
+    useRobotStore.getState().savePose()
+    useInteractionStore.getState().enterGraspCandidate('cup-01')
+    useInteractionStore.getState().holdEquipment('cup-01', {
+      position: [0, 0, 0],
+      quaternion: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    })
+    useInteractionStore
+      .getState()
+      .enterCollision('equipment:cup-01', 'robot-link:LINK04')
+    useEventStore
+      .getState()
+      .appendCollision('equipment:cup-01|robot-link:LINK04', 1)
+    render(
+      <JointInspector onReset={onReset} source={source} />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }))
+
+    expect(onReset).toHaveBeenCalledTimes(1)
+    expect(useInteractionStore.getState().heldEquipmentId).toBe('cup-01')
+    expect(useRobotStore.getState()).toMatchObject({
+      gripperOpen: false,
+      keyframes: [expect.any(Object)],
+    })
+
+    finishRelease()
+    await waitFor(() => {
+      expect(useInteractionStore.getState().heldEquipmentId).toBeNull()
+      expect(useRobotStore.getState()).toMatchObject({
+        gripperOpen: true,
+        keyframes: [],
+      })
+    })
+    expect(useEventStore.getState().events).toHaveLength(1)
     unsubscribe()
   })
 

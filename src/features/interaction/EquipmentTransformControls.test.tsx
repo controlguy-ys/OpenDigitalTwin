@@ -23,6 +23,40 @@ vi.mock('@react-three/drei/core/TransformControls.js', () => ({
 }))
 
 describe('EquipmentTransformControls', () => {
+  it('does not fire drag cleanup when a parent rerender supplies a new callback', () => {
+    const objectRef = createRef<Group>()
+    objectRef.current = new Group()
+    const firstDraggingChange = vi.fn()
+    const secondDraggingChange = vi.fn()
+    const props = {
+      commitTransform: vi.fn(async () => undefined),
+      equipmentId: 'cup-01',
+      objectRef,
+      previewTransform: vi.fn(),
+    }
+    const view = render(
+      <EquipmentTransformControls
+        {...props}
+        onDraggingChange={firstDraggingChange}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'begin transform' }))
+    view.rerender(
+      <EquipmentTransformControls
+        {...props}
+        onDraggingChange={secondDraggingChange}
+      />,
+    )
+
+    expect(firstDraggingChange).toHaveBeenCalledTimes(1)
+    expect(firstDraggingChange).toHaveBeenLastCalledWith(true)
+    expect(secondDraggingChange).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'commit transform' }))
+    expect(secondDraggingChange).toHaveBeenCalledWith(false)
+  })
+
   it('previews every object change, commits once on mouse-up, and coordinates orbit dragging', async () => {
     const objectRef = createRef<Group>()
     objectRef.current = new Group()

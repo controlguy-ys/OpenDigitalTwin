@@ -14,6 +14,7 @@ import {
 import { jointAngleSelectors, useRobotStore } from '../joints/robot-store'
 import { useInteractionStore } from '../interaction/interaction-store'
 import { ROBOT_LINK_COLLISION_BOUNDS } from '../interaction/robot-collision-bounds'
+import { getRobotLinkOutlineState } from '../interaction/outline-state'
 import { RobotGripper } from './RobotGripper'
 
 export const ROBOT_LINK_ASSETS = [
@@ -177,14 +178,13 @@ export function RobotModel({ registerRig }: RobotModelProps) {
       return []
     }
     const bounds = ROBOT_LINK_COLLISION_BOUNDS[id]
-    const selected =
-      selection?.kind === 'robot-link' && selection.linkId === id
-    const collisionEntity = `robot-link:${id}`
-    const collision = activeCollisionPairs.some(
-      (pair) =>
-        pair.startsWith(`${collisionEntity}|`) ||
-        pair.endsWith(`|${collisionEntity}`),
+    const outlineState = getRobotLinkOutlineState(
+      selection,
+      id,
+      activeCollisionPairs,
     )
+    const selected = outlineState === 'selection'
+    const collision = outlineState === 'collision'
     return [
       createPortal(
         <group name={`${id}-interaction`}>
@@ -210,7 +210,7 @@ export function RobotModel({ registerRig }: RobotModelProps) {
               transparent
             />
           </mesh>
-          {selected || collision ? (
+          {outlineState === null ? null : (
             <mesh
               name={`${id}-${collision ? 'collision' : 'selection'}-outline`}
               position={bounds.center}
@@ -235,7 +235,7 @@ export function RobotModel({ registerRig }: RobotModelProps) {
                 wireframe
               />
             </mesh>
-          ) : null}
+          )}
         </group>,
         registration.linkSlots[id],
       ),

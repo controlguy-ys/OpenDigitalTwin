@@ -1,5 +1,5 @@
 import { TransformControls } from '@react-three/drei/core/TransformControls.js'
-import { useEffect, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 import type { Object3D } from 'three'
 import type { SerializableTransform } from '../../domain/equipment/equipment'
 
@@ -26,11 +26,16 @@ export function EquipmentTransformControls({
   commitTransform,
   onDraggingChange,
 }: EquipmentTransformControlsProps) {
+  const onDraggingChangeRef = useRef(onDraggingChange)
+  useLayoutEffect(() => {
+    onDraggingChangeRef.current = onDraggingChange
+  }, [onDraggingChange])
+
   useEffect(
     () => () => {
-      onDraggingChange(false)
+      onDraggingChangeRef.current(false)
     },
-    [onDraggingChange],
+    [],
   )
 
   return (
@@ -38,10 +43,10 @@ export function EquipmentTransformControls({
       mode="translate"
       object={objectRef as RefObject<Object3D>}
       onMouseDown={() => {
-        onDraggingChange(true)
+        onDraggingChangeRef.current(true)
       }}
       onMouseUp={() => {
-        onDraggingChange(false)
+        onDraggingChangeRef.current(false)
         void commitTransform(equipmentId)
       }}
       onObjectChange={() => {

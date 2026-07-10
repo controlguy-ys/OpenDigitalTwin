@@ -48,6 +48,22 @@ describe('interaction selection and visibility', () => {
 })
 
 describe('grasp transitions', () => {
+  it('locks a removing asset against candidates and re-grasp until removal ends', () => {
+    const store = createInteractionStore()
+    store.getState().enterGraspCandidate('cup-01')
+
+    expect(store.getState().beginEquipmentRemoval('cup-01')).toBe(true)
+    expect(store.getState().graspCandidateIds).toEqual([])
+    expect(store.getState().holdEquipment('cup-01', IDENTITY_OFFSET)).toBe(false)
+
+    store.getState().resetInteraction()
+    expect(store.getState().removingEquipmentIds).toEqual(['cup-01'])
+
+    store.getState().endEquipmentRemoval('cup-01')
+    store.getState().enterGraspCandidate('cup-01')
+    expect(store.getState().holdEquipment('cup-01', IDENTITY_OFFSET)).toBe(true)
+  })
+
   it('holds an entered candidate when the gripper closes', () => {
     const store = createInteractionStore()
 
@@ -97,6 +113,26 @@ describe('grasp transitions', () => {
 })
 
 describe('collision transitions', () => {
+  it('clears every canonical pair owned by an unmounted collision entity', () => {
+    const store = createInteractionStore()
+    store
+      .getState()
+      .enterCollision('equipment:cup-01', 'robot-link:LINK04')
+    store
+      .getState()
+      .enterCollision('equipment:cup-01', 'robot-link:LINK05')
+    store
+      .getState()
+      .enterCollision('equipment:cup-02', 'robot-link:LINK03')
+
+    expect(
+      store.getState().clearCollisionPairsForEntity('equipment:cup-01'),
+    ).toBe(2)
+    expect(store.getState().activeCollisionPairs).toEqual([
+      'equipment:cup-02|robot-link:LINK03',
+    ])
+  })
+
   it('canonicalizes one collision enter and preserves history eligibility after exit', () => {
     const store = createInteractionStore()
 

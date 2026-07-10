@@ -25,6 +25,7 @@ export interface InteractionStoreState {
   selection: SceneSelection
   selectedEquipmentId: string | null
   hiddenEntityIds: readonly string[]
+  removingEquipmentIds: readonly string[]
   graspCandidateIds: readonly string[]
   heldEquipmentId: string | null
   gripOffset: SerializableTransform | null
@@ -37,10 +38,13 @@ export interface InteractionStoreState {
   setEntityVisible(id: string, visible: boolean): void
   enterGraspCandidate(id: string): void
   exitGraspCandidate(id: string): void
+  beginEquipmentRemoval(id: string): boolean
+  endEquipmentRemoval(id: string): void
   holdEquipment(id: string, gripOffset: SerializableTransform): boolean
   releaseHeldEquipment(id?: string): ReleasedEquipment | null
   enterCollision(first: CollisionEntityId, second: CollisionEntityId): boolean
   exitCollision(first: CollisionEntityId, second: CollisionEntityId): boolean
+  clearCollisionPairsForEntity(entityId: CollisionEntityId): number
   resetInteraction(): void
 }
 
@@ -77,6 +81,7 @@ const INITIAL_INTERACTION_STATE = {
   selection: null,
   selectedEquipmentId: null,
   hiddenEntityIds: [] as readonly string[],
+  removingEquipmentIds: [] as readonly string[],
   graspCandidateIds: [] as readonly string[],
   heldEquipmentId: null,
   gripOffset: null,
@@ -134,7 +139,9 @@ function createInteractionState(
     },
     enterGraspCandidate: (id) => {
       set((state) => ({
-        graspCandidateIds: state.graspCandidateIds.includes(id)
+        graspCandidateIds: state.removingEquipmentIds.includes(id)
+          ? state.graspCandidateIds
+          : state.graspCandidateIds.includes(id)
           ? state.graspCandidateIds
           : [...state.graspCandidateIds, id],
       }))
@@ -150,6 +157,7 @@ function createInteractionState(
       const state = get()
       if (
         state.heldEquipmentId !== null ||
+        state.removingEquipmentIds.includes(id) ||
         !state.graspCandidateIds.includes(id)
       ) {
         return false
@@ -175,6 +183,26 @@ function createInteractionState(
       set({ heldEquipmentId: null, gripOffset: null })
       return released
     },
+    beginEquipmentRemoval: (id) => {
+      const state = get()
+      if (state.removingEquipmentIds.includes(id)) {
+        return false
+      }
+      set({
+        removingEquipmentIds: [...state.removingEquipmentIds, id],
+        graspCandidateIds: state.graspCandidateIds.filter(
+          (candidateId) => candidateId !== id,
+        ),
+      })
+      return true
+    },
+    endEquipmentRemoval: (id) => {
+      set((state) => ({
+        removingEquipmentIds: state.removingEquipmentIds.filter(
+          (equipmentId) => equipmentId !== id,
+        ),
+      }))
+    },
     enterCollision: (first, second) => {
       const pair = canonicalCollisionPair(first, second)
       if (get().activeCollisionPairs.includes(pair)) {
@@ -197,8 +225,28 @@ function createInteractionState(
       }))
       return true
     },
+    clearCollisionPairsForEntity: (entityId) => {
+      const state = get()
+      const nextPairs = state.activeCollisionPairs.filter(
+        (pair) =>
+          !pair.startsWith(`${entityId}|`) && !pair.endsWith(`|${entityId}`),
+      )
+      const removedCount = state.activeCollisionPairs.length - nextPairs.length
+      if (removedCount > 0) {
+        set({ activeCollisionPairs: nextPairs })
+      }
+      return removedCount
+    },
     resetInteraction: () => {
-      set({ ...INITIAL_INTERACTION_STATE })
+      set({
+        selection: null,
+        selectedEquipmentId: null,
+        hiddenEntityIds: [],
+        graspCandidateIds: [],
+        heldEquipmentId: null,
+        gripOffset: null,
+        activeCollisionPairs: [],
+      })
     },
   }
 }

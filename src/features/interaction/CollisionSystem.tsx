@@ -8,7 +8,7 @@ import {
   type IntersectionExitPayload,
   type RapierRigidBody,
 } from '@react-three/rapier'
-import { useMemo, useRef, type RefObject } from 'react'
+import { useLayoutEffect, useMemo, useRef, type RefObject } from 'react'
 import { Quaternion, Vector3, type Object3D } from 'three'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
@@ -65,6 +65,13 @@ function KinematicSensor({
     rigidBody.setNextKinematicTranslation(position)
     rigidBody.setNextKinematicRotation(rotation)
   })
+
+  useLayoutEffect(
+    () => () => {
+      useInteractionStore.getState().clearCollisionPairsForEntity(entityId)
+    },
+    [entityId],
+  )
 
   const dependencies = {
     interactionStore: useInteractionStore,
@@ -136,7 +143,6 @@ export function CollisionSystem({
   workbenchObjectRef,
 }: CollisionSystemProps) {
   const records = useEquipmentStore((state) => state.records)
-  const heldEquipmentId = useInteractionStore((state) => state.heldEquipmentId)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
 
   return (
@@ -161,7 +167,6 @@ export function CollisionSystem({
       {records
         .filter(
           (record) =>
-            record.id !== heldEquipmentId &&
             !hiddenEntityIds.includes(record.id),
         )
         .map((record) => (

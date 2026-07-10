@@ -10,7 +10,9 @@ import type { ThreeEvent } from '@react-three/fiber'
 import type { Group, Object3D } from 'three'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import { EquipmentTransformControls } from '../interaction/EquipmentTransformControls'
+import { updateEquipmentObjectRegistration } from '../interaction/equipment-object-registry'
 import { useInteractionStore } from '../interaction/interaction-store'
+import { getEquipmentOutlineState } from '../interaction/outline-state'
 import { importedGeometryRepository } from '../import/imported-geometry-repository'
 import { BuiltInEquipment } from './BuiltInEquipment'
 import { StackLight } from './StackLight'
@@ -20,14 +22,6 @@ interface EquipmentInstanceProps {
   record: EquipmentRecord
   equipmentObjectsRef: RefObject<Map<string, Object3D>>
   onDraggingChange(dragging: boolean): void
-}
-
-function hasEquipmentCollision(
-  equipmentId: string,
-  pairs: readonly string[],
-): boolean {
-  const entity = `equipment:${equipmentId}`
-  return pairs.some((pair) => pair.startsWith(`${entity}|`) || pair.endsWith(`|${entity}`))
 }
 
 export function EquipmentVisual({ record }: { record: EquipmentRecord }) {
@@ -93,16 +87,21 @@ const EquipmentInstance = memo(function EquipmentInstance({
   )
   const selected =
     selection?.kind === 'equipment' && selection.equipmentId === record.id
-  const collision = hasEquipmentCollision(record.id, activeCollisionPairs)
+  const outlineState = getEquipmentOutlineState(
+    record.id,
+    selected,
+    activeCollisionPairs,
+  )
+  const collision = outlineState === 'collision'
 
   const registerObject = useCallback(
     (object: Group | null) => {
-      objectRef.current = object
-      if (object === null) {
-        equipmentObjectsRef.current.delete(record.id)
-      } else {
-        equipmentObjectsRef.current.set(record.id, object)
-      }
+      updateEquipmentObjectRegistration(
+        equipmentObjectsRef.current,
+        record.id,
+        objectRef,
+        object,
+      )
     },
     [equipmentObjectsRef, record.id],
   )
@@ -126,9 +125,9 @@ const EquipmentInstance = memo(function EquipmentInstance({
         }}
       >
         <EquipmentVisual record={record} />
-        {selected || collision ? (
+        {outlineState === null ? null : (
           <EquipmentOutline collision={collision} record={record} />
-        ) : null}
+        )}
       </group>
       {selected ? (
         <EquipmentTransformControls

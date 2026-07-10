@@ -11,6 +11,7 @@ import {
   composeWorldTransform,
   computeGripOffset,
   getGraspSensorWorldTransform,
+  getWorldColliderCenter,
   intersectsGraspSensor,
   isCollisionPairAllowed,
   snapTransformToWorkbench,
@@ -23,6 +24,35 @@ const IDENTITY: SerializableTransform = {
 }
 
 describe('grasp transform math', () => {
+  it('transforms the grasp sensor local center through the full tool rotation', () => {
+    const tool = new Group()
+    tool.position.set(1, 2, 3)
+    tool.quaternion.setFromAxisAngle({ x: 0, y: 1, z: 0 }, Math.PI / 2)
+    tool.updateWorldMatrix(true, true)
+
+    const sensor = getGraspSensorWorldTransform(tool)
+
+    expect(sensor.position[0]).toBeCloseTo(1.09, 7)
+    expect(sensor.position[1]).toBeCloseTo(2, 7)
+    expect(sensor.position[2]).toBeCloseTo(3, 7)
+  })
+
+  it('uses the transformed and scaled collider center for grasp distance', () => {
+    const equipment = new Group()
+    equipment.position.set(1, 2, 3)
+    equipment.scale.set(2, 3, 4)
+    equipment.quaternion.setFromAxisAngle({ x: 0, y: 0, z: 1 }, Math.PI / 2)
+    equipment.updateWorldMatrix(true, true)
+
+    expect(getWorldColliderCenter(equipment, [0.5, 0, 0])).toEqual(
+      expect.arrayContaining([
+        expect.closeTo(1, 7),
+        expect.closeTo(3, 7),
+        expect.closeTo(3, 7),
+      ]),
+    )
+  })
+
   it('releases to toolWorld multiplied by the captured grip offset', () => {
     const toolWorld: SerializableTransform = {
       position: [1.2, -0.4, 1.3],
@@ -116,9 +146,9 @@ describe('fixed grasp fixture', () => {
     const sensor = getGraspSensorWorldTransform(rig.toolFrame)
     expect(GRASP_SENSOR_LOCAL_CENTER).toEqual([0, 0, 0.09])
     expect(GRASP_SENSOR_HALF_EXTENTS).toEqual([0.1, 0.08, 0.1])
-    expect(sensor.position[0]).toBeCloseTo(0.63696, 4)
-    expect(sensor.position[1]).toBeCloseTo(0.00066, 4)
-    expect(sensor.position[2]).toBeCloseTo(1.22478, 4)
+    expect(sensor.position[0]).toBeCloseTo(0.66981, 4)
+    expect(sensor.position[1]).toBeCloseTo(-0.01253, 4)
+    expect(sensor.position[2]).toBeCloseTo(1.05203, 4)
     expect(
       intersectsGraspSensor(sensor, GRASP_SENSOR_HALF_EXTENTS, {
         ...IDENTITY,
