@@ -1,0 +1,59 @@
+{
+  "name": "crb15000-robot-sim-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.15.1 <23",
+    "npm": ">=11.4.2 <12"
+  },
+  "packageManager": "npm@11.4.2",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:e2e": "tsc -b && vite build --mode test",
+    "preview": "vite preview",
+    "lint": "oxlint .",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "cad:convert": "tsx scripts/cad/convert-robot.ts",
+    "cad:validate": "tsx scripts/cad/validate-robot-assets.ts",
+    "test:e2e": "npm run build:e2e && playwright test",
+    "verify": "npm run lint && npm run test:run && npm run cad:validate && npm run build"
+  },
+  "dependencies": {
+    "@react-three/drei": "10.7.7",
+    "@react-three/fiber": "9.6.1",
+    "@react-three/rapier": "2.2.0",
+    "dexie": "4.4.4",
+    "dexie-react-hooks": "4.4.0",
+    "lucide-react": "1.24.0",
+    "occt-import-js": "0.0.23",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "three": "0.185.1",
+    "zustand": "5.0.14"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "4.4.1",
+    "@playwright/test": "1.61.1",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@types/three": "0.185.1",
+    "@vitejs/plugin-react": "6.0.3",
+    "@vitest/coverage-v8": "4.1.10",
+    "fake-indexeddb": "6.2.5",
+    "jsdom": "29.1.1",
+    "oxlint": "1.73.0",
+    "tsx": "4.23.0",
+    "typescript": "6.0.3",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
+  }
+}

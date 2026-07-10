@@ -1,0 +1,17 @@
+:root {
+  --color-canvas: #0B1118;
+  --color-panel: #111B24;
+  --color-viewport: #081018;
+  --color-border: #263440;
+  --color-text: #E9F1F7;
+  --color-muted: #8EA1B0;
+  --color-accent: #38BDF8;
+  --color-fault: #EF4444;
+  --color-warning: #F59E0B;
+  --color-running: #22C55E;
+  --radius: 6px;
+  --top-bar-height: 48px;
+  --asset-rail-width: 248px;
+  --inspector-width: 320px;
+  --bottom-rail-height: 128px;
+}

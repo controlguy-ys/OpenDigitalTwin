@@ -1,0 +1,342 @@
+@import './tokens.css';
+
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  color: var(--color-text);
+  background: var(--color-canvas);
+  font-family: 'Segoe UI', Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+button {
+  color: inherit;
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--color-canvas);
+  grid-template-areas:
+    'top top top'
+    'assets viewport inspector'
+    'bottom bottom bottom';
+  grid-template-columns: 248px minmax(0, 1fr) 320px;
+  grid-template-rows: 48px minmax(0, 1fr) 128px;
+}
+
+.top-bar {
+  z-index: 3;
+  display: flex;
+  grid-area: top;
+  align-items: center;
+  gap: 48px;
+  min-width: 0;
+  padding: 0 16px;
+  background: var(--color-canvas);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.top-bar strong {
+  flex: 0 0 auto;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.top-bar span {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.top-bar span:first-of-type {
+  color: var(--color-accent);
+}
+
+.top-bar span:last-of-type {
+  color: var(--color-running);
+}
+
+.top-bar button {
+  width: 132px;
+  height: 32px;
+  margin-left: auto;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius);
+}
+
+.top-bar button:hover {
+  background: rgb(56 189 248 / 8%);
+}
+
+.top-bar button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.drawer-control {
+  display: none;
+}
+
+.asset-rail,
+.inspector,
+.bottom-rail {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-panel);
+}
+
+.bottom-rail-content {
+  min-width: 0;
+  min-height: 0;
+}
+
+.asset-rail {
+  grid-area: assets;
+  border-right: 1px solid var(--color-border);
+}
+
+.viewport {
+  position: relative;
+  display: grid;
+  grid-area: viewport;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-viewport);
+  place-items: center;
+}
+
+.inspector {
+  grid-area: inspector;
+  border-left: 1px solid var(--color-border);
+}
+
+.bottom-rail {
+  z-index: 3;
+  grid-area: bottom;
+  border-top: 1px solid var(--color-border);
+}
+
+.viewport-loading {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+@media (max-width: 959.98px) {
+  .app-shell {
+    grid-template-areas:
+      'top top top'
+      'asset-edge viewport inspector-edge'
+      'bottom bottom bottom';
+    grid-template-columns: 48px minmax(0, 1fr) 48px;
+    grid-template-rows: 48px minmax(0, 1fr) 64px;
+  }
+
+  .top-bar {
+    gap: clamp(8px, 4vw, 28px);
+  }
+
+  .top-bar button {
+    width: 136px;
+  }
+
+  .app-shell::before,
+  .app-shell::after {
+    position: fixed;
+    top: 48px;
+    bottom: 64px;
+    z-index: 1;
+    width: 48px;
+    content: '';
+    background: var(--color-panel);
+    pointer-events: none;
+  }
+
+  .app-shell::before {
+    left: 0;
+    border-right: 1px solid var(--color-border);
+  }
+
+  .app-shell::after {
+    right: 0;
+    border-left: 1px solid var(--color-border);
+  }
+
+  .drawer-control {
+    position: fixed;
+    z-index: 5;
+    display: grid;
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    color: var(--color-muted);
+    cursor: pointer;
+    background: var(--color-panel);
+    border: 0;
+    place-items: center;
+  }
+
+  .drawer-control:hover {
+    color: var(--color-accent);
+    background: var(--color-canvas);
+  }
+
+  .drawer-control:focus-visible {
+    color: var(--color-accent);
+    outline: 2px solid var(--color-accent);
+    outline-offset: -3px;
+  }
+
+  .drawer-control-left,
+  .drawer-control-right {
+    top: 48px;
+    transition: left 160ms ease, right 160ms ease;
+  }
+
+  .drawer-control-left {
+    left: 0;
+    border-right: 1px solid var(--color-border);
+  }
+
+  .drawer-control-left.is-open {
+    left: 200px;
+  }
+
+  .drawer-control-right {
+    right: 0;
+    border-left: 1px solid var(--color-border);
+  }
+
+  .drawer-control-right.is-open {
+    right: 272px;
+  }
+
+  .sheet-control {
+    right: 0;
+    bottom: 0;
+    height: 64px;
+    border-left: 1px solid var(--color-border);
+  }
+
+  .sheet-control svg {
+    transition: transform 160ms ease;
+  }
+
+  .sheet-control:not(.is-open) svg {
+    transform: rotate(180deg);
+  }
+
+  .asset-rail,
+  .inspector {
+    position: fixed;
+    top: 48px;
+    bottom: 64px;
+    z-index: 4;
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 160ms ease;
+  }
+
+  .asset-rail {
+    left: 0;
+    width: 248px;
+    transform: translateX(-100%);
+  }
+
+  .inspector {
+    right: 0;
+    width: 320px;
+    transform: translateX(100%);
+  }
+
+  .asset-rail.is-open,
+  .inspector.is-open {
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateX(0);
+  }
+
+  .bottom-rail {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 4;
+    height: 128px;
+    transform: translateY(64px);
+    transition: transform 160ms ease;
+  }
+
+  .bottom-rail.is-open {
+    transform: translateY(0);
+  }
+
+  .bottom-rail:not(.is-open) .bottom-rail-content {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-control-left,
+  .drawer-control-right,
+  .sheet-control svg,
+  .asset-rail,
+  .inspector,
+  .bottom-rail {
+    transition: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .top-bar {
+    padding-inline: 8px;
+  }
+
+  .top-bar strong {
+    font-size: 15px;
+  }
+
+  .top-bar span {
+    font-size: 9px;
+  }
+
+  .top-bar button {
+    height: 30px;
+    padding-inline: 8px;
+    font-size: 10px;
+  }
+}
