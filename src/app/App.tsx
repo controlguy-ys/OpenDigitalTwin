@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useEquipmentStore } from '../features/equipment/equipment-store'
 import { JointInspector } from '../features/joints/JointInspector'
 import { simulationJointSource } from '../features/joints/SimulationJointSource'
 import { useRobotStore } from '../features/joints/robot-store'
@@ -13,7 +14,12 @@ export function App() {
   const [sceneStatus, setSceneStatus] =
     useState<SceneRenderStatus>('loading')
   const sourceQuality = useRobotStore((state) => state.sourceQuality)
+  const hydrateEquipment = useEquipmentStore((state) => state.hydrate)
   const controlsDisabled = sceneStatus !== 'ready'
+
+  useEffect(() => {
+    void hydrateEquipment()
+  }, [hydrateEquipment])
 
   useEffect(() => {
     const unsubscribe = simulationJointSource.subscribe((frame) => {

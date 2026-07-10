@@ -1,4 +1,5 @@
 import { OrbitControls } from '@react-three/drei/core/OrbitControls.js'
+import { EquipmentScene } from '../equipment/EquipmentScene'
 import type { RobotRigRegistration } from '../robot/RobotModel'
 import { RobotModel } from '../robot/RobotModel'
 
@@ -64,6 +65,7 @@ export function Workcell({ registerRig }: WorkcellProps) {
         rotation={[Math.PI / 2, 0, 0]}
       />
       <Workbench />
+      <EquipmentScene />
       <group name="robot-workbench-mount" position={[0, 0, WORKBENCH_TOP_Z]}>
         <RobotModel registerRig={registerRig} />
       </group>
