@@ -1,14 +1,33 @@
-import { render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { simulationJointSource } from '../features/joints/SimulationJointSource'
+import { useRobotStore } from '../features/joints/robot-store'
 import { App } from './App'
 import { AppShell } from './AppShell'
 
 vi.mock('../features/scene/SceneCanvas', () => ({
-  SceneCanvas: () => null,
+  SceneCanvas: ({
+    onStatusChange,
+  }: {
+    onStatusChange?: (status: 'ready') => void
+  }) => (
+    <button
+      aria-label="Scene ready"
+      onClick={() => {
+        onStatusChange?.('ready')
+      }}
+      type="button"
+    />
+  ),
 }))
 
 describe('AppShell', () => {
+  beforeEach(() => {
+    useRobotStore.getState().reset()
+  })
+
   it('renders the five industrial workstation regions', () => {
     render(<AppShell viewport={<div>3D viewport</div>} />)
     expect(screen.getByRole('banner')).toHaveTextContent('RobotSim')
@@ -82,5 +101,58 @@ describe('AppShell', () => {
       'data-controls-disabled',
       'true',
     )
+  })
+
+  it('mounts the inspector and timeline and enables them only when the scene is ready', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(screen.getByRole('heading', { name: 'Inspector' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Timeline' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Home' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: 'Scene ready' }))
+    expect(screen.getByRole('button', { name: 'Home' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: 'Save Pose' }))
+    await user.click(screen.getByRole('button', { name: 'Save Pose' }))
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled()
+  })
+
+  it('keeps exactly one live source subscription through StrictMode setup and cleanup', () => {
+    const subscriber = vi.fn()
+    const unsubscribe = useRobotStore.subscribe(subscriber)
+    const view = render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+
+    act(() => {
+      simulationJointSource.setAngles([10, 20, 30, 40, 50, 60])
+    })
+    expect(subscriber).toHaveBeenCalledTimes(1)
+    expect(useRobotStore.getState().anglesDeg).toEqual([10, 20, 30, 40, 50, 60])
+
+    view.unmount()
+    act(() => {
+      simulationJointSource.setAngles([0, 0, 0, 0, 0, 0])
+    })
+    expect(subscriber).toHaveBeenCalledTimes(1)
+    unsubscribe()
+  })
+
+  it('renders the current source quality in the top bar', () => {
+    render(
+      <AppShell
+        sourceQuality="STALE"
+        viewport={<div>3D viewport</div>}
+      />,
+    )
+
+    expect(screen.getByRole('banner')).toHaveTextContent('STALE')
+    expect(screen.getByRole('banner')).not.toHaveTextContent('GOOD')
   })
 })

@@ -1,5 +1,6 @@
 import { ChevronDown, PanelLeft, PanelRight } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
+import type { JointQuality } from '../domain/robot/joint-frame'
 
 interface AppShellProps {
   viewport: ReactNode
@@ -8,6 +9,7 @@ interface AppShellProps {
   bottomRail?: ReactNode
   controlsDisabled?: boolean
   viewportBusy?: boolean
+  sourceQuality?: JointQuality
 }
 
 export function AppShell({
@@ -17,6 +19,7 @@ export function AppShell({
   bottomRail,
   controlsDisabled = false,
   viewportBusy = controlsDisabled,
+  sourceQuality = 'GOOD',
 }: AppShellProps) {
   const [isAssetRailOpen, setIsAssetRailOpen] = useState(false)
   const [isInspectorOpen, setIsInspectorOpen] = useState(false)
@@ -30,7 +33,9 @@ export function AppShell({
       <header className="top-bar">
         <strong>RobotSim</strong>
         <span>SIMULATION</span>
-        <span>GOOD</span>
+        <span className="source-quality" data-quality={sourceQuality}>
+          {sourceQuality}
+        </span>
         <button type="button">Import STEP</button>
       </header>
       <button

@@ -55,3 +55,5 @@ export class SimulationJointSource implements JointAngleSource {
     return frame
   }
 }
+
+export const simulationJointSource = new SimulationJointSource()

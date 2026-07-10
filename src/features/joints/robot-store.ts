@@ -7,14 +7,20 @@ import {
   type JointFrame,
   type RobotFrameState,
 } from '../../domain/robot/joint-frame'
+import type { RobotKeyframe } from './keyframes'
 
 export interface RobotStoreState extends RobotFrameState {
   gripperOpen: boolean
+  keyframes: readonly RobotKeyframe[]
+  playbackResetRevision: number
   setJoint(jointIndex: number, angleDeg: number): void
   applyFrame(frame: JointFrame, nowMs?: number): void
   home(): void
   reset(): void
+  savePose(): void
+  clearKeyframes(): void
   setPlaying(playing: boolean): void
+  stopPlayback(): void
   setGripperOpen(gripperOpen: boolean): void
 }
 
@@ -32,6 +38,8 @@ export const jointAngleSelectors = [
 export const useRobotStore = create<RobotStoreState>()((set) => ({
   ...initialRobotState,
   gripperOpen: true,
+  keyframes: [],
+  playbackResetRevision: 0,
 
   setJoint: (jointIndex, angleDeg) => {
     if (!Number.isInteger(jointIndex) || jointIndex < 0 || jointIndex >= 6) {
@@ -64,11 +72,46 @@ export const useRobotStore = create<RobotStoreState>()((set) => ({
     set({
       ...initialRobotState,
       gripperOpen: true,
+      keyframes: [],
+      playbackResetRevision: 0,
     })
+  },
+
+  savePose: () => {
+    set((state) => {
+      const poseNumber = state.keyframes.length + 1
+      const keyframe: RobotKeyframe = {
+        id: `pose-${poseNumber}`,
+        name: `Pose ${poseNumber}`,
+        anglesDeg: [
+          state.anglesDeg[0],
+          state.anglesDeg[1],
+          state.anglesDeg[2],
+          state.anglesDeg[3],
+          state.anglesDeg[4],
+          state.anglesDeg[5],
+        ],
+        durationMs: 1000,
+        easing: 'easeInOut',
+      }
+
+      return { keyframes: [...state.keyframes, keyframe] }
+    })
+  },
+
+  clearKeyframes: () => {
+    set({ keyframes: [] })
   },
 
   setPlaying: (playing) => {
     set({ playing })
+  },
+
+  stopPlayback: () => {
+    set((state) => ({
+      playing: false,
+      playbackResetRevision: state.playbackResetRevision + 1,
+    }))
   },
 
   setGripperOpen: (gripperOpen) => {

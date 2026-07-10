@@ -83,6 +83,47 @@ describe('robot store', () => {
     ])
     expect(useRobotStore.getState().setJoint).toBe(setJoint)
   })
+
+  it('saves immutable pose snapshots and clears them on reset', () => {
+    const store = useRobotStore.getState()
+    store.setJoint(0, 45)
+    store.savePose()
+    useRobotStore.getState().setJoint(0, 90)
+    useRobotStore.getState().savePose()
+
+    expect(useRobotStore.getState().keyframes).toEqual([
+      {
+        id: 'pose-1',
+        name: 'Pose 1',
+        anglesDeg: [45, 0, 0, 0, 0, 0],
+        durationMs: 1000,
+        easing: 'easeInOut',
+      },
+      {
+        id: 'pose-2',
+        name: 'Pose 2',
+        anglesDeg: [90, 0, 0, 0, 0, 0],
+        durationMs: 1000,
+        easing: 'easeInOut',
+      },
+    ])
+
+    useRobotStore.getState().reset()
+    expect(useRobotStore.getState().keyframes).toEqual([])
+  })
+
+  it('distinguishes a stop-time reset from a resumable pause', () => {
+    const initialRevision = useRobotStore.getState().playbackResetRevision
+    useRobotStore.getState().setPlaying(true)
+    useRobotStore.getState().setPlaying(false)
+    expect(useRobotStore.getState().playbackResetRevision).toBe(initialRevision)
+
+    useRobotStore.getState().stopPlayback()
+    expect(useRobotStore.getState()).toMatchObject({
+      playing: false,
+      playbackResetRevision: initialRevision + 1,
+    })
+  })
 })
 
 describe('SimulationJointSource', () => {
