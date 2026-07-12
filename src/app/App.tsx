@@ -29,6 +29,8 @@ import { objectRecords } from '../features/objects/object-equipment-adapter'
 import type { SerializableTransform } from '../domain/equipment/equipment'
 import { useProjectStore } from '../features/project/project-store-browser'
 import { ProjectMenu } from '../features/project/ProjectMenu'
+import { CoordinateFramesDialog } from '../features/frames/CoordinateFramesDialog'
+import type { RobotRigRegistration } from '../features/robot/RobotModel'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -37,6 +39,8 @@ export function App() {
   const [isRobotImportOpen, setIsRobotImportOpen] = useState(false)
   const [isRobotConfigurationOpen, setIsRobotConfigurationOpen] = useState(false)
   const [isRobotGeometryOpen, setIsRobotGeometryOpen] = useState(false)
+  const [isCoordinateFramesOpen, setIsCoordinateFramesOpen] = useState(false)
+  const [robotRig, setRobotRig] = useState<RobotRigRegistration | null>(null)
   const [sourceMode, setSourceMode] = useState<'simulation' | 'opcua'>(
     'simulation',
   )
@@ -331,6 +335,7 @@ export function App() {
         onOpenRobotImport={() => setIsRobotImportOpen(true)}
         onOpenRobotConfiguration={() => setIsRobotConfigurationOpen(true)}
         onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
+        onOpenCoordinateFrames={() => setIsCoordinateFramesOpen(true)}
         onSourceModeChange={(mode) => {
           useRobotStore.getState().stopPlayback()
           setSourceMode(mode)
@@ -340,6 +345,7 @@ export function App() {
         viewport={
           <SceneCanvas
             onStatusChange={setSceneStatus}
+            registerRig={setRobotRig}
             registerInteractionController={(controller) => {
               interactionControllerRef.current = controller
             }}
@@ -366,6 +372,11 @@ export function App() {
       <RobotGeometryDialog
         onClose={() => setIsRobotGeometryOpen(false)}
         open={isRobotGeometryOpen}
+      />
+      <CoordinateFramesDialog
+        onClose={() => setIsCoordinateFramesOpen(false)}
+        open={isCoordinateFramesOpen}
+        rig={robotRig}
       />
     </>
   )

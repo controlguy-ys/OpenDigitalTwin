@@ -40,6 +40,8 @@ describe('EquipmentInspector', () => {
       />,
     )
 
+    expect(screen.getByText('Coordinates relative to MCP')).toBeVisible()
+
     await user.clear(screen.getByLabelText('X (mm)'))
     await user.type(screen.getByLabelText('X (mm)'), '1250')
     await user.clear(screen.getByLabelText('Roll (deg)'))

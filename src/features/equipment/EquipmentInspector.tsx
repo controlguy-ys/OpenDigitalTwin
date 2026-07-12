@@ -128,6 +128,7 @@ export function EquipmentInspector({
       </header>
       <fieldset disabled={disabled}>
         <legend>Manual transform</legend>
+        <p>Coordinates relative to MCP</p>
         <div className="equipment-transform-grid">
           {transformFields.map(([key, label]) => (
             <label key={key}>
