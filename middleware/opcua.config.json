@@ -1,6 +1,7 @@
 {
   "endpointUrl": "opc.tcp://127.0.0.1:4840",
   "websocketPort": 4841,
+  "healthPort": 8081,
   "samplingIntervalMs": 100,
   "reconnectDelayMs": 2000,
   "joints": [

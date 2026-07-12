@@ -17,6 +17,7 @@
     "lint": "oxlint .",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:middleware": "vitest run middleware",
     "test:coverage": "vitest run --coverage",
     "cad:convert": "tsx scripts/cad/convert-robot.ts",
     "cad:validate": "tsx scripts/cad/validate-robot-assets.ts",

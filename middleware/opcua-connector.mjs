@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
 import {
@@ -8,23 +8,36 @@ import {
   SecurityPolicy,
 } from 'node-opcua'
 import { WebSocket, WebSocketServer } from 'ws'
+import {
+  readOpcUaConnectorConfig,
+  validateOpcUaConnectorConfig,
+} from './opcua-config.mjs'
 
 const configPath = resolve(
   process.env.OPCUA_CONFIG ??
     fileURLToPath(new URL('./opcua.config.json', import.meta.url)),
 )
-const config = JSON.parse(await readFile(configPath, 'utf8'))
-
-if (!Array.isArray(config.joints) || config.joints.length !== 6) {
-  throw new Error('OPC UA configuration must define exactly six joint nodes.')
-}
-if (!Number.isInteger(config.websocketPort) || config.websocketPort <= 0) {
-  throw new Error('websocketPort must be a positive integer.')
-}
+const fileConfig = await readOpcUaConnectorConfig(configPath)
+const config = process.env.OPCUA_HEALTH_PORT === undefined
+  ? fileConfig
+  : validateOpcUaConnectorConfig({
+      ...fileConfig,
+      healthPort: Number(process.env.OPCUA_HEALTH_PORT),
+    })
 
 const equipmentNodes = Array.isArray(config.equipment) ? config.equipment : []
 const allNodes = [...config.joints, ...equipmentNodes]
 const websocketServer = new WebSocketServer({ port: config.websocketPort })
+const healthServer = createServer((request, response) => {
+  if (request.method === 'GET' && request.url === '/healthz') {
+    response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+    response.end('ok\n')
+    return
+  }
+  response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+  response.end('not found\n')
+})
+healthServer.listen(config.healthPort)
 let lastJointFrame = null
 let lastEquipmentFrame = null
 let stopped = false
@@ -135,12 +148,13 @@ async function shutdown() {
   await activeSession?.close().catch(() => undefined)
   await activeClient?.disconnect().catch(() => undefined)
   await new Promise((resolveClose) => websocketServer.close(resolveClose))
+  await new Promise((resolveClose) => healthServer.close(resolveClose))
 }
 
 process.once('SIGINT', () => void shutdown())
 process.once('SIGTERM', () => void shutdown())
 
 console.log(
-  `[opcua-connector] ws://127.0.0.1:${config.websocketPort} -> ${config.endpointUrl}`,
+  `[opcua-connector] ws://127.0.0.1:${config.websocketPort}, health :${config.healthPort} -> ${config.endpointUrl}`,
 )
 void runConnector()
