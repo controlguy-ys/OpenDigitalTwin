@@ -16,6 +16,7 @@ import { getEquipmentOutlineState } from '../interaction/outline-state'
 import { importedGeometryRepository } from '../import/imported-geometry-repository'
 import { BuiltInEquipment } from './BuiltInEquipment'
 import { StackLight } from './StackLight'
+import { EquipmentStatusOverlay } from './EquipmentStatusOverlay'
 import { useEquipmentStore } from './equipment-store'
 
 interface EquipmentInstanceProps {
@@ -125,6 +126,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
         }}
       >
         <EquipmentVisual record={record} />
+        <EquipmentStatusOverlay record={record} />
         {outlineState === null ? null : (
           <EquipmentOutline collision={collision} record={record} />
         )}

@@ -77,7 +77,10 @@ export interface EquipmentStoreState {
   upsertEquipment(record: EquipmentRecord): Promise<void>
   previewEquipmentTransform(id: string, transform: SerializableTransform): void
   commitEquipmentTransform(id: string): Promise<void>
+  cancelEquipmentTransform(id: string): void
   setEquipmentStatus(id: string, status: EquipmentStatus): Promise<void>
+  setEquipmentNumericStatus(id: string, value: number): Promise<void>
+  setEquipmentStatusOverlayVisible(id: string, visible: boolean): Promise<void>
   removeEquipment(id: string): Promise<void>
 }
 
@@ -87,6 +90,9 @@ function cloneEquipmentRecord(record: EquipmentRecord): EquipmentRecord {
     name: record.name,
     kind: record.kind,
     status: record.status,
+    numericStatus: record.numericStatus ?? 0,
+    statusSource: record.statusSource ?? 'manual',
+    statusOverlayVisible: record.statusOverlayVisible ?? true,
     transform: {
       position: [...record.transform.position],
       quaternion: [...record.transform.quaternion],
@@ -141,9 +147,12 @@ interface PersistedRecordMergeResult {
 
 function mergePersistedRecords(
   persistedRecords: readonly unknown[],
+  deletedEquipmentIds: ReadonlySet<string> = new Set(),
 ): PersistedRecordMergeResult {
   const recordsById = new Map(
-    builtInRecords().map((record) => [record.id, record]),
+    builtInRecords()
+      .filter((record) => !deletedEquipmentIds.has(record.id))
+      .map((record) => [record.id, record]),
   )
   let corruptRecordCount = 0
 
@@ -174,6 +183,19 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
   let hydrated = false
   let hydrationPromise: Promise<void> | null = null
   const pendingTransformPreviews = new Map<string, SerializableTransform>()
+  const committedTransforms = new Map<string, SerializableTransform>()
+  const deletedEquipmentIds = new Set<string>()
+
+  const rememberCommittedTransforms = (records: readonly EquipmentRecord[]) => {
+    committedTransforms.clear()
+    for (const record of records) {
+      committedTransforms.set(record.id, {
+        position: [...record.transform.position],
+        quaternion: [...record.transform.quaternion],
+        scale: [...record.transform.scale],
+      })
+    }
+  }
 
   return (
     set: (
@@ -206,11 +228,21 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
       hydrationPromise = (async () => {
         try {
           await database.open()
+          const sceneRecord = await database.scene.get('equipment-state')
+          deletedEquipmentIds.clear()
+          for (const id of sceneRecord?.deletedEquipmentIds ?? []) {
+            if (typeof id === 'string' && id.length > 0) {
+              deletedEquipmentIds.add(id)
+            }
+          }
           const persistedRecords = await database.equipment.toArray()
 
           if (persistedRecords.length === 0) {
-            const seeds = builtInRecords()
+            const seeds = builtInRecords().filter(
+              (record) => !deletedEquipmentIds.has(record.id),
+            )
             await database.equipment.bulkPut(seeds)
+            rememberCommittedTransforms(seeds)
             const records = seeds.map((record) => {
               const pending = pendingTransformPreviews.get(record.id)
               return pending === undefined
@@ -223,7 +255,11 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
               warnings: [],
             })
           } else {
-            const mergeResult = mergePersistedRecords(persistedRecords)
+            const mergeResult = mergePersistedRecords(
+              persistedRecords,
+              deletedEquipmentIds,
+            )
+            rememberCommittedTransforms(mergeResult.records)
             const records = mergeResult.records.map((record) => {
               const pending = pendingTransformPreviews.get(record.id)
               return pending === undefined
@@ -262,6 +298,21 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
       }
     }
 
+    const persistDeletedEquipmentIds = async (): Promise<void> => {
+      if (get().persistenceStatus === 'memory-only') {
+        return
+      }
+      try {
+        await database.scene.put({
+          key: 'equipment-state',
+          selectedEquipmentId: null,
+          deletedEquipmentIds: [...deletedEquipmentIds],
+        })
+      } catch {
+        enterMemoryOnlyMode()
+      }
+    }
+
     return {
       records: builtInRecords(),
       persistenceStatus: 'idle',
@@ -272,8 +323,14 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           throw new Error('Invalid equipment record; no changes were saved.')
         }
         await hydrate()
+        deletedEquipmentIds.delete(record.id)
         pendingTransformPreviews.delete(record.id)
         const nextRecord = cloneEquipmentRecord(record)
+        committedTransforms.set(nextRecord.id, {
+          position: [...nextRecord.transform.position],
+          quaternion: [...nextRecord.transform.quaternion],
+          scale: [...nextRecord.transform.scale],
+        })
         set((state) => {
           const existingIndex = state.records.findIndex(
             ({ id }) => id === nextRecord.id,
@@ -287,6 +344,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           return { records }
         })
         await persistRecord(nextRecord)
+        await persistDeletedEquipmentIds()
       },
       previewEquipmentTransform: (id, transform) => {
         const currentRecord = get().records.find((record) => record.id === id)
@@ -304,15 +362,34 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
       commitEquipmentTransform: async (id) => {
         await hydrate()
         const currentRecord = get().records.find((record) => record.id === id)
-        if (currentRecord !== undefined) {
-          const pendingAtCommit = pendingTransformPreviews.get(id)
-          await persistRecord(currentRecord)
-          if (pendingTransformPreviews.get(id) === pendingAtCommit) {
+          if (currentRecord !== undefined) {
+            const pendingAtCommit = pendingTransformPreviews.get(id)
+            await persistRecord(currentRecord)
+            committedTransforms.set(id, {
+              position: [...currentRecord.transform.position],
+              quaternion: [...currentRecord.transform.quaternion],
+              scale: [...currentRecord.transform.scale],
+            })
+            if (pendingTransformPreviews.get(id) === pendingAtCommit) {
             pendingTransformPreviews.delete(id)
           }
-        }
-      },
-      setEquipmentStatus: async (id, status) => {
+          }
+        },
+        cancelEquipmentTransform: (id) => {
+          const committed = committedTransforms.get(id)
+          if (committed === undefined) {
+            return
+          }
+          pendingTransformPreviews.delete(id)
+          set((state) => ({
+            records: state.records.map((record) =>
+              record.id === id
+                ? withEquipmentTransform(record, committed)
+                : record,
+            ),
+          }))
+        },
+        setEquipmentStatus: async (id, status) => {
         await hydrate()
         const currentRecord = get().records.find((record) => record.id === id)
         if (currentRecord === undefined) {
@@ -328,11 +405,51 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
             record.id === id ? nextRecord : record,
           ),
         }))
-        await persistRecord(nextRecord)
-      },
-      removeEquipment: async (id) => {
+          await persistRecord(nextRecord)
+        },
+        setEquipmentNumericStatus: async (id, value) => {
+          if (!Number.isFinite(value)) {
+            throw new Error('Equipment numeric status must be finite.')
+          }
+          await hydrate()
+          const currentRecord = get().records.find((record) => record.id === id)
+          if (currentRecord === undefined) {
+            return
+          }
+          const nextRecord = cloneEquipmentRecord({
+            ...currentRecord,
+            numericStatus: value,
+            statusSource: 'manual',
+          })
+          set((state) => ({
+            records: state.records.map((record) =>
+              record.id === id ? nextRecord : record,
+            ),
+          }))
+          await persistRecord(nextRecord)
+        },
+        setEquipmentStatusOverlayVisible: async (id, visible) => {
+          await hydrate()
+          const currentRecord = get().records.find((record) => record.id === id)
+          if (currentRecord === undefined) {
+            return
+          }
+          const nextRecord = cloneEquipmentRecord({
+            ...currentRecord,
+            statusOverlayVisible: visible,
+          })
+          set((state) => ({
+            records: state.records.map((record) =>
+              record.id === id ? nextRecord : record,
+            ),
+          }))
+          await persistRecord(nextRecord)
+        },
+        removeEquipment: async (id) => {
         await hydrate()
-        pendingTransformPreviews.delete(id)
+          pendingTransformPreviews.delete(id)
+          committedTransforms.delete(id)
+          deletedEquipmentIds.add(id)
         set((state) => ({
           records: state.records.filter((record) => record.id !== id),
         }))
@@ -340,9 +457,10 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           return
         }
 
-        try {
-          await database.equipment.delete(id)
-        } catch {
+          try {
+            await database.equipment.delete(id)
+            await persistDeletedEquipmentIds()
+          } catch {
           enterMemoryOnlyMode()
         }
       },

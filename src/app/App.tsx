@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { EquipmentAssetList } from '../features/equipment/EquipmentAssetList'
+import { EquipmentInspector } from '../features/equipment/EquipmentInspector'
 import { useEquipmentStore } from '../features/equipment/equipment-store'
 import { useInteractionStore } from '../features/interaction/interaction-store'
 import type { InteractionRuntimeController } from '../features/interaction/GraspController'
@@ -29,12 +30,29 @@ export function App() {
   const equipmentRecords = useEquipmentStore((state) => state.records)
   const upsertEquipment = useEquipmentStore((state) => state.upsertEquipment)
   const removeEquipment = useEquipmentStore((state) => state.removeEquipment)
+  const previewEquipmentTransform = useEquipmentStore(
+    (state) => state.previewEquipmentTransform,
+  )
+  const commitEquipmentTransform = useEquipmentStore(
+    (state) => state.commitEquipmentTransform,
+  )
+  const cancelEquipmentTransform = useEquipmentStore(
+    (state) => state.cancelEquipmentTransform,
+  )
+  const setEquipmentNumericStatus = useEquipmentStore(
+    (state) => state.setEquipmentNumericStatus,
+  )
+  const setEquipmentStatusOverlayVisible = useEquipmentStore(
+    (state) => state.setEquipmentStatusOverlayVisible,
+  )
   const selectedEquipmentId = useInteractionStore(
     (state) => state.selectedEquipmentId,
   )
   const selectEquipment = useInteractionStore((state) => state.selectEquipment)
   const clearSelection = useInteractionStore((state) => state.clearSelection)
   const controlsDisabled = sceneStatus !== 'ready'
+  const selectedEquipmentRecord =
+    equipmentRecords.find((record) => record.id === selectedEquipmentId) ?? null
 
   useEffect(() => {
     let active = true
@@ -127,11 +145,24 @@ export function App() {
         }
         controlsDisabled={controlsDisabled}
         inspector={
-          <JointInspector
-            disabled={controlsDisabled}
-            onReset={handleResetInteraction}
-            source={simulationJointSource}
-          />
+          selectedEquipmentRecord === null ? (
+            <JointInspector
+              disabled={controlsDisabled}
+              onReset={handleResetInteraction}
+              source={simulationJointSource}
+            />
+          ) : (
+            <EquipmentInspector
+              disabled={controlsDisabled}
+              onApply={commitEquipmentTransform}
+              onCancel={cancelEquipmentTransform}
+              onDelete={handleRemoveEquipment}
+              onNumericStatus={setEquipmentNumericStatus}
+              onOverlayVisible={setEquipmentStatusOverlayVisible}
+              onPreview={previewEquipmentTransform}
+              record={selectedEquipmentRecord}
+            />
+          )
         }
         onOpenStepImport={() => setIsImportOpen(true)}
         sourceQuality={sourceQuality}

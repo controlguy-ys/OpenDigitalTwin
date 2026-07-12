@@ -1,4 +1,5 @@
 export type EquipmentStatus = 'OFF' | 'RUNNING' | 'WARNING' | 'FAULT'
+export type EquipmentStatusSource = 'manual' | 'opcua'
 
 export interface SerializableTransform {
   position: [number, number, number]
@@ -28,6 +29,9 @@ export interface EquipmentRecord {
   name: string
   kind: 'cup' | 'machine' | 'imported'
   status: EquipmentStatus
+  numericStatus?: number
+  statusSource?: EquipmentStatusSource
+  statusOverlayVisible?: boolean
   transform: SerializableTransform
   graspable: boolean
   collisionHalfExtents: [number, number, number]
@@ -168,6 +172,13 @@ export function isEquipmentRecord(value: unknown): value is EquipmentRecord {
     EQUIPMENT_KINDS.has(record.kind as EquipmentRecord['kind']) &&
     typeof record.status === 'string' &&
     EQUIPMENT_STATUSES.has(record.status as EquipmentStatus) &&
+    (record.numericStatus === undefined ||
+      (typeof record.numericStatus === 'number' && Number.isFinite(record.numericStatus))) &&
+    (record.statusSource === undefined ||
+      record.statusSource === 'manual' ||
+      record.statusSource === 'opcua') &&
+    (record.statusOverlayVisible === undefined ||
+      typeof record.statusOverlayVisible === 'boolean') &&
     isFiniteTuple(serializableTransform.position, 3) &&
     isFiniteTuple(serializableTransform.quaternion, 4) &&
     isFiniteTuple(serializableTransform.scale, 3) &&

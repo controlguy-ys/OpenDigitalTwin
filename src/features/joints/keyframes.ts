@@ -8,6 +8,7 @@ export interface RobotKeyframe {
   anglesDeg: JointAnglesDeg
   durationMs: number
   easing: RobotKeyframeEasing
+  speedPercentToNext?: number
 }
 
 export interface RobotTimelineSample {

@@ -11,6 +11,7 @@ const GOOD_ZERO_FRAME: JointFrame = {
 
 describe('robot store', () => {
   beforeEach(() => {
+    localStorage.clear()
     useRobotStore.getState().reset()
   })
 
@@ -98,6 +99,7 @@ describe('robot store', () => {
         anglesDeg: [45, 0, 0, 0, 0, 0],
         durationMs: 1000,
         easing: 'easeInOut',
+        speedPercentToNext: 100,
       },
       {
         id: 'pose-2',
@@ -105,11 +107,70 @@ describe('robot store', () => {
         anglesDeg: [90, 0, 0, 0, 0, 0],
         durationMs: 1000,
         easing: 'easeInOut',
+        speedPercentToNext: 100,
       },
     ])
 
     useRobotStore.getState().reset()
     expect(useRobotStore.getState().keyframes).toEqual([])
+  })
+
+  it('reorders and deletes poses by stable id', () => {
+    const store = useRobotStore.getState()
+    store.savePose()
+    store.setJoint(0, 10)
+    useRobotStore.getState().savePose()
+    useRobotStore.getState().setJoint(0, 20)
+    useRobotStore.getState().savePose()
+
+    useRobotStore.getState().moveKeyframe('pose-3', -1)
+    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
+      'pose-1',
+      'pose-3',
+      'pose-2',
+    ])
+
+    useRobotStore.getState().deleteKeyframe('pose-1')
+    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
+      'pose-3',
+      'pose-2',
+    ])
+  })
+
+  it('clamps pose speed and updates its outgoing transition duration', () => {
+    useRobotStore.getState().savePose()
+
+    useRobotStore.getState().setKeyframeSpeed('pose-1', 50)
+    expect(useRobotStore.getState().keyframes[0]).toMatchObject({
+      speedPercentToNext: 50,
+      durationMs: 2000,
+    })
+
+    useRobotStore.getState().setKeyframeSpeed('pose-1', 0)
+    expect(useRobotStore.getState().keyframes[0]).toMatchObject({
+      speedPercentToNext: 1,
+      durationMs: 100000,
+    })
+  })
+
+  it('hydrates the edited pose order and speed from browser storage', () => {
+    useRobotStore.getState().savePose()
+    useRobotStore.getState().setJoint(0, 20)
+    useRobotStore.getState().savePose()
+    useRobotStore.getState().setKeyframeSpeed('pose-1', 25)
+    useRobotStore.getState().moveKeyframe('pose-2', -1)
+
+    useRobotStore.getState().reset()
+    useRobotStore.getState().hydrateKeyframes()
+
+    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
+      'pose-2',
+      'pose-1',
+    ])
+    expect(useRobotStore.getState().keyframes[1]).toMatchObject({
+      speedPercentToNext: 25,
+      durationMs: 4000,
+    })
   })
 
   it('distinguishes a stop-time reset from a resumable pause', () => {
