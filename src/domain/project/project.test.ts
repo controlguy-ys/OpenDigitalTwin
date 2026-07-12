@@ -55,6 +55,7 @@ function objectAsset(id = 'asset-machine'): ObjectAssetRecordV1 {
     sourceBytes: new Uint8Array([4, 5, 6]).buffer,
     importScale: 0.001,
     originMode: 'source',
+    colliderCenter: [0, 0, 0.1],
     collisionHalfExtents: [0.5, 0.4, 0.3],
     statistics: { vertices: 36, triangles: 12, meshes: 1, materials: 1 },
   }

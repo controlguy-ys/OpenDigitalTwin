@@ -35,7 +35,10 @@ export interface EquipmentRecord {
   transform: SerializableTransform
   graspable: boolean
   collisionHalfExtents: [number, number, number]
+  collisionCenter?: [number, number, number]
   stackLightAnchor: [number, number, number] | null
+  /** Object Asset id for V1 Asset/Instance records. Legacy imports carry sourceBytes. */
+  assetId?: string
   sourceBytes?: ArrayBuffer
   importMetadata?: EquipmentImportMetadata
 }
@@ -184,11 +187,19 @@ export function isEquipmentRecord(value: unknown): value is EquipmentRecord {
     isFiniteTuple(serializableTransform.scale, 3) &&
     typeof record.graspable === 'boolean' &&
     isPositiveFiniteTuple(record.collisionHalfExtents, 3) &&
+    (record.collisionCenter === undefined ||
+      isFiniteTuple(record.collisionCenter, 3)) &&
     (record.stackLightAnchor === null ||
       isFiniteTuple(record.stackLightAnchor, 3)) &&
     (record.kind === 'imported'
-      ? isArrayBuffer(record.sourceBytes) &&
-        isImportMetadata(record.importMetadata)
-      : record.sourceBytes === undefined && record.importMetadata === undefined)
+      ? (isNonEmptyString(record.assetId) &&
+          record.sourceBytes === undefined &&
+          record.importMetadata === undefined) ||
+        (record.assetId === undefined &&
+          isArrayBuffer(record.sourceBytes) &&
+          isImportMetadata(record.importMetadata))
+      : record.assetId === undefined &&
+        record.sourceBytes === undefined &&
+        record.importMetadata === undefined)
   )
 }

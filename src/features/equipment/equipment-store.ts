@@ -103,10 +103,14 @@ function cloneEquipmentRecord(record: EquipmentRecord): EquipmentRecord {
     },
     graspable: record.graspable,
     collisionHalfExtents: [...record.collisionHalfExtents],
+    ...(record.collisionCenter === undefined
+      ? {}
+      : { collisionCenter: [...record.collisionCenter] }),
     stackLightAnchor:
       record.stackLightAnchor === null
         ? null
         : [...record.stackLightAnchor],
+    ...(record.assetId === undefined ? {} : { assetId: record.assetId }),
     ...(record.sourceBytes === undefined
       ? {}
       : { sourceBytes: record.sourceBytes.slice(0) }),

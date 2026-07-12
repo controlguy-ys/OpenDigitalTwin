@@ -79,6 +79,7 @@ export interface ObjectAssetRecordV1 {
   sourceBytes: ArrayBuffer
   importScale: number
   originMode: EquipmentOriginMode
+  colliderCenter: [number, number, number]
   collisionHalfExtents: [number, number, number]
   statistics: GeometryStatistics
 }
@@ -350,6 +351,7 @@ function validateAssets(value: unknown): {
     if (asset.originMode !== 'center' && asset.originMode !== 'source') {
       fail(`${id} origin mode is unsupported.`)
     }
+    requireTuple(asset.colliderCenter, 3, `${id} collider center`)
     requireTuple(asset.collisionHalfExtents, 3, `${id} collision half extents`, true)
     const stats = requireStatistics(
       asset.statistics,

@@ -4,6 +4,16 @@ import type {
   EquipmentRecord,
   EquipmentSourceUnit,
 } from '../../domain/equipment/equipment'
+import type {
+  ObjectAssetRecordV1,
+  ObjectInstanceRecordV1,
+} from '../../domain/project/project'
+import {
+  MAX_ASSET_MATERIALS,
+  MAX_ASSET_MESHES,
+  MAX_OBJECT_ASSET_BYTES,
+  MAX_OBJECT_ASSET_TRIANGLES,
+} from '../../domain/project/project'
 import type { OcctSuccessResult } from '../../lib/cad/occt-types'
 import { WORKBENCH_TOP_Z } from '../scene/workcell-constants'
 import {
@@ -13,11 +23,12 @@ import {
   type KnownStepUnit,
 } from './detect-step-unit'
 import {
+  assertOcctGeometryBudget,
   createThreeGroupFromOcct,
   type ImportedThreeAsset,
 } from './occt-to-three'
 
-export const MAX_STEP_FILE_BYTES = 100 * 1024 * 1024
+export const MAX_STEP_FILE_BYTES = MAX_OBJECT_ASSET_BYTES
 
 export interface ImportStepController {
   import(source: ArrayBuffer | Uint8Array): Promise<OcctSuccessResult>
@@ -32,10 +43,15 @@ export interface ImportStepDialogProps {
   open: boolean
   client: ImportStepController
   cache: ImportStepGeometryCache
-  onCommit(record: EquipmentRecord): Promise<void>
+  onCommit?(record: EquipmentRecord): Promise<void>
+  onCommitAsset?(
+    asset: ObjectAssetRecordV1,
+    instance: ObjectInstanceRecordV1,
+  ): Promise<void>
   onSelect(id: string): void
   onClose(): void
   createId?: () => string
+  createAssetId?: () => string
 }
 
 interface ImportDraft {
@@ -57,6 +73,10 @@ type DialogStage = 'idle' | 'converting' | 'configure' | 'committing'
 
 function defaultId(): string {
   return `imported-${crypto.randomUUID()}`
+}
+
+function defaultAssetId(): string {
+  return `asset-${crypto.randomUUID()}`
 }
 
 function baseName(fileName: string): string {
@@ -95,14 +115,41 @@ function isPositiveFinite(value: number): boolean {
   return Number.isFinite(value) && value > 0
 }
 
+function geometryStatistics(result: OcctSuccessResult) {
+  const totals = assertOcctGeometryBudget(result.meshes, {
+    maxVertices: Number.MAX_SAFE_INTEGER,
+    maxTriangles: MAX_OBJECT_ASSET_TRIANGLES,
+  })
+  if (result.meshes.length > MAX_ASSET_MESHES) {
+    throw new Error(`Object Assets support at most ${MAX_ASSET_MESHES} meshes.`)
+  }
+  const materialKeys = new Set<string>()
+  for (const mesh of result.meshes) {
+    materialKeys.add(JSON.stringify(mesh.color ?? [0.68, 0.72, 0.74]))
+    for (const face of mesh.brep_faces) {
+      if (face.color !== null) materialKeys.add(JSON.stringify(face.color))
+    }
+  }
+  if (materialKeys.size > MAX_ASSET_MATERIALS) {
+    throw new Error(`Object Assets support at most ${MAX_ASSET_MATERIALS} materials.`)
+  }
+  return {
+    ...totals,
+    meshes: result.meshes.length,
+    materials: materialKeys.size,
+  }
+}
+
 export function ImportStepDialog({
   open,
   client,
   cache,
   onCommit,
+  onCommitAsset,
   onSelect,
   onClose,
   createId = defaultId,
+  createAssetId = defaultAssetId,
 }: ImportStepDialogProps) {
   const [stage, setStage] = useState<DialogStage>('idle')
   const [error, setError] = useState<string | null>(null)
@@ -160,7 +207,11 @@ export function ImportStepDialog({
     const asset = createThreeGroupFromOcct(current.result, {
       postImportScale: postScale(current.detectedUnit, selectedSourceUnit),
       originMode,
+    }, {
+      maxVertices: Number.MAX_SAFE_INTEGER,
+      maxTriangles: MAX_OBJECT_ASSET_TRIANGLES,
     })
+    geometryStatistics(current.result)
     releaseCandidate()
     candidateAsset.current = asset
     return {
@@ -192,7 +243,7 @@ export function ImportStepDialog({
     }
     if (file.size > MAX_STEP_FILE_BYTES) {
       setStage('idle')
-      setError('STEP files must be 100 MiB or smaller.')
+      setError('Object STEP files must be 50 MiB or smaller.')
       return
     }
 
@@ -328,6 +379,8 @@ export function ImportStepDialog({
     const commitOperation = operationId.current
     const selectedSourceUnit = draft.selectedSourceUnit as EquipmentSourceUnit
     const asset = draft.asset
+    const instanceId = createId()
+    const assetId = createAssetId()
     const positionZ =
       WORKBENCH_TOP_Z - asset.bounds.min[2] * draft.scale
     const stackLightAnchor: [number, number, number] | null = draft.stackLight
@@ -340,7 +393,7 @@ export function ImportStepDialog({
           ]
       : null
     const record: EquipmentRecord = {
-      id: createId(),
+      id: instanceId,
       name: draft.name.trim(),
       kind: 'imported',
       status: 'OFF',
@@ -363,14 +416,42 @@ export function ImportStepDialog({
       },
     }
 
+    const objectAsset: ObjectAssetRecordV1 = {
+      id: assetId,
+      name: draft.name.trim(),
+      sourceFileName: draft.sourceFileName,
+      sourceBytes: draft.bytes,
+      importScale: postScale(draft.detectedUnit, selectedSourceUnit),
+      originMode: draft.originMode,
+      colliderCenter: [...asset.colliderCenter],
+      collisionHalfExtents: [...draft.collisionHalfExtents],
+      statistics: geometryStatistics(draft.result),
+    }
+    const objectInstance: ObjectInstanceRecordV1 = {
+      id: instanceId,
+      assetId,
+      name: draft.name.trim(),
+      transform: record.transform,
+      numericStatus: 0,
+      statusSource: 'manual',
+      statusOverlayVisible: true,
+      visible: true,
+    }
+
     try {
-      await onCommit(record)
+      if (onCommitAsset !== undefined) {
+        await onCommitAsset(objectAsset, objectInstance)
+      } else if (onCommit !== undefined) {
+        await onCommit(record)
+      } else {
+        throw new Error('No Object Asset commit handler is configured.')
+      }
       if (operationId.current !== commitOperation) {
         return
       }
       candidateAsset.current = null
-      cache.set(record.id, asset)
-      onSelect(record.id)
+      cache.set(onCommitAsset === undefined ? record.id : assetId, asset)
+      onSelect(instanceId)
       setDraft(null)
       setStage('idle')
       onClose()

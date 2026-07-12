@@ -1,4 +1,5 @@
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
+import type { ObjectAssetRecordV1 } from '../../domain/project/project'
 import type { OcctSuccessResult } from '../../lib/cad/occt-types'
 import { stepImportClient } from './StepImportClient'
 import {
@@ -121,12 +122,42 @@ export class ImportedGeometryRepository {
     return importPromise
   }
 
+  loadObjectAsset(record: ObjectAssetRecordV1): Promise<ImportedThreeAsset> {
+    return this.load({
+      id: record.id,
+      name: record.name,
+      kind: 'imported',
+      status: 'OFF',
+      transform: {
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      graspable: false,
+      collisionHalfExtents: [...record.collisionHalfExtents],
+      stackLightAnchor: null,
+      sourceBytes: record.sourceBytes,
+      importMetadata: {
+        sourceFileName: record.sourceFileName,
+        detectedUnit: 'unknown',
+        selectedSourceUnit: 'meter',
+        postImportScale: record.importScale,
+        originMode: record.originMode,
+        colliderCenter: [...record.colliderCenter],
+      },
+    })
+  }
+
   async restore(records: readonly EquipmentRecord[]): Promise<void> {
     await Promise.allSettled(
       records
         .filter((record) => record.kind === 'imported')
         .map((record) => this.load(record)),
     )
+  }
+
+  async restoreObjectAssets(records: readonly ObjectAssetRecordV1[]): Promise<void> {
+    await Promise.allSettled(records.map((record) => this.loadObjectAsset(record)))
   }
 
   set(id: string, asset: ImportedThreeAsset): void {

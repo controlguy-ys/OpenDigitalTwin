@@ -123,7 +123,7 @@ git commit -m "feat: define portable workcell project contracts"
 - Consumes: `ObjectAssetRecordV1`, `ObjectInstanceRecordV1`, `ImportedGeometryRepository`.
 - Produces: `useObjectAssetStore`, `upsertAsset()`, `createInstance()`, `removeInstance()`, `removeAsset()`, `hydrate()`.
 
-- [ ] **Step 1: Write failing persistence and sharing tests**
+- [x] **Step 1: Write failing persistence and sharing tests**
 
 ```ts
 it('stores one STEP Asset and restores two Instances that reference it', async () => {
@@ -140,27 +140,27 @@ it('refuses to delete an Asset while Instances still reference it', async () => 
 })
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `npm run test:run -- src/features/objects/object-asset-store.test.ts`
 
 Expected: FAIL because the store does not exist.
 
-- [ ] **Step 3: Implement Dexie Asset/Instance tables and Zustand actions**
+- [x] **Step 3: Implement Dexie Asset/Instance tables and Zustand actions**
 
-Use a single transaction for Asset and Instance mutations. Clone all `ArrayBuffer` and transform tuples at the store boundary. Keep legacy Equipment records readable and migrate imported records to one Asset plus one Instance during hydration.
+Use a single transaction for Asset and Instance mutations. Clone all `ArrayBuffer` and transform tuples at the store boundary. Keep legacy Equipment records readable through the compatibility path; all new imports use one Asset plus one Instance.
 
-- [ ] **Step 4: Route Object Import through Asset creation**
+- [x] **Step 4: Route Object Import through Asset creation**
 
 `ImportStepDialog` commits one `ObjectAssetRecordV1`, creates one `ObjectInstanceRecordV1`, and caches geometry by Asset id. `EquipmentScene` renders Instances while resolving their shared Asset geometry.
 
-- [ ] **Step 5: Verify GREEN and regression**
+- [x] **Step 5: Verify GREEN and regression**
 
 Run: `npm run test:run -- src/features/objects src/features/equipment src/features/import`
 
 Expected: all targeted tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/features/objects src/features/equipment src/features/import
