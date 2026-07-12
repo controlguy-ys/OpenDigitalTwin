@@ -27,6 +27,13 @@
 - Parent Robot and Object rendering under MCP, and mount the gripper, grasp
   sensor, and held Object under TCP. Released Object world poses are converted
   back to MCP-local storage exactly once.
+- Added a multi-stage unprivileged Nginx Web image and an optional profile-gated
+  OPC UA Connector image under Docker Compose.
+- Added independent Web/Connector health checks, same-origin `/opcua` WebSocket
+  proxying, read-only filesystems, capability drops, bounded resources, and
+  node-owned temporary PKI storage.
+- Added static deployment contracts and real Web-only/OPC UA profile smoke
+  orchestration with automatic cleanup.
 
 ## Corrected requirements carried into implementation
 
@@ -49,17 +56,22 @@
 
 ## Verification evidence
 
-- `npm run test:run`: 48 files and 255 tests passed.
+- `npm run test:run`: 52 files and 271 tests passed.
 - `npm run lint`: passed.
 - `npm run cad:validate`: 7 valid Links, 0 errors, and 0 warnings.
 - Production TypeScript/Vite build: passed.
 - Playwright MCP/Base/TCP edit → default-project Export → storage clear →
-  Import semantic round-trip: passed in 1.2 minutes.
+  Import semantic round-trip: passed in 1.1 minutes.
+- Static deployment contract and Web-only/OPC UA Compose configurations:
+  passed.
+- Real Web-only smoke: clean image build, `nginx -t`, healthy Nginx, SPA probe,
+  and cleanup passed.
+- Real OPC UA profile smoke: both services healthy, Connector health, Nginx
+  `/opcua` WebSocket handshake, and cleanup passed without an OPC UA server.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
 
 ## Deferred next slices
 
-- Docker/Nginx on-prem deployment package and health checks.
 - Scene draw-call telemetry and enforcement at runtime.
 - Multi-Robot, IK, dynamics, automatic assembly splitting/LOD, OPC UA writes,
   authentication, certificates, and public-internet hardening.

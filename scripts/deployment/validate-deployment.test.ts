@@ -26,6 +26,7 @@ describe('deployment contract', () => {
       expect.stringMatching(/profile/i),
       expect.stringMatching(/read-only/i),
       expect.stringMatching(/capabilities/i),
+      expect.stringMatching(/PKI.*tmpfs/i),
     ]))
   })
 })

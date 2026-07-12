@@ -27,6 +27,12 @@ export function validateDeploymentContract(files) {
   requirePattern(errors, files.compose, /pids_limit:/, 'Compose must bound process counts.')
   requirePattern(errors, files.compose, /mem_limit:/, 'Compose must bound memory.')
   requirePattern(errors, files.compose, /cpus:/, 'Compose must bound CPU.')
+  requirePattern(
+    errors,
+    files.compose,
+    /\/home\/node\/\.config:.*uid=1000.*gid=1000/,
+    'Connector must provide its node-owned PKI configuration path as tmpfs.',
+  )
   requirePattern(errors, files.dockerignore, /node_modules/, '.dockerignore must exclude node_modules.')
   if (/privileged:\s*true|network_mode:\s*host|docker\.sock/i.test(files.compose)) {
     errors.push('Compose must not use privileged mode, host networking, or the Docker socket.')

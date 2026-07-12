@@ -40,6 +40,26 @@ npm run dev -- --host 127.0.0.1 --port 5173
 
 Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
 
+### Docker deployment
+
+Web-only on a trusted on-premise LAN:
+
+```powershell
+docker compose up -d --build web
+```
+
+Web plus the optional read-only OPC UA Connector:
+
+```powershell
+$env:OPCUA_CONFIG_PATH = 'C:\RobotSim\opcua.config.json'
+docker compose --profile opcua up -d --build --wait
+```
+
+The default URL is [http://127.0.0.1:8080/](http://127.0.0.1:8080/), and
+`/healthz` reports Web availability independently from PLC connectivity. See
+the [Docker operator guide](docs/operator/docker-deployment.md) before using
+the OPC UA profile.
+
 ## Project workflow
 
 1. Use **Import Robot STEP** and choose either a complete seven-Link Robot or
@@ -88,6 +108,9 @@ on a trusted on-premise LAN only.
 ```powershell
 npm run verify
 npm run test:e2e
+npm run deploy:validate
+npm run deploy:smoke
+npm run deploy:smoke:opcua
 npm audit --audit-level=high
 ```
 
@@ -112,6 +135,8 @@ middleware               Read-only OPC UA Client and WebSocket gateway
 ## Documentation
 
 - [Fixed Coordinate Frames operator guide](docs/operator/fixed-coordinate-frames.md)
+- [Docker on-prem operator guide](docs/operator/docker-deployment.md)
+- [Docker deployment Tech Spec](docs/superpowers/specs/2026-07-13-on-prem-docker-deployment-design.md)
 - [Portable Workcell Project Tech Spec](docs/superpowers/specs/2026-07-13-portable-workcell-project-format.md)
 - [Implementation plan](docs/superpowers/plans/2026-07-13-portable-workcell-project-core.md)
 - [Short-term MVP implementation record](docs/progress/2026-07-13-short-term-mvp-implementation.md)
@@ -122,7 +147,7 @@ middleware               Read-only OPC UA Client and WebSocket gateway
 Multi-Robot scenes, IK, dynamics, acceleration/jerk planning, automatic STEP
 assembly splitting, automatic mesh simplification, OPC UA writes, credentials,
 certificates, and public-internet deployment are not implemented. The Docker
-on-prem deployment package is the next planned slice.
+package targets a trusted on-premise LAN only.
 
 This project is not a safety-rated Robot controller. It performs no PLC
 transfer, controller write, motion-start command, or safety function.

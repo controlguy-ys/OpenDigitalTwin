@@ -43,6 +43,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
+      - /home/node/.config:size=16m,uid=1000,gid=1000,mode=0700
     cap_drop:
       - ALL
     security_opt:

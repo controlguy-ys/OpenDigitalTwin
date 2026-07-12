@@ -23,6 +23,8 @@
     "cad:validate": "tsx scripts/cad/validate-robot-assets.ts",
     "deploy:validate": "node scripts/deployment/validate-deployment.mjs",
     "deploy:build": "docker compose --profile opcua build",
+    "deploy:smoke": "node scripts/deployment/smoke-deployment.mjs",
+    "deploy:smoke:opcua": "node scripts/deployment/smoke-deployment.mjs --opcua",
     "test:e2e": "npm run build:e2e && playwright test",
     "verify": "npm run lint && npm run test:run && npm run cad:validate && npm run build"
   },
