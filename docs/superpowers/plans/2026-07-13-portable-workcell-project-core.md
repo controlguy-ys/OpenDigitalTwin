@@ -286,7 +286,7 @@ git commit -m "feat: encode portable wdtwin project archives"
 - Consumes: Robot geometry/configuration, Object Asset/Instance, Pose, OPC UA binding snapshots.
 - Produces: `useProjectStore`, `newProject()`, `saveActiveProject()`, `exportActiveProject()`, `importProject()`.
 
-- [ ] **Step 1: Write failing atomic-load tests**
+- [x] **Step 1: Write failing atomic-load tests**
 
 ```ts
 it('keeps the active project unchanged when imported geometry staging fails', async () => {
@@ -296,23 +296,23 @@ it('keeps the active project unchanged when imported geometry staging fails', as
 })
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `npm run test:run -- src/features/project/project-store.test.ts`
 
 Expected: FAIL because the store does not exist.
 
-- [ ] **Step 3: Implement staged validation and one-transaction commit**
+- [x] **Step 3: Implement staged validation and one-transaction commit**
 
 Decode and validate into memory, convert every STEP Asset into temporary repositories, and replace the active IndexedDB project only after all conversions succeed. Dispose staged geometry on failure; dispose old geometry only after commit.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run: `npm run test:run -- src/features/project/project-store.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src/features/project src/app/App.tsx

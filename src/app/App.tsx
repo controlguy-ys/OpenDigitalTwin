@@ -27,6 +27,7 @@ import { AppShell } from './AppShell'
 import { useObjectAssetStore } from '../features/objects/object-asset-store'
 import { objectRecords } from '../features/objects/object-equipment-adapter'
 import type { SerializableTransform } from '../domain/equipment/equipment'
+import { useProjectStore } from '../features/project/project-store-browser'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -48,6 +49,7 @@ export function App() {
   const objectInstances = useObjectAssetStore((state) => state.instances)
   const hydrateObjectAssets = useObjectAssetStore((state) => state.hydrate)
   const hydrateRobotGeometry = useRobotGeometryStore((state) => state.hydrate)
+  const hydrateProject = useProjectStore((state) => state.hydrate)
   const addAssetInstance = useObjectAssetStore((state) => state.addAssetInstance)
   const updateObjectInstance = useObjectAssetStore((state) => state.updateInstance)
   const removeObjectInstance = useObjectAssetStore((state) => state.removeInstance)
@@ -102,6 +104,7 @@ export function App() {
         hydrateEquipment(),
         hydrateObjectAssets(),
         hydrateRobotGeometry(),
+        hydrateProject(),
       ])
       if (active) {
         const robotRecords = useRobotGeometryStore.getState().links
@@ -125,7 +128,7 @@ export function App() {
     return () => {
       active = false
     }
-  }, [hydrateEquipment, hydrateObjectAssets, hydrateRobotGeometry])
+  }, [hydrateEquipment, hydrateObjectAssets, hydrateProject, hydrateRobotGeometry])
 
   useEffect(() => {
     const unsubscribe = activeJointSource.subscribe((frame) => {

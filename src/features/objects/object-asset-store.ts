@@ -35,6 +35,10 @@ export interface ObjectAssetStoreState {
     asset: ObjectAssetRecordV1,
     instance: ObjectInstanceRecordV1,
   ): Promise<void>
+  replaceProject(
+    assets: readonly ObjectAssetRecordV1[],
+    instances: readonly ObjectInstanceRecordV1[],
+  ): Promise<void>
   upsertAsset(asset: ObjectAssetRecordV1): Promise<void>
   createInstance(instance: ObjectInstanceRecordV1): Promise<void>
   updateInstance(instance: ObjectInstanceRecordV1): Promise<void>
@@ -269,6 +273,42 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
           instances: [...state.instances, nextInstance],
         }))
         committedTransforms.set(nextInstance.id, cloneTransform(nextInstance.transform))
+      },
+      replaceProject: async (assets, instances) => {
+        assets.forEach(validateAsset)
+        instances.forEach(validateInstance)
+        const assetIds = new Set(assets.map(({ id }) => id))
+        if (assetIds.size !== assets.length) {
+          throw new Error('Object Asset ids must be unique.')
+        }
+        if (new Set(instances.map(({ id }) => id)).size !== instances.length) {
+          throw new Error('Object Instance ids must be unique.')
+        }
+        if (instances.some(({ assetId }) => !assetIds.has(assetId))) {
+          throw new Error('Every Object Instance must reference a project Asset.')
+        }
+        await hydrate()
+        const nextAssets = assets.map(cloneAsset)
+        const nextInstances = instances.map(cloneInstance)
+        if (get().persistenceStatus !== 'memory-only') {
+          await database.transaction(
+            'rw',
+            database.assets,
+            database.instances,
+            async () => {
+              await database.assets.clear()
+              await database.instances.clear()
+              await database.assets.bulkAdd(nextAssets)
+              await database.instances.bulkAdd(nextInstances)
+            },
+          )
+        }
+        committedTransforms.clear()
+        pendingTransforms.clear()
+        nextInstances.forEach((instance) =>
+          committedTransforms.set(instance.id, cloneTransform(instance.transform)),
+        )
+        set({ assets: nextAssets, instances: nextInstances })
       },
       upsertAsset: async (asset) => {
         validateAsset(asset)

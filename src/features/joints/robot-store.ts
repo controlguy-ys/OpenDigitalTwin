@@ -110,6 +110,7 @@ export interface RobotStoreState extends RobotFrameState {
   savePose(): void
   hydrateKeyframes(): void
   clearKeyframes(): void
+  replaceKeyframes(keyframes: readonly RobotKeyframe[]): void
   moveKeyframe(id: string, direction: -1 | 1): void
   deleteKeyframe(id: string): void
   setKeyframeSpeed(id: string, speedPercent: number): void
@@ -206,6 +207,17 @@ export const useRobotStore = create<RobotStoreState>()((set) => ({
   clearKeyframes: () => {
     persistKeyframes([])
     set({ keyframes: [] })
+  },
+
+  replaceKeyframes: (keyframes) => {
+    const next = recalculateKeyframeDurations(
+      keyframes.map((keyframe) => ({
+        ...keyframe,
+        anglesDeg: [...keyframe.anglesDeg],
+      })),
+    )
+    persistKeyframes(next)
+    set({ keyframes: next, playing: false })
   },
 
   moveKeyframe: (id, direction) => {

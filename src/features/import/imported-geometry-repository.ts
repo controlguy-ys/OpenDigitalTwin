@@ -21,7 +21,7 @@ type GeometryConverter = (
 export class ImportedGeometryRepository {
   private readonly parser: StepImportParser
   private readonly convert: GeometryConverter
-  private readonly entries = new Map<string, ImportedThreeAsset>()
+  private entries = new Map<string, ImportedThreeAsset>()
   private readonly inFlight = new Map<string, Promise<ImportedThreeAsset>>()
   private readonly epochs = new Map<string, number>()
   private readonly errors = new Map<string, string>()
@@ -164,6 +164,16 @@ export class ImportedGeometryRepository {
     this.invalidate(id)
     this.entries.set(id, asset)
     this.errors.delete(id)
+    this.emit()
+  }
+
+  replaceAll(nextEntries: ReadonlyMap<string, ImportedThreeAsset>): void {
+    for (const [id, asset] of this.entries) {
+      if (nextEntries.get(id) !== asset) asset.dispose()
+    }
+    this.entries = new Map(nextEntries)
+    this.inFlight.clear()
+    this.errors.clear()
     this.emit()
   }
 
