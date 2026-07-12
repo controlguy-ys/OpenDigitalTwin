@@ -15,6 +15,7 @@ interface AppShellProps {
   onOpenStepImport?: () => void
   onOpenRobotImport?: () => void
   onOpenRobotConfiguration?: () => void
+  onOpenRobotGeometry?: () => void
   sourceMode?: JointSourceMode
   onSourceModeChange?: (mode: JointSourceMode) => void
 }
@@ -30,6 +31,7 @@ export function AppShell({
   onOpenStepImport,
   onOpenRobotImport,
   onOpenRobotConfiguration,
+  onOpenRobotGeometry,
   sourceMode = 'simulation',
   onSourceModeChange,
 }: AppShellProps) {
@@ -69,6 +71,9 @@ export function AppShell({
         </button>
         <button onClick={onOpenRobotConfiguration} type="button">
           Robot Config
+        </button>
+        <button onClick={onOpenRobotGeometry} type="button">
+          Robot Geometry
         </button>
       </header>
       <button

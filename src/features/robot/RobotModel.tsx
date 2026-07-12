@@ -18,6 +18,7 @@ import {
   robotConfigurationToDefinition,
   useRobotConfigurationStore,
 } from './robot-configuration-store'
+import { useRobotGeometryStore } from './robot-geometry-store'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -137,6 +138,11 @@ export function RobotModel({ registerRig }: RobotModelProps) {
     robotGeometryRepository.getSnapshot,
     robotGeometryRepository.getSnapshot,
   )
+  const geometryRecords = useRobotGeometryStore((state) => state.links)
+  const geometryRecordsByLink = useMemo(
+    () => new Map(geometryRecords.map((record) => [record.linkId, record])),
+    [geometryRecords],
+  )
   const rig = useMemo(() => createRobotRig(definition), [definition])
   const loadedScenes = useMemo(
     () =>
@@ -146,10 +152,18 @@ export function RobotModel({ registerRig }: RobotModelProps) {
       ),
     [geometryRevision, loadedLinks],
   )
-  const registration = useMemo(
-    () => createRobotRigRegistration(rig, loadedScenes),
-    [loadedScenes, rig],
-  )
+  const registration = useMemo(() => {
+    const next = createRobotRigRegistration(rig, loadedScenes)
+    for (const { id } of ROBOT_LINK_ASSETS) {
+      const geometry = geometryRecordsByLink.get(id)
+      if (geometry === undefined) continue
+      next.links[id].position.set(...geometry.localTransform.position)
+      next.links[id].quaternion.set(...geometry.localTransform.quaternion)
+      next.links[id].scale.set(...geometry.localTransform.scale)
+      next.links[id].updateMatrix()
+    }
+    return next
+  }, [geometryRecordsByLink, loadedScenes, rig])
   const j1 = useRobotStore(jointAngleSelectors[0])
   const j2 = useRobotStore(jointAngleSelectors[1])
   const j3 = useRobotStore(jointAngleSelectors[2])
@@ -198,15 +212,23 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   useLayoutEffect(() => {
     rig.root.visible = !hiddenEntityIds.includes('robot')
     for (const { id } of ROBOT_LINK_ASSETS) {
-      registration.links[id].visible = !hiddenEntityIds.includes(id)
+      registration.links[id].visible =
+        (geometryRecordsByLink.get(id)?.visible ?? true) &&
+        !hiddenEntityIds.includes(id)
     }
-  }, [hiddenEntityIds, registration.links, rig.root])
+  }, [geometryRecordsByLink, hiddenEntityIds, registration.links, rig.root])
 
   const linkInteractionPortals = ROBOT_LINK_ASSETS.flatMap(({ id }) => {
     if (hiddenEntityIds.includes(id)) {
       return []
     }
-    const bounds = ROBOT_LINK_COLLISION_BOUNDS[id]
+    const geometry = geometryRecordsByLink.get(id)
+    const bounds = geometry === undefined
+      ? ROBOT_LINK_COLLISION_BOUNDS[id]
+      : {
+          center: geometry.collisionCenter,
+          halfExtents: geometry.collisionHalfExtents,
+        }
     const outlineState = getRobotLinkOutlineState(
       selection,
       id,

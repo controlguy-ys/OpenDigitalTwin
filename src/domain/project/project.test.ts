@@ -42,6 +42,7 @@ function robotLink(linkId: RobotLinkId): RobotLinkGeometryRecordV1 {
     sourceBytes: new Uint8Array([1, 2, 3]).buffer,
     localTransform: identityTransform(),
     visible: true,
+    collisionCenter: [0, 0, 0],
     collisionHalfExtents: [0.1, 0.1, 0.1],
     statistics: { vertices: 12, triangles: 4, meshes: 1, materials: 1 },
   }

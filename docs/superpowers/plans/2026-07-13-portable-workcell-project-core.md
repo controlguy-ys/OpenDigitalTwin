@@ -183,7 +183,7 @@ git commit -m "feat: separate reusable object assets and instances"
 - Consumes: `RobotLinkGeometryRecordV1`, STEP parser, `RobotGeometryRepository`.
 - Produces: `useRobotGeometryStore`, seven persisted Link records, geometry-local XYZ/RPY editor.
 
-- [ ] **Step 1: Write failing independence and persistence tests**
+- [x] **Step 1: Write failing independence and persistence tests**
 
 ```ts
 it('persists Geometry local pose independently from Joint origin', async () => {
@@ -194,27 +194,27 @@ it('persists Geometry local pose independently from Joint origin', async () => {
 })
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `npm run test:run -- src/features/robot/robot-geometry-store.test.ts`
 
 Expected: FAIL because the store does not exist.
 
-- [ ] **Step 3: Implement staged seven-link replacement**
+- [x] **Step 3: Implement staged seven-link replacement**
 
 Remove the fixed `LINK_WORLD_ORIGINS` subtraction from generic Robot Import. Store each converted mesh under its Link slot and apply the persisted geometry-local transform inside that slot. Reject incomplete new-Robot imports; expose a separate partial replacement action.
 
-- [ ] **Step 4: Add the Geometry editor**
+- [x] **Step 4: Add the Geometry editor**
 
 Render Link mapping, source filename, XYZ millimetres, RPY degrees, visibility, Box collision half extents, and geometry statistics. Apply changes only after finite-value validation.
 
-- [ ] **Step 5: Verify GREEN and Robot regression**
+- [x] **Step 5: Verify GREEN and Robot regression**
 
 Run: `npm run test:run -- src/features/robot src/domain/robot`
 
 Expected: all targeted tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/features/robot

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { Group } from 'three'
 import {
+  importRobotStepFiles,
   MAX_ROBOT_STEP_FILES,
   mapRobotStepFiles,
+  validateCompleteRobotStepFiles,
   validateRobotStepFiles,
 } from './robot-step-import'
 
@@ -40,5 +43,44 @@ describe('robot STEP import limits', () => {
   it('uses file order for generic names while retaining the seven-link cap', () => {
     const mapped = mapRobotStepFiles([file('base.step'), file('arm.step')])
     expect(mapped.map(({ linkId }) => linkId)).toEqual(['LINK00', 'LINK01'])
+  })
+
+  it('requires all seven files for a new Robot import', () => {
+    expect(() => validateCompleteRobotStepFiles([file('LINK00.step')])).toThrow(
+      'exactly 7',
+    )
+    expect(() =>
+      validateCompleteRobotStepFiles(
+        Array.from({ length: 7 }, (_, index) => file(`LINK0${index}.step`)),
+      ),
+    ).not.toThrow()
+  })
+
+  it('keeps imported geometry in its Link-local source coordinates', async () => {
+    const group = new Group()
+    const assets = await importRobotStepFiles(
+      [file('LINK01.step')],
+      {
+        import: async () => ({
+          success: true,
+          root: { name: 'root', meshes: [], children: [] },
+          meshes: [],
+        }),
+        cancel: () => undefined,
+      },
+      () => ({
+        group,
+        bounds: {
+          min: [0, 0, 0],
+          max: [1, 1, 1],
+          size: [1, 1, 1],
+          center: [0.5, 0.5, 0.5],
+        },
+        colliderCenter: [0.5, 0.5, 0.5],
+        dispose: () => undefined,
+      }),
+    )
+
+    expect(assets.get('LINK01')?.group.position.toArray()).toEqual([0, 0, 0])
   })
 })

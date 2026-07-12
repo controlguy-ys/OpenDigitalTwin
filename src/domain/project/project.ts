@@ -54,6 +54,7 @@ export interface RobotLinkGeometryRecordV1 {
   sourceBytes: ArrayBuffer
   localTransform: SerializableTransform
   visible: boolean
+  collisionCenter: [number, number, number]
   collisionHalfExtents: [number, number, number]
   statistics: GeometryStatistics
 }
@@ -296,6 +297,7 @@ function validateRobot(value: unknown): {
     sourceBytes += bytes
     requireTransform(link.localTransform, `${linkId} local transform`)
     requireBoolean(link.visible, `${linkId} visibility`)
+    requireTuple(link.collisionCenter, 3, `${linkId} collision center`)
     requireTuple(link.collisionHalfExtents, 3, `${linkId} collision half extents`, true)
     const stats = requireStatistics(
       link.statistics,

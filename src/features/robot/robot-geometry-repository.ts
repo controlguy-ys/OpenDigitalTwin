@@ -16,6 +16,12 @@ export class RobotGeometryRepository {
     this.emit()
   }
 
+  replaceLink(linkId: RobotLinkId, nextAsset: ImportedThreeAsset): void {
+    this.assets.get(linkId)?.dispose()
+    this.assets.set(linkId, nextAsset)
+    this.emit()
+  }
+
   clear(): void {
     this.replace(new Map())
   }

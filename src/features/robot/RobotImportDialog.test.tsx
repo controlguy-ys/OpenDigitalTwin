@@ -25,7 +25,7 @@ describe('RobotImportDialog', () => {
     )
 
     expect(screen.getByRole('alert')).toHaveTextContent('maximum of 7')
-    expect(screen.getByRole('button', { name: 'Replace robot geometry' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Import new Robot' })).toBeDisabled()
     expect(client.import).not.toHaveBeenCalled()
   })
 
@@ -33,14 +33,33 @@ describe('RobotImportDialog', () => {
     const user = userEvent.setup()
     render(<RobotImportDialog onClose={vi.fn()} open />)
 
-    await user.upload(screen.getByLabelText('Robot link STEP files'), [
-      stepFile('custom_LINK01.step'),
-      stepFile('custom_LINK00.step'),
-    ])
+    await user.upload(
+      screen.getByLabelText('Robot link STEP files'),
+      Array.from({ length: 7 }, (_, index) =>
+        stepFile(`custom_LINK0${6 - index}.step`),
+      ),
+    )
 
     expect(screen.getByLabelText('Robot link mapping')).toHaveTextContent(
-      'LINK00custom_LINK00.stepLINK01custom_LINK01.step',
+      'LINK00custom_LINK00.stepLINK01custom_LINK01.stepLINK02custom_LINK02.step',
     )
-    expect(screen.getByRole('button', { name: 'Replace robot geometry' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Import new Robot' })).toBeEnabled()
+  })
+
+  it('offers a separate one-file Link replacement flow', async () => {
+    const user = userEvent.setup()
+    render(<RobotImportDialog onClose={vi.fn()} open />)
+
+    await user.selectOptions(screen.getByLabelText('Robot import mode'), 'replace-link')
+    await user.selectOptions(screen.getByLabelText('Target Robot Link'), 'LINK04')
+    await user.upload(
+      screen.getByLabelText('Robot link STEP files'),
+      stepFile('replacement.step'),
+    )
+
+    expect(screen.getByLabelText('Robot link mapping')).toHaveTextContent(
+      'LINK04replacement.step',
+    )
+    expect(screen.getByRole('button', { name: 'Replace selected Link' })).toBeEnabled()
   })
 })

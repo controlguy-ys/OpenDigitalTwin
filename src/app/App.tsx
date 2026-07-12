@@ -19,6 +19,10 @@ import {
 import { Timeline } from '../features/ui/Timeline'
 import { RobotImportDialog } from '../features/robot/RobotImportDialog'
 import { RobotConfigurationDialog } from '../features/robot/RobotConfigurationDialog'
+import { useRobotGeometryStore } from '../features/robot/robot-geometry-store'
+import { restoreRobotGeometryRecords } from '../features/robot/robot-step-import'
+import { robotGeometryRepository } from '../features/robot/robot-geometry-repository'
+import { RobotGeometryDialog } from '../features/robot/RobotGeometryDialog'
 import { AppShell } from './AppShell'
 import { useObjectAssetStore } from '../features/objects/object-asset-store'
 import { objectRecords } from '../features/objects/object-equipment-adapter'
@@ -30,6 +34,7 @@ export function App() {
   const [isImportOpen, setIsImportOpen] = useState(false)
   const [isRobotImportOpen, setIsRobotImportOpen] = useState(false)
   const [isRobotConfigurationOpen, setIsRobotConfigurationOpen] = useState(false)
+  const [isRobotGeometryOpen, setIsRobotGeometryOpen] = useState(false)
   const [sourceMode, setSourceMode] = useState<'simulation' | 'opcua'>(
     'simulation',
   )
@@ -42,6 +47,7 @@ export function App() {
   const objectAssets = useObjectAssetStore((state) => state.assets)
   const objectInstances = useObjectAssetStore((state) => state.instances)
   const hydrateObjectAssets = useObjectAssetStore((state) => state.hydrate)
+  const hydrateRobotGeometry = useRobotGeometryStore((state) => state.hydrate)
   const addAssetInstance = useObjectAssetStore((state) => state.addAssetInstance)
   const updateObjectInstance = useObjectAssetStore((state) => state.updateInstance)
   const removeObjectInstance = useObjectAssetStore((state) => state.removeInstance)
@@ -92,8 +98,21 @@ export function App() {
   useEffect(() => {
     let active = true
     void (async () => {
-      await Promise.all([hydrateEquipment(), hydrateObjectAssets()])
+      await Promise.all([
+        hydrateEquipment(),
+        hydrateObjectAssets(),
+        hydrateRobotGeometry(),
+      ])
       if (active) {
+        const robotRecords = useRobotGeometryStore.getState().links
+        const restoredRobot =
+          robotRecords.length === 0
+            ? null
+            : await restoreRobotGeometryRecords(robotRecords, stepImportClient)
+                .catch(() => null)
+        if (active && restoredRobot !== null) {
+          robotGeometryRepository.replace(restoredRobot)
+        }
         await Promise.all([
           importedGeometryRepository.restore(useEquipmentStore.getState().records),
           importedGeometryRepository.restoreObjectAssets(
@@ -106,7 +125,7 @@ export function App() {
     return () => {
       active = false
     }
-  }, [hydrateEquipment, hydrateObjectAssets])
+  }, [hydrateEquipment, hydrateObjectAssets, hydrateRobotGeometry])
 
   useEffect(() => {
     const unsubscribe = activeJointSource.subscribe((frame) => {
@@ -306,6 +325,7 @@ export function App() {
         onOpenStepImport={() => setIsImportOpen(true)}
         onOpenRobotImport={() => setIsRobotImportOpen(true)}
         onOpenRobotConfiguration={() => setIsRobotConfigurationOpen(true)}
+        onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
         onSourceModeChange={(mode) => {
           useRobotStore.getState().stopPlayback()
           setSourceMode(mode)
@@ -337,6 +357,10 @@ export function App() {
       <RobotConfigurationDialog
         onClose={() => setIsRobotConfigurationOpen(false)}
         open={isRobotConfigurationOpen}
+      />
+      <RobotGeometryDialog
+        onClose={() => setIsRobotGeometryOpen(false)}
+        open={isRobotGeometryOpen}
       />
     </>
   )
