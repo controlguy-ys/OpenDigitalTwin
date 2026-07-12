@@ -12,6 +12,7 @@ interface EquipmentInspectorProps {
   onApply(id: string): void | Promise<void>
   onCancel(id: string): void
   onNumericStatus(id: string, value: number): void | Promise<void>
+  onStatusSource(id: string, source: 'manual' | 'opcua'): void | Promise<void>
   onOverlayVisible(id: string, visible: boolean): void | Promise<void>
   onDelete(id: string): void | Promise<void>
 }
@@ -76,6 +77,7 @@ export function EquipmentInspector({
   onApply,
   onCancel,
   onNumericStatus,
+  onStatusSource,
   onOverlayVisible,
   onDelete,
 }: EquipmentInspectorProps) {
@@ -164,9 +166,24 @@ export function EquipmentInspector({
       <fieldset disabled={disabled}>
         <legend>Status overlay</legend>
         <label>
+          Status source
+          <select
+            aria-label="Status source"
+            onChange={(event) => void onStatusSource(
+              record.id,
+              event.currentTarget.value as 'manual' | 'opcua',
+            )}
+            value={record.statusSource ?? 'manual'}
+          >
+            <option value="manual">Manual</option>
+            <option value="opcua">OPC UA</option>
+          </select>
+        </label>
+        <label>
           Numeric status
           <input
             aria-label="Numeric status"
+            disabled={(record.statusSource ?? 'manual') === 'opcua'}
             onChange={(event) => setNumericStatus(event.currentTarget.value)}
             step="any"
             type="number"
@@ -185,6 +202,7 @@ export function EquipmentInspector({
           Show status overlay
         </label>
         <button
+          disabled={(record.statusSource ?? 'manual') === 'opcua'}
           onClick={() => {
             const value = Number(numericStatus)
             if (numericStatus.trim() === '' || !Number.isFinite(value)) {

@@ -1,6 +1,5 @@
 import { Grip, Home as HomeIcon, RotateCcw, Save } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { CRB15000_DEFINITION } from '../../domain/robot/crb15000'
+import { useEffect, useMemo, useState } from 'react'
 import {
   clampJointAngles,
   ZERO_JOINT_ANGLES,
@@ -10,6 +9,10 @@ import {
   type SimulationJointSource,
 } from './SimulationJointSource'
 import { jointAngleSelectors, useRobotStore } from './robot-store'
+import {
+  robotConfigurationToDefinition,
+  useRobotConfigurationStore,
+} from '../robot/robot-configuration-store'
 
 export interface JointInspectorProps {
   disabled?: boolean
@@ -36,6 +39,11 @@ export function JointInspector({
   const [drafts, setDrafts] = useState(() => anglesDeg.map(String))
   const [focusedDraftIndex, setFocusedDraftIndex] = useState<number | null>(null)
   const [dirtyDraftIndex, setDirtyDraftIndex] = useState<number | null>(null)
+  const configuration = useRobotConfigurationStore((state) => state.configuration)
+  const definition = useMemo(
+    () => robotConfigurationToDefinition(configuration),
+    [configuration],
+  )
 
   useEffect(() => {
     setDrafts((current) =>
@@ -65,7 +73,7 @@ export function JointInspector({
       currentAngles[5],
     ]
     nextAngles[jointIndex] = angleDeg
-    const clampedAngles = clampJointAngles(nextAngles)
+    const clampedAngles = clampJointAngles(nextAngles, definition)
     source.setAngles(clampedAngles)
     return clampedAngles[jointIndex] ?? currentAngles[jointIndex] ?? 0
   }
@@ -103,7 +111,7 @@ export function JointInspector({
     <div className="joint-inspector">
       <h2>Inspector</h2>
       <div className="joint-controls">
-        {CRB15000_DEFINITION.joints.map((joint, jointIndex) => (
+        {definition.joints.map((joint, jointIndex) => (
           <div className="joint-control" key={joint.id}>
             <label htmlFor={`${joint.id}-range`}>{joint.id}</label>
             <input

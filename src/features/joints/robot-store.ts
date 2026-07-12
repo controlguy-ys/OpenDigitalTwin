@@ -7,7 +7,42 @@ import {
   type JointFrame,
   type RobotFrameState,
 } from '../../domain/robot/joint-frame'
-import type { RobotKeyframe } from './keyframes'
+import {
+  deriveTransitionDurationMs,
+  type RobotKeyframe,
+} from './keyframes'
+import {
+  robotConfigurationToDefinition,
+  useRobotConfigurationStore,
+} from '../robot/robot-configuration-store'
+
+function activeRobotDefinition() {
+  return robotConfigurationToDefinition(
+    useRobotConfigurationStore.getState().configuration,
+  )
+}
+
+function recalculateKeyframeDurations(
+  keyframes: readonly RobotKeyframe[],
+): readonly RobotKeyframe[] {
+  const velocities = useRobotConfigurationStore
+    .getState()
+    .configuration.joints.map((joint) => joint.maxVelocityDegPerSec)
+  return keyframes.map((keyframe, index) => {
+    const next = keyframes[index + 1]
+    if (next === undefined) return keyframe
+    const speedPercent = keyframe.speedPercentToNext ?? 100
+    return {
+      ...keyframe,
+      durationMs: deriveTransitionDurationMs(
+        keyframe,
+        next,
+        speedPercent,
+        velocities,
+      ),
+    }
+  })
+}
 
 const POSE_STORAGE_KEY = 'robot-sim.pose-sequence.v1'
 
@@ -115,12 +150,12 @@ export const useRobotStore = create<RobotStoreState>()((set) => ({
         number,
       ]
       anglesDeg[jointIndex] = angleDeg
-      return { anglesDeg: clampJointAngles(anglesDeg) }
+      return { anglesDeg: clampJointAngles(anglesDeg, activeRobotDefinition()) }
     })
   },
 
   applyFrame: (frame, nowMs = Date.now()) => {
-    set((state) => reduceJointFrame(state, frame, nowMs))
+    set((state) => reduceJointFrame(state, frame, nowMs, activeRobotDefinition()))
   },
 
   home: () => {
@@ -155,7 +190,10 @@ export const useRobotStore = create<RobotStoreState>()((set) => ({
         speedPercentToNext: 100,
       }
 
-      const keyframes = [...state.keyframes, keyframe]
+      const keyframes = recalculateKeyframeDurations([
+        ...state.keyframes,
+        keyframe,
+      ])
       persistKeyframes(keyframes)
       return { keyframes }
     })
@@ -189,14 +227,17 @@ export const useRobotStore = create<RobotStoreState>()((set) => ({
         return state
       }
       keyframes.splice(toIndex, 0, moved)
-      persistKeyframes(keyframes)
-      return { keyframes, playing: false }
+      const recalculated = recalculateKeyframeDurations(keyframes)
+      persistKeyframes(recalculated)
+      return { keyframes: recalculated, playing: false }
     })
   },
 
   deleteKeyframe: (id) => {
     set((state) => {
-      const keyframes = state.keyframes.filter((keyframe) => keyframe.id !== id)
+      const keyframes = recalculateKeyframeDurations(
+        state.keyframes.filter((keyframe) => keyframe.id !== id),
+      )
       persistKeyframes(keyframes)
       return { keyframes, playing: false }
     })
@@ -209,15 +250,14 @@ export const useRobotStore = create<RobotStoreState>()((set) => ({
 
     const clampedSpeedPercent = Math.min(100, Math.max(1, speedPercent))
     set((state) => {
-      const keyframes = state.keyframes.map((keyframe) =>
+      const keyframes = recalculateKeyframeDurations(state.keyframes.map((keyframe) =>
         keyframe.id === id
           ? {
               ...keyframe,
               speedPercentToNext: clampedSpeedPercent,
-              durationMs: 1000 * (100 / clampedSpeedPercent),
             }
           : keyframe,
-      )
+      ))
       persistKeyframes(keyframes)
       return { keyframes, playing: false }
     })

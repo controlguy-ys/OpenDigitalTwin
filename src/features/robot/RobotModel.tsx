@@ -1,11 +1,8 @@
 import { createPortal, useLoader, type ThreeEvent } from '@react-three/fiber'
-import { useLayoutEffect, useMemo } from 'react'
-import { Mesh, type Object3D } from 'three'
+import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react'
+import { Euler, MathUtils, Mesh, type Object3D } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import {
-  CRB15000_DEFINITION,
-  type RobotLinkId,
-} from '../../domain/robot/crb15000'
+import type { RobotLinkId } from '../../domain/robot/crb15000'
 import {
   createRobotRig,
   setRigAngles,
@@ -16,6 +13,11 @@ import { useInteractionStore } from '../interaction/interaction-store'
 import { ROBOT_LINK_COLLISION_BOUNDS } from '../interaction/robot-collision-bounds'
 import { getRobotLinkOutlineState } from '../interaction/outline-state'
 import { RobotGripper } from './RobotGripper'
+import { robotGeometryRepository } from './robot-geometry-repository'
+import {
+  robotConfigurationToDefinition,
+  useRobotConfigurationStore,
+} from './robot-configuration-store'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -125,10 +127,24 @@ export function describeRobotLoadError(error: unknown): string {
 
 export function RobotModel({ registerRig }: RobotModelProps) {
   const loadedLinks = useLoader(GLTFLoader, ROBOT_LINK_URLS)
-  const rig = useMemo(() => createRobotRig(CRB15000_DEFINITION), [])
+  const configuration = useRobotConfigurationStore((state) => state.configuration)
+  const definition = useMemo(
+    () => robotConfigurationToDefinition(configuration),
+    [configuration],
+  )
+  const geometryRevision = useSyncExternalStore(
+    robotGeometryRepository.subscribe,
+    robotGeometryRepository.getSnapshot,
+    robotGeometryRepository.getSnapshot,
+  )
+  const rig = useMemo(() => createRobotRig(definition), [definition])
   const loadedScenes = useMemo(
-    () => loadedLinks.map(({ scene }) => scene),
-    [loadedLinks],
+    () =>
+      ROBOT_LINK_ASSETS.map(
+        ({ id }, index) =>
+          robotGeometryRepository.get(id)?.group ?? loadedLinks[index]!.scene,
+      ),
+    [geometryRevision, loadedLinks],
   )
   const registration = useMemo(
     () => createRobotRigRegistration(rig, loadedScenes),
@@ -146,6 +162,19 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   )
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
   const selectRobotLink = useInteractionStore((state) => state.selectRobotLink)
+
+  useLayoutEffect(() => {
+    rig.root.position.set(...configuration.basePosition)
+    rig.root.quaternion.setFromEuler(
+      new Euler(
+        MathUtils.degToRad(configuration.baseRotationDeg[0]),
+        MathUtils.degToRad(configuration.baseRotationDeg[1]),
+        MathUtils.degToRad(configuration.baseRotationDeg[2]),
+        'ZYX',
+      ),
+    )
+    rig.root.updateMatrix()
+  }, [configuration.basePosition, configuration.baseRotationDeg, rig.root])
 
   useLayoutEffect(() => {
     setRigAngles(rig, [j1, j2, j3, j4, j5, j6])

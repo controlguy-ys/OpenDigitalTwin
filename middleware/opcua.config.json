@@ -1,0 +1,15 @@
+{
+  "endpointUrl": "opc.tcp://127.0.0.1:4840",
+  "websocketPort": 4841,
+  "samplingIntervalMs": 100,
+  "reconnectDelayMs": 2000,
+  "joints": [
+    { "id": "J1", "nodeId": "ns=2;s=Robot.J1", "scale": 1, "offset": 0 },
+    { "id": "J2", "nodeId": "ns=2;s=Robot.J2", "scale": 1, "offset": 0 },
+    { "id": "J3", "nodeId": "ns=2;s=Robot.J3", "scale": 1, "offset": 0 },
+    { "id": "J4", "nodeId": "ns=2;s=Robot.J4", "scale": 1, "offset": 0 },
+    { "id": "J5", "nodeId": "ns=2;s=Robot.J5", "scale": 1, "offset": 0 },
+    { "id": "J6", "nodeId": "ns=2;s=Robot.J6", "scale": 1, "offset": 0 }
+  ],
+  "equipment": []
+}

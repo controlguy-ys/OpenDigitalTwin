@@ -33,6 +33,7 @@ describe('EquipmentInspector', () => {
         onCancel={vi.fn()}
         onDelete={vi.fn()}
         onNumericStatus={vi.fn()}
+        onStatusSource={vi.fn()}
         onOverlayVisible={vi.fn()}
         onPreview={onPreview}
         record={RECORD}
@@ -61,6 +62,7 @@ describe('EquipmentInspector', () => {
     const onDelete = vi.fn().mockResolvedValue(undefined)
     const onNumericStatus = vi.fn().mockResolvedValue(undefined)
     const onOverlayVisible = vi.fn().mockResolvedValue(undefined)
+    const onStatusSource = vi.fn().mockResolvedValue(undefined)
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(
       <EquipmentInspector
@@ -68,6 +70,7 @@ describe('EquipmentInspector', () => {
         onCancel={onCancel}
         onDelete={onDelete}
         onNumericStatus={onNumericStatus}
+        onStatusSource={onStatusSource}
         onOverlayVisible={onOverlayVisible}
         onPreview={vi.fn()}
         record={RECORD}
@@ -81,6 +84,9 @@ describe('EquipmentInspector', () => {
     await user.type(screen.getByLabelText('Numeric status'), '42.5')
     await user.click(screen.getByRole('button', { name: 'Apply numeric status' }))
     expect(onNumericStatus).toHaveBeenCalledWith('fixture-01', 42.5)
+
+    await user.selectOptions(screen.getByLabelText('Status source'), 'opcua')
+    expect(onStatusSource).toHaveBeenCalledWith('fixture-01', 'opcua')
 
     await user.click(screen.getByLabelText('Show status overlay'))
     expect(onOverlayVisible).toHaveBeenCalledWith('fixture-01', false)

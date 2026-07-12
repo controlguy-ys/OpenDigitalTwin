@@ -258,8 +258,11 @@ describe('Timeline', () => {
     fireEvent.change(speed, { target: { value: '40' } })
     expect(useRobotStore.getState().keyframes[0]).toMatchObject({
       speedPercentToNext: 40,
-      durationMs: 2500,
     })
+    expect(useRobotStore.getState().keyframes[0]?.durationMs).toBeCloseTo(
+      1388.889,
+      2,
+    )
 
     await user.click(screen.getByRole('button', { name: 'Delete Pose 2' }))
     expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([

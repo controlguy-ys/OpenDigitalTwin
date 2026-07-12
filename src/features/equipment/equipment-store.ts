@@ -4,6 +4,7 @@ import type {
   EquipmentRecord,
   SerializableTransform,
   EquipmentStatus,
+  EquipmentStatusSource,
 } from '../../domain/equipment/equipment'
 import { isEquipmentRecord } from '../../domain/equipment/equipment'
 import { equipmentDb, type EquipmentDatabase } from './equipment-db'
@@ -80,6 +81,8 @@ export interface EquipmentStoreState {
   cancelEquipmentTransform(id: string): void
   setEquipmentStatus(id: string, status: EquipmentStatus): Promise<void>
   setEquipmentNumericStatus(id: string, value: number): Promise<void>
+  setEquipmentStatusSource(id: string, source: EquipmentStatusSource): Promise<void>
+  applyOpcUaEquipmentStatuses(values: Readonly<Record<string, number>>): void
   setEquipmentStatusOverlayVisible(id: string, visible: boolean): Promise<void>
   removeEquipment(id: string): Promise<void>
 }
@@ -427,6 +430,33 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
             ),
           }))
           await persistRecord(nextRecord)
+        },
+        setEquipmentStatusSource: async (id, source) => {
+          await hydrate()
+          const currentRecord = get().records.find((record) => record.id === id)
+          if (currentRecord === undefined) return
+          const nextRecord = cloneEquipmentRecord({
+            ...currentRecord,
+            statusSource: source,
+          })
+          set((state) => ({
+            records: state.records.map((record) =>
+              record.id === id ? nextRecord : record,
+            ),
+          }))
+          await persistRecord(nextRecord)
+        },
+        applyOpcUaEquipmentStatuses: (values) => {
+          set((state) => ({
+            records: state.records.map((record) => {
+              const value = values[record.id]
+              return record.statusSource === 'opcua' &&
+                typeof value === 'number' &&
+                Number.isFinite(value)
+                ? cloneEquipmentRecord({ ...record, numericStatus: value })
+                : record
+            }),
+          }))
         },
         setEquipmentStatusOverlayVisible: async (id, visible) => {
           await hydrate()

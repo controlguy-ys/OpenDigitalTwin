@@ -2,6 +2,8 @@ import { ChevronDown, PanelLeft, PanelRight } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { JointQuality } from '../domain/robot/joint-frame'
 
+type JointSourceMode = 'simulation' | 'opcua'
+
 interface AppShellProps {
   viewport: ReactNode
   assetTree?: ReactNode
@@ -11,6 +13,10 @@ interface AppShellProps {
   viewportBusy?: boolean
   sourceQuality?: JointQuality
   onOpenStepImport?: () => void
+  onOpenRobotImport?: () => void
+  onOpenRobotConfiguration?: () => void
+  sourceMode?: JointSourceMode
+  onSourceModeChange?: (mode: JointSourceMode) => void
 }
 
 export function AppShell({
@@ -22,6 +28,10 @@ export function AppShell({
   viewportBusy = controlsDisabled,
   sourceQuality = 'GOOD',
   onOpenStepImport,
+  onOpenRobotImport,
+  onOpenRobotConfiguration,
+  sourceMode = 'simulation',
+  onSourceModeChange,
 }: AppShellProps) {
   const [isAssetRailOpen, setIsAssetRailOpen] = useState(false)
   const [isInspectorOpen, setIsInspectorOpen] = useState(false)
@@ -38,8 +48,27 @@ export function AppShell({
         <span className="source-quality" data-quality={sourceQuality}>
           {sourceQuality}
         </span>
+        <label className="joint-source-select">
+          <span>Joint source</span>
+          <select
+            aria-label="Joint source"
+            onChange={(event) =>
+              onSourceModeChange?.(event.currentTarget.value as JointSourceMode)
+            }
+            value={sourceMode}
+          >
+            <option value="simulation">Simulation</option>
+            <option value="opcua">OPC UA</option>
+          </select>
+        </label>
         <button onClick={onOpenStepImport} type="button">
           Import STEP
+        </button>
+        <button onClick={onOpenRobotImport} type="button">
+          Import Robot STEP
+        </button>
+        <button onClick={onOpenRobotConfiguration} type="button">
+          Robot Config
         </button>
       </header>
       <button

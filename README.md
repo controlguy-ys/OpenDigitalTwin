@@ -6,10 +6,11 @@ geometry, simulates six joints, imports equipment STEP files, displays
 industrial stack-light status, and supports collision-aware pick and place.
 
 > Project status: the original implementation plan is complete through Task 9.
-> Industrial UI completion, production E2E coverage, and the final audit remain
-> in Tasks 10–12. The configurable Frame Graph, generic robot import, read-only
-> OPC UA gateway, and velocity-aware Pose Sequence are approved Tech Spec work
-> and are not yet implemented.
+> A short-term configurable Digital Twin MVP is now implemented: single-robot
+> STEP replacement, editable six-axis mechanics/base pose, object coordinates
+> and numeric status, velocity-aware Pose editing, and a read-only OPC UA client
+> middleware. The full Frame Graph and production E2E/final audit remain future
+> scope.
 
 ## Current capabilities
 
@@ -21,6 +22,11 @@ industrial stack-light status, and supports collision-aware pick and place.
 - Equipment selection and transform controls.
 - Rapier collision events, gripper sensing, deterministic pick/place, held-object following, and release persistence.
 - Responsive industrial HMI shell with viewport, asset tree, inspector, and timeline surfaces.
+- Single-robot STEP replacement with a strict maximum of seven files (`LINK00`–`LINK06`), 25 MiB per file, and 100 MiB total.
+- Editable robot name, base XYZ/RPY, joint origins, axes, limits, and maximum velocities with CRB datasheet defaults.
+- Manual equipment XYZ/RPY, persistent deletion, numeric 3D status overlays, and Manual/OPC UA status ownership.
+- Reorderable and deletable persisted Poses with 1–100% outgoing speed and velocity-derived segment durations.
+- Simulation/OPC UA joint-source switch with BAD-quality fail-safe behavior.
 
 ## Quick start
 
@@ -53,6 +59,7 @@ npm run test:run
 npm run cad:validate
 npm run build
 npm run test:e2e
+npm run middleware:opcua
 ```
 
 ## Architecture
@@ -66,14 +73,17 @@ src/features/import     STEP worker pipeline and geometry repository
 src/features/interaction Collision, selection, transforms, and grasp lifecycle
 src/features/scene      React Three Fiber / Rapier workcell
 src/features/ui         Timeline and industrial UI surfaces
+middleware              Anonymous read-only OPC UA client and WebSocket gateway
 scripts/cad             Deterministic CAD conversion and validation
 public/models/robot     Runtime GLB assets and asset report
 ```
 
-The browser is currently self-contained. A future OPC UA integration uses a
-dedicated read-only WebSocket gateway; the browser never connects directly to
-`opc.tcp`, stores controller credentials, writes PLC values, or starts robot
-motion.
+The browser remains independent of `opc.tcp`. The optional middleware connects
+as an anonymous OPC UA client using `SecurityPolicy.None` and
+`MessageSecurityMode.None`, polls six configured joint `Value` attributes, and
+publishes frames to `ws://127.0.0.1:4841`. It never writes controller values or
+starts robot motion. Edit [`middleware/opcua.config.json`](middleware/opcua.config.json)
+and see [`middleware/README.md`](middleware/README.md) before starting it.
 
 ## Robot geometry and kinematics
 
@@ -90,6 +100,7 @@ definition. Joint limits were cross-checked against ABB product specification
 ## Documentation
 
 - [Current project status](docs/progress/2026-07-13-project-status.md)
+- [Short-term MVP implementation record](docs/progress/2026-07-13-short-term-mvp-implementation.md)
 - [Baseline Robot Simulation Tech Spec](docs/superpowers/specs/2026-07-10-robot-simulation-design.md)
 - [Approved configurable digital-twin Tech Spec](docs/superpowers/specs/2026-07-11-frame-graph-generic-robot-opcua-pose-sequence-design.md)
 - [Baseline implementation plan](docs/superpowers/plans/2026-07-10-crb15000-web-simulation.md)

@@ -97,7 +97,7 @@ describe('robot store', () => {
         id: 'pose-1',
         name: 'Pose 1',
         anglesDeg: [45, 0, 0, 0, 0, 0],
-        durationMs: 1000,
+        durationMs: 250,
         easing: 'easeInOut',
         speedPercentToNext: 100,
       },
@@ -139,17 +139,19 @@ describe('robot store', () => {
 
   it('clamps pose speed and updates its outgoing transition duration', () => {
     useRobotStore.getState().savePose()
+    useRobotStore.getState().setJoint(0, 90)
+    useRobotStore.getState().savePose()
 
     useRobotStore.getState().setKeyframeSpeed('pose-1', 50)
     expect(useRobotStore.getState().keyframes[0]).toMatchObject({
       speedPercentToNext: 50,
-      durationMs: 2000,
+      durationMs: 1000,
     })
 
     useRobotStore.getState().setKeyframeSpeed('pose-1', 0)
     expect(useRobotStore.getState().keyframes[0]).toMatchObject({
       speedPercentToNext: 1,
-      durationMs: 100000,
+      durationMs: 50000,
     })
   })
 
@@ -169,8 +171,11 @@ describe('robot store', () => {
     ])
     expect(useRobotStore.getState().keyframes[1]).toMatchObject({
       speedPercentToNext: 25,
-      durationMs: 4000,
     })
+    expect(useRobotStore.getState().keyframes[1]?.durationMs).toBeCloseTo(
+      444.444,
+      2,
+    )
   })
 
   it('distinguishes a stop-time reset from a resumable pause', () => {

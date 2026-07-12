@@ -110,6 +110,25 @@ describe('equipment persistence', () => {
     })
   })
 
+  it('applies live OPC UA status only to equipment owned by the OPC source', async () => {
+    const database = createDatabase('opc-status')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    await store.getState().setEquipmentStatusSource('machine-01', 'opcua')
+
+    store.getState().applyOpcUaEquipmentStatuses({
+      'machine-01': 73.5,
+      'cup-01': 99,
+    })
+
+    expect(
+      store.getState().records.find(({ id }) => id === 'machine-01'),
+    ).toMatchObject({ numericStatus: 73.5, statusSource: 'opcua' })
+    expect(
+      store.getState().records.find(({ id }) => id === 'cup-01'),
+    ).toMatchObject({ numericStatus: 0, statusSource: 'manual' })
+  })
+
   it('cancels a transform preview back to the last committed transform', async () => {
     const database = createDatabase('transform-cancel')
     const store = createEquipmentStore(database)

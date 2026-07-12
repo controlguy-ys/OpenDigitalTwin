@@ -10,18 +10,26 @@ import { deleteImportedEquipment } from '../features/import/imported-equipment-a
 import { importedGeometryRepository } from '../features/import/imported-geometry-repository'
 import { JointInspector } from '../features/joints/JointInspector'
 import { simulationJointSource } from '../features/joints/SimulationJointSource'
+import { opcUaJointSource } from '../features/joints/OpcUaJointSource'
 import { useRobotStore } from '../features/joints/robot-store'
 import {
   SceneCanvas,
   type SceneRenderStatus,
 } from '../features/scene/SceneCanvas'
 import { Timeline } from '../features/ui/Timeline'
+import { RobotImportDialog } from '../features/robot/RobotImportDialog'
+import { RobotConfigurationDialog } from '../features/robot/RobotConfigurationDialog'
 import { AppShell } from './AppShell'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
     useState<SceneRenderStatus>('loading')
   const [isImportOpen, setIsImportOpen] = useState(false)
+  const [isRobotImportOpen, setIsRobotImportOpen] = useState(false)
+  const [isRobotConfigurationOpen, setIsRobotConfigurationOpen] = useState(false)
+  const [sourceMode, setSourceMode] = useState<'simulation' | 'opcua'>(
+    'simulation',
+  )
   const interactionControllerRef = useRef<InteractionRuntimeController | null>(
     null,
   )
@@ -45,12 +53,18 @@ export function App() {
   const setEquipmentStatusOverlayVisible = useEquipmentStore(
     (state) => state.setEquipmentStatusOverlayVisible,
   )
+  const setEquipmentStatusSource = useEquipmentStore(
+    (state) => state.setEquipmentStatusSource,
+  )
   const selectedEquipmentId = useInteractionStore(
     (state) => state.selectedEquipmentId,
   )
   const selectEquipment = useInteractionStore((state) => state.selectEquipment)
   const clearSelection = useInteractionStore((state) => state.clearSelection)
   const controlsDisabled = sceneStatus !== 'ready'
+  const jointControlsDisabled = controlsDisabled || sourceMode === 'opcua'
+  const activeJointSource =
+    sourceMode === 'simulation' ? simulationJointSource : opcUaJointSource
   const selectedEquipmentRecord =
     equipmentRecords.find((record) => record.id === selectedEquipmentId) ?? null
 
@@ -71,16 +85,27 @@ export function App() {
   }, [hydrateEquipment])
 
   useEffect(() => {
-    const unsubscribe = simulationJointSource.subscribe((frame) => {
+    const unsubscribe = activeJointSource.subscribe((frame) => {
       useRobotStore.getState().applyFrame(frame)
     })
-    void simulationJointSource.connect()
+    const unsubscribeEquipment =
+      activeJointSource === opcUaJointSource
+        ? opcUaJointSource.subscribeEquipment((values) => {
+            useEquipmentStore.getState().applyOpcUaEquipmentStatuses(values)
+          })
+        : () => undefined
+    void activeJointSource.connect().then(() => {
+      if (activeJointSource === simulationJointSource) {
+        simulationJointSource.setAngles(useRobotStore.getState().anglesDeg)
+      }
+    }).catch(() => undefined)
 
     return () => {
       unsubscribe()
-      void simulationJointSource.disconnect()
+      unsubscribeEquipment()
+      void activeJointSource.disconnect()
     }
-  }, [])
+  }, [activeJointSource])
 
   const handleRemoveEquipment = useCallback(
     (id: string) =>
@@ -139,7 +164,7 @@ export function App() {
         }
         bottomRail={
           <Timeline
-            disabled={controlsDisabled}
+            disabled={jointControlsDisabled}
             source={simulationJointSource}
           />
         }
@@ -147,7 +172,7 @@ export function App() {
         inspector={
           selectedEquipmentRecord === null ? (
             <JointInspector
-              disabled={controlsDisabled}
+              disabled={jointControlsDisabled}
               onReset={handleResetInteraction}
               source={simulationJointSource}
             />
@@ -159,12 +184,20 @@ export function App() {
               onDelete={handleRemoveEquipment}
               onNumericStatus={setEquipmentNumericStatus}
               onOverlayVisible={setEquipmentStatusOverlayVisible}
+              onStatusSource={setEquipmentStatusSource}
               onPreview={previewEquipmentTransform}
               record={selectedEquipmentRecord}
             />
           )
         }
         onOpenStepImport={() => setIsImportOpen(true)}
+        onOpenRobotImport={() => setIsRobotImportOpen(true)}
+        onOpenRobotConfiguration={() => setIsRobotConfigurationOpen(true)}
+        onSourceModeChange={(mode) => {
+          useRobotStore.getState().stopPlayback()
+          setSourceMode(mode)
+        }}
+        sourceMode={sourceMode}
         sourceQuality={sourceQuality}
         viewport={
           <SceneCanvas
@@ -183,6 +216,14 @@ export function App() {
         onCommit={upsertEquipment}
         onSelect={selectEquipment}
         open={isImportOpen}
+      />
+      <RobotImportDialog
+        onClose={() => setIsRobotImportOpen(false)}
+        open={isRobotImportOpen}
+      />
+      <RobotConfigurationDialog
+        onClose={() => setIsRobotConfigurationOpen(false)}
+        open={isRobotConfigurationOpen}
       />
     </>
   )

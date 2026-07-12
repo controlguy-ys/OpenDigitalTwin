@@ -110,6 +110,7 @@ export function reduceJointFrame<TState extends RobotFrameState>(
   state: TState,
   frame: JointFrame,
   nowMs: number,
+  definition: RobotLimitDefinition = CRB15000_DEFINITION,
 ): TState {
   validateJointFrame(frame)
   if (!Number.isFinite(nowMs)) {
@@ -130,7 +131,7 @@ export function reduceJointFrame<TState extends RobotFrameState>(
 
   return {
     ...state,
-    anglesDeg: clampJointAngles(frame.anglesDeg),
+    anglesDeg: clampJointAngles(frame.anglesDeg, definition),
     sourceQuality,
     lastFrameTimestampMs: frame.timestampMs,
   }
