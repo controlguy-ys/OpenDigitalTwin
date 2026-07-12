@@ -45,16 +45,32 @@ It defines:
 6. Persistence, conflict handling, lifecycle cleanup, security boundaries, and acceptance tests.
 
 Execution is decomposed into four implementation plans under
-`docs/superpowers/plans/`. These plans are approved planning artifacts; their
-features are not represented as complete in the current runtime.
+`docs/superpowers/plans/`. The short-term MVP implements a deliberately reduced
+slice of those plans; the full multi-frame, lifecycle, and security designs
+remain planning artifacts.
+
+## Short-term MVP delivered
+
+- One active robot with runtime replacement of 1–7 STEP link files.
+- Editable and persisted six-axis origins, axes, limits, maximum velocities,
+  robot name, and base XYZ/RPY using CRB datasheet defaults.
+- Manual equipment XYZ/RPY, deletion, and numeric status overlays with
+  Manual/OPC UA ownership.
+- Persisted Pose ordering, deletion, and 1–100% velocity-aware outgoing speed.
+- Anonymous, read-only OPC UA Client middleware using no security policy or
+  message security, plus a browser WebSocket source selector.
 
 ## Current limitations
 
-- The built-in CRB 15000 is the only robot model currently simulated.
-- STEP import currently creates equipment assets, not arbitrary articulated robots.
+- The runtime intentionally supports one robot at a time and exactly six joints.
+- Imported robot STEP geometry is runtime-session data; the editable mechanical
+  configuration persists, while imported robot source files must be selected
+  again after a full browser reload.
 - MCP/Base/TCP/object Frame Graph editing is specified but not implemented.
-- OPC UA is an architectural boundary only; no live gateway or PLC integration is present.
-- Existing playback uses baseline keyframes; persisted reorderable velocity-aware Pose Sequences are planned.
+- OPC UA connection settings are file-based in the middleware MVP; credentials,
+  certificates, encryption, write operations, and controller commands are excluded.
+- Pose duration uses configured maximum joint velocity and saved outgoing speed;
+  advanced acceleration/jerk/dynamics are excluded.
 - The application is not safety-rated and performs no controller or PLC writes.
 
 ## Verification record
@@ -62,9 +78,10 @@ features are not represented as complete in the current runtime.
 Publication verification on 2026-07-13:
 
 - `npm run lint`: PASS.
-- `npm run test:run`: 29 test files and 193 tests PASS.
+- `npm run test:run`: 36 test files and 217 tests PASS.
 - `npm run cad:validate`: 7 link assets valid, 0 errors, 0 warnings.
 - `npm run build`: TypeScript and Vite production build PASS.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
 - Recorded non-blocking upstream advisories: `occt-import-js` browser
   externalization messages for `path`/`crypto`, and the Vite large-chunk
   advisory for the CAD/runtime bundle.

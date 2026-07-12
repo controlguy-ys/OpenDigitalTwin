@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { JointAnglesDeg } from '../../domain/robot/joint-frame'
 import {
+  deriveTransitionDurationMs,
   getTimelineDurationMs,
   sampleTimeline,
   type RobotKeyframe,
@@ -22,6 +23,17 @@ function keyframe(
 }
 
 describe('robot keyframe timeline', () => {
+  it('derives segment time from the slowest required joint at the selected speed', () => {
+    expect(
+      deriveTransitionDurationMs(
+        keyframe('a', [0, 0, 0, 0, 0, 0]),
+        keyframe('b', [90, 20, 0, 0, 0, 0]),
+        50,
+        [180, 100, 100, 100, 100, 100],
+      ),
+    ).toBe(1000)
+  })
+
   it('linearly interpolates joint angles in degrees', () => {
     const sample = sampleTimeline(
       [

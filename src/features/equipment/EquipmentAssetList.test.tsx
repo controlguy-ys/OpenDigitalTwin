@@ -30,7 +30,7 @@ const IMPORTED: EquipmentRecord = {
 }
 
 describe('EquipmentAssetList', () => {
-  it('selects equipment and exposes delete only for imported assets', async () => {
+  it('selects equipment and exposes deletion for built-in and imported objects', async () => {
     const user = userEvent.setup()
     const onSelect = vi.fn()
     const onRemove = vi.fn(async () => undefined)
@@ -48,12 +48,13 @@ describe('EquipmentAssetList', () => {
       'aria-selected',
       'true',
     )
-    expect(screen.queryByRole('button', { name: 'Delete Cup 01' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete Cup 01' })).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: 'Select Cup 01' }))
+    await user.click(screen.getByRole('button', { name: 'Delete Cup 01' }))
     await user.click(screen.getByRole('button', { name: 'Delete Imported Fixture' }))
     expect(onSelect).toHaveBeenCalledWith('cup-01')
-    expect(onRemove).toHaveBeenCalledWith(IMPORTED.id)
+    expect(onRemove.mock.calls).toEqual([['cup-01'], [IMPORTED.id]])
   })
 
   it('shows deletion failure, blocks duplicate pending calls, and clears the error on retry', async () => {

@@ -90,6 +90,21 @@ describe('AppShell', () => {
     expect(onOpenStepImport).toHaveBeenCalledTimes(1)
   })
 
+  it('opens coordinate frames through its typed top-bar action', async () => {
+    const user = userEvent.setup()
+    const onOpenCoordinateFrames = vi.fn()
+    render(
+      <AppShell
+        onOpenCoordinateFrames={onOpenCoordinateFrames}
+        viewport={<div>3D viewport</div>}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Coordinate Frames' }))
+
+    expect(onOpenCoordinateFrames).toHaveBeenCalledTimes(1)
+  })
+
   it('wires the top-bar action to the accessible import dialog', async () => {
     const user = userEvent.setup()
     render(<App />)
@@ -98,6 +113,16 @@ describe('AppShell', () => {
     expect(screen.getByRole('dialog', { name: 'Import STEP' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Close import dialog' }))
     expect(screen.queryByRole('dialog', { name: 'Import STEP' })).not.toBeInTheDocument()
+  })
+
+  it('wires the coordinate action to the accessible frame dialog', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: 'Coordinate Frames' }))
+    expect(screen.getByRole('dialog', { name: 'Coordinate Frames' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Close Coordinate Frames' }))
+    expect(screen.queryByRole('dialog', { name: 'Coordinate Frames' })).not.toBeInTheDocument()
   })
 
   it('keeps controls disabled without marking an error fallback as busy', () => {

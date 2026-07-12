@@ -4,6 +4,7 @@ import type { EquipmentRecord } from '../../domain/equipment/equipment'
 export interface SceneDatabaseRecord {
   key: string
   selectedEquipmentId: string | null
+  deletedEquipmentIds?: string[]
 }
 
 export class EquipmentDatabase extends Dexie {

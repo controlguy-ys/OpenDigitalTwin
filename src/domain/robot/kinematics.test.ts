@@ -66,6 +66,8 @@ describe('manifest-driven robot kinematics', () => {
 
     expect(rig.toolFrame.parent).toBe(rig.linkSlots.LINK06)
     expect(rig.toolFrame.rotation.y).toBeCloseTo(Math.PI / 2, 12)
+    expect(rig.tcpFrame.parent).toBe(rig.toolFrame)
+    expect(rig.tcpFrame.position.toArray()).toEqual([0, 0, 0])
   })
 
   it('rejects malformed rig angle input before changing a pivot', () => {

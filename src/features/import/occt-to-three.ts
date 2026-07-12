@@ -81,13 +81,13 @@ function validateMaterialMetadata(mesh: OcctMesh, triangleCount: number): void {
   validateColor(fallbackColor, mesh.name)
 
   for (const face of mesh.brep_faces) {
-    if (
-      !Number.isInteger(face.first) ||
-      !Number.isInteger(face.last) ||
-      face.first < 0 ||
-      face.last < face.first ||
-      face.last >= triangleCount
-    ) {
+    if (!Number.isInteger(face.first) || !Number.isInteger(face.last)) {
+      throw new Error(
+        `OCCT mesh ${mesh.name} has an invalid face range ${face.first}-${face.last}.`,
+      )
+    }
+    if (face.last < face.first) continue
+    if (face.first < 0 || face.last >= triangleCount) {
       throw new Error(
         `OCCT mesh ${mesh.name} has an invalid face range ${face.first}-${face.last}.`,
       )
@@ -109,6 +109,7 @@ function materialGroups(
   )
 
   for (const face of mesh.brep_faces) {
+    if (face.last < face.first) continue
     const faceColor = face.color ?? fallbackColor
     for (let triangle = face.first; triangle <= face.last; triangle += 1) {
       triangleColors[triangle] = faceColor

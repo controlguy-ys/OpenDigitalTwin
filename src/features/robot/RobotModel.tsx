@@ -1,11 +1,8 @@
 import { createPortal, useLoader, type ThreeEvent } from '@react-three/fiber'
-import { useLayoutEffect, useMemo } from 'react'
-import { Mesh, type Object3D } from 'three'
+import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react'
+import { Euler, MathUtils, Mesh, type Object3D } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import {
-  CRB15000_DEFINITION,
-  type RobotLinkId,
-} from '../../domain/robot/crb15000'
+import type { RobotLinkId } from '../../domain/robot/crb15000'
 import {
   createRobotRig,
   setRigAngles,
@@ -16,6 +13,13 @@ import { useInteractionStore } from '../interaction/interaction-store'
 import { ROBOT_LINK_COLLISION_BOUNDS } from '../interaction/robot-collision-bounds'
 import { getRobotLinkOutlineState } from '../interaction/outline-state'
 import { RobotGripper } from './RobotGripper'
+import { robotGeometryRepository } from './robot-geometry-repository'
+import {
+  robotConfigurationToDefinition,
+  useRobotConfigurationStore,
+} from './robot-configuration-store'
+import { useRobotGeometryStore } from './robot-geometry-store'
+import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -35,6 +39,7 @@ export interface RobotRigRegistration {
   readonly rig: RobotRig
   readonly linkSlots: RobotRig['linkSlots']
   readonly toolFrame: RobotRig['toolFrame']
+  readonly tcpFrame: RobotRig['tcpFrame']
   readonly links: Record<RobotLinkId, Object3D>
 }
 
@@ -78,6 +83,7 @@ export function createRobotRigRegistration(
     rig,
     linkSlots: rig.linkSlots,
     toolFrame: rig.toolFrame,
+    tcpFrame: rig.tcpFrame,
     links,
   }
 }
@@ -125,15 +131,43 @@ export function describeRobotLoadError(error: unknown): string {
 
 export function RobotModel({ registerRig }: RobotModelProps) {
   const loadedLinks = useLoader(GLTFLoader, ROBOT_LINK_URLS)
-  const rig = useMemo(() => createRobotRig(CRB15000_DEFINITION), [])
+  const configuration = useRobotConfigurationStore((state) => state.configuration)
+  const definition = useMemo(
+    () => robotConfigurationToDefinition(configuration),
+    [configuration],
+  )
+  const geometryRevision = useSyncExternalStore(
+    robotGeometryRepository.subscribe,
+    robotGeometryRepository.getSnapshot,
+    robotGeometryRepository.getSnapshot,
+  )
+  const geometryRecords = useRobotGeometryStore((state) => state.links)
+  const tcpTransform = useCoordinateFrameStore((state) => state.frames.tcp)
+  const geometryRecordsByLink = useMemo(
+    () => new Map(geometryRecords.map((record) => [record.linkId, record])),
+    [geometryRecords],
+  )
+  const rig = useMemo(() => createRobotRig(definition), [definition])
   const loadedScenes = useMemo(
-    () => loadedLinks.map(({ scene }) => scene),
-    [loadedLinks],
+    () =>
+      ROBOT_LINK_ASSETS.map(
+        ({ id }, index) =>
+          robotGeometryRepository.get(id)?.group ?? loadedLinks[index]!.scene,
+      ),
+    [geometryRevision, loadedLinks],
   )
-  const registration = useMemo(
-    () => createRobotRigRegistration(rig, loadedScenes),
-    [loadedScenes, rig],
-  )
+  const registration = useMemo(() => {
+    const next = createRobotRigRegistration(rig, loadedScenes)
+    for (const { id } of ROBOT_LINK_ASSETS) {
+      const geometry = geometryRecordsByLink.get(id)
+      if (geometry === undefined) continue
+      next.links[id].position.set(...geometry.localTransform.position)
+      next.links[id].quaternion.set(...geometry.localTransform.quaternion)
+      next.links[id].scale.set(...geometry.localTransform.scale)
+      next.links[id].updateMatrix()
+    }
+    return next
+  }, [geometryRecordsByLink, loadedScenes, rig])
   const j1 = useRobotStore(jointAngleSelectors[0])
   const j2 = useRobotStore(jointAngleSelectors[1])
   const j3 = useRobotStore(jointAngleSelectors[2])
@@ -148,8 +182,27 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   const selectRobotLink = useInteractionStore((state) => state.selectRobotLink)
 
   useLayoutEffect(() => {
+    rig.root.position.set(...configuration.basePosition)
+    rig.root.quaternion.setFromEuler(
+      new Euler(
+        MathUtils.degToRad(configuration.baseRotationDeg[0]),
+        MathUtils.degToRad(configuration.baseRotationDeg[1]),
+        MathUtils.degToRad(configuration.baseRotationDeg[2]),
+        'ZYX',
+      ),
+    )
+    rig.root.updateMatrix()
+  }, [configuration.basePosition, configuration.baseRotationDeg, rig.root])
+
+  useLayoutEffect(() => {
     setRigAngles(rig, [j1, j2, j3, j4, j5, j6])
   }, [j1, j2, j3, j4, j5, j6, rig])
+
+  useLayoutEffect(() => {
+    rig.tcpFrame.position.set(...tcpTransform.position)
+    rig.tcpFrame.quaternion.set(...tcpTransform.quaternion).normalize()
+    rig.tcpFrame.updateMatrix()
+  }, [rig.tcpFrame, tcpTransform])
 
   useLayoutEffect(() => {
     attachRobotRigRegistration(registration)
@@ -169,15 +222,23 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   useLayoutEffect(() => {
     rig.root.visible = !hiddenEntityIds.includes('robot')
     for (const { id } of ROBOT_LINK_ASSETS) {
-      registration.links[id].visible = !hiddenEntityIds.includes(id)
+      registration.links[id].visible =
+        (geometryRecordsByLink.get(id)?.visible ?? true) &&
+        !hiddenEntityIds.includes(id)
     }
-  }, [hiddenEntityIds, registration.links, rig.root])
+  }, [geometryRecordsByLink, hiddenEntityIds, registration.links, rig.root])
 
   const linkInteractionPortals = ROBOT_LINK_ASSETS.flatMap(({ id }) => {
     if (hiddenEntityIds.includes(id)) {
       return []
     }
-    const bounds = ROBOT_LINK_COLLISION_BOUNDS[id]
+    const geometry = geometryRecordsByLink.get(id)
+    const bounds = geometry === undefined
+      ? ROBOT_LINK_COLLISION_BOUNDS[id]
+      : {
+          center: geometry.collisionCenter,
+          halfExtents: geometry.collisionHalfExtents,
+        }
     const outlineState = getRobotLinkOutlineState(
       selection,
       id,
@@ -245,7 +306,7 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   return (
     <>
       <primitive dispose={null} object={rig.root} />
-      <RobotGripper toolFrame={rig.toolFrame} />
+      <RobotGripper tcpFrame={rig.tcpFrame} />
       {linkInteractionPortals}
     </>
   )

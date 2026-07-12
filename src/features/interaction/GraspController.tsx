@@ -41,6 +41,8 @@ import {
 import { useInteractionStore } from './interaction-store'
 import { updateEquipmentObjectRegistration } from './equipment-object-registry'
 import { getEquipmentOutlineState } from './outline-state'
+import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
+import { worldTransformToMcpLocal } from '../frames/frame-runtime'
 
 const GRASP_GROUPS = interactionGroups(3, [1])
 
@@ -109,14 +111,19 @@ export function GraspController({
       resetInteraction: () => {
         useInteractionStore.getState().resetInteraction()
       },
+      toPersistedTransform: (world) =>
+        worldTransformToMcpLocal(
+          world,
+          useCoordinateFrameStore.getState().frames.mcp,
+        ),
     }),
     [],
   )
 
   const getToolWorld = useCallback((): SerializableTransform => {
-    rig.toolFrame.updateWorldMatrix(true, false)
-    return matrixToTransform(rig.toolFrame.matrixWorld)
-  }, [rig.toolFrame])
+    rig.tcpFrame.updateWorldMatrix(true, false)
+    return matrixToTransform(rig.tcpFrame.matrixWorld)
+  }, [rig.tcpFrame])
 
   const releaseHeld = useCallback(
     async (id?: string) => {
@@ -143,7 +150,7 @@ export function GraspController({
     if (interaction.heldEquipmentId !== null) {
       return
     }
-    const sensorWorld = getGraspSensorWorldTransform(rig.toolFrame)
+    const sensorWorld = getGraspSensorWorldTransform(rig.tcpFrame)
     sensorPosition.fromArray(sensorWorld.position)
     const candidates = interaction.graspCandidateIds.flatMap((equipmentId) => {
       const record = useEquipmentStore
@@ -178,14 +185,14 @@ export function GraspController({
     if (useInteractionStore.getState().holdEquipment(equipmentId, grip)) {
       useInteractionStore.getState().selectEquipment(equipmentId)
     }
-  }, [equipmentObjectsRef, getToolWorld, rig.toolFrame, sensorPosition])
+  }, [equipmentObjectsRef, getToolWorld, rig.tcpFrame, sensorPosition])
 
   useBeforePhysicsStep(() => {
     const rigidBody = rigidBodyRef.current
     if (rigidBody === null) {
       return
     }
-    const sensor = getGraspSensorWorldTransform(rig.toolFrame)
+    const sensor = getGraspSensorWorldTransform(rig.tcpFrame)
     rigidBody.setNextKinematicTranslation(new Vector3(...sensor.position))
     rigidBody.setNextKinematicRotation({
       x: sensor.quaternion[0],
@@ -305,7 +312,7 @@ export function GraspController({
                 />
               )}
             </group>,
-            rig.toolFrame,
+            rig.tcpFrame,
           )}
     </>
   )

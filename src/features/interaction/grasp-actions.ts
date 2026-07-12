@@ -15,6 +15,7 @@ export interface GraspActionDependencies {
   clearHeld(id: string): void
   commitTransform(id: string): Promise<void>
   resetInteraction(): void
+  toPersistedTransform(world: SerializableTransform): SerializableTransform
 }
 
 export async function releaseHeldEquipmentAtTool(
@@ -44,7 +45,10 @@ export async function releaseHeldEquipmentAtTool(
     record.collisionHalfExtents,
     workbenchTopZ,
   )
-  dependencies.previewTransform(held.equipmentId, releasedTransform)
+  dependencies.previewTransform(
+    held.equipmentId,
+    dependencies.toPersistedTransform(releasedTransform),
+  )
   dependencies.clearHeld(held.equipmentId)
   await dependencies.commitTransform(held.equipmentId)
   return releasedTransform

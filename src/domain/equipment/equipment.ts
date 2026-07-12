@@ -1,4 +1,5 @@
 export type EquipmentStatus = 'OFF' | 'RUNNING' | 'WARNING' | 'FAULT'
+export type EquipmentStatusSource = 'manual' | 'opcua'
 
 export interface SerializableTransform {
   position: [number, number, number]
@@ -28,10 +29,16 @@ export interface EquipmentRecord {
   name: string
   kind: 'cup' | 'machine' | 'imported'
   status: EquipmentStatus
+  numericStatus?: number
+  statusSource?: EquipmentStatusSource
+  statusOverlayVisible?: boolean
   transform: SerializableTransform
   graspable: boolean
   collisionHalfExtents: [number, number, number]
+  collisionCenter?: [number, number, number]
   stackLightAnchor: [number, number, number] | null
+  /** Object Asset id for V1 Asset/Instance records. Legacy imports carry sourceBytes. */
+  assetId?: string
   sourceBytes?: ArrayBuffer
   importMetadata?: EquipmentImportMetadata
 }
@@ -168,16 +175,31 @@ export function isEquipmentRecord(value: unknown): value is EquipmentRecord {
     EQUIPMENT_KINDS.has(record.kind as EquipmentRecord['kind']) &&
     typeof record.status === 'string' &&
     EQUIPMENT_STATUSES.has(record.status as EquipmentStatus) &&
+    (record.numericStatus === undefined ||
+      (typeof record.numericStatus === 'number' && Number.isFinite(record.numericStatus))) &&
+    (record.statusSource === undefined ||
+      record.statusSource === 'manual' ||
+      record.statusSource === 'opcua') &&
+    (record.statusOverlayVisible === undefined ||
+      typeof record.statusOverlayVisible === 'boolean') &&
     isFiniteTuple(serializableTransform.position, 3) &&
     isFiniteTuple(serializableTransform.quaternion, 4) &&
     isFiniteTuple(serializableTransform.scale, 3) &&
     typeof record.graspable === 'boolean' &&
     isPositiveFiniteTuple(record.collisionHalfExtents, 3) &&
+    (record.collisionCenter === undefined ||
+      isFiniteTuple(record.collisionCenter, 3)) &&
     (record.stackLightAnchor === null ||
       isFiniteTuple(record.stackLightAnchor, 3)) &&
     (record.kind === 'imported'
-      ? isArrayBuffer(record.sourceBytes) &&
-        isImportMetadata(record.importMetadata)
-      : record.sourceBytes === undefined && record.importMetadata === undefined)
+      ? (isNonEmptyString(record.assetId) &&
+          record.sourceBytes === undefined &&
+          record.importMetadata === undefined) ||
+        (record.assetId === undefined &&
+          isArrayBuffer(record.sourceBytes) &&
+          isImportMetadata(record.importMetadata))
+      : record.assetId === undefined &&
+        record.sourceBytes === undefined &&
+        record.importMetadata === undefined)
   )
 }

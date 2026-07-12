@@ -1,4 +1,4 @@
-import { Pause, Play, Square } from 'lucide-react'
+import { ChevronDown, ChevronUp, Pause, Play, Square, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   simulationJointSource,
@@ -48,6 +48,9 @@ export function Timeline({
   )
   const setPlaying = useRobotStore((state) => state.setPlaying)
   const stopPlayback = useRobotStore((state) => state.stopPlayback)
+  const moveKeyframe = useRobotStore((state) => state.moveKeyframe)
+  const deleteKeyframe = useRobotStore((state) => state.deleteKeyframe)
+  const setKeyframeSpeed = useRobotStore((state) => state.setKeyframeSpeed)
   const frameIdRef = useRef<number | null>(null)
   const generationRef = useRef(0)
   const elapsedMsRef = useRef(0)
@@ -232,8 +235,51 @@ export function Timeline({
       </div>
       <div className="timeline-track" data-position-ms={positionMs}>
         <ol aria-label="Timeline">
-          {keyframes.map((keyframe) => (
-            <li key={keyframe.id}>{keyframe.name}</li>
+          {keyframes.map((keyframe, index) => (
+            <li className="timeline-pose" key={keyframe.id}>
+              <span>{keyframe.name}</span>
+              <label>
+                Speed
+                <input
+                  aria-label={`${keyframe.name} speed to next pose`}
+                  disabled={disabled || playing || index === keyframes.length - 1}
+                  max={100}
+                  min={1}
+                  onChange={(event) => {
+                    setKeyframeSpeed(keyframe.id, Number(event.currentTarget.value))
+                  }}
+                  type="number"
+                  value={keyframe.speedPercentToNext ?? 100}
+                />
+                <small>%</small>
+              </label>
+              <div className="timeline-pose-actions">
+                <button
+                  aria-label={`Move ${keyframe.name} up`}
+                  disabled={disabled || playing || index === 0}
+                  onClick={() => moveKeyframe(keyframe.id, -1)}
+                  type="button"
+                >
+                  <ChevronUp aria-hidden="true" size={14} />
+                </button>
+                <button
+                  aria-label={`Move ${keyframe.name} down`}
+                  disabled={disabled || playing || index === keyframes.length - 1}
+                  onClick={() => moveKeyframe(keyframe.id, 1)}
+                  type="button"
+                >
+                  <ChevronDown aria-hidden="true" size={14} />
+                </button>
+                <button
+                  aria-label={`Delete ${keyframe.name}`}
+                  disabled={disabled || playing}
+                  onClick={() => deleteKeyframe(keyframe.id)}
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" size={14} />
+                </button>
+              </div>
+            </li>
           ))}
         </ol>
       </div>

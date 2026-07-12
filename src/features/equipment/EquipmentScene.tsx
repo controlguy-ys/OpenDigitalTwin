@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useSyncExternalStore,
   type RefObject,
@@ -16,7 +17,10 @@ import { getEquipmentOutlineState } from '../interaction/outline-state'
 import { importedGeometryRepository } from '../import/imported-geometry-repository'
 import { BuiltInEquipment } from './BuiltInEquipment'
 import { StackLight } from './StackLight'
+import { EquipmentStatusOverlay } from './EquipmentStatusOverlay'
 import { useEquipmentStore } from './equipment-store'
+import { useObjectAssetStore } from '../objects/object-asset-store'
+import { objectRecords } from '../objects/object-equipment-adapter'
 
 interface EquipmentInstanceProps {
   record: EquipmentRecord
@@ -39,7 +43,8 @@ export function EquipmentOutline({
   record: EquipmentRecord
   collision: boolean
 }) {
-  const center = record.importMetadata?.colliderCenter ?? [0, 0, 0]
+  const center =
+    record.collisionCenter ?? record.importMetadata?.colliderCenter ?? [0, 0, 0]
   return (
     <mesh
       name={`${record.id}-${collision ? 'collision' : 'selection'}-outline`}
@@ -85,6 +90,12 @@ const EquipmentInstance = memo(function EquipmentInstance({
   const commitTransform = useEquipmentStore(
     (state) => state.commitEquipmentTransform,
   )
+  const previewObjectTransform = useObjectAssetStore(
+    (state) => state.previewInstanceTransform,
+  )
+  const commitObjectTransform = useObjectAssetStore(
+    (state) => state.commitInstanceTransform,
+  )
   const selected =
     selection?.kind === 'equipment' && selection.equipmentId === record.id
   const outlineState = getEquipmentOutlineState(
@@ -125,17 +136,22 @@ const EquipmentInstance = memo(function EquipmentInstance({
         }}
       >
         <EquipmentVisual record={record} />
+        <EquipmentStatusOverlay record={record} />
         {outlineState === null ? null : (
           <EquipmentOutline collision={collision} record={record} />
         )}
       </group>
       {selected ? (
         <EquipmentTransformControls
-          commitTransform={commitTransform}
+          commitTransform={
+            record.assetId === undefined ? commitTransform : commitObjectTransform
+          }
           equipmentId={record.id}
           objectRef={objectRef}
           onDraggingChange={onDraggingChange}
-          previewTransform={previewTransform}
+          previewTransform={
+            record.assetId === undefined ? previewTransform : previewObjectTransform
+          }
         />
       ) : null}
     </>
@@ -148,21 +164,32 @@ function ImportedEquipment({ record }: { record: EquipmentRecord }) {
     importedGeometryRepository.getSnapshot,
     importedGeometryRepository.getSnapshot,
   )
-  const asset = importedGeometryRepository.get(record.id)
+  const assetRecord = useObjectAssetStore((state) =>
+    record.assetId === undefined
+      ? undefined
+      : state.assets.find(({ id }) => id === record.assetId),
+  )
+  const geometryId = record.assetId ?? record.id
+  const asset = importedGeometryRepository.get(geometryId)
 
   useEffect(() => {
     if (asset === undefined) {
-      void importedGeometryRepository.load(record).catch(() => undefined)
+      void (assetRecord === undefined
+        ? importedGeometryRepository.load(record)
+        : importedGeometryRepository.loadObjectAsset(assetRecord)
+      ).catch(() => undefined)
     }
-  }, [asset, record])
+  }, [asset, assetRecord, record])
 
-  if (asset === undefined) {
+  const instanceGroup = useMemo(() => asset?.group.clone(true), [asset])
+
+  if (instanceGroup === undefined) {
     return null
   }
 
   return (
     <group name={`${record.id}-imported-visual`}>
-      <primitive object={asset.group} />
+      <primitive object={instanceGroup} />
       {record.stackLightAnchor === null ? null : (
         <group
           name={`${record.id}-stack-light-anchor`}
@@ -187,6 +214,12 @@ export function EquipmentScene({
   onDraggingChange = NOOP_DRAGGING_CHANGE,
 }: EquipmentSceneProps = {}) {
   const records = useEquipmentStore((state) => state.records)
+  const objectAssets = useObjectAssetStore((state) => state.assets)
+  const objectInstances = useObjectAssetStore((state) => state.instances)
+  const allRecords = useMemo(
+    () => [...records, ...objectRecords(objectAssets, objectInstances)],
+    [objectAssets, objectInstances, records],
+  )
   const heldEquipmentId = useInteractionStore((state) => state.heldEquipmentId)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
   const localEquipmentObjectsRef = useRef(new Map<string, Object3D>())
@@ -195,7 +228,7 @@ export function EquipmentScene({
 
   return (
     <group name="equipment-scene">
-      {records
+      {allRecords
         .filter(
           (record) =>
             record.id !== heldEquipmentId &&

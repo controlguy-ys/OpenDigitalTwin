@@ -88,6 +88,69 @@ describe('built-in equipment', () => {
 })
 
 describe('equipment persistence', () => {
+  it('persists numeric status, overlay visibility, and its manual source', async () => {
+    const database = createDatabase('numeric-status')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    const actions = store.getState() as typeof store.getState extends () => infer State
+      ? State & {
+          setEquipmentNumericStatus(id: string, value: number): Promise<void>
+          setEquipmentStatusOverlayVisible(id: string, visible: boolean): Promise<void>
+        }
+      : never
+
+    await actions.setEquipmentNumericStatus('machine-01', 42.5)
+    await actions.setEquipmentStatusOverlayVisible('machine-01', false)
+
+    const persisted = await database.equipment.get('machine-01')
+    expect(persisted).toMatchObject({
+      numericStatus: 42.5,
+      statusSource: 'manual',
+      statusOverlayVisible: false,
+    })
+  })
+
+  it('applies live OPC UA status only to equipment owned by the OPC source', async () => {
+    const database = createDatabase('opc-status')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    await store.getState().setEquipmentStatusSource('machine-01', 'opcua')
+
+    store.getState().applyOpcUaEquipmentStatuses({
+      'machine-01': 73.5,
+      'cup-01': 99,
+    })
+
+    expect(
+      store.getState().records.find(({ id }) => id === 'machine-01'),
+    ).toMatchObject({ numericStatus: 73.5, statusSource: 'opcua' })
+    expect(
+      store.getState().records.find(({ id }) => id === 'cup-01'),
+    ).toMatchObject({ numericStatus: 0, statusSource: 'manual' })
+  })
+
+  it('cancels a transform preview back to the last committed transform', async () => {
+    const database = createDatabase('transform-cancel')
+    const store = createEquipmentStore(database)
+    await store.getState().hydrate()
+    const committed = store.getState().records.find(({ id }) => id === 'cup-01')!.transform
+    const preview: SerializableTransform = {
+      position: [1.4, -0.3, 1.2],
+      quaternion: [0, 0, 0.7071068, 0.7071068],
+      scale: [1, 1, 1],
+    }
+
+    store.getState().previewEquipmentTransform('cup-01', preview)
+    const actions = store.getState() as typeof store.getState extends () => infer State
+      ? State & { cancelEquipmentTransform(id: string): void }
+      : never
+    actions.cancelEquipmentTransform('cup-01')
+
+    expect(store.getState().records.find(({ id }) => id === 'cup-01')?.transform)
+      .toEqual(committed)
+    expect(await database.equipment.get('cup-01')).toMatchObject({ transform: committed })
+  })
+
   it('preserves and commits an operator preview issued during slow hydration', async () => {
     const database = createDatabase('transform-hydration-race')
     const actualOpen = database.open.bind(database)
@@ -379,6 +442,26 @@ describe('equipment persistence', () => {
 
     expect(store.getState().records.some(({ id }) => id === imported.id)).toBe(false)
     expect(await database.equipment.get(imported.id)).toBeUndefined()
+  })
+
+  it('keeps a deleted built-in object removed after reopening the database', async () => {
+    const firstDatabase = createDatabase('remove-built-in')
+    const firstStore = createEquipmentStore(firstDatabase)
+    await firstStore.getState().hydrate()
+
+    await firstStore.getState().removeEquipment('cup-02')
+    firstDatabase.close()
+
+    const reopenedDatabase = new EquipmentDatabase(firstDatabase.name)
+    openDatabases.push(reopenedDatabase)
+    const reopenedStore = createEquipmentStore(reopenedDatabase)
+    await reopenedStore.getState().hydrate()
+
+    expect(reopenedStore.getState().records.some(({ id }) => id === 'cup-02')).toBe(false)
+    expect(reopenedStore.getState().records.map(({ id }) => id)).toEqual([
+      'cup-01',
+      'machine-01',
+    ])
   })
 
   it('keeps a removal in memory when deleting from IndexedDB fails', async () => {

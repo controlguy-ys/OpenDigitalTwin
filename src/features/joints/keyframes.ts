@@ -8,6 +8,7 @@ export interface RobotKeyframe {
   anglesDeg: JointAnglesDeg
   durationMs: number
   easing: RobotKeyframeEasing
+  speedPercentToNext?: number
 }
 
 export interface RobotTimelineSample {
@@ -15,6 +16,39 @@ export interface RobotTimelineSample {
 }
 
 const JOINT_COUNT = 6
+const MIN_SEGMENT_DURATION_MS = 16
+
+export function deriveTransitionDurationMs(
+  from: RobotKeyframe,
+  to: RobotKeyframe,
+  speedPercent: number,
+  maxVelocitiesDegPerSec: readonly number[],
+): number {
+  if (!Number.isFinite(speedPercent) || speedPercent < 1 || speedPercent > 100) {
+    throw new Error('Pose speed must be from 1 through 100 percent')
+  }
+  if (
+    maxVelocitiesDegPerSec.length !== JOINT_COUNT ||
+    maxVelocitiesDegPerSec.some(
+      (velocity) => !Number.isFinite(velocity) || velocity <= 0,
+    )
+  ) {
+    throw new Error('Robot maximum velocities must contain six positive values')
+  }
+
+  let baseDurationSeconds = 0
+  for (let index = 0; index < JOINT_COUNT; index += 1) {
+    baseDurationSeconds = Math.max(
+      baseDurationSeconds,
+      Math.abs(to.anglesDeg[index]! - from.anglesDeg[index]!) /
+        maxVelocitiesDegPerSec[index]!,
+    )
+  }
+  return Math.max(
+    MIN_SEGMENT_DURATION_MS,
+    baseDurationSeconds * 1000 * (100 / speedPercent),
+  )
+}
 
 function validateKeyframe(keyframe: RobotKeyframe): void {
   if (

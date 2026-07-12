@@ -1,33 +1,37 @@
-# WebDigitalTwin — CRB 15000 RobotSim Web
+# WebDigitalTwin RobotSim Web
 
-Browser-based industrial robot digital-twin prototype for the ABB CRB 15000
-12 kg / 1.27 m robot. The current application renders STEP-derived robot
-geometry, simulates six joints, imports equipment STEP files, displays
-industrial stack-light status, and supports collision-aware pick and place.
+Browser-based industrial workcell simulation for one configurable six-axis
+Robot, reusable STEP Object Assets, editable Poses, and optional read-only OPC
+UA joint/status input.
 
-> Project status: the original implementation plan is complete through Task 9.
-> Industrial UI completion, production E2E coverage, and the final audit remain
-> in Tasks 10–12. The configurable Frame Graph, generic robot import, read-only
-> OPC UA gateway, and velocity-aware Pose Sequence are approved Tech Spec work
-> and are not yet implemented.
+## Implemented capabilities
 
-## Current capabilities
-
-- STEP-derived `LINK00`–`LINK06` CRB 15000 geometry rendered with React Three Fiber.
-- Six-axis Simulation Mode with joint limits, Home/Reset, saved poses, and keyframe playback.
-- Browser-side equipment STEP import through an OCCT Web Worker with unit detection and bounded resource validation.
-- IndexedDB persistence for equipment records and imported geometry.
-- Built-in cups, machine equipment, and reusable red/yellow/green industrial stack lights.
-- Equipment selection and transform controls.
-- Rapier collision events, gripper sensing, deterministic pick/place, held-object following, and release persistence.
-- Responsive industrial HMI shell with viewport, asset tree, inspector, and timeline surfaces.
+- One active six-axis Robot with `LINK00` through `LINK06`.
+- ABB CRB 15000-12/1.27 STEP-derived default geometry and datasheet mechanics.
+- `Import new Robot`: exactly seven mapped STEP files are required.
+- `Replace one Link`: a separate explicit single-file replacement flow.
+- Robot Geometry configuration is independent from Mechanical configuration:
+  source filename, local XYZ/RPY/scale, visibility, Box collision bounds, and
+  mesh statistics are persisted per Link.
+- Object import accepts one whole STEP file per reusable Object Asset. Multiple
+  Object Instances can share the same converted geometry.
+- Manual Object XYZ/RPY editing, deletion, numeric 3D status overlay, and
+  Manual/OPC UA status ownership. Object transforms are relative to MCP.
+- Fixed `World -> MCP -> Robot Base -> Joints -> Flange -> TCP` hierarchy. MCP,
+  Robot Base, and TCP are editable in mm/degrees; World and Flange are
+  read-only. The gripper and held Object follow TCP.
+- Simulation Poses can be saved, reordered, speed-adjusted, and deleted.
+- `.wdtwin` project Save, Export, and Import covers Robot source STEP files,
+  mechanics, Geometry configuration, Objects, Poses, frame placeholders, and
+  OPC UA bindings.
+- Import is decoded, resource-validated, and geometry-staged before the active
+  project changes; failure retains the previous central snapshot.
+- Optional anonymous, read-only OPC UA Client middleware publishes joint angles
+  and numeric Object status over a local WebSocket.
 
 ## Quick start
 
-Requirements:
-
-- Node.js `>=22.15.1 <23`
-- npm `>=11.4.2 <12`
+Requirements: Node.js `>=22.15.1 <23` and npm `>=11.4.2 <12`.
 
 ```powershell
 npm install
@@ -36,71 +40,114 @@ npm run dev -- --host 127.0.0.1 --port 5173
 
 Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
 
+### Docker deployment
+
+Web-only on a trusted on-premise LAN:
+
+```powershell
+docker compose up -d --build web
+```
+
+Web plus the optional read-only OPC UA Connector:
+
+```powershell
+$env:OPCUA_CONFIG_PATH = 'C:\RobotSim\opcua.config.json'
+docker compose --profile opcua up -d --build --wait
+```
+
+The default URL is [http://127.0.0.1:8080/](http://127.0.0.1:8080/), and
+`/healthz` reports Web availability independently from PLC connectivity. See
+the [Docker operator guide](docs/operator/docker-deployment.md) before using
+the OPC UA profile.
+
+## Project workflow
+
+1. Use **Import Robot STEP** and choose either a complete seven-Link Robot or
+   the explicit single-Link replacement mode.
+2. Use **Robot Config** for base pose, joint origins, axes, limits, and maximum
+   velocities. Use **Robot Geometry** for CAD-local transforms and collision
+   bounds.
+3. Use **Import STEP** for an external Object. One file becomes one Object
+   Asset plus its first scene Instance.
+4. Arrange Objects with the inspector and build the Simulation Pose sequence.
+5. Use **Coordinate Frames** to position MCP, Robot Base, and TCP. Moving MCP
+   carries the Robot and Objects together without changing their local poses.
+6. Use **Save**, then **Export** to create a portable `.wdtwin`. **Import**
+   restores a validated archive.
+
+### Resource limits
+
+| Scope | Limit |
+| --- | ---: |
+| Robot files | exactly 7 for a new Robot |
+| Robot STEP per Link | 25 MiB, 150,000 triangles |
+| Robot total | 100 MiB, 600,000 triangles |
+| Object STEP per Asset | 50 MiB, 250,000 triangles |
+| Meshes/materials per Asset | 64 / 32 |
+| Project raw STEP total | 256 MiB |
+| Visible Scene | 1,500,000 triangles |
+
+The seven-file rule applies only to Robot Import. Objects have no seven-file
+count limit; each Object Asset owns one whole STEP file and is controlled by
+the per-Asset and total project budgets.
+
+## OPC UA middleware
+
+```powershell
+npm run middleware:opcua
+```
+
+The browser never opens `opc.tcp` directly. The middleware configuration is in
+[`middleware/opcua.config.json`](middleware/opcua.config.json). This short-term
+scope intentionally uses anonymous `SecurityPolicy.None` /
+`MessageSecurityMode.None` and performs no writes or motion commands. Keep it
+on a trusted on-premise LAN only.
+
 ## Verification
 
 ```powershell
 npm run verify
-```
-
-The verification pipeline runs lint, unit/integration tests, CAD asset
-validation, TypeScript compilation, and the production Vite build. Browser E2E
-coverage belongs to the remaining Task 11 scope.
-
-Useful individual commands:
-
-```powershell
-npm run test:run
-npm run cad:validate
-npm run build
 npm run test:e2e
+npm run deploy:validate
+npm run deploy:smoke
+npm run deploy:smoke:opcua
+npm audit --audit-level=high
 ```
+
+`verify` runs lint, unit/integration tests, CAD validation, TypeScript, and the
+production build. The Playwright test exports the default workcell, clears
+browser persistence, imports the archive, and compares semantic project state.
 
 ## Architecture
 
 ```text
-src/domain              Robot/equipment contracts and kinematics
-src/features/robot      CRB renderer, gripper, and status overlay
-src/features/joints     Simulation source, joint store, poses, and playback
-src/features/equipment  Equipment persistence, rendering, and stack lights
-src/features/import     STEP worker pipeline and geometry repository
-src/features/interaction Collision, selection, transforms, and grasp lifecycle
-src/features/scene      React Three Fiber / Rapier workcell
-src/features/ui         Timeline and industrial UI surfaces
-scripts/cad             Deterministic CAD conversion and validation
-public/models/robot     Runtime GLB assets and asset report
+src/domain/project       Versioned project/Asset/Instance contracts and budgets
+src/features/project     .wdtwin codec, active project store, and project menu
+src/features/robot       Robot import, mechanics, Geometry persistence, renderer
+src/features/frames      Pose math, persisted MCP/TCP, manual frame editor
+src/features/objects     Reusable Object Asset and Object Instance persistence
+src/features/import      STEP Worker, OCCT conversion, shared geometry cache
+src/features/joints      Simulation/OPC UA sources, Poses, playback
+src/features/equipment   Scene adapter, inspector, status overlay, stack lights
+middleware               Read-only OPC UA Client and WebSocket gateway
 ```
-
-The browser is currently self-contained. A future OPC UA integration uses a
-dedicated read-only WebSocket gateway; the browser never connects directly to
-`opc.tcp`, stores controller credentials, writes PLC values, or starts robot
-motion.
-
-## Robot geometry and kinematics
-
-The authoritative source geometry is the supplied
-`CRB15000_12kg-127_OmniCore_rev00_STEP_J` STEP set. Runtime `LINK00` through
-`LINK06` GLBs are generated from those files with OCCT metre output and retain
-the source mesh and face colors.
-
-The numeric CRB 15000-12/1.27 joint origins and axes are attributed to the
-ROS-Industrial `abb_crb15000_support/urdf/crb15000_12_127_macro.xacro`
-definition. Joint limits were cross-checked against ABB product specification
-3HAC077390-001 Revision X.
 
 ## Documentation
 
-- [Current project status](docs/progress/2026-07-13-project-status.md)
-- [Baseline Robot Simulation Tech Spec](docs/superpowers/specs/2026-07-10-robot-simulation-design.md)
-- [Approved configurable digital-twin Tech Spec](docs/superpowers/specs/2026-07-11-frame-graph-generic-robot-opcua-pose-sequence-design.md)
-- [Baseline implementation plan](docs/superpowers/plans/2026-07-10-crb15000-web-simulation.md)
-- [Frame Graph and manual coordinates plan](docs/superpowers/plans/2026-07-11-frame-graph-manual-coordinates.md)
-- [Generic robot import and mechanics plan](docs/superpowers/plans/2026-07-11-generic-robot-import-mechanical-configuration.md)
-- [Read-only OPC UA joint source plan](docs/superpowers/plans/2026-07-11-opcua-joint-source-gateway.md)
-- [Pose Sequence speed and ordering plan](docs/superpowers/plans/2026-07-11-pose-sequence-speed-ordering.md)
-- [Industrial visual specification](docs/design/robot-sim-visual-spec.md)
+- [Fixed Coordinate Frames operator guide](docs/operator/fixed-coordinate-frames.md)
+- [Docker on-prem operator guide](docs/operator/docker-deployment.md)
+- [Docker deployment Tech Spec](docs/superpowers/specs/2026-07-13-on-prem-docker-deployment-design.md)
+- [Portable Workcell Project Tech Spec](docs/superpowers/specs/2026-07-13-portable-workcell-project-format.md)
+- [Implementation plan](docs/superpowers/plans/2026-07-13-portable-workcell-project-core.md)
+- [Short-term MVP implementation record](docs/progress/2026-07-13-short-term-mvp-implementation.md)
+- [Configurable Digital Twin design](docs/superpowers/specs/2026-07-11-frame-graph-generic-robot-opcua-pose-sequence-design.md)
 
-## Safety boundary
+## Known exclusions and safety boundary
 
-This project is a visualization and simulation prototype. It is not a
-safety-rated robot controller. No PLC transfer, controller write, motion-start
-command, or safety function is implemented.
+Multi-Robot scenes, IK, dynamics, acceleration/jerk planning, automatic STEP
+assembly splitting, automatic mesh simplification, OPC UA writes, credentials,
+certificates, and public-internet deployment are not implemented. The Docker
+package targets a trusted on-premise LAN only.
+
+This project is not a safety-rated Robot controller. It performs no PLC
+transfer, controller write, motion-start command, or safety function.

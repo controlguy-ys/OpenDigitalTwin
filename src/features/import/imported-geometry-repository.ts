@@ -1,4 +1,5 @@
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
+import type { ObjectAssetRecordV1 } from '../../domain/project/project'
 import type { OcctSuccessResult } from '../../lib/cad/occt-types'
 import { stepImportClient } from './StepImportClient'
 import {
@@ -20,7 +21,7 @@ type GeometryConverter = (
 export class ImportedGeometryRepository {
   private readonly parser: StepImportParser
   private readonly convert: GeometryConverter
-  private readonly entries = new Map<string, ImportedThreeAsset>()
+  private entries = new Map<string, ImportedThreeAsset>()
   private readonly inFlight = new Map<string, Promise<ImportedThreeAsset>>()
   private readonly epochs = new Map<string, number>()
   private readonly errors = new Map<string, string>()
@@ -121,6 +122,32 @@ export class ImportedGeometryRepository {
     return importPromise
   }
 
+  loadObjectAsset(record: ObjectAssetRecordV1): Promise<ImportedThreeAsset> {
+    return this.load({
+      id: record.id,
+      name: record.name,
+      kind: 'imported',
+      status: 'OFF',
+      transform: {
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      graspable: false,
+      collisionHalfExtents: [...record.collisionHalfExtents],
+      stackLightAnchor: null,
+      sourceBytes: record.sourceBytes,
+      importMetadata: {
+        sourceFileName: record.sourceFileName,
+        detectedUnit: 'unknown',
+        selectedSourceUnit: 'meter',
+        postImportScale: record.importScale,
+        originMode: record.originMode,
+        colliderCenter: [...record.colliderCenter],
+      },
+    })
+  }
+
   async restore(records: readonly EquipmentRecord[]): Promise<void> {
     await Promise.allSettled(
       records
@@ -129,10 +156,24 @@ export class ImportedGeometryRepository {
     )
   }
 
+  async restoreObjectAssets(records: readonly ObjectAssetRecordV1[]): Promise<void> {
+    await Promise.allSettled(records.map((record) => this.loadObjectAsset(record)))
+  }
+
   set(id: string, asset: ImportedThreeAsset): void {
     this.invalidate(id)
     this.entries.set(id, asset)
     this.errors.delete(id)
+    this.emit()
+  }
+
+  replaceAll(nextEntries: ReadonlyMap<string, ImportedThreeAsset>): void {
+    for (const [id, asset] of this.entries) {
+      if (nextEntries.get(id) !== asset) asset.dispose()
+    }
+    this.entries = new Map(nextEntries)
+    this.inFlight.clear()
+    this.errors.clear()
     this.emit()
   }
 

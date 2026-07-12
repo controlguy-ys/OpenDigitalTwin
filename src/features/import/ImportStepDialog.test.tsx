@@ -84,6 +84,47 @@ function renderDialog(
 }
 
 describe('ImportStepDialog', () => {
+  it('commits one reusable Object Asset and one scene Instance', async () => {
+    const user = userEvent.setup()
+    const onCommitAsset = vi.fn(async () => undefined)
+    const cache: ImportStepGeometryCache = { set: vi.fn() }
+    render(
+      <ImportStepDialog
+        cache={cache}
+        client={{ import: vi.fn(async () => LINK00_RESULT), cancel: vi.fn() }}
+        createAssetId={() => 'asset-link00'}
+        createId={() => 'instance-link00'}
+        onClose={vi.fn()}
+        onCommitAsset={onCommitAsset}
+        onSelect={vi.fn()}
+        open
+      />,
+    )
+
+    await user.upload(
+      screen.getByLabelText('STEP file'),
+      stepFile('SI_UNIT(.MILLI.,.METRE.);'),
+    )
+    await screen.findByText('0.242 × 0.200 × 0.214 m')
+    await user.click(screen.getByRole('button', { name: 'Add to scene' }))
+
+    expect(onCommitAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'asset-link00',
+        sourceFileName: 'LINK00_CAD.step',
+        statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
+      }),
+      expect.objectContaining({
+        id: 'instance-link00',
+        assetId: 'asset-link00',
+      }),
+    )
+    expect(cache.set).toHaveBeenCalledWith(
+      'asset-link00',
+      expect.objectContaining({ bounds: expect.any(Object) }),
+    )
+  })
+
   it('prevalidates extension and size before parsing or mutating scene surfaces', async () => {
     const user = userEvent.setup({ applyAccept: false })
     const harness = renderDialog()
@@ -98,7 +139,7 @@ describe('ImportStepDialog', () => {
       input,
       stepFile('DATA;', 'oversize.step', MAX_STEP_FILE_BYTES + 1),
     )
-    expect(await screen.findByRole('alert')).toHaveTextContent(/100 MiB/i)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/50 MiB/i)
     expect(harness.client.import).not.toHaveBeenCalled()
     expect(harness.onCommit).not.toHaveBeenCalled()
     expect(harness.cache.set).not.toHaveBeenCalled()

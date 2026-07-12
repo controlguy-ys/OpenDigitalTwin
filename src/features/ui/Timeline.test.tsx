@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SimulationJointSource } from '../joints/SimulationJointSource'
@@ -240,5 +240,33 @@ describe('Timeline', () => {
     expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Pause' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled()
+  })
+
+  it('edits pose order, outgoing speed, and deletion from the timeline', async () => {
+    const user = userEvent.setup()
+    render(<Timeline source={new SimulationJointSource()} />)
+
+    await user.click(screen.getByRole('button', { name: 'Move Pose 2 up' }))
+    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
+      'end',
+      'start',
+    ])
+
+    const speed = screen.getByRole('spinbutton', {
+      name: 'Pose 2 speed to next pose',
+    })
+    fireEvent.change(speed, { target: { value: '40' } })
+    expect(useRobotStore.getState().keyframes[0]).toMatchObject({
+      speedPercentToNext: 40,
+    })
+    expect(useRobotStore.getState().keyframes[0]?.durationMs).toBeCloseTo(
+      1388.889,
+      2,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Delete Pose 2' }))
+    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
+      'start',
+    ])
   })
 })

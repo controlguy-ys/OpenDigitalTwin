@@ -84,19 +84,17 @@ export function EquipmentAssetList({
               <span>{record.name}</span>
               <small>{record.kind}</small>
             </button>
-            {record.kind === 'imported' ? (
-              <button
-                aria-label={`Delete ${record.name}`}
-                className="equipment-delete"
-                disabled={pendingSnapshot.has(record.id)}
-                onClick={() => {
-                  void remove(record)
-                }}
-                type="button"
-              >
-                {pendingSnapshot.has(record.id) ? 'Deleting…' : 'Delete'}
-              </button>
-            ) : null}
+            <button
+              aria-label={`Delete ${record.name}`}
+              className="equipment-delete"
+              disabled={pendingSnapshot.has(record.id)}
+              onClick={() => {
+                void remove(record)
+              }}
+              type="button"
+            >
+              {pendingSnapshot.has(record.id) ? 'Deleting…' : 'Delete'}
+            </button>
             {removalErrors.has(record.id) ? (
               <p className="equipment-remove-error" role="alert">
                 {removalErrors.get(record.id)}
