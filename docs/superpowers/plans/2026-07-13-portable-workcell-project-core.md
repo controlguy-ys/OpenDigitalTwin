@@ -233,11 +233,11 @@ git commit -m "feat: persist configurable robot link geometry"
 - Consumes: `WorkcellProjectSnapshotV1`.
 - Produces: `encodeWorkcellProject(snapshot): Promise<Uint8Array>` and `decodeWorkcellProject(bytes): Promise<WorkcellProjectSnapshotV1>`.
 
-- [ ] **Step 1: Install the pinned browser ZIP dependency**
+- [x] **Step 1: Install the pinned browser ZIP dependency**
 
 Run: `npm install --save-exact fflate@0.8.3`
 
-- [ ] **Step 2: Write failing round-trip and corruption tests**
+- [x] **Step 2: Write failing round-trip and corruption tests**
 
 ```ts
 it('round-trips JSON records and raw STEP bytes', async () => {
@@ -251,23 +251,23 @@ it('rejects a corrupt archive without returning partial state', async () => {
 })
 ```
 
-- [ ] **Step 3: Verify RED**
+- [x] **Step 3: Verify RED**
 
 Run: `npm run test:run -- src/features/project/project-codec.test.ts`
 
 Expected: FAIL because the codec does not exist.
 
-- [ ] **Step 4: Implement deterministic ZIP layout**
+- [x] **Step 4: Implement deterministic ZIP layout**
 
 Encode `manifest.json`, `robot/configuration.json`, `robot/links/LINKxx.step`, `objects/assets.json`, `objects/assets/<id>.step`, `objects/instances.json`, `poses/sequences.json`, and `opcua/bindings.json`. Decode into a temporary snapshot, enforce entry/path/size limits, then call `validateWorkcellProjectSnapshot()`.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run: `npm run test:run -- src/features/project/project-codec.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add package.json package-lock.json src/features/project

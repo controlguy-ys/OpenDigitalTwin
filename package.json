@@ -29,6 +29,7 @@
     "@react-three/rapier": "2.2.0",
     "dexie": "4.4.4",
     "dexie-react-hooks": "4.4.0",
+    "fflate": "0.8.3",
     "lucide-react": "1.24.0",
     "node-opcua": "2.175.0",
     "occt-import-js": "0.0.23",
