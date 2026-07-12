@@ -8,6 +8,9 @@ interface SemanticProject {
   objectAssetCount: number
   objectInstanceCount: number
   poseCount: number
+  mcpPosition: number[]
+  tcpPosition: number[]
+  basePosition: number[]
 }
 
 async function semanticProject(page: import('@playwright/test').Page) {
@@ -35,6 +38,9 @@ async function semanticProject(page: import('@playwright/test').Page) {
       objectAssetCount: snapshot.objectAssets.length,
       objectInstanceCount: snapshot.objectInstances.length,
       poseCount: snapshot.poses.length,
+      mcpPosition: snapshot.frames.mcp.position,
+      tcpPosition: snapshot.frames.tcp.position,
+      basePosition: snapshot.robot.basePosition,
     }
   })
 }
@@ -45,6 +51,17 @@ test('exports and restores the complete default workcell project', async ({ page
     'aria-busy',
     'false',
   )
+
+  await page.getByRole('button', { name: 'Coordinate Frames' }).click()
+  await page.getByLabel('Position X (mm)').fill('125')
+  await page.getByRole('button', { name: 'Apply frame' }).click()
+  await page.getByLabel('Coordinate frame', { exact: true }).selectOption('base')
+  await page.getByLabel('Position Y (mm)').fill('-80')
+  await page.getByRole('button', { name: 'Apply frame' }).click()
+  await page.getByLabel('Coordinate frame', { exact: true }).selectOption('tcp')
+  await page.getByLabel('Position Z (mm)').fill('65')
+  await page.getByRole('button', { name: 'Apply frame' }).click()
+  await page.getByRole('button', { name: 'Close Coordinate Frames' }).click()
 
   await page.getByRole('button', { name: 'Save project' }).click()
   await expect(page.getByText('Saved', { exact: true })).toBeVisible()
@@ -92,4 +109,12 @@ test('exports and restores the complete default workcell project', async ({ page
   await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
 
   expect(await semanticProject(page)).toEqual(before)
+
+  await page.getByRole('button', { name: 'Coordinate Frames' }).click()
+  await page.getByLabel('Coordinate frame', { exact: true }).selectOption('mcp')
+  await expect(page.getByLabel('Position X (mm)')).toHaveValue('125')
+  await page.getByLabel('Coordinate frame', { exact: true }).selectOption('base')
+  await expect(page.getByLabel('Position Y (mm)')).toHaveValue('-80')
+  await page.getByLabel('Coordinate frame', { exact: true }).selectOption('tcp')
+  await expect(page.getByLabel('Position Z (mm)')).toHaveValue('65')
 })

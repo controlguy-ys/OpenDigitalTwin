@@ -21,6 +21,12 @@
 - Added New, Save, Export, and Import controls to the top bar.
 - Bundled the seven authoritative CRB STEP sources so the default workcell can
   also be exported as a complete portable project.
+- Added the fixed `World → MCP → Robot Base → Joints → Flange → TCP`
+  hierarchy. MCP, Robot Base, and TCP are manually editable and persisted;
+  World and the joint-derived Flange are read-only.
+- Parent Robot and Object rendering under MCP, and mount the gripper, grasp
+  sensor, and held Object under TCP. Released Object world poses are converted
+  back to MCP-local storage exactly once.
 
 ## Corrected requirements carried into implementation
 
@@ -43,18 +49,16 @@
 
 ## Verification evidence
 
-- `npm run test:run`: 44 files and 238 tests passed.
+- `npm run test:run`: 48 files and 255 tests passed.
 - `npm run lint`: passed.
 - `npm run cad:validate`: 7 valid Links, 0 errors, and 0 warnings.
 - Production TypeScript/Vite build: passed.
-- Playwright default-project Export → storage clear → Import semantic round-trip:
-  passed in 56.5 seconds.
+- Playwright MCP/Base/TCP edit → default-project Export → storage clear →
+  Import semantic round-trip: passed in 1.2 minutes.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
 
 ## Deferred next slices
 
-- Editable fixed World → MCP → Base → Joints → Flange → TCP frame hierarchy.
-- MCP-parented Object placement and frame conversion UI.
 - Docker/Nginx on-prem deployment package and health checks.
 - Scene draw-call telemetry and enforcement at runtime.
 - Multi-Robot, IK, dynamics, automatic assembly splitting/LOD, OPC UA writes,

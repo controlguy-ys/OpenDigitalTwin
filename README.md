@@ -16,7 +16,10 @@ UA joint/status input.
 - Object import accepts one whole STEP file per reusable Object Asset. Multiple
   Object Instances can share the same converted geometry.
 - Manual Object XYZ/RPY editing, deletion, numeric 3D status overlay, and
-  Manual/OPC UA status ownership.
+  Manual/OPC UA status ownership. Object transforms are relative to MCP.
+- Fixed `World -> MCP -> Robot Base -> Joints -> Flange -> TCP` hierarchy. MCP,
+  Robot Base, and TCP are editable in mm/degrees; World and Flange are
+  read-only. The gripper and held Object follow TCP.
 - Simulation Poses can be saved, reordered, speed-adjusted, and deleted.
 - `.wdtwin` project Save, Export, and Import covers Robot source STEP files,
   mechanics, Geometry configuration, Objects, Poses, frame placeholders, and
@@ -47,7 +50,9 @@ Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
 3. Use **Import STEP** for an external Object. One file becomes one Object
    Asset plus its first scene Instance.
 4. Arrange Objects with the inspector and build the Simulation Pose sequence.
-5. Use **Save**, then **Export** to create a portable `.wdtwin`. **Import**
+5. Use **Coordinate Frames** to position MCP, Robot Base, and TCP. Moving MCP
+   carries the Robot and Objects together without changing their local poses.
+6. Use **Save**, then **Export** to create a portable `.wdtwin`. **Import**
    restores a validated archive.
 
 ### Resource limits
@@ -96,6 +101,7 @@ browser persistence, imports the archive, and compares semantic project state.
 src/domain/project       Versioned project/Asset/Instance contracts and budgets
 src/features/project     .wdtwin codec, active project store, and project menu
 src/features/robot       Robot import, mechanics, Geometry persistence, renderer
+src/features/frames      Pose math, persisted MCP/TCP, manual frame editor
 src/features/objects     Reusable Object Asset and Object Instance persistence
 src/features/import      STEP Worker, OCCT conversion, shared geometry cache
 src/features/joints      Simulation/OPC UA sources, Poses, playback
@@ -105,6 +111,7 @@ middleware               Read-only OPC UA Client and WebSocket gateway
 
 ## Documentation
 
+- [Fixed Coordinate Frames operator guide](docs/operator/fixed-coordinate-frames.md)
 - [Portable Workcell Project Tech Spec](docs/superpowers/specs/2026-07-13-portable-workcell-project-format.md)
 - [Implementation plan](docs/superpowers/plans/2026-07-13-portable-workcell-project-core.md)
 - [Short-term MVP implementation record](docs/progress/2026-07-13-short-term-mvp-implementation.md)
@@ -114,9 +121,8 @@ middleware               Read-only OPC UA Client and WebSocket gateway
 
 Multi-Robot scenes, IK, dynamics, acceleration/jerk planning, automatic STEP
 assembly splitting, automatic mesh simplification, OPC UA writes, credentials,
-certificates, and public-internet deployment are not implemented. Fixed
-World/MCP/Base/Flange/TCP editing and the Docker on-prem deployment package are
-the next planned slices.
+certificates, and public-internet deployment are not implemented. The Docker
+on-prem deployment package is the next planned slice.
 
 This project is not a safety-rated Robot controller. It performs no PLC
 transfer, controller write, motion-start command, or safety function.
