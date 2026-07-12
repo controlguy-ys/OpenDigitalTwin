@@ -5,6 +5,7 @@ import {
   type JointAnglesDeg,
   type JointFrame,
 } from '../../domain/robot/joint-frame'
+import { resolveOpcUaGatewayUrl } from './opcua-gateway-url'
 
 export interface BrowserWebSocket {
   onopen: (() => void) | null
@@ -160,5 +161,8 @@ export class OpcUaJointSource implements JointAngleSource {
 }
 
 export const opcUaJointSource = new OpcUaJointSource(
-  import.meta.env.VITE_OPCUA_GATEWAY_URL ?? 'ws://127.0.0.1:4841',
+  resolveOpcUaGatewayUrl(
+    import.meta.env.VITE_OPCUA_GATEWAY_URL,
+    typeof window === 'undefined' ? undefined : window.location,
+  ),
 )
