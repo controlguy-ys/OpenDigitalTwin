@@ -15,6 +15,7 @@ import {
   WORKBENCH_TOP_THICKNESS,
   WORKBENCH_TOP_Z,
 } from './workcell-constants'
+import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
@@ -95,6 +96,7 @@ export function Workcell({
 }: WorkcellProps) {
   const [rig, setRig] = useState<RobotRigRegistration | null>(null)
   const [orbitEnabled, setOrbitEnabled] = useState(true)
+  const mcp = useCoordinateFrameStore((state) => state.frames.mcp)
   const equipmentObjectsRef = useRef(new Map<string, Object3D>())
   const workbenchObjectRef = useRef<Group>(null)
   const handleRigRegistration = useCallback(
@@ -129,12 +131,18 @@ export function Workcell({
         rotation={[Math.PI / 2, 0, 0]}
       />
       <Workbench ref={workbenchObjectRef} />
-      <EquipmentScene
-        equipmentObjectsRef={equipmentObjectsRef}
-        onDraggingChange={handleEquipmentDraggingChange}
-      />
-      <group name="robot-workbench-mount" position={[0, 0, WORKBENCH_TOP_Z]}>
-        <RobotModel registerRig={handleRigRegistration} />
+      <group
+        name="mcp-frame"
+        position={mcp.position}
+        quaternion={mcp.quaternion}
+      >
+        <EquipmentScene
+          equipmentObjectsRef={equipmentObjectsRef}
+          onDraggingChange={handleEquipmentDraggingChange}
+        />
+        <group name="robot-workbench-mount" position={[0, 0, WORKBENCH_TOP_Z]}>
+          <RobotModel registerRig={handleRigRegistration} />
+        </group>
       </group>
       <CollisionSystem
         equipmentObjectsRef={equipmentObjectsRef}

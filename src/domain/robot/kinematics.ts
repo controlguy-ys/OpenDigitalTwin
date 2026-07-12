@@ -29,6 +29,7 @@ export interface RobotRig {
   readonly jointPivots: Record<RobotJointId, Group>
   readonly linkSlots: Record<RobotLinkId, Group>
   readonly toolFrame: Group
+  readonly tcpFrame: Group
 }
 
 const JOINT_COUNT = 6
@@ -80,6 +81,10 @@ export function createRobotRig(
   toolFrame.rotation.set(0, definition.toolRotationYRad, 0)
   finalLinkSlot.add(toolFrame)
 
+  const tcpFrame = new Group()
+  tcpFrame.name = 'tcp-frame'
+  toolFrame.add(tcpFrame)
+
   return {
     definition,
     root,
@@ -87,6 +92,7 @@ export function createRobotRig(
     jointPivots,
     linkSlots: linkSlots as Record<RobotLinkId, Group>,
     toolFrame,
+    tcpFrame,
   }
 }
 

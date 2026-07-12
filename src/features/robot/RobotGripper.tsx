@@ -3,10 +3,10 @@ import type { Group } from 'three'
 import { useRobotStore } from '../joints/robot-store'
 
 interface RobotGripperProps {
-  toolFrame: Group
+  tcpFrame: Group
 }
 
-export function RobotGripper({ toolFrame }: RobotGripperProps) {
+export function RobotGripper({ tcpFrame }: RobotGripperProps) {
   const gripperOpen = useRobotStore((state) => state.gripperOpen)
   const jawOffset = gripperOpen ? 0.038 : 0.018
 
@@ -31,6 +31,6 @@ export function RobotGripper({ toolFrame }: RobotGripperProps) {
         </mesh>
       ))}
     </group>,
-    toolFrame,
+    tcpFrame,
   )
 }

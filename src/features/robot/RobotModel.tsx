@@ -19,6 +19,7 @@ import {
   useRobotConfigurationStore,
 } from './robot-configuration-store'
 import { useRobotGeometryStore } from './robot-geometry-store'
+import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -38,6 +39,7 @@ export interface RobotRigRegistration {
   readonly rig: RobotRig
   readonly linkSlots: RobotRig['linkSlots']
   readonly toolFrame: RobotRig['toolFrame']
+  readonly tcpFrame: RobotRig['tcpFrame']
   readonly links: Record<RobotLinkId, Object3D>
 }
 
@@ -81,6 +83,7 @@ export function createRobotRigRegistration(
     rig,
     linkSlots: rig.linkSlots,
     toolFrame: rig.toolFrame,
+    tcpFrame: rig.tcpFrame,
     links,
   }
 }
@@ -139,6 +142,7 @@ export function RobotModel({ registerRig }: RobotModelProps) {
     robotGeometryRepository.getSnapshot,
   )
   const geometryRecords = useRobotGeometryStore((state) => state.links)
+  const tcpTransform = useCoordinateFrameStore((state) => state.frames.tcp)
   const geometryRecordsByLink = useMemo(
     () => new Map(geometryRecords.map((record) => [record.linkId, record])),
     [geometryRecords],
@@ -193,6 +197,12 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   useLayoutEffect(() => {
     setRigAngles(rig, [j1, j2, j3, j4, j5, j6])
   }, [j1, j2, j3, j4, j5, j6, rig])
+
+  useLayoutEffect(() => {
+    rig.tcpFrame.position.set(...tcpTransform.position)
+    rig.tcpFrame.quaternion.set(...tcpTransform.quaternion).normalize()
+    rig.tcpFrame.updateMatrix()
+  }, [rig.tcpFrame, tcpTransform])
 
   useLayoutEffect(() => {
     attachRobotRigRegistration(registration)
@@ -296,7 +306,7 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   return (
     <>
       <primitive dispose={null} object={rig.root} />
-      <RobotGripper toolFrame={rig.toolFrame} />
+      <RobotGripper tcpFrame={rig.tcpFrame} />
       {linkInteractionPortals}
     </>
   )

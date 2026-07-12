@@ -49,6 +49,7 @@ function createDependencies(calls: string[] = []) {
     resetInteraction: vi.fn(() => {
       calls.push('reset')
     }),
+    toPersistedTransform: (world: SerializableTransform) => world,
   }
 }
 
@@ -88,5 +89,30 @@ describe('grasp release actions', () => {
     )
 
     expect(calls).toEqual(['preview', 'clear-held', 'commit', 'reset'])
+  })
+
+  it('converts the released world pose before preview persistence', async () => {
+    const dependencies = createDependencies()
+    dependencies.toPersistedTransform = (world) => ({
+      ...world,
+      position: [world.position[0] - 1, world.position[1], world.position[2]],
+    })
+
+    const released = await releaseHeldEquipmentAtTool(
+      'cup-01',
+      {
+        position: [1, 0, 1.155],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      1.08,
+      dependencies,
+    )
+
+    expect(released?.position).toEqual([1.1, 0, 1.155])
+    const persistedTransform = vi.mocked(dependencies.previewTransform).mock.calls[0]?.[1]
+    expect(persistedTransform?.position[0]).toBeCloseTo(0.1)
+    expect(persistedTransform?.position[1]).toBeCloseTo(0)
+    expect(persistedTransform?.position[2]).toBeCloseTo(1.155)
   })
 })
