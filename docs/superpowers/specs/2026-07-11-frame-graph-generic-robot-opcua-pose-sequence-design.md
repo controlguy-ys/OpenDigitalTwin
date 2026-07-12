@@ -1,6 +1,13 @@
 # Frame Graph, Generic Robot Import, OPC UA, and Pose Sequence Design
 
-**Status:** Approved in conversation on 2026-07-11; written specification pending final file review
+**Status:** Approved as written on 2026-07-11
+
+**Planning refinement:** Post-approval implementation-plan reviews tightened
+multi-instance frame identity, per-geometry robot assets, read-only gateway
+authorization/lifecycle, committed frame revisions, per-instance mutation
+arbitration, and legacy-Pose source truth. These clarifications do not change
+the approved feature scope or operator behavior; they make the implementation
+contracts below unambiguous and executable.
 
 **Extends:** `2026-07-10-robot-simulation-design.md`
 
@@ -133,6 +140,10 @@ changing their saved world pose.
   compose as `q = qz(yaw) * qy(pitch) * qx(roll)`; quaternion storage prevents
   Euler display singularities from becoming persisted ambiguity.
 - Imported units and every conversion are retained as provenance.
+- A STEP Manifest package unit applies to all length-valued wire fields,
+  including Pose translations, collision extents, and prismatic Home/limits/
+  zero offset/velocity/acceleration; revolute values remain radians. Conversion
+  to canonical m, m/s, and m/s^2 occurs exactly once before validation.
 - A stored local pose always means `T_parent_child`.
 - A world pose is calculated by composing every ancestor transform.
 
@@ -201,13 +212,24 @@ World / Cell
   selects its MCP parent explicitly.
 - Every non-root frame has exactly one parent.
 - Frame IDs are unique and the graph must be acyclic.
+- Cell-scoped IDs are globally unique. A reusable robot definition contains
+  definition-local frame IDs only; materialization prefixes every scene ID with
+  `robot:<robotInstanceId>:` so two instances can never collide.
 - MCP, Robot Base, TCP, fixture, workobject, workpiece, equipment, sensor,
   camera, moving, and custom frames may be edited when their source is manual.
 - Joint, link, and flange frames produced by forward kinematics are read-only
   during operation.
+- Each robot-scoped manual TCP has exactly one persisted scene FrameNode under
+  its same-owner derived flange. The FK adapter emits joint/link/flange nodes
+  and never emits a duplicate TCP. Tool-mounted manual sensor/camera frames
+  parent that persisted TCP rather than the derived flange directly.
 - Reparenting preserves the world pose by computing a new local pose.
 - Deleting a parent requires explicit child reparenting or subtree deletion;
   implicit orphaning is prohibited.
+- Frame-only subtree deletion is rejected when any descendant is an equipment,
+  RobotInstance Base, or other entity lifecycle root. The owning entity service
+  must perform the cross-store transactional deletion so no entity record can
+  reference a missing frame.
 - A moving frame carries timestamp, quality, and source metadata outside the
   persisted `FrameNode`; runtime values never overwrite its nominal pose until
   the operator explicitly commits a calibration.
@@ -228,6 +250,13 @@ Preview changes are memory-only. Apply performs one validated transaction.
 Cancel restores the last committed transform. Robot Base editing moves the
 whole robot instance without changing its joint geometry. TCP editing changes
 the flange-to-tool offset and does not solve inverse kinematics.
+Every persisted frame has a committed transform/topology revision: create is
+revision 1, and each committed local-pose or parent change increments it once in
+the same transaction. Preview, Cancel, no-op Apply, rename-only edits, and
+active-TCP selection do not increment it. The Frame Store exposes a typed
+committed-record accessor and post-commit subscription so playback can snapshot
+and observe TCP revisions without relying on array identity; revisions survive
+reload.
 
 ## 9. Generic Robot Model
 
@@ -258,15 +287,45 @@ export interface RobotJointDefinitionV1 {
   readonly axis: readonly [number, number, number] | null
   readonly limits: RobotJointLimits
   readonly homePosition: number
+  readonly direction: 1 | -1
+  readonly zeroOffset: number
+}
+
+export type RobotAssetId = `builtin:${string}` | `sha256:${string}`
+
+export interface RobotGeometryInstanceV1 {
+  readonly id: string
+  readonly assetId: RobotAssetId
+  readonly pose: Pose3D
+  readonly scale: readonly [number, number, number]
+}
+
+export interface RobotCollisionBoxV1 {
+  readonly id: string
+  readonly sourceGeometryId: string | null
+  readonly pose: Pose3D
+  readonly halfExtents: readonly [number, number, number]
 }
 
 export interface RobotLinkDefinitionV1 {
   readonly id: string
   readonly name: string
-  readonly visualAssetIds: readonly string[]
-  readonly visualPose: Pose3D
-  readonly collisionAssetIds: readonly string[]
-  readonly collisionPose: Pose3D
+  readonly visualGeometries: readonly RobotGeometryInstanceV1[]
+  readonly collisionGeometries: readonly RobotGeometryInstanceV1[]
+  readonly collisionBounds: readonly RobotCollisionBoxV1[]
+}
+
+export type RobotNamedFrameParentV1 =
+  | { readonly kind: 'link'; readonly linkId: string }
+  | { readonly kind: 'frame'; readonly frameId: string }
+
+export interface RobotNamedFrameDefinitionV1 {
+  readonly id: string
+  readonly name: string
+  readonly role: 'flange' | 'tcp' | 'sensor' | 'camera' | 'custom'
+  readonly parent: RobotNamedFrameParentV1
+  readonly localPose: Pose3D
+  readonly ownership: 'derived' | 'instance-manual'
 }
 
 export interface RobotDefinitionV1 {
@@ -276,12 +335,13 @@ export interface RobotDefinitionV1 {
   readonly name: string
   readonly sourceFormat: 'builtin' | 'step-manifest' | 'urdf'
   readonly sourceSha256: string
+  readonly sourceAssetIds: readonly RobotAssetId[]
   readonly rootLinkId: string
   readonly links: readonly RobotLinkDefinitionV1[]
   readonly joints: readonly RobotJointDefinitionV1[]
-  readonly namedFrames: readonly FrameNode[]
-  readonly defaultFlangeFrameId: string
-  readonly defaultTcpFrameId: string | null
+  readonly namedFrames: readonly RobotNamedFrameDefinitionV1[]
+  readonly defaultFlangeFrameLocalId: string
+  readonly defaultTcpFrameLocalId: string | null
 }
 ```
 
@@ -292,18 +352,36 @@ upper limits. Continuous joints have null position limits. Every movable joint
 used by percentage-speed Pose Sequence playback requires a finite positive
 `maxVelocity`.
 
+Geometry records are per-instance within a link so resolved URDF files can
+retain multiple independently transformed and scaled visual/collision elements.
+Scale is finite, positive import provenance, not a Mechanical Editor mesh-
+deformation control. Collision overrides and approximations are link-level so
+they also cover the root link. Named-frame IDs in a definition are local; only
+materialized instance FrameNodes receive global scene IDs.
+`sourceAssetIds` retains the original manifest/STEP or URDF/resolved-mesh bytes
+as provenance; reference-aware GC traverses these IDs as well as runtime
+geometry and configuration overrides.
+
 ### 9.2 Definition, configuration, and instance
 
 - `RobotDefinitionV1` is immutable nominal data and content-addressed assets.
 - `MechanicalConfigurationV1` is a versioned set of overrides for joint
   origins, axes, direction, zero offsets, home values, limits, flange, TCP, and
-  collision geometry.
+  per-link visual/collision geometry and approximations, including the root
+  link.
 - `EffectiveRobotDefinition` is a validated in-memory composition of nominal
   data and one selected configuration.
 - `RobotInstanceV1` references a definition revision and configuration
-  revision, owns a Robot Base frame, current source selection, current joint
-  state, and active TCP.
+  revision and owns a Robot Base frame, current source/profile selection, and
+  active TCP. Current joints and quality are transient per-instance runtime
+  state, never persisted in the instance metadata row.
 - Multiple instances may reference the same definition and assets.
+
+Mechanical drafts and Apply operations are keyed by explicit RobotInstance ID
+plus the base configuration/revision, never by active tree selection or shared
+configuration ID alone. Apply rechecks that identity inside its transaction and
+updates only the requested instance; another instance sharing the prior
+configuration remains unchanged.
 
 Changing a joint origin updates forward kinematics and attached collision
 geometry. It does not deform a CAD mesh. If the effective joint dimensions no
@@ -363,18 +441,23 @@ assets unchanged.
 
 The current CRB15000 joint origins, axes, limits, link assets, world-origin
 localization, flange rotation, and material metadata become a committed built-in
-`RobotDefinitionV1`. Migration must prove that:
+`RobotDefinitionV1`. Its exact definition ID/revision are
+`crb15000-12kg-127`/`builtin-v1`; the default instance ID is `crb15000-01`.
+Migration must prove that:
 
 - zero pose reproduces the current assembled bounds;
 - the six current joint motions produce the same link transforms;
 - the current gripper/TCP and deterministic Cup 01 pick fixture remain valid;
-- existing saved CRB15000 poses migrate without angle changes;
+- any non-empty retiring same-runtime CRB15000 Pose snapshot converts without
+  angle changes; a cold upgrade fabricates no legacy Pose row;
 - existing collision bounds remain aligned.
 
 ## 11. Joint State and Source Ownership
 
 ```ts
 export type JointSourceMode = 'simulation' | 'opcua'
+export type JointSourceStatus =
+  | 'CONNECTING' | 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE' | 'DISCONNECTED'
 
 export interface NamedJointValue {
   readonly jointId: string
@@ -392,9 +475,11 @@ export interface RobotJointFrame {
 
 export interface RobotJointSource {
   readonly mode: JointSourceMode
+  readonly robotInstanceId: string
   connect(): Promise<void>
   disconnect(): Promise<void>
   subscribe(listener: (frame: RobotJointFrame) => void): () => void
+  subscribeStatus(listener: (status: JointSourceStatus) => void): () => void
 }
 ```
 
@@ -404,12 +489,29 @@ export interface RobotJointSource {
   values are rejected and surfaced as diagnostics.
 - Values are normalized to radians or metres before entering the store.
 - Limits are applied from the effective definition.
-- BAD or frames older than 1,000 ms hold the last good pose and stop playback.
+- BAD or frames older than 1,000 ms hold the last good pose and pause playback
+  at the current elapsed position; source switching/deletion uses Stop and
+  resets elapsed.
 - UNCERTAIN updates may render but are visibly identified.
 - Switching source stops playback, disconnects the previous source, clears its
   queued frames, and requires a valid initial frame from the new source.
+- Source mode and arbitration are owned independently per RobotInstance;
+  switching one robot never changes another robot's controls or readiness.
+- Each RobotInstance persists a nullable assigned browser profile-selection ID;
+  there is no global active-profile fallback after reload.
+- Connection/status events use the separate status subscription and can lower
+  readiness without fabricating an empty joint frame or changing the last pose.
 - Simulation Mode owns manual joint controls and Pose Sequence playback.
 - OPC UA Mode locks manual joint controls and Pose Sequence editing/playback.
+- A per-RobotInstance Simulation-mutation gate is the authority behind UI
+  locks. It combines a monotonic generation, pending-transition token, and
+  serialized commit lock. Source/Play requests invalidate queued mechanical or
+  Pose writes synchronously; a write already inside the lock finishes while
+  Simulation still owns the robot and the transition waits. New writes are
+  rejected while a transition is pending, and rollback clears only its exact
+  token. Mechanical preview actions perform the same synchronous authority
+  check, and source/Play transition cleanup restores any existing preview to
+  the committed definition before live motion proceeds.
 
 ## 12. OPC UA Gateway
 
@@ -427,14 +529,56 @@ export interface OpcUaJointBinding {
   readonly offset: number
   readonly direction: 1 | -1
 }
+
+export interface GatewayAllowedProfileV1 {
+  readonly schemaVersion: 1
+  readonly id: string
+  readonly name: string
+  readonly robotDefinitionId: string
+  readonly robotDefinitionRevision: string
+  readonly samplingIntervalMs: number
+  readonly bindings: readonly OpcUaJointBinding[]
+}
+
+export interface OpcUaBindingProfileV1 {
+  readonly schemaVersion: 1
+  readonly id: string
+  readonly name: string
+  readonly gatewayProfileId: string
+  readonly robotDefinitionId: string
+  readonly robotDefinitionRevision: string
+}
 ```
 
-The gateway subscribes to the configured Nodes with OPC UA MonitoredItems and
+NodeIds and conversion bindings live only in a validated server-side allowlist
+file. The browser persists a profile-ID selection and sends definition plus
+RobotInstance identity; it cannot submit or widen NodeIds. The gateway
+subscribes to the configured Nodes with OPC UA MonitoredItems and
 emits one coherent joint frame containing source timestamp, sequence, and
 quality. Partial updates are assembled only when every joint has a value from a
 consistent sampling window. The default browser-facing rate is 50 Hz and the
 gateway may coalesce faster server updates. It reconnects with bounded backoff
 and reports CONNECTING, GOOD, UNCERTAIN, BAD, STALE, and DISCONNECTED states.
+One frame assembler belongs to one logical browser subscription, so sequence
+numbers remain increasing across upstream OPC UA reconnects; reconnect clears
+all partial joint samples before new MonitoredItems feed that assembler. Frame
+and status callbacks are separate and generation-guarded. A browser socket
+closed while subscribe is pending disposes the late subscription exactly once,
+and `profile-accepted` is sent only after subscribe succeeds and the socket is
+still current.
+
+The gateway binds loopback by default. A non-loopback bind fails startup unless
+the origin allowlist is explicit, reverse-proxy bearer authentication is
+enabled, and a server-side upstream token is configured. Each HTTP upgrade must
+carry the matching proxy-injected Authorization header; the browser never
+stores or sends that token. Origin checking remains defense in depth rather
+than authentication.
+
+Browser selection records may be reused, but assignment is explicit per
+RobotInstance and definition/revision validated. Assigned profile deletion is
+blocked until every referencing instance is unassigned or deleted. While a
+selection is assigned, its server profile ID and definition/revision are
+immutable; only its display name may change, preventing silent live retargeting.
 
 The first release is strictly read-only. Enabling OPC UA writes later requires
 a separate command contract, user authority, range checks, controller state and
@@ -452,11 +596,16 @@ export interface PoseStepV1 {
 }
 
 export interface PoseSequenceV1 {
+  readonly schemaVersion: 1
   readonly id: string
+  readonly robotInstanceId: string
   readonly robotDefinitionId: string
   readonly robotDefinitionRevision: string
+  readonly mechanicalConfigurationId: string
+  readonly mechanicalConfigurationRevision: string
   readonly name: string
   readonly steps: readonly PoseStepV1[]
+  readonly updatedAtMs: number
 }
 ```
 
@@ -478,23 +627,55 @@ export interface PoseSequenceV1 {
 - If every joint delta is zero, the segment completes immediately.
 - Missing or invalid velocity limits block playback and identify every joint
   requiring configuration.
+- Every non-continuous commanded position is validated against the active
+  effective lower/upper limits during bridge conversion, hydration, capture,
+  edit, and Play; playback never relies on downstream clamping.
 
 ### 13.2 Ordering and playback
 
+- Each sequence belongs to one RobotInstance and one definition/configuration
+  revision. A mismatch blocks editing/play until an explicit validation-only
+  rebase updates the revision without changing Pose values.
 - Operators can reorder steps using drag and drop or keyboard-accessible Move
   Up and Move Down actions.
 - The Pose and its outgoing `speedPercentToNext` move together.
-- Editing and reordering are disabled while playing or while OPC UA owns the
-  robot.
+- Editing and reordering are disabled while a playback snapshot is active
+  (playing or paused) or while OPC UA owns the robot. Only Stop/natural
+  completion clears the session and unlocks sequence mutation.
 - Play snapshots the full ordered sequence, configuration revision, velocity
-  limits, and active TCP. Later state changes cannot mutate an active run.
+  limits, current Simulation source generation, every committed Base-to-World
+  ancestor ID/parent/local pose/revision, and active TCP
+  ID/parent/local pose/frame revision. Committing or reparenting the same TCP,
+  Base, or persisted ancestor pauses/invalidates every affected descendant
+  robot run; later state changes cannot mutate an active snapshot.
+- Previewing the active TCP, Base, or a persisted Base ancestor likewise first
+  pauses/invalidates every affected run, then permits the coordinate draft.
+  Coordinate editing remains allowed, but Resume requires Stop plus fresh Play;
+  a fresh Play cancels any unapplied relevant preview before snapshotting,
+  closes the matching Inspector/gizmo draft, restores committed field values,
+  and makes every retained stale Apply token invalid.
 - A collision pauses playback at the current segment and retains timeline
-  position.
-- Stop returns timeline position to zero without deleting the sequence.
+  position and immutable snapshot. Resume reuses that exact snapshot and elapsed
+  time rather than re-snapshotting; it is blocked while a collision pair remains
+  active. Collision exit never auto-resumes.
+- Stop clears the snapshot and returns timeline position to zero without
+  deleting the sequence. Natural completion also clears the snapshot; every
+  later fresh Play starts from zero with current persisted edits.
+- A revision change while paused marks the snapshot invalid and requires Stop
+  plus a fresh Play.
 - Home changes the current robot pose but does not reorder or delete steps.
 - Reset clears transient playback and interaction state. Persisted sequence
   deletion requires a separate explicit action.
-- Reorder, speed edits, add, rename, and delete persist atomically in Dexie.
+- Active-sequence selection, reorder, speed/easing edits, add, rename, and
+  delete persist atomically in Dexie.
+- Sequence schema/envelope validation rejects unknown schema versions, empty or
+  oversized identities/names, invalid easing, and non-finite timestamps before
+  domain validation.
+- UI disabled state is advisory. Every persisted operator mutation rechecks
+  Simulation ownership and no active playing/paused session under the shared per-instance gate
+  immediately before its transaction, with no DB or memory change on denial.
+  Play requests the corresponding transition synchronously and installs its
+  immutable snapshot under the same lock.
 
 ## 14. User Interface
 
@@ -533,15 +714,24 @@ Dexie stores separate versioned records for:
 - mechanical configurations;
 - robot instances;
 - persisted manual frame nodes;
-- OPC UA binding profiles without credentials or private keys;
-- named Poses and ordered Pose Sequences;
+- reusable browser OPC UA profile-ID selections plus each RobotInstance's
+  nullable assignment, without NodeIds, credentials, or private keys; full
+  binding profiles remain in the server allowlist;
+- named Poses, ordered Pose Sequences, and per-RobotInstance active-sequence
+  selections;
 - existing equipment and imported equipment.
 
 Hydration is single-flight and StrictMode-safe. Corrupt records are isolated per
 row and reported without preventing valid records from loading. Schema
-migrations copy the current CRB15000 state to the built-in definition and
-convert fixed six-angle keyframes to joint-ID records. Every migration is
-idempotent and covered by a reopen test.
+migrations copy the current CRB15000 state to the built-in definition. The
+baseline did not persist legacy fixed-six keyframes, so a cold upgrade has no
+durable Pose row to recover and must not fabricate one. A same-runtime retiring
+memory snapshot, when non-empty, is converted once to joint-ID records through
+an explicit compatibility adapter and marker. Every durable migration and this
+conversion bridge are idempotent and covered by reopen/source-truth tests.
+Deleting a RobotInstance deletes its owned Pose Sequences and active selection
+in the same transaction; sequences for other instances and shared robot assets
+remain intact.
 
 ## 16. Error Handling
 
@@ -567,6 +757,8 @@ idempotent and covered by a reopen test.
 - Pose composition, inverse, relative conversion, and preserve-world reparent.
 - Frame cycle, missing parent, duplicate ID, and subtree-delete validation.
 - Robot definition topology, joint axis, limits, units, and asset validation.
+- Multi-geometry pose/scale retention, link-level collision overrides, and
+  definition-local to instance-namespaced frame materialization.
 - Mechanical override composition and immutable nominal definitions.
 - CRB15000 zero-pose and known joint-transform parity before and after
   migration.
@@ -575,9 +767,12 @@ idempotent and covered by a reopen test.
 - Named joint frame validation, source switching, out-of-order rejection,
   revision mismatch, quality, and stale handling.
 - OPC UA binding unit, scale, offset, and direction normalization.
+- Server profile allowlisting, client NodeId rejection, loopback defaults, and
+  authenticated non-loopback upgrade rejection.
 - Pose segment duration for revolute, continuous, and prismatic joints;
   ease-in-out peak velocity; zero-distance segments; and missing limits.
-- Pose add, rename, speed edit, reorder, delete, persistence, and reload.
+- Pose add, rename, speed/easing edit, per-instance selection, bounded-position
+  validation, reorder, delete, persistence, and reload.
 - Editing locks during playback and OPC UA ownership.
 
 ### 17.2 Browser acceptance
@@ -595,8 +790,9 @@ idempotent and covered by a reopen test.
    revision, reload, and geometry-mismatch warning.
 7. Import a resolved URDF fixture and reject an unsupported/cyclic fixture with
    a precise report.
-8. Configure a mock OPC UA gateway mapping, receive named joints, verify source
-   ownership, then inject BAD and stale data.
+8. Select a mock server-allowlisted OPC UA profile, receive named joints,
+   verify per-instance source ownership, reject a client-supplied NodeId, then
+   inject BAD and stale data.
 9. Save at least three Poses, reorder them, set 40% and 80% outgoing speeds,
    verify calculated durations, play, pause on collision, and reload the saved
    order and speeds.
@@ -628,16 +824,20 @@ The extension is complete only when:
    manually editable relative to selectable frames and persist after reload.
 3. Derived joint/link/flange frames remain consistent with forward kinematics.
 4. The supplied CRB15000 retains its current geometry, zero pose, joint
-   behavior, collision behavior, gripper behavior, and saved Poses after
-   migration.
+   behavior, collision behavior, and gripper behavior. Any non-empty retiring
+   same-runtime fixed-six Pose snapshot converts exactly from degrees to radians
+   without changing its physical joint angles; all
+   Poses created by the new feature persist and reopen.
 5. A second robot can be imported from STEP plus Manifest and a resolved URDF
    can be converted to the same validated internal model.
 6. Supported mechanical overrides update FK and collision geometry, are
    versioned, and visibly warn when CAD geometry no longer matches.
-7. Simulation and OPC UA sources are mutually exclusive, named-joint based,
-   quality-aware, and hold the last good pose on BAD/STALE data.
-8. OPC UA integration is browser-safe and read-only, with no PLC or controller
-   mutation.
+7. Simulation and OPC UA sources are mutually exclusive per RobotInstance,
+   named-joint based, quality-aware, and hold the last good pose on BAD/STALE
+   data.
+8. OPC UA integration is browser-safe and read-only, uses server-allowlisted
+   Node profiles plus authenticated non-loopback upgrades, and exposes no PLC
+   or controller mutation.
 9. Operators can reorder Poses, set 1–100% outgoing speed, see calculated
    durations, persist the sequence, and play it without exceeding joint
    velocity limits.
