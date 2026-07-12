@@ -21,6 +21,8 @@
     "test:coverage": "vitest run --coverage",
     "cad:convert": "tsx scripts/cad/convert-robot.ts",
     "cad:validate": "tsx scripts/cad/validate-robot-assets.ts",
+    "deploy:validate": "node scripts/deployment/validate-deployment.mjs",
+    "deploy:build": "docker compose --profile opcua build",
     "test:e2e": "npm run build:e2e && playwright test",
     "verify": "npm run lint && npm run test:run && npm run cad:validate && npm run build"
   },
