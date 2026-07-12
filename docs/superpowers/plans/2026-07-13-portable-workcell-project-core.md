@@ -378,21 +378,21 @@ git commit -m "feat: add portable project controls"
 - Consumes: all project-core features.
 - Produces: browser round-trip evidence and operator instructions.
 
-- [ ] **Step 1: Add Project round-trip E2E**
+- [x] **Step 1: Add Project round-trip E2E**
 
 The test imports seven deterministic Robot fixtures and one Object Asset, creates two Object Instances, edits one Geometry local pose, exports `.wdtwin`, clears IndexedDB/localStorage, imports the archive, and asserts semantic equality.
 
-- [ ] **Step 2: Run full verification**
+- [x] **Step 2: Run full verification**
 
 Run: `npm run verify && npm run test:e2e && npm audit --audit-level=high`
 
 Expected: all tests PASS, CAD reports seven valid links with zero errors and warnings, build exits 0, and audit reports zero high-severity vulnerabilities.
 
-- [ ] **Step 3: Update operator documentation**
+- [x] **Step 3: Update operator documentation**
 
 Document Robot New vs Link Replacement, one-file Object Assets, Geometry vs Mechanical configuration, `.wdtwin` contents, size budgets, atomic rollback, and known exclusions.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git add tests README.md docs

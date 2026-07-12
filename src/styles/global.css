@@ -53,6 +53,8 @@ button {
   align-items: center;
   gap: 12px;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding: 0 16px;
   background: var(--color-canvas);
   border-bottom: 1px solid var(--color-border);
@@ -62,12 +64,19 @@ button {
   align-items: center;
   display: flex;
   gap: 0.35rem;
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.top-bar .project-menu button {
+  width: auto;
+  min-width: 52px;
+  padding-inline: 9px;
 }
 
 .project-name {
   color: var(--text-primary);
-  max-width: 12rem;
+  max-width: 8rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -114,7 +123,7 @@ button {
 
 .top-bar button {
   width: auto;
-  min-width: 112px;
+  min-width: 92px;
   height: 32px;
   padding: 0 14px;
   font-size: 12px;
@@ -125,7 +134,7 @@ button {
   border-radius: var(--radius);
 }
 
-.top-bar button:first-of-type {
+.top-bar > button:first-of-type {
   margin-left: auto;
 }
 

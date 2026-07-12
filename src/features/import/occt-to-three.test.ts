@@ -132,6 +132,17 @@ describe('createThreeGroupFromOcct', () => {
     })
   })
 
+  it('ignores OCCT empty face ranges while retaining valid triangles', () => {
+    const asset = createThreeGroupFromOcct(
+      resultWithMesh({
+        brep_faces: [{ first: 2, last: 1, color: [1, 0, 0] }],
+      }),
+    )
+    const mesh = asset.group.children[0] as Mesh<BufferGeometry>
+
+    expect(mesh.geometry.index?.count).toBe(6)
+  })
+
   it('applies one post-import scale and centers only in center-origin mode', () => {
     const source = createThreeGroupFromOcct(resultWithMesh(), {
       postImportScale: 0.001,

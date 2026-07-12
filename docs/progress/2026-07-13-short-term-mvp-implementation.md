@@ -1,68 +1,61 @@
 # Short-term WebDigitalTwin MVP Implementation — 2026-07-13
 
-## Delivered scope
+## Delivered in the portable-project slice
 
-### Single robot and STEP replacement
+- Added a versioned V1 Workcell Project contract with finite-value, reference,
+  STEP byte, mesh/material, and triangle-budget validation.
+- Split new external imports into reusable Object Assets and transform/status
+  Object Instances. Existing legacy Equipment records remain readable.
+- Restricted a new custom Robot to exactly seven `LINK00–LINK06` STEP files.
+  Single-Link replacement is a separate mode and never silently fills missing
+  custom links with CRB geometry.
+- Removed CRB-specific world-origin subtraction from generic Robot import.
+- Persisted per-Link raw STEP, CAD-local transform, visibility, Box collision,
+  and statistics independently from joint Mechanical configuration.
+- Added the Robot Geometry editor and restored custom Geometry after reload.
+- Added deterministic `.wdtwin` ZIP encoding with pre-expansion central
+  directory checks, safe paths, fixed entry layout, source STEP preservation,
+  and schema validation.
+- Added a staged active Project Store with rollback to the previous central
+  snapshot on decode, conversion, or commit failure.
+- Added New, Save, Export, and Import controls to the top bar.
+- Bundled the seven authoritative CRB STEP sources so the default workcell can
+  also be exported as a complete portable project.
 
-- The workcell keeps one active six-axis robot.
-- `Import Robot STEP` accepts 1–7 `.step`/`.stp` files.
-- `LINK00`–`LINK06` filenames map by link ID; generic filenames map by order.
-- An eighth file, a duplicate link, files above 25 MiB, or a set above 100 MiB
-  is rejected before conversion.
-- Converted links replace matching runtime geometry; unspecified links retain
-  the built-in CRB geometry.
+## Corrected requirements carried into implementation
 
-### Robot mechanical configuration
+- The seven-file cap belongs only to Robot Import.
+- One Object STEP is imported whole as one Object Asset; Object count is not
+  capped at seven.
+- Geometry configuration and Mechanical configuration are separate surfaces.
+- A complete custom Robot requires seven Links. Partial Link replacement is an
+  explicit operation, not a fallback to built-in CRB links.
+- Security features remain excluded only for the short-term trusted-LAN target;
+  this does not authorize public-internet exposure.
 
-- CRB 15000-12/1.27 values are the editable default.
-- The operator can change robot name, base XYZ/RPY, each joint origin XYZ,
-  axis XYZ, minimum/maximum angle, and maximum velocity.
-- Configuration changes are persisted in browser storage and are used by the
-  rendered kinematic chain, joint clamping, and Pose segment timing.
+## Current resource budgets
 
-### Equipment editing and status
-
-- Every external object can be selected, manually previewed/applied/cancelled
-  in XYZ millimetres and Roll/Pitch/Yaw degrees, or deleted.
-- Deleted built-in and imported equipment remains deleted after reload.
-- Each object exposes a numeric 3D overlay, visibility toggle, and Manual or
-  OPC UA status source.
-
-### Pose Sequence MVP
-
-- Poses can be saved, reordered up/down, assigned 1–100% outgoing speed, and
-  deleted.
-- Segment duration is derived from joint displacement and configured maximum
-  joint velocities; the slowest required joint governs the segment.
-- Ordered Poses and speeds persist in browser storage.
-
-### OPC UA Client middleware
-
-- `middleware/opcua-connector.mjs` is a read-only OPC UA Client.
-- It creates an anonymous session with `SecurityPolicy.None` and
-  `MessageSecurityMode.None` and polls six configured joint values.
-- Optional numeric equipment nodes are published with joint frames over a
-  local WebSocket gateway.
-- The web UI switches between Simulation and OPC UA. Connection or payload
-  failure produces BAD quality and holds the last valid pose.
-- Authentication, certificates, encryption, writes, motion commands, and
-  safety functions are intentionally excluded from this short-term target.
+- Robot: 25 MiB and 150k triangles per Link; 100 MiB and 600k triangles total.
+- Object: 50 MiB and 250k triangles per Asset.
+- Asset complexity: 64 meshes and 32 materials.
+- Project raw STEP bytes: 256 MiB.
+- Visible Scene: 1.5M triangles.
 
 ## Verification evidence
 
-- `npm run test:run`: 36 files, 217 tests passed.
-- `npm run cad:validate`: 7 links valid, 0 errors, 0 warnings.
+- `npm run test:run`: 44 files and 238 tests passed.
 - `npm run lint`: passed.
-- `npm run build`: TypeScript and production Vite build passed.
+- `npm run cad:validate`: 7 valid Links, 0 errors, and 0 warnings.
+- Production TypeScript/Vite build: passed.
+- Playwright default-project Export → storage clear → Import semantic round-trip:
+  passed in 56.5 seconds.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
-- Browser smoke check: Robot Config, object transform/status inspector, Robot
-  STEP dialog, and Simulation/OPC UA source switching rendered and behaved as
-  expected.
 
-## Deferred scope
+## Deferred next slices
 
-- Full World/MCP/Base/Flange/TCP/fixture Frame Graph and reparenting.
-- Persisting imported robot STEP source bytes across browser reloads.
-- Multi-robot scenes, IK, dynamics, acceleration/jerk planning, and safety-rated
-  control.
-- OPC UA security, credentials, certificates, redundancy, and write paths.
+- Editable fixed World → MCP → Base → Joints → Flange → TCP frame hierarchy.
+- MCP-parented Object placement and frame conversion UI.
+- Docker/Nginx on-prem deployment package and health checks.
+- Scene draw-call telemetry and enforcement at runtime.
+- Multi-Robot, IK, dynamics, automatic assembly splitting/LOD, OPC UA writes,
+  authentication, certificates, and public-internet hardening.
