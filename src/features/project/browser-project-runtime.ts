@@ -7,6 +7,7 @@ import type { ImportedThreeAsset } from '../import/occt-to-three'
 import { useObjectAssetStore } from '../objects/object-asset-store'
 import { loadDefaultRobotGeometry } from '../robot/default-robot-geometry'
 import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
+import { createDatasheetRobotConfiguration } from '../robot/robot-configuration-store'
 import { robotGeometryRepository } from '../robot/robot-geometry-repository'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
 import { restoreRobotGeometryRecords } from '../robot/robot-step-import'
@@ -37,6 +38,36 @@ const identityTransform = () => ({
 })
 
 export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
+  createNew: async () => {
+    const now = new Date().toISOString()
+    const configuration = createDatasheetRobotConfiguration()
+    return {
+      manifest: {
+        format: WORKCELL_PROJECT_FORMAT,
+        schemaVersion: WORKCELL_PROJECT_SCHEMA_VERSION,
+        projectId: crypto.randomUUID(),
+        name: 'Untitled Workcell',
+        createdAt: now,
+        updatedAt: now,
+      },
+      robot: {
+        name: configuration.name,
+        basePosition: [...configuration.basePosition],
+        baseRotationDeg: [...configuration.baseRotationDeg],
+        links: await loadDefaultRobotGeometry(),
+        joints: configuration.joints.map((joint) => ({
+          ...joint,
+          origin: [...joint.origin],
+          axis: [...joint.axis],
+        })),
+      },
+      frames: { mcp: identityTransform(), tcp: identityTransform() },
+      objectAssets: [],
+      objectInstances: [],
+      poses: [],
+      opcUa: DEFAULT_OPC_UA,
+    }
+  },
   capture: async (previous) => {
     const now = new Date().toISOString()
     const configuration = useRobotConfigurationStore.getState().configuration

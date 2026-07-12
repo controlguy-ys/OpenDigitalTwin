@@ -5,6 +5,7 @@ import { decodeWorkcellProject, encodeWorkcellProject } from './project-codec'
 import type { ProjectDatabase } from './project-db'
 
 export interface ProjectRuntime<Staged = unknown> {
+  createNew?(): Promise<WorkcellProjectSnapshotV1>
   capture(previous: WorkcellProjectSnapshotV1 | null): Promise<WorkcellProjectSnapshotV1>
   stage(snapshot: WorkcellProjectSnapshotV1): Promise<Staged>
   commit(snapshot: WorkcellProjectSnapshotV1, staged: Staged): Promise<void>
@@ -23,6 +24,7 @@ export interface ProjectStoreState {
   status: 'idle' | 'loading' | 'saving' | 'importing' | 'ready' | 'error'
   error: string | null
   hydrate(): Promise<void>
+  newProject(): Promise<void>
   saveActiveProject(): Promise<WorkcellProjectSnapshotV1>
   exportActiveProject(): Promise<Uint8Array>
   importProject(bytes: Uint8Array | ArrayBuffer): Promise<void>
@@ -98,6 +100,38 @@ export function createProjectStore<Staged>(
       status: 'idle',
       error: null,
       hydrate,
+      newProject: async () => {
+        await hydrate()
+        const previous = get().activeSnapshot
+        set({ status: 'importing', error: null })
+        let staged: Staged | undefined
+        try {
+          const snapshot = validateWorkcellProjectSnapshot(
+            runtime.createNew === undefined
+              ? await runtime.capture(null)
+              : await runtime.createNew(),
+          )
+          staged = await runtime.stage(snapshot)
+          await runtime.commit(snapshot, staged)
+          await database.projects.put({ key: 'active', snapshot })
+          set(activate(snapshot))
+        } catch (error) {
+          if (staged !== undefined) runtime.dispose(staged)
+          if (previous !== null && staged !== undefined) {
+            try {
+              const rollback = await runtime.stage(previous)
+              await runtime.commit(previous, rollback)
+            } catch {
+              // The previous central snapshot remains authoritative for next hydration.
+            }
+          }
+          set({
+            status: previous === null ? 'error' : 'ready',
+            error: error instanceof Error ? error.message : 'New project failed.',
+          })
+          throw error
+        }
+      },
       saveActiveProject,
       exportActiveProject: async () => {
         const snapshot = await saveActiveProject()

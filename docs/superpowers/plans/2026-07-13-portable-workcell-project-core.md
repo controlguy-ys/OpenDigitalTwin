@@ -332,7 +332,7 @@ git commit -m "feat: load and save active projects atomically"
 - Consumes: `useProjectStore` actions and dirty/persistence state.
 - Produces: New, Save, Export `.wdtwin`, Import `.wdtwin`, and Saved/Unsaved UI.
 
-- [ ] **Step 1: Write failing interaction tests**
+- [x] **Step 1: Write failing interaction tests**
 
 ```tsx
 it('exports .wdtwin and imports one selected archive', async () => {
@@ -344,23 +344,23 @@ it('exports .wdtwin and imports one selected archive', async () => {
 })
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `npm run test:run -- src/features/project/ProjectMenu.test.tsx`
 
 Expected: FAIL because the component does not exist.
 
-- [ ] **Step 3: Implement the compact top-bar Project menu**
+- [x] **Step 3: Implement the compact top-bar Project menu**
 
 Show project name, Saved/Unsaved, New, Save, Export, and Import. Use a hidden file input with `.wdtwin` accept filter and a Blob download for export. Disable mutations during import staging.
 
-- [ ] **Step 4: Verify GREEN and App regression**
+- [x] **Step 4: Verify GREEN and App regression**
 
 Run: `npm run test:run -- src/features/project src/app/AppShell.test.tsx`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src/features/project src/app src/styles/global.css

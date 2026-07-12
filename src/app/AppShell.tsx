@@ -6,6 +6,7 @@ type JointSourceMode = 'simulation' | 'opcua'
 
 interface AppShellProps {
   viewport: ReactNode
+  projectMenu?: ReactNode
   assetTree?: ReactNode
   inspector?: ReactNode
   bottomRail?: ReactNode
@@ -22,6 +23,7 @@ interface AppShellProps {
 
 export function AppShell({
   viewport,
+  projectMenu,
   assetTree,
   inspector,
   bottomRail,
@@ -46,6 +48,7 @@ export function AppShell({
     >
       <header className="top-bar">
         <strong>RobotSim</strong>
+        {projectMenu}
         <span>SIMULATION</span>
         <span className="source-quality" data-quality={sourceQuality}>
           {sourceQuality}

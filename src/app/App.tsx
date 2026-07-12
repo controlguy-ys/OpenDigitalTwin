@@ -28,6 +28,7 @@ import { useObjectAssetStore } from '../features/objects/object-asset-store'
 import { objectRecords } from '../features/objects/object-equipment-adapter'
 import type { SerializableTransform } from '../domain/equipment/equipment'
 import { useProjectStore } from '../features/project/project-store-browser'
+import { ProjectMenu } from '../features/project/ProjectMenu'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -289,6 +290,7 @@ export function App() {
   return (
     <>
       <AppShell
+        projectMenu={<ProjectMenu />}
         assetTree={
           <EquipmentAssetList
             onRemove={handleRemoveEquipment}
