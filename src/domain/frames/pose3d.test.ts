@@ -44,7 +44,9 @@ describe('Pose3D', () => {
     { position: [0, 0, 0], quaternion: [0, 0, 0, 0] },
     { position: [0, 0, 0], quaternion: [0, Infinity, 0, 1] },
   ])('rejects invalid transforms before matrix math', (pose) => {
-    expect(() => normalizePose3D(pose as Pose3D)).toThrow(/finite|quaternion/i)
+    expect(() => normalizePose3D(pose as unknown as Pose3D)).toThrow(
+      /finite|quaternion/i,
+    )
   })
 
   it('composes a parent and child and recovers the relative pose', () => {

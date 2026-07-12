@@ -212,6 +212,15 @@ function requireTransform(value: unknown, label: string): void {
   requireTuple(transform.scale, 3, `${label}.scale`, true)
 }
 
+function requireFrameTransform(value: unknown, label: string): void {
+  requireTransform(value, label)
+  const transform = requireRecord(value, label)
+  const scale = requireTuple(transform.scale, 3, `${label}.scale`)
+  if (scale.some((entry) => Math.abs(entry - 1) > 1e-9)) {
+    fail(`${label} cannot contain scale.`)
+  }
+}
+
 function requireArrayBuffer(value: unknown, label: string): ArrayBuffer {
   if (
     typeof value !== 'object' ||
@@ -450,8 +459,8 @@ export function validateWorkcellProjectSnapshot(
   const robot = validateRobot(snapshot.robot)
 
   const frames = requireRecord(snapshot.frames, 'coordinate frames')
-  requireTransform(frames.mcp, 'MCP frame')
-  requireTransform(frames.tcp, 'TCP frame')
+  requireFrameTransform(frames.mcp, 'MCP frame')
+  requireFrameTransform(frames.tcp, 'TCP frame')
 
   const assets = validateAssets(snapshot.objectAssets)
   const visibleObjectTriangles = validateInstances(

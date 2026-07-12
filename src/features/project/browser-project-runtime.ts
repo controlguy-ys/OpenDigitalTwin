@@ -12,6 +12,7 @@ import { robotGeometryRepository } from '../robot/robot-geometry-repository'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
 import { restoreRobotGeometryRecords } from '../robot/robot-step-import'
 import type { ProjectRuntime } from './project-store'
+import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 
 interface BrowserStagedProject {
   robotAssets: ReadonlyMap<WorkcellProjectSnapshotV1['robot']['links'][number]['linkId'], ImportedThreeAsset>
@@ -97,10 +98,7 @@ export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
           axis: [...joint.axis],
         })),
       },
-      frames: previous?.frames ?? {
-        mcp: identityTransform(),
-        tcp: identityTransform(),
-      },
+      frames: structuredClone(useCoordinateFrameStore.getState().frames),
       objectAssets: [...structuredClone(objectState.assets)],
       objectInstances: [...structuredClone(objectState.instances)],
       poses: useRobotStore.getState().keyframes.map((pose) => ({
@@ -157,6 +155,7 @@ export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
         anglesDeg: [...pose.anglesDeg],
       })),
     )
+    useCoordinateFrameStore.getState().replaceFrames(snapshot.frames)
     robotGeometryRepository.replace(staged.robotAssets)
     importedGeometryRepository.replaceAll(staged.objectAssets)
   },

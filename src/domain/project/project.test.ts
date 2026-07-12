@@ -179,4 +179,11 @@ describe('portable workcell project contract', () => {
       'triangle budget',
     )
   })
+
+  it('rejects scale on fixed MCP and TCP frames', () => {
+    const snapshot = validProjectSnapshot()
+    snapshot.frames.mcp.scale = [1, 2, 1]
+
+    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(/scale/i)
+  })
 })
