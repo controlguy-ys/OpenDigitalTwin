@@ -71,7 +71,7 @@ function referenceEntities(): readonly GeometryCollisionEntity[] {
     name: `External ${index}`,
     category: 'object' as const,
     boxes: [BOX],
-    worldMatrix: translatedMatrix(index * 0.25, 2, 0),
+    worldMatrix: translatedMatrix(index * 0.25, index < 3 ? 0.06 : 2, 0),
   }))
   return [...robot, tool, ...externals]
 }
@@ -158,6 +158,8 @@ describe('geometry collision reference performance fixture', () => {
     expect(result.telemetry.broadPhaseCandidateCount).toBeLessThan(
       unconstrainedPairs,
     )
+    expect(result.telemetry.broadPhaseCandidateCount).toBeGreaterThan(0)
+    expect(result.telemetry.broadPhaseCandidateCount).toBe(3)
     expect(result.telemetry.narrowPhaseTestCount).toBeLessThanOrEqual(
       result.telemetry.broadPhaseCandidateCount,
     )
@@ -175,7 +177,7 @@ describe('geometry collision reference performance fixture', () => {
     expect(queries).toBe(10)
   })
 
-  it('processes exactly 1,000 Worker samples while yielding animation progress', async () => {
+  it('processes 1,000 samples while deterministically reporting finding-cap pressure', async () => {
     let animationCounter = 0
     const progress: number[] = []
 
@@ -190,7 +192,8 @@ describe('geometry collision reference performance fixture', () => {
     })
 
     expect(result?.sampleCount).toBe(1_000)
-    expect(result?.findings.length).toBeLessThanOrEqual(10_000)
+    expect(result?.truncated).toBe(true)
+    expect(result?.findings).toHaveLength(10_000)
     expect(progress).toEqual([250, 500, 750, 1_000])
     expect(animationCounter).toBeGreaterThan(0)
   })

@@ -94,7 +94,7 @@ export function publishCurrentPoseCollision(
     policy,
     currentFindings: result.findings,
     diagnostics: result.diagnostics,
-  })
+  }, result.telemetry)
   return result
 }
 

@@ -13,6 +13,7 @@ import type { ProjectDatabase } from './project-db'
 
 export interface ProjectRuntime<Staged = unknown> {
   createNew?(): Promise<CurrentProjectSnapshot>
+  restore?(snapshot: CurrentProjectSnapshot): Promise<void> | void
   capture(previous: CurrentProjectSnapshot | null): Promise<CurrentProjectSnapshot>
   stage(snapshot: CurrentProjectSnapshot): Promise<Staged>
   commit(snapshot: CurrentProjectSnapshot, staged: Staged): Promise<void>
@@ -108,6 +109,7 @@ export function createProjectStore<Staged>(
             ) {
               await database.projects.put({ key: 'active', snapshot })
             }
+            await runtime.restore?.(snapshot)
             set(activate(snapshot))
           }
         } catch (error) {

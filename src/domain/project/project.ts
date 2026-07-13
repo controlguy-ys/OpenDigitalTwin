@@ -491,6 +491,9 @@ function validateInstances(
   instances.forEach((rawInstance, index) => {
     const instance = requireRecord(rawInstance, `Object Instance ${index}`)
     const id = requireUniqueId(instance.id, 'Object Instance', ids)
+    if (id.includes('|')) {
+      fail('Object Instance id must not contain the Collision Entity pair separator.')
+    }
     const assetId = requireString(instance.assetId, `${id} Object Asset id`)
     if (!assetIds.has(assetId)) {
       fail(`Object Instance ${id} references missing Object Asset ${assetId}.`)

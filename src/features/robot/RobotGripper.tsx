@@ -5,12 +5,15 @@ import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { useRobotStore } from '../joints/robot-store'
 
 interface RobotGripperProps {
+  collisionActive?: boolean
   tcpFrame: Group
 }
 
 export function registerRobotToolGeometryEntity(
   object: Object3D,
+  collisionActive = true,
 ): () => void {
+  if (!collisionActive) return () => undefined
   return registerGeometryEntity({
     id: 'tool:default',
     name: 'Parallel gripper',
@@ -28,15 +31,23 @@ export function registerRobotToolGeometryEntity(
   })
 }
 
-export function RobotGripper({ tcpFrame }: RobotGripperProps) {
+export function RobotGripper({
+  collisionActive = true,
+  tcpFrame,
+}: RobotGripperProps) {
   const gripperOpen = useRobotStore((state) => state.gripperOpen)
   const jawOffset = gripperOpen ? 0.038 : 0.018
   const cleanupRegistrationRef = useRef<(() => void) | null>(null)
-  const registerTool = useCallback((object: Group | null) => {
-    cleanupRegistrationRef.current?.()
-    cleanupRegistrationRef.current =
-      object === null ? null : registerRobotToolGeometryEntity(object)
-  }, [])
+  const registerTool = useCallback(
+    (object: Group | null) => {
+      cleanupRegistrationRef.current?.()
+      cleanupRegistrationRef.current =
+        object === null
+          ? null
+          : registerRobotToolGeometryEntity(object, collisionActive)
+    },
+    [collisionActive],
+  )
 
   useLayoutEffect(
     () => () => {

@@ -10,6 +10,7 @@ import {
   type CollisionFinding,
   type CollisionPolicy,
 } from '../../domain/collision/collision'
+import type { CollisionQueryTelemetry } from '../../domain/collision/query-collision'
 
 export interface CollisionStateSnapshot {
   readonly policy: CollisionPolicy
@@ -25,13 +26,17 @@ export interface CollisionValidationReport {
 }
 
 export interface CollisionStoreState extends CollisionStateSnapshot {
+  readonly latestTelemetry: CollisionQueryTelemetry | null
   readonly validationReport: CollisionValidationReport | null
   readonly validationReportStale: boolean
   readonly validationReportError: string | null
   readonly selectedFindingIndex: number | null
   readonly selectedFindingKey: string | null
   readonly pausePlaybackOnCollision: boolean
-  replaceCollisionState(snapshot: CollisionStateSnapshot): void
+  replaceCollisionState(
+    snapshot: CollisionStateSnapshot,
+    telemetry?: CollisionQueryTelemetry | null,
+  ): void
   setCollisionEnabled(enabled: boolean): void
   setWarningDistanceM(distanceM: number): void
   ignorePair(candidatePairKey: string): void
@@ -40,6 +45,23 @@ export interface CollisionStoreState extends CollisionStateSnapshot {
   markValidationReportStale(error?: string): void
   setSelectedFindingIndex(index: number | null): void
   setPausePlaybackOnCollision(enabled: boolean): void
+  setLatestTelemetry(telemetry: CollisionQueryTelemetry | null): void
+}
+
+function ownedTelemetry(
+  telemetry: CollisionQueryTelemetry,
+): CollisionQueryTelemetry {
+  const values = [
+    telemetry.entityCount,
+    telemetry.boxCount,
+    telemetry.broadPhaseCandidateCount,
+    telemetry.narrowPhaseTestCount,
+    telemetry.findingCount,
+  ]
+  if (values.some((value) => !Number.isInteger(value) || value < 0)) {
+    throw new Error('Collision telemetry counts must be non-negative integers.')
+  }
+  return Object.freeze({ ...telemetry })
 }
 
 function ownedSnapshot(snapshot: CollisionStateSnapshot): CollisionStateSnapshot {
@@ -146,16 +168,27 @@ function collisionStateCreator(
 ): CollisionStoreState {
   return {
     ...createInitialSnapshot(),
+    latestTelemetry: null,
     validationReport: null,
     validationReportStale: false,
     validationReportError: null,
     selectedFindingIndex: null,
     selectedFindingKey: null,
     pausePlaybackOnCollision: true,
-    replaceCollisionState: (candidate) => {
+    setLatestTelemetry: (telemetry) => {
+      set({ latestTelemetry: telemetry === null ? null : ownedTelemetry(telemetry) })
+    },
+    replaceCollisionState: (candidate, telemetry) => {
       const snapshot = ownedSnapshot(candidate)
+      const telemetryPatch = telemetry === undefined
+        ? {}
+        : {
+            latestTelemetry:
+              telemetry === null ? null : ownedTelemetry(telemetry),
+          }
       set((state) => ({
         ...snapshot,
+        ...telemetryPatch,
         ...(state.validationReport === null
           ? selectedFindingPatch(
               snapshot.currentFindings,

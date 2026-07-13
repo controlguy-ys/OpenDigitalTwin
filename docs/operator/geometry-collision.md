@@ -30,7 +30,9 @@ Open **Timeline and Events** and use **Geometry Proxy Collision**.
   separation is within **Warning distance (mm)**.
 - Current-pose validation is revision-driven and runs at no more than 10 Hz.
   It reacts to joint, frame, proxy, visibility, Object-transform, and policy
-  changes; it is not coupled to render FPS.
+  changes. React Three Fiber invokes its scheduler from `useFrame`, so checks
+  follow active render cadence while the query rate itself remains capped at
+  10 Hz; a paused render loop does not provide an independent collision timer.
 - The existing `robot-link:LINK00|workcell:workbench` contact is an allowed
   mounting pair and is not reported. Other enabled Robot/Workbench pairs remain
   query participants.

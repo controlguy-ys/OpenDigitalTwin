@@ -204,6 +204,31 @@ describe('RobotModel asset registration', () => {
     expect(geometryEntityRegistry.size).toBe(0)
   })
 
+  it('registers no Link or Tool collision participants while the Robot root is hidden', () => {
+    geometryEntityRegistry.clear()
+    const registration = createRobotRigRegistration(
+      createRobotRig(CRB15000_DEFINITION),
+      createLoadedScenes(),
+    )
+
+    const cleanupLinks = registerRobotGeometryEntities(
+      registration,
+      geometryRecords(),
+      8,
+      ['robot'],
+    )
+    const cleanupTool = (
+      registerRobotToolGeometryEntity as (
+        object: Group,
+        collisionActive: boolean,
+      ) => () => void
+    )(new Group(), false)
+
+    expect(geometryEntityRegistry.size).toBe(0)
+    cleanupTool()
+    cleanupLinks()
+  })
+
   it('registers the default gripper as the Tool Entity', () => {
     geometryEntityRegistry.clear()
     const tool = new Group()

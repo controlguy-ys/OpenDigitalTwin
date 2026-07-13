@@ -97,12 +97,41 @@ afterEach(async () => {
 
 function runtime(snapshot: CurrentProjectSnapshot): ProjectRuntime {
   return {
+    restore: vi.fn(async () => undefined),
     capture: vi.fn(async () => snapshot),
     stage: vi.fn(async () => ({ staged: true })),
     commit: vi.fn(async () => undefined),
     dispose: vi.fn(),
   }
 }
+
+it('restores a stored project runtime during hydration before activating it', async () => {
+  const stored = project('stored-runtime-project')
+  stored.collisionPolicy = {
+    enabled: false,
+    warningDistanceM: 0.125,
+    ignoredPairKeys: ['object:fixture|robot-link:LINK03'],
+    enabledRobotSelfPairs: [],
+  }
+  const db = database()
+  await db.projects.put({ key: 'active', snapshot: stored })
+  const projectRuntime = runtime(project('capture-fallback'))
+  const store = createProjectStore(db, projectRuntime)
+
+  await store.getState().hydrate()
+
+  expect(projectRuntime.restore).toHaveBeenCalledOnce()
+  expect(projectRuntime.restore).toHaveBeenCalledWith(
+    expect.objectContaining({ collisionPolicy: stored.collisionPolicy }),
+  )
+  expect(projectRuntime.stage).not.toHaveBeenCalled()
+  expect(projectRuntime.commit).not.toHaveBeenCalled()
+  expect(store.getState()).toMatchObject({
+    activeProjectId: 'stored-runtime-project',
+    status: 'ready',
+    error: null,
+  })
+})
 
 it('rejects invalid stored V2 data without activating or rewriting it', async () => {
   const invalid = project('invalid-stored-v2')

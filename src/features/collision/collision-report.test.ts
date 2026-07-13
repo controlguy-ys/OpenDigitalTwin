@@ -94,6 +94,26 @@ describe('collision report encoders', () => {
     expect(csvRows).toHaveLength(COLLISION_REPORT_MAX_FINDINGS + 1)
   })
 
+  it('preserves upstream Worker truncation even when available rows are below the export cap', () => {
+    const encoded = (
+      encodeCollisionReportJson as unknown as (
+        rows: readonly CollisionFinding[],
+        metadata: { readonly sourceTruncated: boolean; readonly sampleCount: number },
+      ) => string
+    )(
+      [finding('object:a|robot-link:LINK03', 'collision', -0.001)],
+      { sourceTruncated: true, sampleCount: 20_000 },
+    )
+    const decoded = JSON.parse(encoded) as {
+      summary: { truncated: boolean; sampleCount: number }
+    }
+
+    expect(decoded.summary).toMatchObject({
+      truncated: true,
+      sampleCount: 20_000,
+    })
+  })
+
   it('is byte-stable for shuffled rows with reversed Entity orientation', () => {
     const canonical = finding(
       'object:a|robot-link:LINK02',

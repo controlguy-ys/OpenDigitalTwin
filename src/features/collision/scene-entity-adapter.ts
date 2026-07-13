@@ -1,6 +1,10 @@
 import type { Object3D } from 'three'
+import { validateCollisionBox, type CollisionBox } from '../../domain/collision/collision'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
-import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
+import type {
+  RobotLinkGeometryRecordV1,
+  RobotLinkGeometryRecordV2,
+} from '../../domain/project/project'
 import type { GeometryEntityRegistration } from './geometry-entity-registry'
 
 export { objectInstanceToGeometryEntity } from '../objects/object-equipment-adapter'
@@ -8,7 +12,7 @@ export { objectInstanceToGeometryEntity } from '../objects/object-equipment-adap
 type RobotLinkCollisionRecord = Pick<
   RobotLinkGeometryRecordV1,
   'linkId' | 'collisionCenter' | 'collisionHalfExtents'
->
+> & Partial<Pick<RobotLinkGeometryRecordV2, 'collisionBoxes'>>
 
 function defaultBox(
   center: readonly [number, number, number],
@@ -33,15 +37,14 @@ function defaultBox(
 
 function registration(
   value: Omit<GeometryEntityRegistration, 'boxes'> & {
-    readonly center: readonly [number, number, number]
-    readonly halfExtents: readonly [number, number, number]
+    readonly boxes: readonly CollisionBox[]
   },
 ): GeometryEntityRegistration {
   return Object.freeze({
     id: value.id,
     name: value.name,
     category: value.category,
-    boxes: Object.freeze([defaultBox(value.center, value.halfExtents)]),
+    boxes: Object.freeze(value.boxes.map(validateCollisionBox)),
     object: value.object,
     colliderRevision: value.colliderRevision ?? 0,
   })
@@ -57,11 +60,14 @@ export function equipmentRecordToGeometryEntity(
     id: `equipment:${record.id}`,
     name: record.name,
     category: held ? 'held-object' : 'equipment',
-    center:
-      record.collisionCenter ??
-      record.importMetadata?.colliderCenter ??
-      [0, 0, 0],
-    halfExtents: record.collisionHalfExtents,
+    boxes: [
+      defaultBox(
+        record.collisionCenter ??
+          record.importMetadata?.colliderCenter ??
+          [0, 0, 0],
+        record.collisionHalfExtents,
+      ),
+    ],
     object,
     colliderRevision,
   })
@@ -76,8 +82,9 @@ export function robotLinkToGeometryEntity(
     id: `robot-link:${record.linkId}`,
     name: record.linkId,
     category: 'robot-link',
-    center: record.collisionCenter,
-    halfExtents: record.collisionHalfExtents,
+    boxes: record.collisionBoxes ?? [
+      defaultBox(record.collisionCenter, record.collisionHalfExtents),
+    ],
     object,
     colliderRevision,
   })
@@ -91,8 +98,7 @@ export function workbenchToGeometryEntity(
     id: 'workcell:workbench',
     name: 'Workbench',
     category: 'environment',
-    center: [0, 0, 1.03],
-    halfExtents: [0.9, 0.6, 0.05],
+    boxes: [defaultBox([0, 0, 1.03], [0.9, 0.6, 0.05])],
     object,
     colliderRevision,
   })

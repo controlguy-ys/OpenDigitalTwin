@@ -119,10 +119,26 @@ describe('current-pose collision scheduler', () => {
       collisionStore.getState(),
       'replaceCollisionState',
     )
+    let transitions = 0
+    const unsubscribe = collisionStore.subscribe(() => {
+      transitions += 1
+    })
 
     publishCurrentPoseCollision(collisionStore, new Map())
+    unsubscribe()
 
     expect(replaceCollisionState).toHaveBeenCalledTimes(1)
+    expect(transitions).toBe(1)
     expect(collisionStore.getState().currentFindings).toEqual([])
+    expect(
+      (collisionStore.getState() as unknown as { latestTelemetry: unknown })
+        .latestTelemetry,
+    ).toEqual({
+      entityCount: 0,
+      boxCount: 0,
+      broadPhaseCandidateCount: 0,
+      narrowPhaseTestCount: 0,
+      findingCount: 0,
+    })
   })
 })

@@ -1,35 +1,33 @@
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
+import { validateCollisionBox } from '../../domain/collision/collision'
 import type {
   ObjectAssetRecordV1,
+  ObjectAssetRecordV2,
   ObjectInstanceRecordV1,
 } from '../../domain/project/project'
 import type { Object3D } from 'three'
 import type { GeometryEntityRegistration } from '../collision/geometry-entity-registry'
 
 export function objectInstanceToGeometryEntity(
-  asset: ObjectAssetRecordV1,
+  asset: ObjectAssetRecordV1 | ObjectAssetRecordV2,
   instance: ObjectInstanceRecordV1,
   object: Object3D | null,
   held = false,
   colliderRevision = 0,
 ): GeometryEntityRegistration {
-  const center: [number, number, number] = [...asset.colliderCenter]
-  const halfExtents: [number, number, number] = [
-    ...asset.collisionHalfExtents,
-  ]
-  const quaternion: [number, number, number, number] = [0, 0, 0, 1]
+  const boxes = 'collisionBoxes' in asset
+    ? asset.collisionBoxes
+    : [{
+        id: 'default',
+        center: asset.colliderCenter,
+        halfExtents: asset.collisionHalfExtents,
+        quaternion: [0, 0, 0, 1] as const,
+      }]
   return Object.freeze({
     id: `object:${instance.id}`,
     name: instance.name,
     category: held ? 'held-object' : 'object',
-    boxes: Object.freeze([
-      Object.freeze({
-        id: 'default',
-        center: Object.freeze(center),
-        halfExtents: Object.freeze(halfExtents),
-        quaternion: Object.freeze(quaternion),
-      }),
-    ]),
+    boxes: Object.freeze(boxes.map(validateCollisionBox)),
     object,
     colliderRevision,
   })

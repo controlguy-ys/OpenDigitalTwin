@@ -207,6 +207,15 @@ describe('portable workcell project contract', () => {
     expect(() => validateWorkcellProjectSnapshotV1(snapshot)).toThrow('Duplicate')
   })
 
+  it('rejects Object Instance ids that cannot form a Collision Entity id', () => {
+    const snapshot = validProjectSnapshot()
+    snapshot.objectInstances = [objectInstance('machine|forged-pair')]
+
+    expect(() => validateWorkcellProjectSnapshotV1(snapshot)).toThrow(
+      /Object Instance.*separator|Collision Entity/i,
+    )
+  })
+
   it('rejects Object geometry that exceeds the triangle budget', () => {
     const snapshot = validProjectSnapshot()
     snapshot.objectAssets = [

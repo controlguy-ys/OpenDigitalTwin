@@ -230,6 +230,30 @@ function ownedPairKeys(values: readonly string[], label: string): readonly strin
   return Object.freeze([...result].sort(compareStrings))
 }
 
+function robotLinkIndex(entityId: string): number | null {
+  const match = /^robot-link:LINK0([0-6])$/.exec(entityId)
+  return match === null ? null : Number(match[1])
+}
+
+function ownedRobotSelfPairKeys(values: readonly string[]): readonly string[] {
+  const pairs = ownedPairKeys(values, 'Enabled Robot self pairs')
+  for (const value of pairs) {
+    const [first, second] = value.split('|') as [string, string]
+    const firstIndex = robotLinkIndex(first)
+    const secondIndex = robotLinkIndex(second)
+    if (
+      firstIndex === null ||
+      secondIndex === null ||
+      Math.abs(firstIndex - secondIndex) <= 1
+    ) {
+      throw new Error(
+        'Enabled Robot self pairs must contain recognized non-adjacent Robot Links.',
+      )
+    }
+  }
+  return pairs
+}
+
 export function validateCollisionPolicy(
   candidate: CollisionPolicy,
 ): CollisionPolicy {
@@ -249,9 +273,8 @@ export function validateCollisionPolicy(
       candidate.ignoredPairKeys,
       'Ignored collision pairs',
     ),
-    enabledRobotSelfPairs: ownedPairKeys(
+    enabledRobotSelfPairs: ownedRobotSelfPairKeys(
       candidate.enabledRobotSelfPairs,
-      'Enabled Robot self pairs',
     ),
   })
 }

@@ -5,14 +5,21 @@
 Completed the Task 7 acceptance, performance, documentation, and deployment
 evidence slice:
 
-- added a generated V1 `.wdtwin` browser fixture covering migration, imported
-  Object collision/near-miss, unchanged Object pose, Workbench participation,
-  pair ignore/restore, navigation, JSON/CSV reports, reload parity, and a
-  two-Pose validation with a TCP-held Object;
-- kept V2 save/export/import in the independent project-roundtrip browser gate
-  instead of re-importing the same archive in the collision scenario;
+- added an isolated Test A with a generated V1 `.wdtwin` fixture covering
+  migration, imported Object collision/near-miss, unchanged Object pose,
+  Workbench participation, pair ignore/restore, navigation, JSON/CSV reports,
+  and migrated V2 reload parity;
+- added an isolated Test B with a compact V2 Worker workload, canonical
+  TCP-held Object, exact scene Box telemetry, and report assertions over the
+  held/static pair's middle-motion sample/time window;
 - added deterministic query telemetry and a reference fixture with seven Link
-  Boxes, one Tool Box, 50 external Boxes, and exactly 1,000 Worker samples;
+  Boxes, one Tool Box, 50 external Boxes, three exact nonzero broad-phase
+  candidates, and exactly 1,000 Worker samples below the sample cap while
+  intentionally pressuring the finding cap;
+- compressed the browser Worker fixture to one STEP Asset, five Instances, and
+  ten Compound Boxes per Instance while instrumenting native Worker creation,
+  all four progress messages, and sustained animation frames across partial
+  progress intervals;
 - exposed current-pose query telemetry without changing the existing findings
   API and preserved the current-pose transform-mutation regression;
 - fixed missing React keys on Robot Link interaction portals found while
@@ -23,57 +30,37 @@ evidence slice:
 
 ## Browser evidence
 
-The first bounded geometry run used:
+Test A and Test B are intentionally isolated so their OCCT-backed imports do
+not share a page or a singleton import client. Test A passed in 2.4 minutes in
+the final one-Worker combined run. It owns V1 migration, current-pose/report
+workflows, and the saved migrated-V2 reload comparison.
+
+Test B passed with:
 
 ```text
-npx playwright test tests/geometry-collision.spec.ts --timeout=180000
+npx playwright test tests/geometry-collision.spec.ts --workers=1 --timeout=300000 --grep "keeps browser animation responsive"
 ```
 
-It exited after 1.7 minutes on an acceptance-test locator scoped to the
-Equipment Inspector. The product collision checks before that locator had
-completed. The flaky Joint UI assertion was removed; Object transform
-invariance remains in the browser scenario and Robot/scene transform
-invariance remains covered by `current-pose-collision.test.ts`.
+Result: one test passed in 1.3 minutes. The browser reported 59 live Boxes,
+announced `object:collision-fixture` as the held Entity, exposed progress at
+250/500/750/1000 samples, and executed sustained animation frames across
+partial Worker progress intervals. The downloaded JSON contained the canonical
+`object:collision-fixture|object:collision-worker-load-00` pair in samples
+486–513, around 1.35–1.43 seconds, with `worker-*` Box IDs. The time differs
+from the sample number because the 499.5-degree J1 move is duration-scaled by
+the configured 180 degrees/second maximum velocity.
 
-The independent V2 gate passed:
-
-```text
-npx playwright test tests/project-roundtrip.spec.ts --timeout=180000
-```
-
-Result: one test passed in 1.6 minutes.
-
-An initial full `npm run test:e2e` ran both OCCT-heavy imports concurrently and
-both timed out waiting for import completion. `playwright.config.ts` now uses
-one Worker. Sequential runs then exposed two test-only locator ambiguities; each
-was corrected without changing production behavior. The last combined command
-completed the V2 test but stopped the geometry test on the final J1 strict
-locator. After correcting it to the J1 spinbutton, the authorized final
-geometry-only command passed:
-
-```text
-npx playwright test tests/geometry-collision.spec.ts --workers=1 --timeout=300000
-```
-
-Result: one test passed in 3.2 minutes. No additional browser run was made.
-
-After the Task 7 commit, the complete checked-in E2E command was run once more
-to close the combined-gate evidence:
-
-```text
-npm run test:e2e
-```
-
-Result: exit 0, two tests passed using one Worker. The geometry collision
-scenario passed in 2.9 minutes, the V2 project round-trip passed in 1.3 minutes,
-and the complete command finished in 4.3 minutes.
+`tests/project-roundtrip.spec.ts` remains the independent general V2
+save/export/import gate. It complements rather than replaces Test A's
+V1-to-V2 migration round-trip.
 
 ## Final gates
 
-- `npm run verify`: passed; 73 Vitest files and 439 tests, seven valid CAD Links,
+- `npm run verify`: passed; 74 Vitest files and 451 tests, seven valid CAD Links,
   zero CAD errors/warnings, clean lint, and successful TypeScript/Vite build.
-- `npm run test:e2e`: passed; two Playwright tests completed sequentially in
-  4.3 minutes.
+- `npm run test:e2e`: passed all three browser tests sequentially with one
+  Worker in 5.3 minutes. Geometry Test A passed in 2.4 minutes, Geometry Test B
+  in 1.2 minutes, and the general V2 project round-trip in 1.6 minutes.
 - `npm run deploy:validate`: passed.
 - `npm run deploy:smoke`: passed with real Web image build, Nginx validation,
   health probe, and cleanup.
@@ -88,6 +75,6 @@ and the complete command finished in 4.3 minutes.
 
 ## Remaining concern
 
-No geometry-collision acceptance gate remains unverified. Existing Vite
-OCCT-browser-externalization and large-chunk notices remain non-fatal and are
-documented performance constraints rather than test failures.
+No geometry-collision acceptance or integration gate remains unverified.
+Existing Vite OCCT-browser-externalization and large-chunk notices remain
+non-fatal and are documented performance constraints rather than test failures.

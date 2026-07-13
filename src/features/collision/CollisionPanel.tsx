@@ -258,13 +258,14 @@ function useDefaultValidationRuntime(
       const activeEntityIds = new Set(
         registrySnapshot.entities.map((entity) => entity.id),
       )
+      const robotCollisionActive = !hiddenEntityIds.includes('robot')
       const {
         geometryTransforms,
         linkEntities,
       } = buildCollisionValidationRobotGeometry(
         geometryLinks,
         activeEntityIds,
-        !hiddenEntityIds.includes('robot'),
+        robotCollisionActive,
       )
       const staticEntities = registrySnapshot.entities.filter(
         (entity) =>
@@ -302,7 +303,7 @@ function useDefaultValidationRuntime(
             tcp: frames.tcp,
           },
           linkEntities,
-          toolEntity: toolRegistration === undefined
+          toolEntity: !robotCollisionActive || toolRegistration === undefined
             ? null
             : {
                 id: 'tool:default',
@@ -311,7 +312,10 @@ function useDefaultValidationRuntime(
               },
         },
         heldObject:
-          heldEntityId === null || gripOffset === null || heldRegistration === undefined
+          !robotCollisionActive ||
+          heldEntityId === null ||
+          gripOffset === null ||
+          heldRegistration === undefined
             ? null
             : {
                 id: heldEntityId,
@@ -360,7 +364,9 @@ function clearanceText(separationM: number): string {
 
 export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) {
   const policy = useCollisionStore((state) => state.policy)
+  const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const currentFindings = useCollisionStore((state) => state.currentFindings)
+  const latestTelemetry = useCollisionStore((state) => state.latestTelemetry)
   const diagnostics = useCollisionStore((state) => state.diagnostics)
   const navigationFindings = useCollisionStore(
     selectCollisionNavigationFindings,
@@ -368,6 +374,7 @@ export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) 
   const selectedFindingIndex = useCollisionStore(
     (state) => state.selectedFindingIndex,
   )
+  const validationReport = useCollisionStore((state) => state.validationReport)
   const pausePlaybackOnCollision = useCollisionStore(
     (state) => state.pausePlaybackOnCollision,
   )
@@ -513,6 +520,18 @@ export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) 
           <span data-kind="collision">Collision {counts.collisions}</span>
           <span data-kind="near-miss">Near-miss {counts.nearMisses}</span>
         </div>
+        {latestTelemetry === null ? null : (
+          <output
+            aria-label="Scene collision telemetry"
+            aria-live="off"
+            role="status"
+          >
+            Entities {latestTelemetry.entityCount} Boxes {latestTelemetry.boxCount}{' '}
+            Candidates {latestTelemetry.broadPhaseCandidateCount} OBB tests{' '}
+            {latestTelemetry.narrowPhaseTestCount} Findings{' '}
+            {latestTelemetry.findingCount}
+          </output>
+        )}
       </header>
 
       <div className="collision-policy-controls">
@@ -550,6 +569,9 @@ export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) 
       </div>
 
       <div className="collision-validation-controls">
+        <output aria-label="Held collision entity" role="status">
+          Held Object: {heldEntityId ?? 'None'}
+        </output>
         {validationRunning ? (
           <button
             aria-label="Cancel Validation"
@@ -587,6 +609,12 @@ export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) 
         {validationError === null ? null : (
           <p role="alert">{validationError}</p>
         )}
+        {validationReport?.truncated === true ? (
+          <p role="alert">
+            Validation result is incomplete: a sample or finding resource cap
+            was reached after {validationReport.sampleCount} samples.
+          </p>
+        ) : null}
       </div>
 
       <div className="collision-finding-navigation">
@@ -695,7 +723,10 @@ export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) 
               downloadText(
                 'geometry-proxy-collision.json',
                 'application/json',
-                encodeCollisionReportJson(navigationFindings),
+                encodeCollisionReportJson(navigationFindings, {
+                  sourceTruncated: validationReport?.truncated ?? false,
+                  sampleCount: validationReport?.sampleCount ?? null,
+                }),
               )
             }
             type="button"

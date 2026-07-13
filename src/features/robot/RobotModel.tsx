@@ -158,6 +158,7 @@ export function registerRobotGeometryEntities(
   colliderRevision = 0,
   hiddenEntityIds: readonly string[] = [],
 ): () => void {
+  if (hiddenEntityIds.includes('robot')) return () => undefined
   const recordsByLink = new Map(
     geometryRecords.map((record) => [record.linkId, record]),
   )
@@ -399,7 +400,10 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   return (
     <>
       <primitive dispose={null} object={rig.root} />
-      <RobotGripper tcpFrame={rig.tcpFrame} />
+      <RobotGripper
+        collisionActive={!hiddenEntityIds.includes('robot')}
+        tcpFrame={rig.tcpFrame}
+      />
       {linkInteractionPortals}
     </>
   )

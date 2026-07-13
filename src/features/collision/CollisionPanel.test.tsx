@@ -61,6 +61,7 @@ function seedFindings() {
   })
   state.setSelectedFindingIndex(0)
   state.setPausePlaybackOnCollision(true)
+  state.setLatestTelemetry(null)
   state.setValidationReport(null)
 }
 
@@ -218,6 +219,15 @@ describe('CollisionPanel', () => {
   })
 
   it('shows live counts, diagnostics, clearance, and the non-safety disclaimer', () => {
+    useCollisionStore.setState({
+      latestTelemetry: {
+        entityCount: 12,
+        boxCount: 59,
+        broadPhaseCandidateCount: 7,
+        narrowPhaseTestCount: 4,
+        findingCount: 2,
+      },
+    } as never)
     render(<CollisionPanel />)
 
     expect(screen.getByRole('heading', { name: 'Geometry Proxy Collision' })).toBeVisible()
@@ -225,12 +235,39 @@ describe('CollisionPanel', () => {
     expect(screen.getByText('Near-miss 1')).toBeVisible()
     expect(screen.getByText('Approximate Clearance')).toBeVisible()
     expect(screen.getByText('-5.000 mm')).toBeVisible()
+    expect(screen.getByRole('status', { name: 'Scene collision telemetry' }))
+      .toHaveAttribute('aria-live', 'off')
+    expect(screen.getByRole('status', { name: 'Scene collision telemetry' }))
+      .toHaveTextContent('Entities 12 Boxes 59 Candidates 7 OBB tests 4 Findings 2')
     expect(
       screen.getByRole('list', { name: 'Collision diagnostics' }),
     ).toHaveTextContent(
       'object:missing: Scene object is unavailable.',
     )
     expect(screen.getByText(/not physics, RobotWare, SafeMove, or safety-rated/i)).toBeVisible()
+  })
+
+  it('announces the canonical held Entity used by sequence validation', () => {
+    render(<CollisionPanel />)
+
+    const heldStatus = screen.getByRole('status', {
+      name: 'Held collision entity',
+    })
+    expect(heldStatus).toHaveTextContent('Held Object: None')
+
+    let held = false
+    act(() => {
+      const interaction = useInteractionStore.getState()
+      interaction.enterGraspCandidate('object:fixture-01')
+      held = interaction.holdEquipment('object:fixture-01', {
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      })
+    })
+
+    expect(held).toBe(true)
+    expect(heldStatus).toHaveTextContent('Held Object: object:fixture-01')
   })
 
   it('ignores and restores canonical pairs', async () => {
@@ -282,7 +319,7 @@ describe('CollisionPanel', () => {
 
   it('downloads deterministic JSON and CSV reports', async () => {
     const user = userEvent.setup()
-    const createObjectURL = vi.fn(() => 'blob:collision-report')
+    const createObjectURL = vi.fn((_value: Blob) => 'blob:collision-report')
     const revokeObjectURL = vi.fn()
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
@@ -293,12 +330,26 @@ describe('CollisionPanel', () => {
       value: revokeObjectURL,
     })
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    useCollisionStore.getState().setValidationReport({
+      revision: 'capped-export',
+      sampleCount: 20_000,
+      findings: [COLLISION],
+      truncated: true,
+    })
     render(<CollisionPanel />)
 
     await user.click(screen.getByRole('button', { name: 'Download JSON report' }))
     await user.click(screen.getByRole('button', { name: 'Download CSV report' }))
 
     expect(createObjectURL).toHaveBeenCalledTimes(2)
+    const jsonBlob = createObjectURL.mock.calls[0]![0]
+    const jsonReport = JSON.parse(await jsonBlob.text()) as {
+      summary: { sampleCount: number; truncated: boolean }
+    }
+    expect(jsonReport.summary).toMatchObject({
+      sampleCount: 20_000,
+      truncated: true,
+    })
     expect(click).toHaveBeenCalledTimes(2)
     expect(revokeObjectURL).toHaveBeenCalledTimes(2)
     click.mockRestore()
@@ -501,6 +552,39 @@ describe('CollisionPanel', () => {
       }],
       object: new Group(),
     })
+    registerGeometryEntity({
+      id: 'tool:default',
+      name: 'Parallel gripper',
+      category: 'tool',
+      boxes: [{
+        id: 'default',
+        center: [0, 0, 0],
+        halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object: new Group(),
+    })
+    registerGeometryEntity({
+      id: 'object:held-fixture',
+      name: 'Held fixture',
+      category: 'held-object',
+      boxes: [{
+        id: 'default',
+        center: [0, 0, 0],
+        halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object: new Group(),
+    })
+    act(() => {
+      const interaction = useInteractionStore.getState()
+      interaction.enterGraspCandidate('object:held-fixture')
+      expect(interaction.holdEquipment('object:held-fixture', {
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      })).toBe(true)
+    })
     const user = userEvent.setup()
     const { validate, cancel } = startDefaultValidation()
     render(<CollisionPanel />)
@@ -512,6 +596,8 @@ describe('CollisionPanel', () => {
         ({ linkId }) => linkId === 'LINK00',
       )?.collisionActive,
     ).toBe(true)
+    expect(validate.mock.calls[0]?.[0].robot.toolEntity?.id).toBe('tool:default')
+    expect(validate.mock.calls[0]?.[0].heldObject?.id).toBe('object:held-fixture')
     cancel.mockClear()
 
     act(() => {
@@ -529,6 +615,8 @@ describe('CollisionPanel', () => {
         ({ collisionActive }) => !collisionActive,
       ),
     ).toBe(true)
+    expect(validate.mock.calls[1]?.[0].robot.toolEntity).toBeNull()
+    expect(validate.mock.calls[1]?.[0].heldObject).toBeNull()
     cancel.mockClear()
 
     act(() => {
@@ -553,6 +641,23 @@ describe('CollisionPanel', () => {
       { linkId: 'LINK05', collisionActive: false },
       { linkId: 'LINK06', collisionActive: false },
     ])
+    expect(validate.mock.calls[2]?.[0].robot.toolEntity?.id).toBe('tool:default')
+    expect(validate.mock.calls[2]?.[0].heldObject?.id).toBe('object:held-fixture')
+  })
+
+  it('visibly marks a capped sequence result as incomplete', () => {
+    useCollisionStore.getState().setValidationReport({
+      revision: 'capped-run',
+      sampleCount: 20_000,
+      findings: [COLLISION],
+      truncated: true,
+    })
+
+    render(<CollisionPanel />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /truncated|incomplete|resource cap/i,
+    )
   })
 
   it('marks a completed report stale when Entity validation visibility changes', () => {

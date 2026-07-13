@@ -10,6 +10,7 @@ import type {
   ObjectAssetRecordV1,
   ObjectInstanceRecordV1,
   RobotLinkGeometryRecordV1,
+  RobotLinkGeometryRecordV2,
 } from '../../domain/project/project'
 import {
   geometryEntityRegistry,
@@ -141,6 +142,31 @@ describe('scene collision Entity adapters', () => {
         },
       ],
     })
+  })
+
+  it('preserves every canonical V2 Robot Link Compound Box', () => {
+    const compound: RobotLinkGeometryRecordV2 = {
+      ...robotGeometry(),
+      collisionBoxes: [
+        {
+          id: 'body',
+          center: [0.12, -0.23, 0.34],
+          halfExtents: [0.41, 0.32, 0.23],
+          quaternion: [0, 0, 0, 1],
+        },
+        {
+          id: 'wrist',
+          center: [0.5, 0.1, -0.2],
+          halfExtents: [0.08, 0.09, 0.1],
+          quaternion: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
+        },
+      ],
+    }
+
+    const registration = robotLinkToGeometryEntity(compound, new Group())
+
+    expect(registration.boxes).toEqual(compound.collisionBoxes)
+    expect(registration.boxes).not.toBe(compound.collisionBoxes)
   })
 
   it('publishes the existing Workbench proxy as the environment pair participant', () => {

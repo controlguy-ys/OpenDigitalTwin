@@ -43,6 +43,20 @@ interface EquipmentInstanceProps {
   onDraggingChange(dragging: boolean): void
 }
 
+export function isExternalCollisionRegistrationActive(
+  entityId: ExternalCollisionEntityId,
+  localId: string,
+  visible: boolean,
+  heldEntityId: ExternalCollisionEntityId | null,
+  hiddenEntityIds: readonly string[],
+): boolean {
+  return (
+    visible &&
+    !hiddenEntityIds.includes(localId) &&
+    !(entityId === heldEntityId && hiddenEntityIds.includes('robot'))
+  )
+}
+
 export function EquipmentVisual({ record }: { record: EquipmentRecord }) {
   return record.kind === 'imported' ? (
     <ImportedEquipment record={record} />
@@ -256,13 +270,20 @@ export function EquipmentScene({
   useLayoutEffect(() => {
     const cleanups: (() => void)[] = []
     for (const record of records) {
-      if (hiddenEntityIds.includes(record.id)) continue
+      const entityId = `equipment:${record.id}` as const
+      if (!isExternalCollisionRegistrationActive(
+        entityId,
+        record.id,
+        true,
+        heldEntityId,
+        hiddenEntityIds,
+      )) continue
       cleanups.push(
         registerGeometryEntity(
           equipmentRecordToGeometryEntity(
             record,
-            equipmentObjectsRef.current.get(`equipment:${record.id}`) ?? null,
-            heldEntityId === `equipment:${record.id}`,
+            equipmentObjectsRef.current.get(entityId) ?? null,
+            heldEntityId === entityId,
           ),
         ),
       )
@@ -270,7 +291,14 @@ export function EquipmentScene({
 
     const assetsById = new Map(objectAssets.map((asset) => [asset.id, asset]))
     for (const instance of objectInstances) {
-      if (!instance.visible || hiddenEntityIds.includes(instance.id)) continue
+      const entityId = `object:${instance.id}` as const
+      if (!isExternalCollisionRegistrationActive(
+        entityId,
+        instance.id,
+        instance.visible,
+        heldEntityId,
+        hiddenEntityIds,
+      )) continue
       const asset = assetsById.get(instance.assetId)
       if (asset === undefined) continue
       cleanups.push(
@@ -278,8 +306,8 @@ export function EquipmentScene({
           objectInstanceToGeometryEntity(
             asset,
             instance,
-            equipmentObjectsRef.current.get(`object:${instance.id}`) ?? null,
-            heldEntityId === `object:${instance.id}`,
+            equipmentObjectsRef.current.get(entityId) ?? null,
+            heldEntityId === entityId,
           ),
         ),
       )

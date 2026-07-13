@@ -3,6 +3,11 @@ import type { CollisionFinding } from '../../domain/collision/collision'
 export const COLLISION_REPORT_SCHEMA_VERSION = 1
 export const COLLISION_REPORT_MAX_FINDINGS = 10_000
 
+export interface CollisionReportMetadata {
+  readonly sourceTruncated?: boolean
+  readonly sampleCount?: number | null
+}
+
 interface CollisionReportRow {
   readonly kind: CollisionFinding['kind']
   readonly pairKey: string
@@ -69,6 +74,7 @@ function stableRows(findings: readonly CollisionFinding[]): {
 
 export function encodeCollisionReportJson(
   findings: readonly CollisionFinding[],
+  metadata: CollisionReportMetadata = {},
 ): string {
   const { rows, truncated } = stableRows(findings)
   return JSON.stringify(
@@ -81,7 +87,8 @@ export function encodeCollisionReportJson(
         exportedFindings: rows.length,
         collisions: findings.filter(({ kind }) => kind === 'collision').length,
         nearMisses: findings.filter(({ kind }) => kind === 'near-miss').length,
-        truncated,
+        sampleCount: metadata.sampleCount ?? null,
+        truncated: metadata.sourceTruncated === true || truncated,
       },
       findings: rows,
     },

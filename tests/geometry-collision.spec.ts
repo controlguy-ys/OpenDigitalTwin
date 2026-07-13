@@ -6,12 +6,16 @@ const decoder = new TextDecoder()
 const encoder = new TextEncoder()
 const FIXTURE_ENTITY_ID = 'object:collision-fixture'
 const LINK00_PAIR = `${FIXTURE_ENTITY_ID}|robot-link:LINK00`
+const HELD_WORKER_PAIR =
+  `${FIXTURE_ENTITY_ID}|object:collision-worker-load-00`
 
 interface CollisionReportRow {
   kind: 'collision' | 'near-miss'
   pairKey: string
   firstEntityId: string
   secondEntityId: string
+  firstBoxId: string
+  secondBoxId: string
   approximateClearanceMm: number
   sampleIndex: number | null
   timeMs: number | null
@@ -28,9 +32,26 @@ interface CollisionReport {
   findings: CollisionReportRow[]
 }
 
+interface CollisionWorkerEvidence {
+  constructedUrls: string[]
+  progressEvents: Array<{
+    processedSamples: number
+    totalSamples: number
+    rafFrames: number
+  }>
+  rafFrames: number
+  inFlightFrames: number
+  partialProgressFrames: number
+}
+
+type CollisionWorkerEvidenceWindow = Window & {
+  __geometryCollisionWorkerEvidence: CollisionWorkerEvidence
+}
+
 interface ProjectSemantics {
   schemaVersion: number
   name: string
+  objectInstanceCount: number
   objectTransform: {
     position: number[]
     quaternion: number[]
@@ -121,7 +142,7 @@ function legacyCollisionFixture(source: Uint8Array): Buffer {
     {
       id: 'pose-home',
       name: 'Home',
-      anglesDeg: [0, 0, 0, 0, 0, 0],
+      anglesDeg: [-249.75, 0, 0, 0, 0, 0],
       durationMs: 1_000,
       easing: 'linear',
       speedPercentToNext: 100,
@@ -129,13 +150,122 @@ function legacyCollisionFixture(source: Uint8Array): Buffer {
     {
       id: 'pose-cup',
       name: 'Cup Pick',
-      anglesDeg: [184.8, -63.6, -205.2, -152, -22.1, -144.2],
+      anglesDeg: [249.75, 0, 0, 0, 0, 0],
       durationMs: 1_000,
       easing: 'linear',
       speedPercentToNext: 100,
     },
   ])
   delete entries['collision/policy.json']
+
+  return Buffer.from(
+    zipSync(
+      Object.fromEntries(
+        Object.entries(entries).sort(([left], [right]) =>
+          left.localeCompare(right),
+        ),
+      ),
+      { level: 6 },
+    ),
+  )
+}
+
+function heldWorkerFixture(source: Uint8Array): Buffer {
+  const entries = unzipSync(source)
+  const manifest = jsonEntry<Record<string, unknown>>(entries, 'manifest.json')
+  const links = jsonEntry<Record<string, unknown>[]>(
+    entries,
+    'robot/links/index.json',
+  )
+  const sourceLink = links[0]
+  if (sourceLink === undefined) throw new Error('Default Robot has no Link source.')
+  const sourcePath = String(sourceLink.archivePath)
+  const sourceBytes = entries[sourcePath]
+  if (sourceBytes === undefined) throw new Error(`Missing source STEP: ${sourcePath}`)
+  const collisionBoxes = Array.from({ length: 10 }, (_, index) => ({
+    id: `worker-${index.toString().padStart(2, '0')}`,
+    center: [0, 0, 0],
+    halfExtents: [0.02, 0.02, 0.02],
+    quaternion: [0, 0, 0, 1],
+  }))
+
+  putJson(entries, 'manifest.json', {
+    ...manifest,
+    schemaVersion: 2,
+    projectId: 'geometry-collision-worker-acceptance',
+    name: 'Geometry Collision Worker Acceptance',
+    createdAt: '2026-07-13T01:00:00.000Z',
+    updatedAt: '2026-07-13T01:00:00.000Z',
+  })
+  const objectStepPath = 'objects/assets/0000.step'
+  entries[objectStepPath] = sourceBytes.slice()
+  putJson(entries, 'objects/assets.json', [{
+    id: 'collision-fixture-asset',
+    name: 'Collision Fixture Asset',
+    sourceFileName: 'collision-fixture.step',
+    importScale: 0.001,
+    originMode: 'source',
+    colliderCenter: [0, 0, 0],
+    collisionHalfExtents: [0.02, 0.02, 0.02],
+    collisionBoxes,
+    statistics: sourceLink.statistics,
+    archivePath: objectStepPath,
+  }])
+  const fixture = {
+    id: 'collision-fixture',
+    assetId: 'collision-fixture-asset',
+    name: 'Collision Fixture',
+    transform: {
+      position: [0.725, 0, 2.315],
+      quaternion: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    },
+    numericStatus: 7,
+    statusSource: 'manual',
+    statusOverlayVisible: true,
+    visible: true,
+  }
+  putJson(entries, 'objects/instances.json', [
+    fixture,
+    ...Array.from({ length: 4 }, (_, index) => ({
+      ...fixture,
+      id: `collision-worker-load-${index.toString().padStart(2, '0')}`,
+      name: `Collision Worker Load ${index + 1}`,
+      transform: {
+        position: index === 0
+          ? [0.755, 0, 2.315]
+          : [10 + index * 0.25, 10, 10],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      numericStatus: 0,
+      statusOverlayVisible: false,
+    })),
+  ])
+  putJson(entries, 'poses/sequences.json', [
+    {
+      id: 'worker-start',
+      name: 'Worker Start',
+      anglesDeg: [-249.75, 0, 0, 0, 0, 0],
+      durationMs: 1_000,
+      easing: 'linear',
+      speedPercentToNext: 100,
+    },
+    {
+      id: 'worker-end',
+      name: 'Worker End',
+      anglesDeg: [249.75, 0, 0, 0, 0, 0],
+      durationMs: 1_000,
+      easing: 'linear',
+      speedPercentToNext: 100,
+    },
+  ])
+  putJson(entries, 'collision/policy.json', {
+    enabled: true,
+    warningDistanceM: 0.05,
+    ignoredPairKeys: [],
+    enabledRobotSelfPairs: [],
+  })
 
   return Buffer.from(
     zipSync(
@@ -211,6 +341,7 @@ async function activeProjectSemantics(page: Page): Promise<ProjectSemantics> {
     return {
       schemaVersion: snapshot.manifest.schemaVersion,
       name: snapshot.manifest.name,
+      objectInstanceCount: snapshot.objectInstances.length,
       objectTransform: instance.transform,
       objectCollisionBoxes: asset.collisionBoxes,
       poseAngles: snapshot.poses.map(({ anglesDeg }: { anglesDeg: number[] }) =>
@@ -241,7 +372,7 @@ async function applyFixturePosition(
   await expect(inspector.getByLabel('Z (mm)')).toHaveValue(String(positionMm[2]))
 }
 
-test('accepts geometry collision, migration, reports, round-trip, and held sequence workflows', async ({
+test('accepts geometry collision, migration, reports, and round-trip workflows', async ({
   page,
 }) => {
   test.setTimeout(300_000)
@@ -380,34 +511,214 @@ test('accepts geometry collision, migration, reports, round-trip, and held seque
   )
   expect(reloadedRow).toEqual(restoredRow)
   expect(await activeProjectSemantics(page)).toEqual(beforeRoundTrip)
+})
 
-  await selectCollisionFixture(page)
-  await applyFixturePosition(page, [725, 0, 2_315])
-  await page.getByRole('button', { name: 'Save project' }).click()
-  await page.reload()
+test('keeps browser animation responsive during held-object Worker validation', async ({
+  page,
+}) => {
+  test.setTimeout(300_000)
+  await page.addInitScript(() => {
+    const evidence: CollisionWorkerEvidence = {
+      constructedUrls: [],
+      progressEvents: [],
+      rafFrames: 0,
+      inFlightFrames: 0,
+      partialProgressFrames: 0,
+    }
+    const NativeWorker = window.Worker
+    class InstrumentedWorker extends NativeWorker {
+      constructor(scriptURL: string | URL, options?: WorkerOptions) {
+        super(scriptURL, options)
+        const url = String(scriptURL)
+        if (!url.includes('collision-validation.worker')) return
+        evidence.constructedUrls.push(url)
+        this.addEventListener('message', (event: MessageEvent<unknown>) => {
+          if (event.data === null || typeof event.data !== 'object') return
+          const message = event.data as {
+            type?: unknown
+            progress?: {
+              processedSamples?: unknown
+              totalSamples?: unknown
+            }
+          }
+          if (
+            message.type !== 'progress' ||
+            typeof message.progress?.processedSamples !== 'number' ||
+            typeof message.progress.totalSamples !== 'number'
+          ) return
+          evidence.progressEvents.push({
+            processedSamples: message.progress.processedSamples,
+            totalSamples: message.progress.totalSamples,
+            rafFrames: evidence.rafFrames,
+          })
+        })
+      }
+    }
+    ;(window as CollisionWorkerEvidenceWindow)
+      .__geometryCollisionWorkerEvidence = evidence
+    Object.defineProperty(window, 'Worker', {
+      configurable: true,
+      writable: true,
+      value: InstrumentedWorker,
+    })
+  })
+  await page.goto('/')
   await expect(page.getByRole('main', { name: '3D viewport' })).toHaveAttribute(
     'aria-busy',
     'false',
-    { timeout: 180_000 },
   )
+  const [defaultDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Export project' }).click(),
+  ])
+  const workerFixture = heldWorkerFixture(
+    await readFile(await downloadPath(defaultDownload)),
+  )
+  await page.getByLabel('Import project').setInputFiles({
+    name: 'geometry-collision-worker-v2.wdtwin',
+    mimeType: 'application/zip',
+    buffer: workerFixture,
+  })
+  await expect(page.getByText('Geometry Collision Worker Acceptance', {
+    exact: true,
+  })).toBeVisible({ timeout: 180_000 })
+  const workerSemantics = await activeProjectSemantics(page)
+  expect(workerSemantics.objectInstanceCount).toBe(5)
+  expect(workerSemantics.objectCollisionBoxes).toHaveLength(10)
+  expect(
+    workerSemantics.objectInstanceCount *
+      workerSemantics.objectCollisionBoxes.length,
+  ).toBe(50)
+  await openDrawer(page, 'Scene Assets drawer')
+  for (const name of ['Cup 01', 'Cup 02', 'Machine 01']) {
+    const deleteEquipment = page.getByRole('button', {
+      name: `Delete ${name}`,
+    })
+    await deleteEquipment.click()
+    await expect(deleteEquipment).not.toBeVisible()
+  }
+  await openDrawer(page, 'Timeline and Events sheet')
+  await expect(page.getByRole('status', {
+    name: 'Scene collision telemetry',
+  })).toContainText('Boxes 59', { timeout: 180_000 })
+
   await openDrawer(page, 'Inspector drawer')
   await expect(page.getByRole('spinbutton', { name: 'J1' })).toHaveValue('0')
   await page.getByRole('button', { name: 'Close Gripper' }).click()
   await openDrawer(page, 'Timeline and Events sheet')
+  await expect(page.getByRole('status', { name: 'Held collision entity' }))
+    .toHaveText(`Held Object: ${FIXTURE_ENTITY_ID}`)
+  await page.evaluate(() => {
+    const evidence = (window as CollisionWorkerEvidenceWindow)
+      .__geometryCollisionWorkerEvidence
+    evidence.rafFrames = 0
+    evidence.inFlightFrames = 0
+    evidence.partialProgressFrames = 0
+    evidence.progressEvents.length = 0
+    const countFrame = () => {
+      evidence.rafFrames += 1
+      const cancel = document.querySelector(
+        'button[aria-label="Cancel Validation"]',
+      )
+      if (cancel !== null) {
+        evidence.inFlightFrames += 1
+        const status = document.querySelector(
+          'output[aria-label="Sequence validation progress"]',
+        )
+        const match = status?.textContent?.trim().match(/^(\d+) \/ (\d+)$/)
+        if (match !== null && Number(match?.[1]) < Number(match?.[2])) {
+          evidence.partialProgressFrames += 1
+        }
+      }
+      requestAnimationFrame(countFrame)
+    }
+    requestAnimationFrame(countFrame)
+  })
+  const rafFramesBeforeValidation = await page.evaluate(() =>
+    (window as CollisionWorkerEvidenceWindow)
+      .__geometryCollisionWorkerEvidence.rafFrames,
+  )
   await page.getByRole('button', { name: 'Validate Sequence' }).click()
+  await expect(page.getByRole('button', { name: 'Cancel Validation' }))
+    .toBeVisible()
+  const progress = page.getByRole('status', {
+    name: 'Sequence validation progress',
+  })
+  await expect(progress).toHaveText(/^(250|500|750) \/ 1000$/)
   await expect(page.getByRole('button', { name: 'Validate Sequence' }))
     .toBeEnabled({ timeout: 180_000 })
 
-  const sequenceReport = await downloadJsonReport(page)
-  expect(sequenceReport.findings).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        firstEntityId: FIXTURE_ENTITY_ID,
-        sampleIndex: expect.any(Number),
-        timeMs: expect.any(Number),
-      }),
-    ]),
+  const workerEvidence = await page.evaluate(() => {
+    const evidence = (window as CollisionWorkerEvidenceWindow)
+      .__geometryCollisionWorkerEvidence
+    return {
+      ...evidence,
+      constructedUrls: [...evidence.constructedUrls],
+      progressEvents: evidence.progressEvents.map((event) => ({ ...event })),
+    }
+  })
+  expect(workerEvidence.constructedUrls).toHaveLength(1)
+  expect(workerEvidence.constructedUrls[0]).toContain(
+    'collision-validation.worker',
   )
+  expect(
+    workerEvidence.progressEvents.map(({ processedSamples }) => processedSamples),
+  ).toEqual([250, 500, 750, 1_000])
+  expect(
+    workerEvidence.progressEvents.every(({ totalSamples }) =>
+      totalSamples === 1_000,
+    ),
+  ).toBe(true)
+  const partialWorkerProgress = workerEvidence.progressEvents.filter(
+    ({ processedSamples, totalSamples }) => processedSamples < totalSamples,
+  )
+  expect(partialWorkerProgress).toHaveLength(3)
+  expect(
+    partialWorkerProgress.at(-1)!.rafFrames -
+      partialWorkerProgress[0]!.rafFrames,
+  ).toBeGreaterThan(5)
+  expect(workerEvidence.rafFrames - rafFramesBeforeValidation)
+    .toBeGreaterThan(10)
+  expect(workerEvidence.inFlightFrames).toBeGreaterThan(10)
+  expect(workerEvidence.partialProgressFrames).toBeGreaterThan(10)
+
+  const sequenceReport = await downloadJsonReport(page)
+  const heldWorkerFindings = sequenceReport.findings.filter(
+    ({ pairKey, sampleIndex, timeMs }) =>
+      pairKey === HELD_WORKER_PAIR && sampleIndex !== null && timeMs !== null,
+  )
+  expect(heldWorkerFindings.length).toBeGreaterThan(0)
+  const heldWorkerOutOfWindow = heldWorkerFindings.filter(
+    ({ sampleIndex, timeMs }) =>
+      sampleIndex === null || sampleIndex <= 400 || sampleIndex >= 600 ||
+      timeMs === null || timeMs <= 1_200 || timeMs >= 1_600,
+  )
+  expect(
+    heldWorkerOutOfWindow,
+    `Held/static sequence findings escaped the middle window: ${JSON.stringify(
+      heldWorkerOutOfWindow.slice(0, 10),
+    )}`,
+  ).toHaveLength(0)
+  expect(heldWorkerFindings.every(({ firstBoxId, secondBoxId }) =>
+    firstBoxId.startsWith('worker-') && secondBoxId.startsWith('worker-'),
+  )).toBe(true)
+  const heldSequenceFinding = sequenceReport.findings.find(
+    ({ firstEntityId, secondEntityId, sampleIndex, timeMs }) =>
+      (firstEntityId === FIXTURE_ENTITY_ID || secondEntityId === FIXTURE_ENTITY_ID) &&
+      sampleIndex !== null && sampleIndex > 0 &&
+      timeMs !== null && timeMs > 0,
+  )
+  expect(heldSequenceFinding).toEqual(
+    expect.objectContaining({
+      sampleIndex: expect.any(Number),
+      timeMs: expect.any(Number),
+    }),
+  )
+  expect(
+    heldSequenceFinding?.firstEntityId === FIXTURE_ENTITY_ID
+      ? heldSequenceFinding.firstBoxId
+      : heldSequenceFinding?.secondBoxId,
+  ).toMatch(/^worker-/)
   expect(sequenceReport.summary.totalFindings).toBeGreaterThan(0)
   expect(sequenceReport.summary.truncated).toBe(false)
 })

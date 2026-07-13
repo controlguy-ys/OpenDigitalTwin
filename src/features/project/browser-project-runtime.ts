@@ -41,6 +41,17 @@ const identityTransform = () => ({
 })
 
 export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
+  restore: (snapshot) => {
+    useCollisionStore.getState().replaceCollisionState(
+      {
+        policy: snapshot.collisionPolicy,
+        currentFindings: [],
+        diagnostics: [],
+      },
+      null,
+    )
+    useCollisionStore.getState().setValidationReport(null)
+  },
   createNew: async () => {
     const now = new Date().toISOString()
     const configuration = createDatasheetRobotConfiguration()
@@ -178,11 +189,14 @@ export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
     useCoordinateFrameStore.getState().replaceFrames(snapshot.frames)
     robotGeometryRepository.replace(staged.robotAssets)
     importedGeometryRepository.replaceAll(staged.objectAssets)
-    useCollisionStore.getState().replaceCollisionState({
-      policy: snapshot.collisionPolicy,
-      currentFindings: [],
-      diagnostics: [],
-    })
+    useCollisionStore.getState().replaceCollisionState(
+      {
+        policy: snapshot.collisionPolicy,
+        currentFindings: [],
+        diagnostics: [],
+      },
+      null,
+    )
     useCollisionStore.getState().setValidationReport(null)
   },
   dispose: (staged) => {

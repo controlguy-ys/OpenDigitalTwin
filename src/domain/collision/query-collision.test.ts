@@ -94,6 +94,27 @@ describe('geometry collision orchestration', () => {
     ).toHaveLength(1)
   })
 
+  it('rejects adjacent and identical Robot self-pair policy entries', () => {
+    const adjacent = pairKey('robot-link:LINK02', 'robot-link:LINK03')
+    const identical = pairKey('robot-link:LINK02', 'robot-link:LINK02')
+
+    expect(() =>
+      queryGeometryCollisions(
+        [
+          entity('robot-link:LINK02', 'robot-link', 0),
+          entity('robot-link:LINK03', 'robot-link', 0.5),
+        ],
+        { ...POLICY, enabledRobotSelfPairs: [adjacent] },
+      ),
+    ).toThrow(/non-adjacent|self pair/i)
+    expect(() =>
+      queryGeometryCollisions(
+        [entity('robot-link:LINK02', 'robot-link', 0)],
+        { ...POLICY, enabledRobotSelfPairs: [identical] },
+      ),
+    ).toThrow(/non-adjacent|self pair/i)
+  })
+
   it('collapses Compound Box hits to the most severe Entity-pair finding', () => {
     const findings = queryGeometryCollisions(
       [

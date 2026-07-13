@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   CurrentProjectSnapshot,
   RobotLinkGeometryRecordV2,
@@ -51,8 +51,10 @@ const originalCollision = {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
   useRobotGeometryStore.setState({ links: originalLinks })
-  useCollisionStore.getState().replaceCollisionState(originalCollision)
+  useCollisionStore.getState().replaceCollisionState(originalCollision, null)
+  useCollisionStore.getState().setValidationReport(null)
 })
 
 describe('browser project collision policy bridge', () => {
@@ -75,5 +77,47 @@ describe('browser project collision policy bridge', () => {
       ignoredPairKeys: ['object:cup-01|robot-link:LINK03'],
       enabledRobotSelfPairs: [],
     })
+  })
+
+  it('restores the persisted collision policy without staging STEP geometry', async () => {
+    useRobotGeometryStore.setState({ links: LINK_IDS.map(robotLink) })
+    useCollisionStore.getState().setCollisionEnabled(false)
+    useCollisionStore.getState().setWarningDistanceM(0.125)
+    useCollisionStore
+      .getState()
+      .ignorePair('robot-link:LINK03|object:cup-01')
+    const captured = await browserProjectRuntime.capture(null)
+
+    useCollisionStore.getState().setCollisionEnabled(true)
+    useCollisionStore.getState().setWarningDistanceM(0.001)
+    useCollisionStore
+      .getState()
+      .restorePair('robot-link:LINK03|object:cup-01')
+    useCollisionStore.getState().setLatestTelemetry({
+      entityCount: 1,
+      boxCount: 1,
+      broadPhaseCandidateCount: 0,
+      narrowPhaseTestCount: 0,
+      findingCount: 0,
+    })
+    const replaceCollisionState = vi.spyOn(
+      useCollisionStore.getState(),
+      'replaceCollisionState',
+    )
+
+    await browserProjectRuntime.restore?.(captured)
+
+    expect(useCollisionStore.getState().policy).toEqual({
+      enabled: false,
+      warningDistanceM: 0.125,
+      ignoredPairKeys: ['object:cup-01|robot-link:LINK03'],
+      enabledRobotSelfPairs: [],
+    })
+    expect(replaceCollisionState).toHaveBeenCalledWith(
+      expect.objectContaining({ policy: captured.collisionPolicy }),
+      null,
+    )
+    expect(useCollisionStore.getState().latestTelemetry).toBeNull()
+    expect(useCollisionStore.getState().validationReport).toBeNull()
   })
 })
