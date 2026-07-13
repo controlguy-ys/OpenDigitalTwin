@@ -92,12 +92,12 @@ function ownedValidationReport(
 
 export function collisionFindingKey(finding: CollisionFinding): string {
   return JSON.stringify([
+    finding.pairKey,
     finding.firstEntityId,
     finding.secondEntityId,
     finding.firstBoxId,
     finding.secondBoxId,
     finding.kind,
-    finding.separationM,
     finding.sampleIndex,
     finding.timeMs,
   ])
@@ -111,6 +111,10 @@ function selectedFindingPatch(
   if (findings.length === 0) {
     return { selectedFindingIndex: null, selectedFindingKey: null }
   }
+  const index = fallbackIndex ?? 0
+  if (!Number.isInteger(index)) {
+    throw new Error('Selected collision finding index must be an integer.')
+  }
   if (selectedFindingKey !== null) {
     const preservedIndex = findings.findIndex(
       (finding) => collisionFindingKey(finding) === selectedFindingKey,
@@ -118,14 +122,6 @@ function selectedFindingPatch(
     if (preservedIndex >= 0) {
       return { selectedFindingIndex: preservedIndex, selectedFindingKey }
     }
-    return {
-      selectedFindingIndex: 0,
-      selectedFindingKey: collisionFindingKey(findings[0]!),
-    }
-  }
-  const index = fallbackIndex ?? 0
-  if (!Number.isInteger(index)) {
-    throw new Error('Selected collision finding index must be an integer.')
   }
   const clampedIndex = Math.min(Math.max(index, 0), findings.length - 1)
   return {

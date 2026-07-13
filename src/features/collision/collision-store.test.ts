@@ -243,4 +243,90 @@ describe('collision store', () => {
       collisionFindingKey(removed),
     )
   })
+
+  it('keeps a selected live row when only clearance changes and follows its new index', () => {
+    const store = createCollisionStore()
+    const first: CollisionFinding = {
+      ...FINDING,
+      pairKey: 'object:a|robot-link:LINK03',
+      firstEntityId: 'object:a',
+      separationM: -0.01,
+    }
+    const second: CollisionFinding = {
+      ...FINDING,
+      pairKey: 'object:b|robot-link:LINK03',
+      firstEntityId: 'object:b',
+      separationM: -0.02,
+    }
+    store.getState().replaceCollisionState({
+      policy: POLICY,
+      currentFindings: [first, second],
+      diagnostics: [],
+    })
+    store.getState().setSelectedFindingIndex(1)
+    const selectedKey = store.getState().selectedFindingKey
+    const updatedSecond = { ...second, separationM: -0.006 }
+
+    expect(collisionFindingKey(updatedSecond)).toBe(selectedKey)
+    store.getState().replaceCollisionState({
+      policy: POLICY,
+      currentFindings: [first, updatedSecond],
+      diagnostics: [],
+    })
+    expect(store.getState().selectedFindingIndex).toBe(1)
+    expect(selectSelectedCollisionFinding(store.getState())?.separationM).toBe(
+      -0.006,
+    )
+
+    store.getState().replaceCollisionState({
+      policy: POLICY,
+      currentFindings: [updatedSecond],
+      diagnostics: [],
+    })
+    expect(store.getState().selectedFindingIndex).toBe(0)
+    expect(store.getState().selectedFindingKey).toBe(selectedKey)
+  })
+
+  it('clamps the old index when the selected structural row disappears in live and report data', () => {
+    const store = createCollisionStore()
+    const rows: CollisionFinding[] = ['a', 'b', 'c'].map((id, index) => ({
+      ...FINDING,
+      pairKey: `object:${id}|robot-link:LINK03`,
+      firstEntityId: `object:${id}`,
+      separationM: -0.01 - index * 0.001,
+      sampleIndex: index,
+      timeMs: index * 100,
+    }))
+    store.getState().replaceCollisionState({
+      policy: POLICY,
+      currentFindings: rows,
+      diagnostics: [],
+    })
+    store.getState().setSelectedFindingIndex(1)
+
+    store.getState().replaceCollisionState({
+      policy: POLICY,
+      currentFindings: [rows[0]!, rows[2]!],
+      diagnostics: [],
+    })
+    expect(store.getState().selectedFindingIndex).toBe(1)
+    expect(selectSelectedCollisionFinding(store.getState())).toEqual(rows[2])
+
+    store.getState().setValidationReport({
+      revision: 'sequence-clamp-1',
+      sampleCount: 3,
+      findings: rows,
+      truncated: false,
+    })
+    store.getState().setSelectedFindingIndex(1)
+    store.getState().setValidationReport({
+      revision: 'sequence-clamp-2',
+      sampleCount: 3,
+      findings: [rows[0]!, rows[2]!],
+      truncated: false,
+    })
+
+    expect(store.getState().selectedFindingIndex).toBe(1)
+    expect(selectSelectedCollisionFinding(store.getState())).toEqual(rows[2])
+  })
 })

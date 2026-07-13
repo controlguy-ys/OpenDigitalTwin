@@ -122,3 +122,22 @@ tests passing. Review GREEN results:
 - expanded collision/UI integration: 23 files, 104 tests passed;
 - full suite: 69 files, 390 tests passed with 0 failures;
 - lint, production build, and diff-check passed.
+
+## Second Fix
+
+The final review exercised navigation across the 100 ms live-finding refresh.
+The finding identity is now structural: pair, both Entity IDs, both Box IDs,
+kind, sample index, and time. Signed clearance is intentionally excluded, so a
+new measurement updates the selected row without changing its identity.
+
+When a structural row remains, navigation follows it to its new index. When it
+is removed, the previous index is clamped to the new finding length instead of
+resetting unconditionally to zero; an empty result resets both index and key to
+`null`. Current-pose and validation-report replacement use the same rule.
+
+Second Fix RED: 1 file ran with 2 expected failures and 10 existing tests
+passing. Second Fix GREEN:
+
+- focused collision navigation/report UI: 4 files, 23 tests passed;
+- full suite: 69 files, 392 tests passed with 0 failures;
+- lint, production build, and diff-check passed.
