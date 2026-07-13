@@ -7,8 +7,8 @@ import {
   useState,
 } from 'react'
 import type { Group, Object3D } from 'three'
+import { CurrentPoseCollisionSystem } from '../collision/CurrentPoseCollisionSystem'
 import { EquipmentScene } from '../equipment/EquipmentScene'
-import { CollisionSystem } from '../interaction/CollisionSystem'
 import { useInteractionStore } from '../interaction/interaction-store'
 import { hasActiveCollision } from '../interaction/outline-state'
 import {
@@ -163,11 +163,7 @@ export function Workcell({
           <RobotModel registerRig={handleRigRegistration} />
         </group>
       </group>
-      <CollisionSystem
-        equipmentObjectsRef={equipmentObjectsRef}
-        rig={rig}
-        workbenchObjectRef={workbenchObjectRef}
-      />
+      <CurrentPoseCollisionSystem />
       {rig === null ? null : (
         <GraspController
           equipmentObjectsRef={equipmentObjectsRef}

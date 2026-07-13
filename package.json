@@ -31,7 +31,6 @@
   "dependencies": {
     "@react-three/drei": "10.7.7",
     "@react-three/fiber": "9.6.1",
-    "@react-three/rapier": "2.2.0",
     "dexie": "4.4.4",
     "dexie-react-hooks": "4.4.0",
     "fflate": "0.8.3",

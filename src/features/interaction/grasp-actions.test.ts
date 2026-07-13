@@ -140,7 +140,7 @@ describe('grasp release actions', () => {
     expect(calls).toEqual(['preview', 'clear-held', 'commit', 'reset'])
   })
 
-  it('converts the released world pose before preview persistence', async () => {
+  it('returns the preserved World pose while persisting one MCP-local conversion', async () => {
     const dependencies = createDependencies()
     dependencies.toPersistedTransform = (world) => ({
       ...world,
@@ -163,5 +163,6 @@ describe('grasp release actions', () => {
     expect(persistedTransform?.position[0]).toBeCloseTo(0.1)
     expect(persistedTransform?.position[1]).toBeCloseTo(0)
     expect(persistedTransform?.position[2]).toBeCloseTo(1.155)
+    expect(persistedTransform).not.toBe(released)
   })
 })

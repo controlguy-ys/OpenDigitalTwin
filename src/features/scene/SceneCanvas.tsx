@@ -1,5 +1,4 @@
 import { Canvas, useLoader } from '@react-three/fiber'
-import { Physics } from '@react-three/rapier'
 import { Suspense, useCallback, useState } from 'react'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import {
@@ -93,12 +92,10 @@ export function SceneCanvas({
           shadows
         >
           <Suspense fallback={null}>
-            <Physics gravity={[0, 0, 0]}>
-              <Workcell
-                registerInteractionController={registerInteractionController}
-                registerRig={handleRigRegistration}
-              />
-            </Physics>
+            <Workcell
+              registerInteractionController={registerInteractionController}
+              registerRig={handleRigRegistration}
+            />
           </Suspense>
         </Canvas>
       </SceneErrorBoundary>

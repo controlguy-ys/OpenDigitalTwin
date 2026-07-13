@@ -1,13 +1,4 @@
-import { ActiveCollisionTypes } from '@dimforge/rapier3d-compat'
 import { createPortal, type ThreeEvent } from '@react-three/fiber'
-import {
-  CuboidCollider,
-  RigidBody,
-  interactionGroups,
-  useBeforePhysicsStep,
-  type IntersectionEnterPayload,
-  type RapierRigidBody,
-} from '@react-three/rapier'
 import {
   useCallback,
   useEffect,
@@ -16,8 +7,10 @@ import {
   useRef,
   type RefObject,
 } from 'react'
-import { Vector3, type Group, type Object3D } from 'three'
+import type { Group, Object3D } from 'three'
+import type { GeometryCollisionEntity } from '../../domain/collision/collision'
 import type { SerializableTransform } from '../../domain/equipment/equipment'
+import { snapshotGeometryEntities } from '../collision/geometry-entity-registry'
 import {
   EquipmentOutline,
   EquipmentVisual,
@@ -32,11 +25,7 @@ import {
   type GraspActionDependencies,
 } from './grasp-actions'
 import {
-  GRASP_SENSOR_HALF_EXTENTS,
-  chooseNearestGraspCandidate,
   computeGripOffset,
-  getGraspSensorWorldTransform,
-  getWorldColliderCenter,
   matrixToTransform,
 } from './interaction-math'
 import {
@@ -49,11 +38,12 @@ import { getExternalEntityOutlineState } from './outline-state'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { worldTransformToMcpLocal } from '../frames/frame-runtime'
 import {
-  collisionEntityToGraspParticipantId,
   runtimeGraspParticipants,
 } from './grasp-participants'
-
-const GRASP_GROUPS = interactionGroups(3, [1])
+import {
+  createGeometryGraspSensorEntity,
+  findGraspCandidates,
+} from './geometry-grasp-sensor'
 
 export interface InteractionRuntimeController {
   releaseHeldEquipment(id?: string): Promise<void>
@@ -71,11 +61,16 @@ export interface GraspControllerProps {
     | undefined
 }
 
-function getOtherParticipantId(
-  payload: IntersectionEnterPayload,
+export function resolveGeometryGraspTarget(
+  sensorEntity: GeometryCollisionEntity,
+  candidates: readonly GeometryCollisionEntity[],
+  graspableEntityIds: ReadonlySet<string>,
 ): ExternalCollisionEntityId | null {
-  const entity = payload.other.rigidBodyObject?.userData.collisionEntityId
-  return collisionEntityToGraspParticipantId(entity)
+  return (
+    findGraspCandidates(sensorEntity, candidates).find(({ entityId }) =>
+      graspableEntityIds.has(entityId),
+    )?.entityId ?? null
+  )
 }
 
 export function GraspController({
@@ -84,7 +79,6 @@ export function GraspController({
   workbenchTopZ,
   registerController,
 }: GraspControllerProps) {
-  const rigidBodyRef = useRef<RapierRigidBody>(null)
   const gripperOpen = useRobotStore((state) => state.gripperOpen)
   const records = useEquipmentStore((state) => state.records)
   const objectAssets = useObjectAssetStore((state) => state.assets)
@@ -109,7 +103,6 @@ export function GraspController({
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
   const heldObjectOwnerRef = useRef<Object3D>(null)
   const previousGripperOpen = useRef(true)
-  const sensorPosition = useMemo(() => new Vector3(), [])
 
   const graspDependencies = useMemo<GraspActionDependencies>(
     () => ({
@@ -206,33 +199,30 @@ export function GraspController({
     if (interaction.heldEntityId !== null) {
       return
     }
-    const sensorWorld = getGraspSensorWorldTransform(rig.tcpFrame)
-    sensorPosition.fromArray(sensorWorld.position)
-    const candidates = interaction.graspCandidateIds.flatMap((candidateId) => {
-      const entityId = collisionEntityToGraspParticipantId(candidateId)
-      if (entityId === null) return []
-      const record = participantsById.get(entityId)?.record
-      const object = equipmentObjectsRef.current.get(entityId)
-      if (record?.graspable !== true || object === undefined) {
-        return []
+    const sensorEntity = createGeometryGraspSensorEntity(rig.tcpFrame)
+    const candidates = snapshotGeometryEntities().entities
+    const graspableEntityIds = new Set(
+      participants
+        .filter(({ record }) => record.graspable)
+        .map(({ entityId }) => entityId),
+    )
+    const overlappingIds = findGraspCandidates(sensorEntity, candidates)
+      .filter(({ entityId }) => graspableEntityIds.has(entityId))
+      .map(({ entityId }) => entityId)
+    const overlappingIdSet = new Set(overlappingIds)
+    for (const candidateId of interaction.graspCandidateIds) {
+      if (!overlappingIdSet.has(candidateId as ExternalCollisionEntityId)) {
+        interaction.exitGraspCandidate(candidateId)
       }
-      object.updateWorldMatrix(true, false)
-      const equipmentPosition = new Vector3().fromArray(
-        getWorldColliderCenter(
-          object,
-          record.collisionCenter ??
-            record.importMetadata?.colliderCenter ??
-            [0, 0, 0],
-        ),
-      )
-      return [{
-        equipmentId: entityId,
-        distanceSq: equipmentPosition.distanceToSquared(sensorPosition),
-      }]
-    })
-    const entityId = chooseNearestGraspCandidate(candidates) as
-      | ExternalCollisionEntityId
-      | null
+    }
+    for (const candidateId of overlappingIds) {
+      interaction.enterGraspCandidate(candidateId)
+    }
+    const entityId = resolveGeometryGraspTarget(
+      sensorEntity,
+      candidates,
+      graspableEntityIds,
+    )
     if (entityId === null) {
       return
     }
@@ -254,24 +244,9 @@ export function GraspController({
     equipmentObjectsRef,
     getToolWorld,
     participantsById,
+    participants,
     rig.tcpFrame,
-    sensorPosition,
   ])
-
-  useBeforePhysicsStep(() => {
-    const rigidBody = rigidBodyRef.current
-    if (rigidBody === null) {
-      return
-    }
-    const sensor = getGraspSensorWorldTransform(rig.tcpFrame)
-    rigidBody.setNextKinematicTranslation(new Vector3(...sensor.position))
-    rigidBody.setNextKinematicRotation({
-      x: sensor.quaternion[0],
-      y: sensor.quaternion[1],
-      z: sensor.quaternion[2],
-      w: sensor.quaternion[3],
-    })
-  })
 
   useEffect(() => {
     const wasOpen = previousGripperOpen.current
@@ -330,35 +305,6 @@ export function GraspController({
 
   return (
     <>
-      <RigidBody
-        colliders={false}
-        ref={rigidBodyRef}
-        type="kinematicPosition"
-        userData={{ collisionEntityId: 'grasp-sensor' }}
-      >
-        <CuboidCollider
-          activeCollisionTypes={ActiveCollisionTypes.ALL}
-          args={[...GRASP_SENSOR_HALF_EXTENTS]}
-          collisionGroups={GRASP_GROUPS}
-          onIntersectionEnter={(payload) => {
-            const entityId = getOtherParticipantId(payload)
-            const record =
-              entityId === null
-                ? undefined
-                : participantsById.get(entityId)?.record
-            if (entityId !== null && record?.graspable === true) {
-              useInteractionStore.getState().enterGraspCandidate(entityId)
-            }
-          }}
-          onIntersectionExit={(payload) => {
-            const entityId = getOtherParticipantId(payload)
-            if (entityId !== null) {
-              useInteractionStore.getState().exitGraspCandidate(entityId)
-            }
-          }}
-          sensor
-        />
-      </RigidBody>
       {heldRecord === undefined ||
       gripOffset === null ||
       hiddenEntityIds.includes(heldRecord.id)
