@@ -6,7 +6,11 @@ import type { RobotLinkId } from '../../domain/robot/crb15000'
 export type SceneSelection =
   | { readonly kind: 'robot' }
   | { readonly kind: 'robot-link'; readonly linkId: RobotLinkId }
-  | { readonly kind: 'equipment'; readonly equipmentId: string }
+  | {
+      readonly kind: 'equipment'
+      readonly entityId: ExternalCollisionEntityId
+      readonly equipmentId: string
+    }
   | null
 
 export type CollisionEntityId =
@@ -80,7 +84,8 @@ function selectionMatchesId(selection: SceneSelection, id: string): boolean {
   if (selection.kind === 'robot-link') {
     return selection.linkId === id
   }
-  return selection.equipmentId === id
+  const entityId = id.includes(':') ? id : `equipment:${id}`
+  return selection.entityId === entityId
 }
 
 const INITIAL_INTERACTION_STATE = {
@@ -114,9 +119,11 @@ function createInteractionState(
         selectedEquipmentId: null,
       })
     },
-    selectEquipment: (equipmentId) => {
+    selectEquipment: (id) => {
+      const entityId = toExternalCollisionEntityId(id)
+      const equipmentId = externalCollisionEntityLocalId(entityId)
       set({
-        selection: { kind: 'equipment', equipmentId },
+        selection: { kind: 'equipment', entityId, equipmentId },
         selectedEquipmentId: equipmentId,
       })
     },

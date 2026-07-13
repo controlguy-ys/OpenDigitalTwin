@@ -248,7 +248,7 @@ export function GraspController({
     if (useInteractionStore.getState().holdEquipment(entityId, grip)) {
       useInteractionStore
         .getState()
-        .selectEquipment(externalCollisionEntityLocalId(entityId))
+        .selectEquipment(entityId)
     }
   }, [
     equipmentObjectsRef,
@@ -304,7 +304,7 @@ export function GraspController({
   const heldSelected =
     heldRecord !== undefined &&
     selection?.kind === 'equipment' &&
-    selection.equipmentId === heldRecord.id
+    selection.entityId === heldEntityId
   const heldOutlineState =
     heldRecord === undefined
       ? null
@@ -368,7 +368,7 @@ export function GraspController({
               name={`${heldRecord.id}-held`}
               onPointerDown={(event: ThreeEvent<PointerEvent>) => {
                 event.stopPropagation()
-                useInteractionStore.getState().selectEquipment(heldRecord.id)
+                useInteractionStore.getState().selectEquipment(heldEntityId!)
               }}
               position={gripOffset.position}
               quaternion={gripOffset.quaternion}

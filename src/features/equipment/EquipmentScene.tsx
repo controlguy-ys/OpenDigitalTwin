@@ -108,7 +108,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
     (state) => state.commitInstanceTransform,
   )
   const selected =
-    selection?.kind === 'equipment' && selection.equipmentId === record.id
+    selection?.kind === 'equipment' && selection.entityId === entityId
   const outlineState = getExternalEntityOutlineState(
     entityId,
     selected,
@@ -134,7 +134,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
         name={record.id}
         onPointerDown={(event: ThreeEvent<PointerEvent>) => {
           event.stopPropagation()
-          selectEquipment(record.id)
+          selectEquipment(entityId)
         }}
         position={record.transform.position}
         quaternion={record.transform.quaternion}

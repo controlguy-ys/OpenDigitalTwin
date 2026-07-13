@@ -1,25 +1,18 @@
 import { useRef, useState } from 'react'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type { ExternalCollisionEntityId } from '../interaction/interaction-store'
+import { equipmentRecordEntityId } from './equipment-entity-selection'
 
 interface EquipmentAssetListProps {
   records: readonly EquipmentRecord[]
-  selectedEquipmentId: string | null
-  onSelect(id: string): void
+  selectedEntityId: ExternalCollisionEntityId | null
+  onSelect(id: ExternalCollisionEntityId): void
   onRemove(id: ExternalCollisionEntityId): Promise<void>
-}
-
-function canonicalEntityId(
-  record: EquipmentRecord,
-): ExternalCollisionEntityId {
-  return record.assetId === undefined
-    ? `equipment:${record.id}`
-    : `object:${record.id}`
 }
 
 export function EquipmentAssetList({
   records,
-  selectedEquipmentId,
+  selectedEntityId,
   onSelect,
   onRemove,
 }: EquipmentAssetListProps) {
@@ -32,7 +25,7 @@ export function EquipmentAssetList({
   >(() => new Map())
 
   const remove = async (record: EquipmentRecord) => {
-    const entityId = canonicalEntityId(record)
+    const entityId = equipmentRecordEntityId(record)
     if (pendingRemovalIds.current.has(entityId)) {
       return
     }
@@ -74,18 +67,18 @@ export function EquipmentAssetList({
       <h2>Scene Assets</h2>
       <ul role="tree">
         {records.map((record) => {
-          const entityId = canonicalEntityId(record)
+          const entityId = equipmentRecordEntityId(record)
           return (
             <li
               aria-label={record.name}
-              aria-selected={record.id === selectedEquipmentId}
+              aria-selected={entityId === selectedEntityId}
               key={entityId}
               role="treeitem"
             >
               <button
                 aria-label={`Select ${record.name}`}
                 className="equipment-select"
-                onClick={() => onSelect(record.id)}
+                onClick={() => onSelect(entityId)}
                 type="button"
               >
                 <span

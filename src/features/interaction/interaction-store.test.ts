@@ -25,6 +25,7 @@ describe('interaction selection and visibility', () => {
     store.getState().selectEquipment('cup-01')
     expect(store.getState().selection).toEqual({
       kind: 'equipment',
+      entityId: 'equipment:cup-01',
       equipmentId: 'cup-01',
     })
     expect(store.getState().selectedEquipmentId).toBe('cup-01')
@@ -32,6 +33,34 @@ describe('interaction selection and visibility', () => {
     store.getState().clearSelectionForEntity('cup-01')
     expect(store.getState().selection).toBeNull()
     expect(structuredClone(store.getState().selection)).toBeNull()
+  })
+
+  it('preserves canonical Equipment and Object selection with one local id', () => {
+    const store = createInteractionStore()
+
+    store.getState().selectEquipment('object:shared-01')
+    expect(store.getState().selection).toEqual({
+      kind: 'equipment',
+      entityId: 'object:shared-01',
+      equipmentId: 'shared-01',
+    })
+    expect(store.getState().selectedEquipmentId).toBe('shared-01')
+
+    expect(() =>
+      store.getState().clearSelectionForEntity('workcell:workbench'),
+    ).not.toThrow()
+    expect(store.getState().selection).not.toBeNull()
+    store.getState().clearSelectionForEntity('equipment:shared-01')
+    expect(store.getState().selection).not.toBeNull()
+    store.getState().clearSelectionForEntity('object:shared-01')
+    expect(store.getState().selection).toBeNull()
+
+    store.getState().selectEquipment('equipment:shared-01')
+    expect(store.getState().selection).toEqual({
+      kind: 'equipment',
+      entityId: 'equipment:shared-01',
+      equipmentId: 'shared-01',
+    })
   })
 
   it('tracks visibility as plain ids and clears selection when an entity is hidden', () => {

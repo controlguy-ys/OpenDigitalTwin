@@ -4,6 +4,8 @@ import type {
   EquipmentRecord,
   SerializableTransform,
 } from '../../domain/equipment/equipment'
+import type { ExternalCollisionEntityId } from '../interaction/interaction-store'
+import { equipmentRecordEntityId } from './equipment-entity-selection'
 
 interface EquipmentInspectorProps {
   record: EquipmentRecord
@@ -14,7 +16,7 @@ interface EquipmentInspectorProps {
   onNumericStatus(id: string, value: number): void | Promise<void>
   onStatusSource(id: string, source: 'manual' | 'opcua'): void | Promise<void>
   onOverlayVisible(id: string, visible: boolean): void | Promise<void>
-  onDelete(id: string): void | Promise<void>
+  onDelete(id: ExternalCollisionEntityId): void | Promise<void>
 }
 
 interface TransformDraft {
@@ -224,7 +226,7 @@ export function EquipmentInspector({
         disabled={disabled}
         onClick={() => {
           if (window.confirm(`Delete ${record.name}?`)) {
-            void onDelete(record.id)
+            void onDelete(equipmentRecordEntityId(record))
           }
         }}
         type="button"

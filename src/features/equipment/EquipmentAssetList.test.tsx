@@ -33,6 +33,7 @@ describe('EquipmentAssetList', () => {
   it('emits canonical delete ids for same-local-id Equipment and Object rows', async () => {
     const user = userEvent.setup()
     const onRemove = vi.fn(async () => undefined)
+    const onSelect = vi.fn()
     const equipment: EquipmentRecord = {
       ...BUILT_IN_EQUIPMENT[0]!,
       id: 'shared-01',
@@ -47,12 +48,24 @@ describe('EquipmentAssetList', () => {
     render(
       <EquipmentAssetList
         onRemove={onRemove}
-        onSelect={vi.fn()}
+        onSelect={onSelect}
         records={[equipment, object]}
-        selectedEquipmentId={null}
+        selectedEntityId="object:shared-01"
       />,
     )
 
+    expect(
+      screen.getByRole('treeitem', { name: 'Object Shared' }),
+    ).toHaveAttribute('aria-selected', 'true')
+    expect(
+      screen.getByRole('treeitem', { name: 'Equipment Shared' }),
+    ).toHaveAttribute('aria-selected', 'false')
+    await user.click(
+      screen.getByRole('button', { name: 'Select Object Shared' }),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Select Equipment Shared' }),
+    )
     await user.click(
       screen.getByRole('button', { name: 'Delete Equipment Shared' }),
     )
@@ -60,6 +73,10 @@ describe('EquipmentAssetList', () => {
       screen.getByRole('button', { name: 'Delete Object Shared' }),
     )
 
+    expect(onSelect.mock.calls).toEqual([
+      ['object:shared-01'],
+      ['equipment:shared-01'],
+    ])
     expect(onRemove.mock.calls).toEqual([
       ['equipment:shared-01'],
       ['object:shared-01'],
@@ -75,7 +92,7 @@ describe('EquipmentAssetList', () => {
         onRemove={onRemove}
         onSelect={onSelect}
         records={[...BUILT_IN_EQUIPMENT, IMPORTED]}
-        selectedEquipmentId={IMPORTED.id}
+        selectedEntityId={`equipment:${IMPORTED.id}`}
       />,
     )
 
@@ -89,7 +106,7 @@ describe('EquipmentAssetList', () => {
     await user.click(screen.getByRole('button', { name: 'Select Cup 01' }))
     await user.click(screen.getByRole('button', { name: 'Delete Cup 01' }))
     await user.click(screen.getByRole('button', { name: 'Delete Imported Fixture' }))
-    expect(onSelect).toHaveBeenCalledWith('cup-01')
+    expect(onSelect).toHaveBeenCalledWith('equipment:cup-01')
     expect(onRemove.mock.calls).toEqual([
       ['equipment:cup-01'],
       [`equipment:${IMPORTED.id}`],
@@ -111,7 +128,7 @@ describe('EquipmentAssetList', () => {
         onRemove={onRemove}
         onSelect={vi.fn()}
         records={[IMPORTED]}
-        selectedEquipmentId={null}
+        selectedEntityId={null}
       />,
     )
     const deleteButton = screen.getByRole('button', {

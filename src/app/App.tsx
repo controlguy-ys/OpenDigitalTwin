@@ -33,6 +33,7 @@ import { CoordinateFramesDialog } from '../features/frames/CoordinateFramesDialo
 import type { RobotRigRegistration } from '../features/robot/RobotModel'
 import type { ExternalCollisionEntityId } from '../features/interaction/interaction-store'
 import { removeCanonicalExternalEntity } from './external-entity-removal'
+import { findEquipmentRecordByEntityId } from '../features/equipment/equipment-entity-selection'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -92,17 +93,19 @@ export function App() {
   const setEquipmentStatusSource = useEquipmentStore(
     (state) => state.setEquipmentStatusSource,
   )
-  const selectedEquipmentId = useInteractionStore(
-    (state) => state.selectedEquipmentId,
-  )
+  const selection = useInteractionStore((state) => state.selection)
   const selectEquipment = useInteractionStore((state) => state.selectEquipment)
   const clearSelection = useInteractionStore((state) => state.clearSelection)
   const controlsDisabled = sceneStatus !== 'ready'
   const jointControlsDisabled = controlsDisabled || sourceMode === 'opcua'
   const activeJointSource =
     sourceMode === 'simulation' ? simulationJointSource : opcUaJointSource
-  const selectedEquipmentRecord =
-    allEquipmentRecords.find((record) => record.id === selectedEquipmentId) ?? null
+  const selectedEntityId =
+    selection?.kind === 'equipment' ? selection.entityId : null
+  const selectedEquipmentRecord = findEquipmentRecordByEntityId(
+    allEquipmentRecords,
+    selectedEntityId,
+  )
 
   useEffect(() => {
     let active = true
@@ -176,9 +179,7 @@ export function App() {
               await controller.releaseHeldEquipment(entityId)
             }
             await removeObjectInstance(id)
-            if (useInteractionStore.getState().selectedEquipmentId === id) {
-              clearSelection()
-            }
+            useInteractionStore.getState().clearSelectionForEntity(entityId)
           } finally {
             useInteractionStore.getState().endEquipmentRemoval(entityId)
           }
@@ -211,8 +212,13 @@ export function App() {
             invalidateGeometry: (equipmentId) => {
               importedGeometryRepository.invalidate(equipmentId)
             },
-            getSelectedEquipmentId: () =>
-              useInteractionStore.getState().selectedEquipmentId,
+            getSelectedEquipmentId: () => {
+              const currentSelection = useInteractionStore.getState().selection
+              return currentSelection?.kind === 'equipment' &&
+                currentSelection.entityId === entityId
+                ? id
+                : null
+            },
             clearSelection,
           })
         },
@@ -309,7 +315,7 @@ export function App() {
             onRemove={handleRemoveEquipment}
             onSelect={selectEquipment}
             records={allEquipmentRecords}
-            selectedEquipmentId={selectedEquipmentId}
+            selectedEntityId={selectedEntityId}
           />
         }
         bottomRail={
@@ -331,13 +337,7 @@ export function App() {
               disabled={controlsDisabled}
               onApply={handleCommitEquipmentTransform}
               onCancel={handleCancelEquipmentTransform}
-              onDelete={(id) =>
-                handleRemoveEquipment(
-                  selectedEquipmentRecord.assetId === undefined
-                    ? `equipment:${id}`
-                    : `object:${id}`,
-                )
-              }
+              onDelete={handleRemoveEquipment}
               onNumericStatus={handleNumericStatus}
               onOverlayVisible={handleOverlayVisible}
               onStatusSource={handleStatusSource}
@@ -373,7 +373,7 @@ export function App() {
         client={stepImportClient}
         onClose={() => setIsImportOpen(false)}
         onCommitAsset={addAssetInstance}
-        onSelect={selectEquipment}
+        onSelect={(id) => selectEquipment(`object:${id}`)}
         open={isImportOpen}
       />
       <RobotImportDialog

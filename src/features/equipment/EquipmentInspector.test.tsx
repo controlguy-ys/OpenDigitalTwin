@@ -95,6 +95,28 @@ describe('EquipmentInspector', () => {
 
     await user.click(screen.getByRole('button', { name: 'Delete Fixture 01' }))
     expect(window.confirm).toHaveBeenCalledWith('Delete Fixture 01?')
-    expect(onDelete).toHaveBeenCalledWith('fixture-01')
+    expect(onDelete).toHaveBeenCalledWith('equipment:fixture-01')
+  })
+
+  it('deletes an imported Object through its canonical owner', async () => {
+    const user = userEvent.setup()
+    const onDelete = vi.fn().mockResolvedValue(undefined)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(
+      <EquipmentInspector
+        onApply={vi.fn()}
+        onCancel={vi.fn()}
+        onDelete={onDelete}
+        onNumericStatus={vi.fn()}
+        onStatusSource={vi.fn()}
+        onOverlayVisible={vi.fn()}
+        onPreview={vi.fn()}
+        record={{ ...RECORD, assetId: 'asset-01', name: 'Object Shared' }}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Delete Object Shared' }))
+
+    expect(onDelete).toHaveBeenCalledWith('object:fixture-01')
   })
 })
