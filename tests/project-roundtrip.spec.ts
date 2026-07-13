@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 interface SemanticProject {
+  schemaVersion: number
   projectId: string
   robotName: string
   linkFiles: string[]
@@ -11,6 +12,8 @@ interface SemanticProject {
   mcpPosition: number[]
   tcpPosition: number[]
   basePosition: number[]
+  robotCollisionBoxes: unknown[]
+  collisionPolicy: unknown
 }
 
 async function semanticProject(page: import('@playwright/test').Page) {
@@ -31,6 +34,7 @@ async function semanticProject(page: import('@playwright/test').Page) {
     })
     if (snapshot === undefined) throw new Error('Active project was not persisted.')
     return {
+      schemaVersion: snapshot.manifest.schemaVersion,
       projectId: snapshot.manifest.projectId,
       robotName: snapshot.robot.name,
       linkFiles: snapshot.robot.links.map((link: any) => link.sourceFileName),
@@ -41,6 +45,10 @@ async function semanticProject(page: import('@playwright/test').Page) {
       mcpPosition: snapshot.frames.mcp.position,
       tcpPosition: snapshot.frames.tcp.position,
       basePosition: snapshot.robot.basePosition,
+      robotCollisionBoxes: snapshot.robot.links.map((link: any) =>
+        link.collisionBoxes,
+      ),
+      collisionPolicy: snapshot.collisionPolicy,
     }
   })
 }
@@ -67,6 +75,17 @@ test('exports and restores the complete default workcell project', async ({ page
   await expect(page.getByText('Saved', { exact: true })).toBeVisible()
   const before = await semanticProject(page)
   expect(before.linkFiles).toHaveLength(7)
+  expect(before.schemaVersion).toBe(2)
+  expect(before.robotCollisionBoxes).toHaveLength(7)
+  expect(
+    before.robotCollisionBoxes.every(
+      (boxes) => Array.isArray(boxes) && boxes.length > 0,
+    ),
+  ).toBe(true)
+  expect(before.collisionPolicy).toMatchObject({
+    enabled: true,
+    warningDistanceM: expect.any(Number),
+  })
   expect(before.linkBytes.every((byteLength) => byteLength > 0)).toBe(true)
 
   const downloadPromise = page.waitForEvent('download')

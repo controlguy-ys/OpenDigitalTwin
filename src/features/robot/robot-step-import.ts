@@ -1,4 +1,4 @@
-import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
+import type { RobotLinkGeometryRecordV2 } from '../../domain/project/project'
 import {
   MAX_ASSET_MATERIALS,
   MAX_ASSET_MESHES,
@@ -29,7 +29,7 @@ export interface RobotStepImportController {
 
 export interface RobotGeometryImportResult {
   assets: ReadonlyMap<RobotLinkId, ImportedThreeAsset>
-  records: readonly RobotLinkGeometryRecordV1[]
+  records: readonly RobotLinkGeometryRecordV2[]
 }
 
 type RobotGeometryConverter = typeof createThreeGroupFromOcct
@@ -154,7 +154,7 @@ export async function importMappedRobotStepGeometry(
   convert: RobotGeometryConverter = createThreeGroupFromOcct,
 ): Promise<RobotGeometryImportResult> {
   const assets = new Map<RobotLinkId, ImportedThreeAsset>()
-  const records: RobotLinkGeometryRecordV1[] = []
+  const records: RobotLinkGeometryRecordV2[] = []
 
   try {
     for (const { linkId, file } of mapped) {
@@ -173,6 +173,11 @@ export async function importMappedRobotStepGeometry(
         maxTriangles: MAX_ROBOT_LINK_TRIANGLES,
       })
       assets.set(linkId, asset)
+      const collisionHalfExtents: [number, number, number] = [
+        asset.bounds.size[0] / 2,
+        asset.bounds.size[1] / 2,
+        asset.bounds.size[2] / 2,
+      ]
       records.push({
         linkId,
         sourceFileName: file.name,
@@ -184,11 +189,13 @@ export async function importMappedRobotStepGeometry(
         },
         visible: true,
         collisionCenter: [...asset.colliderCenter],
-        collisionHalfExtents: [
-          asset.bounds.size[0] / 2,
-          asset.bounds.size[1] / 2,
-          asset.bounds.size[2] / 2,
-        ],
+        collisionHalfExtents,
+        collisionBoxes: [{
+          id: 'default',
+          center: [...asset.colliderCenter],
+          halfExtents: [...collisionHalfExtents],
+          quaternion: [0, 0, 0, 1],
+        }],
         statistics: geometryStatistics,
       })
     }
@@ -200,7 +207,7 @@ export async function importMappedRobotStepGeometry(
 }
 
 export async function restoreRobotGeometryRecords(
-  records: readonly RobotLinkGeometryRecordV1[],
+  records: readonly RobotLinkGeometryRecordV2[],
   client: RobotStepImportController,
   convert: RobotGeometryConverter = createThreeGroupFromOcct,
 ): Promise<ReadonlyMap<RobotLinkId, ImportedThreeAsset>> {

@@ -1,15 +1,23 @@
 import { unzipSync, zipSync } from 'fflate'
 import type {
+  CurrentProjectSnapshot,
   ObjectAssetRecordV1,
+  ObjectAssetRecordV2,
   RobotLinkGeometryRecordV1,
+  RobotLinkGeometryRecordV2,
   WorkcellProjectSnapshotV1,
+  WorkcellProjectSnapshotV2,
 } from '../../domain/project/project'
 import {
   MAX_OBJECT_ASSET_BYTES,
   MAX_PROJECT_SOURCE_BYTES,
   MAX_ROBOT_LINK_BYTES,
   validateWorkcellProjectSnapshot,
+  validateWorkcellProjectSnapshotV1,
+  WORKCELL_PROJECT_SCHEMA_VERSION,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V1,
 } from '../../domain/project/project'
+import { migrateV1ToV2 } from '../../domain/project/project-v1-migration'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf-8', { fatal: true })
@@ -25,6 +33,14 @@ interface ArchivedRobotLink extends Omit<RobotLinkGeometryRecordV1, 'sourceBytes
 }
 
 interface ArchivedObjectAsset extends Omit<ObjectAssetRecordV1, 'sourceBytes'> {
+  archivePath: string
+}
+
+interface ArchivedRobotLinkV2 extends Omit<RobotLinkGeometryRecordV2, 'sourceBytes'> {
+  archivePath: string
+}
+
+interface ArchivedObjectAssetV2 extends Omit<ObjectAssetRecordV2, 'sourceBytes'> {
   archivePath: string
 }
 
@@ -148,20 +164,20 @@ function parseJson<T>(entries: Record<string, Uint8Array>, path: string): T {
 }
 
 export async function encodeWorkcellProject(
-  snapshot: WorkcellProjectSnapshotV1,
+  snapshot: CurrentProjectSnapshot,
 ): Promise<Uint8Array> {
-  validateWorkcellProjectSnapshot(snapshot)
+  const normalized = validateWorkcellProjectSnapshot(snapshot)
   const entries: Record<string, Uint8Array> = {}
-  entries['manifest.json'] = json(snapshot.manifest)
+  entries['manifest.json'] = json(normalized.manifest)
   entries['robot/configuration.json'] = json({
-    name: snapshot.robot.name,
-    basePosition: snapshot.robot.basePosition,
-    baseRotationDeg: snapshot.robot.baseRotationDeg,
-    joints: snapshot.robot.joints,
+    name: normalized.robot.name,
+    basePosition: normalized.robot.basePosition,
+    baseRotationDeg: normalized.robot.baseRotationDeg,
+    joints: normalized.robot.joints,
   })
-  entries['frames.json'] = json(snapshot.frames)
+  entries['frames.json'] = json(normalized.frames)
 
-  const robotLinks: ArchivedRobotLink[] = [...snapshot.robot.links]
+  const robotLinks: ArchivedRobotLinkV2[] = [...normalized.robot.links]
     .sort((left, right) => left.linkId.localeCompare(right.linkId))
     .map(({ sourceBytes, ...link }) => {
       const archivePath = `robot/links/${link.linkId}.step`
@@ -170,7 +186,7 @@ export async function encodeWorkcellProject(
     })
   entries['robot/links/index.json'] = json(robotLinks)
 
-  const objectAssets: ArchivedObjectAsset[] = [...snapshot.objectAssets]
+  const objectAssets: ArchivedObjectAssetV2[] = [...normalized.objectAssets]
     .sort((left, right) => left.id.localeCompare(right.id))
     .map(({ sourceBytes, ...asset }, index) => {
       const archivePath = `objects/assets/${index.toString().padStart(4, '0')}.step`
@@ -178,9 +194,10 @@ export async function encodeWorkcellProject(
       return { ...asset, archivePath }
     })
   entries['objects/assets.json'] = json(objectAssets)
-  entries['objects/instances.json'] = json(snapshot.objectInstances)
-  entries['poses/sequences.json'] = json(snapshot.poses)
-  entries['opcua/bindings.json'] = json(snapshot.opcUa)
+  entries['objects/instances.json'] = json(normalized.objectInstances)
+  entries['poses/sequences.json'] = json(normalized.poses)
+  entries['opcua/bindings.json'] = json(normalized.opcUa)
+  entries['collision/policy.json'] = json(normalized.collisionPolicy)
 
   const orderedEntries = Object.fromEntries(
     Object.entries(entries).sort(([left], [right]) => left.localeCompare(right)),
@@ -190,7 +207,7 @@ export async function encodeWorkcellProject(
 
 export async function decodeWorkcellProject(
   source: Uint8Array | ArrayBuffer,
-): Promise<WorkcellProjectSnapshotV1> {
+): Promise<CurrentProjectSnapshot> {
   const bytes = source instanceof Uint8Array ? source : new Uint8Array(source)
   inspectArchive(bytes)
   let entries: Record<string, Uint8Array>
@@ -200,18 +217,67 @@ export async function decodeWorkcellProject(
     throw new Error('Invalid .wdtwin archive: ZIP data cannot be expanded.')
   }
 
-  const manifest = parseJson<WorkcellProjectSnapshotV1['manifest']>(
+  const manifest = parseJson<
+    WorkcellProjectSnapshotV1['manifest'] | WorkcellProjectSnapshotV2['manifest']
+  >(
     entries,
     'manifest.json',
   )
+  if (
+    manifest.schemaVersion !== WORKCELL_PROJECT_SCHEMA_VERSION_V1 &&
+    manifest.schemaVersion !== WORKCELL_PROJECT_SCHEMA_VERSION
+  ) {
+    throw new Error('Invalid .wdtwin archive: unsupported project schema version.')
+  }
+
+  if (manifest.schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V1) {
+    const robotConfiguration = parseJson<
+      Omit<WorkcellProjectSnapshotV1['robot'], 'links'>
+    >(entries, 'robot/configuration.json')
+    const archivedLinks = parseJson<ArchivedRobotLink[]>(
+      entries,
+      'robot/links/index.json',
+    )
+    const robotLinks: RobotLinkGeometryRecordV1[] = archivedLinks.map(
+      ({ archivePath, ...link }) => {
+        if (!safeArchivePath(archivePath) || !archivePath.startsWith('robot/links/')) {
+          throw new Error(`Invalid .wdtwin archive path: ${archivePath}.`)
+        }
+        return { ...link, sourceBytes: ownBytes(required(entries, archivePath)) }
+      },
+    )
+    const archivedAssets = parseJson<ArchivedObjectAsset[]>(
+      entries,
+      'objects/assets.json',
+    )
+    const objectAssets: ObjectAssetRecordV1[] = archivedAssets.map(
+      ({ archivePath, ...asset }) => {
+        if (!safeArchivePath(archivePath) || !archivePath.startsWith('objects/assets/')) {
+          throw new Error(`Invalid .wdtwin archive path: ${archivePath}.`)
+        }
+        return { ...asset, sourceBytes: ownBytes(required(entries, archivePath)) }
+      },
+    )
+    const snapshot = validateWorkcellProjectSnapshotV1({
+      manifest,
+      robot: { ...robotConfiguration, links: robotLinks },
+      frames: parseJson(entries, 'frames.json'),
+      objectAssets,
+      objectInstances: parseJson(entries, 'objects/instances.json'),
+      poses: parseJson(entries, 'poses/sequences.json'),
+      opcUa: parseJson(entries, 'opcua/bindings.json'),
+    })
+    return migrateV1ToV2(snapshot)
+  }
+
   const robotConfiguration = parseJson<
-    Omit<WorkcellProjectSnapshotV1['robot'], 'links'>
+    Omit<WorkcellProjectSnapshotV2['robot'], 'links'>
   >(entries, 'robot/configuration.json')
-  const archivedLinks = parseJson<ArchivedRobotLink[]>(
+  const archivedLinks = parseJson<ArchivedRobotLinkV2[]>(
     entries,
     'robot/links/index.json',
   )
-  const robotLinks: RobotLinkGeometryRecordV1[] = archivedLinks.map(
+  const robotLinks: RobotLinkGeometryRecordV2[] = archivedLinks.map(
     ({ archivePath, ...link }) => {
       if (!safeArchivePath(archivePath) || !archivePath.startsWith('robot/links/')) {
         throw new Error(`Invalid .wdtwin archive path: ${archivePath}.`)
@@ -219,11 +285,11 @@ export async function decodeWorkcellProject(
       return { ...link, sourceBytes: ownBytes(required(entries, archivePath)) }
     },
   )
-  const archivedAssets = parseJson<ArchivedObjectAsset[]>(
+  const archivedAssets = parseJson<ArchivedObjectAssetV2[]>(
     entries,
     'objects/assets.json',
   )
-  const objectAssets: ObjectAssetRecordV1[] = archivedAssets.map(
+  const objectAssets: ObjectAssetRecordV2[] = archivedAssets.map(
     ({ archivePath, ...asset }) => {
       if (!safeArchivePath(archivePath) || !archivePath.startsWith('objects/assets/')) {
         throw new Error(`Invalid .wdtwin archive path: ${archivePath}.`)
@@ -231,8 +297,7 @@ export async function decodeWorkcellProject(
       return { ...asset, sourceBytes: ownBytes(required(entries, archivePath)) }
     },
   )
-
-  const snapshot: WorkcellProjectSnapshotV1 = {
+  return validateWorkcellProjectSnapshot({
     manifest,
     robot: { ...robotConfiguration, links: robotLinks },
     frames: parseJson(entries, 'frames.json'),
@@ -240,6 +305,6 @@ export async function decodeWorkcellProject(
     objectInstances: parseJson(entries, 'objects/instances.json'),
     poses: parseJson(entries, 'poses/sequences.json'),
     opcUa: parseJson(entries, 'opcua/bindings.json'),
-  }
-  return validateWorkcellProjectSnapshot(snapshot)
+    collisionPolicy: parseJson(entries, 'collision/policy.json'),
+  })
 }

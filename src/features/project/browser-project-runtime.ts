@@ -1,5 +1,6 @@
-import type { WorkcellProjectSnapshotV1 } from '../../domain/project/project'
+import type { CurrentProjectSnapshot } from '../../domain/project/project'
 import { WORKCELL_PROJECT_FORMAT, WORKCELL_PROJECT_SCHEMA_VERSION } from '../../domain/project/project'
+import { DEFAULT_COLLISION_POLICY } from '../../domain/collision/collision'
 import { useRobotStore } from '../joints/robot-store'
 import { stepImportClient } from '../import/StepImportClient'
 import { ImportedGeometryRepository, importedGeometryRepository } from '../import/imported-geometry-repository'
@@ -13,9 +14,10 @@ import { useRobotGeometryStore } from '../robot/robot-geometry-store'
 import { restoreRobotGeometryRecords } from '../robot/robot-step-import'
 import type { ProjectRuntime } from './project-store'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
+import { useCollisionStore } from '../collision/collision-store'
 
 interface BrowserStagedProject {
-  robotAssets: ReadonlyMap<WorkcellProjectSnapshotV1['robot']['links'][number]['linkId'], ImportedThreeAsset>
+  robotAssets: ReadonlyMap<CurrentProjectSnapshot['robot']['links'][number]['linkId'], ImportedThreeAsset>
   objectAssets: ReadonlyMap<string, ImportedThreeAsset>
   objectRepository: ImportedGeometryRepository
 }
@@ -67,13 +69,21 @@ export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
       objectInstances: [],
       poses: [],
       opcUa: DEFAULT_OPC_UA,
+      collisionPolicy: {
+        enabled: DEFAULT_COLLISION_POLICY.enabled,
+        warningDistanceM: DEFAULT_COLLISION_POLICY.warningDistanceM,
+        ignoredPairKeys: [...DEFAULT_COLLISION_POLICY.ignoredPairKeys],
+        enabledRobotSelfPairs: [
+          ...DEFAULT_COLLISION_POLICY.enabledRobotSelfPairs,
+        ],
+      },
     }
   },
   capture: async (previous) => {
     const now = new Date().toISOString()
     const configuration = useRobotConfigurationStore.getState().configuration
     const persistedLinks = useRobotGeometryStore.getState().links
-    const links: WorkcellProjectSnapshotV1['robot']['links'] =
+    const links: CurrentProjectSnapshot['robot']['links'] =
       persistedLinks.length === 0
         ? await loadDefaultRobotGeometry()
         : [...structuredClone(persistedLinks)]
@@ -106,6 +116,16 @@ export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
         anglesDeg: [...pose.anglesDeg] as [number, number, number, number, number, number],
       })),
       opcUa: previous?.opcUa ?? DEFAULT_OPC_UA,
+      collisionPolicy: {
+        enabled: useCollisionStore.getState().policy.enabled,
+        warningDistanceM: useCollisionStore.getState().policy.warningDistanceM,
+        ignoredPairKeys: [
+          ...useCollisionStore.getState().policy.ignoredPairKeys,
+        ],
+        enabledRobotSelfPairs: [
+          ...useCollisionStore.getState().policy.enabledRobotSelfPairs,
+        ],
+      },
     }
   },
   stage: async (snapshot) => {
@@ -158,6 +178,11 @@ export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
     useCoordinateFrameStore.getState().replaceFrames(snapshot.frames)
     robotGeometryRepository.replace(staged.robotAssets)
     importedGeometryRepository.replaceAll(staged.objectAssets)
+    useCollisionStore.getState().replaceCollisionState({
+      policy: snapshot.collisionPolicy,
+      currentFindings: [],
+      diagnostics: [],
+    })
   },
   dispose: (staged) => {
     for (const asset of staged.robotAssets.values()) asset.dispose()

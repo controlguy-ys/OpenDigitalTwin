@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../robot/crb15000'
 import {
   MAX_OBJECT_ASSET_TRIANGLES,
+  MAX_COLLISION_BOXES_PER_PROJECT,
+  type ProjectCollisionBoxV2,
   type ObjectAssetRecordV1,
   type ObjectInstanceRecordV1,
   type RobotLinkGeometryRecordV1,
   type WorkcellProjectSnapshotV1,
+  type WorkcellProjectSnapshotV2,
   validateWorkcellProjectSnapshot,
+  validateWorkcellProjectSnapshotV1,
   WORKCELL_PROJECT_FORMAT,
   WORKCELL_PROJECT_SCHEMA_VERSION,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V1,
 } from './project'
 
 const LINK_IDS = [
@@ -83,7 +88,7 @@ function validProjectSnapshot(): WorkcellProjectSnapshotV1 {
   return {
     manifest: {
       format: WORKCELL_PROJECT_FORMAT,
-      schemaVersion: WORKCELL_PROJECT_SCHEMA_VERSION,
+      schemaVersion: WORKCELL_PROJECT_SCHEMA_VERSION_V1,
       projectId: 'project-01',
       name: 'Portable cell',
       createdAt: '2026-07-13T00:00:00.000Z',
@@ -131,18 +136,57 @@ function validProjectSnapshot(): WorkcellProjectSnapshotV1 {
   }
 }
 
+const defaultBox = (
+  center: [number, number, number] = [0, 0, 0],
+  halfExtents: [number, number, number] = [0.1, 0.1, 0.1],
+): ProjectCollisionBoxV2 => ({
+  id: 'default',
+  center: [...center],
+  halfExtents: [...halfExtents],
+  quaternion: [0, 0, 0, 1],
+})
+
+function validV2ProjectSnapshot(): WorkcellProjectSnapshotV2 {
+  const legacy = validProjectSnapshot()
+  return {
+    ...legacy,
+    manifest: { ...legacy.manifest, schemaVersion: 2 },
+    robot: {
+      ...legacy.robot,
+      links: legacy.robot.links.map((link) => ({
+        ...link,
+        collisionBoxes: [
+          defaultBox([...link.collisionCenter], [...link.collisionHalfExtents]),
+        ],
+      })),
+    },
+    objectAssets: legacy.objectAssets.map((asset) => ({
+      ...asset,
+      collisionBoxes: [
+        defaultBox([...asset.colliderCenter], [...asset.collisionHalfExtents]),
+      ],
+    })),
+    collisionPolicy: {
+      enabled: true,
+      warningDistanceM: 0.02,
+      ignoredPairKeys: [],
+      enabledRobotSelfPairs: [],
+    },
+  }
+}
+
 describe('portable workcell project contract', () => {
   it('accepts seven Robot links and reusable Object Asset references', () => {
     const snapshot = validProjectSnapshot()
 
-    expect(validateWorkcellProjectSnapshot(snapshot)).toBe(snapshot)
+    expect(validateWorkcellProjectSnapshotV1(snapshot)).toBe(snapshot)
   })
 
   it('rejects a project that does not contain exactly seven Robot links', () => {
     const snapshot = validProjectSnapshot()
     snapshot.robot.links = snapshot.robot.links.slice(0, 6)
 
-    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(
+    expect(() => validateWorkcellProjectSnapshotV1(snapshot)).toThrow(
       'exactly seven',
     )
   })
@@ -151,7 +195,7 @@ describe('portable workcell project contract', () => {
     const snapshot = validProjectSnapshot()
     snapshot.objectInstances = [objectInstance('orphan', 'missing-asset')]
 
-    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(
+    expect(() => validateWorkcellProjectSnapshotV1(snapshot)).toThrow(
       'Object Asset',
     )
   })
@@ -160,7 +204,7 @@ describe('portable workcell project contract', () => {
     const snapshot = validProjectSnapshot()
     snapshot.objectAssets = [objectAsset(), objectAsset()]
 
-    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow('Duplicate')
+    expect(() => validateWorkcellProjectSnapshotV1(snapshot)).toThrow('Duplicate')
   })
 
   it('rejects Object geometry that exceeds the triangle budget', () => {
@@ -175,7 +219,7 @@ describe('portable workcell project contract', () => {
       },
     ]
 
-    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(
+    expect(() => validateWorkcellProjectSnapshotV1(snapshot)).toThrow(
       'triangle budget',
     )
   })
@@ -184,6 +228,115 @@ describe('portable workcell project contract', () => {
     const snapshot = validProjectSnapshot()
     snapshot.frames.mcp.scale = [1, 2, 1]
 
-    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(/scale/i)
+    expect(() => validateWorkcellProjectSnapshotV1(snapshot)).toThrow(/scale/i)
+  })
+})
+
+describe('portable workcell project V2 collision contract', () => {
+  it('keeps the V1 literal independent from the current schema version', () => {
+    expect(WORKCELL_PROJECT_SCHEMA_VERSION_V1).toBe(1)
+    expect(WORKCELL_PROJECT_SCHEMA_VERSION).toBe(2)
+  })
+
+  it('normalizes and owns Compound Boxes and policy pair-key arrays', () => {
+    const snapshot = validV2ProjectSnapshot()
+    const boxes = snapshot.robot.links[0]!.collisionBoxes
+    boxes[0]!.quaternion = [0, 0, 0, 2]
+    boxes.push({
+      id: 'secondary',
+      center: [0.2, 0, 0],
+      halfExtents: [0.05, 0.06, 0.07],
+      quaternion: [0, 0, 1, 1],
+    })
+    snapshot.collisionPolicy.ignoredPairKeys = [
+      'object:machine-02|robot-link:LINK01',
+      'object:machine-01|robot-link:LINK00',
+      'object:machine-02|robot-link:LINK01',
+    ]
+
+    const normalized = validateWorkcellProjectSnapshot(snapshot)
+
+    expect(normalized).not.toBe(snapshot)
+    expect(normalized.robot.links[0]!.collisionBoxes).not.toBe(boxes)
+    expect(normalized.robot.links[0]!.collisionBoxes[0]!.quaternion).toEqual([
+      0, 0, 0, 1,
+    ])
+    expect(normalized.robot.links[0]!.collisionBoxes[1]!.quaternion[2]).toBeCloseTo(
+      Math.SQRT1_2,
+    )
+    expect(normalized.robot.links[0]!.collisionBoxes[1]!.quaternion[3]).toBeCloseTo(
+      Math.SQRT1_2,
+    )
+    expect(normalized.robot.links[0]!.collisionCenter).toEqual(
+      normalized.robot.links[0]!.collisionBoxes[0]!.center,
+    )
+    expect(normalized.robot.links[0]!.collisionHalfExtents).toEqual(
+      normalized.robot.links[0]!.collisionBoxes[0]!.halfExtents,
+    )
+    expect(normalized.collisionPolicy.ignoredPairKeys).toEqual([
+      'object:machine-01|robot-link:LINK00',
+      'object:machine-02|robot-link:LINK01',
+    ])
+
+    boxes[1]!.center[0] = 99
+    snapshot.collisionPolicy.ignoredPairKeys[0] = 'mutated'
+    expect(normalized.robot.links[0]!.collisionBoxes[1]!.center[0]).toBe(0.2)
+    expect(normalized.collisionPolicy.ignoredPairKeys[0]).toBe(
+      'object:machine-01|robot-link:LINK00',
+    )
+  })
+
+  it.each([
+    ['an empty canonical array', () => [] as ProjectCollisionBoxV2[]],
+    [
+      'duplicate Box ids',
+      () => [defaultBox(), { ...defaultBox(), center: [0.2, 0, 0] }],
+    ],
+    [
+      'a non-positive half extent',
+      () => [{ ...defaultBox(), halfExtents: [0.1, 0, 0.1] }],
+    ],
+    [
+      'a non-finite quaternion',
+      () => [{ ...defaultBox(), quaternion: [0, 0, Number.NaN, 1] }],
+    ],
+    [
+      'more than sixteen Boxes',
+      () => Array.from({ length: 17 }, (_, index) => ({
+        ...defaultBox(),
+        id: `box-${index}`,
+      })),
+    ],
+  ])('rejects %s instead of falling back to legacy bounds', (_label, boxes) => {
+    const snapshot = validV2ProjectSnapshot()
+    snapshot.robot.links[0]!.collisionBoxes = boxes() as ProjectCollisionBoxV2[]
+
+    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(/Box|collision/i)
+  })
+
+  it('rejects projects above the total Compound Box budget', () => {
+    const snapshot = validV2ProjectSnapshot()
+    const boxesPerAsset = 16
+    const assetCount = Math.ceil(
+      (MAX_COLLISION_BOXES_PER_PROJECT - snapshot.robot.links.length + 1) /
+        boxesPerAsset,
+    )
+    snapshot.objectAssets = Array.from({ length: assetCount }, (_, assetIndex) => ({
+      ...objectAsset(`asset-${assetIndex}`),
+      collisionBoxes: Array.from({ length: boxesPerAsset }, (_, boxIndex) => ({
+        ...defaultBox(),
+        id: `box-${boxIndex}`,
+      })),
+    }))
+    snapshot.objectInstances = []
+
+    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(/1,024|project.*Box/i)
+  })
+
+  it('rejects a negative collision warning distance', () => {
+    const snapshot = validV2ProjectSnapshot()
+    snapshot.collisionPolicy.warningDistanceM = -0.01
+
+    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(/warning distance/i)
   })
 })

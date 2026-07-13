@@ -1,4 +1,4 @@
-import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
+import type { RobotLinkGeometryRecordV2 } from '../../domain/project/project'
 import { LINK_WORLD_ORIGINS, type RobotLinkId } from '../../domain/robot/crb15000'
 
 const SOURCE_URLS = {
@@ -58,7 +58,7 @@ function tupleMap(
   return [map(tuple[0], 0), map(tuple[1], 1), map(tuple[2], 2)]
 }
 
-export async function loadDefaultRobotGeometry(): Promise<RobotLinkGeometryRecordV1[]> {
+export async function loadDefaultRobotGeometry(): Promise<RobotLinkGeometryRecordV2[]> {
   const reportResponse = await fetch('/models/robot/asset-report.json')
   if (!reportResponse.ok) throw new Error('Unable to load the default Robot asset report.')
   const report = (await reportResponse.json()) as AssetReport
@@ -88,6 +88,12 @@ export async function loadDefaultRobotGeometry(): Promise<RobotLinkGeometryRecor
         visible: true,
         collisionCenter,
         collisionHalfExtents,
+        collisionBoxes: [{
+          id: 'default',
+          center: [...collisionCenter],
+          halfExtents: [...collisionHalfExtents],
+          quaternion: [0, 0, 0, 1],
+        }],
         statistics: {
           vertices: link.source.vertexCount,
           triangles: link.source.triangleCount,

@@ -1,11 +1,11 @@
 import Dexie, { type Table } from 'dexie'
 import type {
-  ObjectAssetRecordV1,
+  ObjectAssetRecordV2,
   ObjectInstanceRecordV1,
 } from '../../domain/project/project'
 
 export class ObjectAssetDatabase extends Dexie {
-  assets!: Table<ObjectAssetRecordV1, string>
+  assets!: Table<ObjectAssetRecordV2, string>
   instances!: Table<ObjectInstanceRecordV1, string>
 
   constructor(name = 'robot-sim-object-assets') {

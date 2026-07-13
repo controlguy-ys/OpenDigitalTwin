@@ -1,31 +1,38 @@
 import { createStore } from 'zustand/vanilla'
-import type { WorkcellProjectSnapshotV1 } from '../../domain/project/project'
-import { validateWorkcellProjectSnapshot } from '../../domain/project/project'
+import type {
+  CurrentProjectSnapshot,
+  WorkcellProjectSnapshotV1,
+} from '../../domain/project/project'
+import {
+  validateWorkcellProjectSnapshot,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V1,
+} from '../../domain/project/project'
+import { migrateV1ToV2 } from '../../domain/project/project-v1-migration'
 import { decodeWorkcellProject, encodeWorkcellProject } from './project-codec'
 import type { ProjectDatabase } from './project-db'
 
 export interface ProjectRuntime<Staged = unknown> {
-  createNew?(): Promise<WorkcellProjectSnapshotV1>
-  capture(previous: WorkcellProjectSnapshotV1 | null): Promise<WorkcellProjectSnapshotV1>
-  stage(snapshot: WorkcellProjectSnapshotV1): Promise<Staged>
-  commit(snapshot: WorkcellProjectSnapshotV1, staged: Staged): Promise<void>
+  createNew?(): Promise<CurrentProjectSnapshot>
+  capture(previous: CurrentProjectSnapshot | null): Promise<CurrentProjectSnapshot>
+  stage(snapshot: CurrentProjectSnapshot): Promise<Staged>
+  commit(snapshot: CurrentProjectSnapshot, staged: Staged): Promise<void>
   dispose(staged: Staged): void
 }
 
 export interface ProjectCodec {
-  decode(bytes: Uint8Array | ArrayBuffer): Promise<WorkcellProjectSnapshotV1>
-  encode(snapshot: WorkcellProjectSnapshotV1): Promise<Uint8Array>
+  decode(bytes: Uint8Array | ArrayBuffer): Promise<CurrentProjectSnapshot>
+  encode(snapshot: CurrentProjectSnapshot): Promise<Uint8Array>
 }
 
 export interface ProjectStoreState {
   activeProjectId: string | null
   activeProjectName: string | null
-  activeSnapshot: WorkcellProjectSnapshotV1 | null
+  activeSnapshot: CurrentProjectSnapshot | null
   status: 'idle' | 'loading' | 'saving' | 'importing' | 'ready' | 'error'
   error: string | null
   hydrate(): Promise<void>
   newProject(): Promise<void>
-  saveActiveProject(): Promise<WorkcellProjectSnapshotV1>
+  saveActiveProject(): Promise<CurrentProjectSnapshot>
   exportActiveProject(): Promise<Uint8Array>
   importProject(bytes: Uint8Array | ArrayBuffer): Promise<void>
 }
@@ -42,8 +49,18 @@ export function createProjectStore<Staged>(
 ) {
   let hydrated = false
   let hydrationPromise: Promise<void> | null = null
+
+  const currentSnapshot = (candidate: unknown): CurrentProjectSnapshot => {
+    const schemaVersion = (
+      candidate as { manifest?: { schemaVersion?: unknown } }
+    ).manifest?.schemaVersion
+    return schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V1
+      ? migrateV1ToV2(candidate as WorkcellProjectSnapshotV1)
+      : validateWorkcellProjectSnapshot(candidate)
+  }
+
   return createStore<ProjectStoreState>()((set, get) => {
-    const activate = (snapshot: WorkcellProjectSnapshotV1) => ({
+    const activate = (snapshot: CurrentProjectSnapshot) => ({
       activeSnapshot: snapshot,
       activeProjectId: snapshot.manifest.projectId,
       activeProjectName: snapshot.manifest.name,
@@ -60,7 +77,17 @@ export function createProjectStore<Staged>(
           await database.open()
           const stored = await database.projects.get('active')
           if (stored === undefined) set({ status: 'idle' })
-          else set(activate(stored.snapshot))
+          else {
+            const snapshot =
+              (stored.snapshot.manifest.schemaVersion as number) ===
+              WORKCELL_PROJECT_SCHEMA_VERSION_V1
+                ? currentSnapshot(stored.snapshot)
+                : stored.snapshot
+            if (stored.snapshot.manifest.schemaVersion !== snapshot.manifest.schemaVersion) {
+              await database.projects.put({ key: 'active', snapshot })
+            }
+            set(activate(snapshot))
+          }
         } catch (error) {
           set({
             status: 'error',
@@ -143,7 +170,7 @@ export function createProjectStore<Staged>(
         set({ status: 'importing', error: null })
         let staged: Staged | undefined
         try {
-          const incoming = await codec.decode(bytes)
+          const incoming = currentSnapshot(await codec.decode(bytes))
           staged = await runtime.stage(incoming)
           await runtime.commit(incoming, staged)
           await database.projects.put({ key: 'active', snapshot: incoming })

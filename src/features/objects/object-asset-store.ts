@@ -1,15 +1,18 @@
 import { create } from 'zustand'
 import { createStore } from 'zustand/vanilla'
 import type {
-  ObjectAssetRecordV1,
+  ObjectAssetRecordV2,
   ObjectInstanceRecordV1,
+  ProjectCollisionBoxV2,
 } from '../../domain/project/project'
+import { validateCollisionBox } from '../../domain/collision/collision'
 import type { SerializableTransform } from '../../domain/equipment/equipment'
 import {
   MAX_ASSET_MATERIALS,
   MAX_ASSET_MESHES,
   MAX_OBJECT_ASSET_BYTES,
   MAX_OBJECT_ASSET_TRIANGLES,
+  MAX_COLLISION_BOXES_PER_ENTITY,
 } from '../../domain/project/project'
 import {
   objectAssetDb,
@@ -26,20 +29,20 @@ export const OBJECT_ASSET_PERSISTENCE_WARNING =
   'Object Asset storage is unavailable; changes will remain in memory for this session.'
 
 export interface ObjectAssetStoreState {
-  assets: readonly ObjectAssetRecordV1[]
+  assets: readonly ObjectAssetRecordV2[]
   instances: readonly ObjectInstanceRecordV1[]
   persistenceStatus: ObjectAssetPersistenceStatus
   warnings: readonly string[]
   hydrate(): Promise<void>
   addAssetInstance(
-    asset: ObjectAssetRecordV1,
+    asset: ObjectAssetRecordV2,
     instance: ObjectInstanceRecordV1,
   ): Promise<void>
   replaceProject(
-    assets: readonly ObjectAssetRecordV1[],
+    assets: readonly ObjectAssetRecordV2[],
     instances: readonly ObjectInstanceRecordV1[],
   ): Promise<void>
-  upsertAsset(asset: ObjectAssetRecordV1): Promise<void>
+  upsertAsset(asset: ObjectAssetRecordV2): Promise<void>
   createInstance(instance: ObjectInstanceRecordV1): Promise<void>
   updateInstance(instance: ObjectInstanceRecordV1): Promise<void>
   previewInstanceTransform(id: string, transform: SerializableTransform): void
@@ -74,7 +77,22 @@ function finiteTuple(
   }
 }
 
-function validateAsset(asset: ObjectAssetRecordV1): void {
+function validateCollisionBoxes(boxes: readonly ProjectCollisionBoxV2[]): void {
+  if (!Array.isArray(boxes) || boxes.length === 0) {
+    throw new Error('Object Asset must contain at least one collision Box.')
+  }
+  if (boxes.length > MAX_COLLISION_BOXES_PER_ENTITY) {
+    throw new Error(`Object Asset cannot exceed ${MAX_COLLISION_BOXES_PER_ENTITY} collision Boxes.`)
+  }
+  const ids = new Set<string>()
+  boxes.forEach((box) => {
+    validateCollisionBox(box)
+    if (ids.has(box.id)) throw new Error(`Duplicate collision Box id: ${box.id}.`)
+    ids.add(box.id)
+  })
+}
+
+function validateAsset(asset: ObjectAssetRecordV2): void {
   nonEmpty(asset.id, 'Object Asset id')
   nonEmpty(asset.name, 'Object Asset name')
   nonEmpty(asset.sourceFileName, 'Object Asset source filename')
@@ -93,6 +111,7 @@ function validateAsset(asset: ObjectAssetRecordV1): void {
   }
   finiteTuple(asset.collisionHalfExtents, 3, 'Object Asset collision half extents', true)
   finiteTuple(asset.colliderCenter, 3, 'Object Asset collider center')
+  validateCollisionBoxes(asset.collisionBoxes)
   const { vertices, triangles, meshes, materials } = asset.statistics
   if (
     [vertices, triangles, meshes, materials].some(
@@ -130,12 +149,25 @@ function validateInstance(instance: ObjectInstanceRecordV1): void {
   }
 }
 
-function cloneAsset(asset: ObjectAssetRecordV1): ObjectAssetRecordV1 {
+function cloneCollisionBox(box: ProjectCollisionBoxV2): ProjectCollisionBoxV2 {
+  const normalized = validateCollisionBox(box)
+  return {
+    id: normalized.id,
+    center: [...normalized.center],
+    halfExtents: [...normalized.halfExtents],
+    quaternion: [...normalized.quaternion],
+  }
+}
+
+function cloneAsset(asset: ObjectAssetRecordV2): ObjectAssetRecordV2 {
+  const collisionBoxes = asset.collisionBoxes.map(cloneCollisionBox)
+  const first = collisionBoxes[0]!
   return {
     ...asset,
     sourceBytes: asset.sourceBytes.slice(0),
-    colliderCenter: [...asset.colliderCenter],
-    collisionHalfExtents: [...asset.collisionHalfExtents],
+    colliderCenter: [...first.center],
+    collisionHalfExtents: [...first.halfExtents],
+    collisionBoxes,
     statistics: { ...asset.statistics },
   }
 }

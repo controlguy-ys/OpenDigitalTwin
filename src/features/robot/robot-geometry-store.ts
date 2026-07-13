@@ -1,7 +1,11 @@
 import { create } from 'zustand'
 import { createStore } from 'zustand/vanilla'
 import type { SerializableTransform } from '../../domain/equipment/equipment'
-import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
+import { validateCollisionBox } from '../../domain/collision/collision'
+import type {
+  ProjectCollisionBoxV2,
+  RobotLinkGeometryRecordV2,
+} from '../../domain/project/project'
 import {
   MAX_ASSET_MATERIALS,
   MAX_ASSET_MESHES,
@@ -9,6 +13,7 @@ import {
   MAX_ROBOT_LINK_BYTES,
   MAX_ROBOT_LINK_TRIANGLES,
   MAX_ROBOT_TRIANGLES,
+  MAX_COLLISION_BOXES_PER_ENTITY,
 } from '../../domain/project/project'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
 import { robotGeometryDb, type RobotGeometryDatabase } from './robot-geometry-db'
@@ -18,11 +23,11 @@ const LINK_IDS = [
 ] as const satisfies readonly RobotLinkId[]
 
 export interface RobotGeometryStoreState {
-  links: readonly RobotLinkGeometryRecordV1[]
+  links: readonly RobotLinkGeometryRecordV2[]
   persistenceStatus: 'idle' | 'loading' | 'persistent' | 'memory-only'
   hydrate(): Promise<void>
-  replaceRobot(links: readonly RobotLinkGeometryRecordV1[]): Promise<void>
-  replaceLink(link: RobotLinkGeometryRecordV1): Promise<void>
+  replaceRobot(links: readonly RobotLinkGeometryRecordV2[]): Promise<void>
+  replaceLink(link: RobotLinkGeometryRecordV2): Promise<void>
   setLocalTransform(linkId: RobotLinkId, transform: SerializableTransform): Promise<void>
   setVisible(linkId: RobotLinkId, visible: boolean): Promise<void>
   setCollision(
@@ -48,7 +53,22 @@ function finiteTuple(
   }
 }
 
-function validateLink(link: RobotLinkGeometryRecordV1): void {
+function validateCollisionBoxes(boxes: readonly ProjectCollisionBoxV2[]): void {
+  if (!Array.isArray(boxes) || boxes.length === 0) {
+    throw new Error('Robot Link must contain at least one collision Box.')
+  }
+  if (boxes.length > MAX_COLLISION_BOXES_PER_ENTITY) {
+    throw new Error(`Robot Link cannot exceed ${MAX_COLLISION_BOXES_PER_ENTITY} collision Boxes.`)
+  }
+  const ids = new Set<string>()
+  boxes.forEach((box) => {
+    validateCollisionBox(box)
+    if (ids.has(box.id)) throw new Error(`Duplicate collision Box id: ${box.id}.`)
+    ids.add(box.id)
+  })
+}
+
+function validateLink(link: RobotLinkGeometryRecordV2): void {
   if (!LINK_IDS.includes(link.linkId)) throw new Error('Robot Link id is invalid.')
   if (link.sourceFileName.trim() === '') throw new Error(`${link.linkId} filename is required.`)
   if (
@@ -67,6 +87,7 @@ function validateLink(link: RobotLinkGeometryRecordV1): void {
   if (typeof link.visible !== 'boolean') throw new Error(`${link.linkId} visibility is invalid.`)
   finiteTuple(link.collisionCenter, 3, `${link.linkId} collision center`)
   finiteTuple(link.collisionHalfExtents, 3, `${link.linkId} collision extents`, true)
+  validateCollisionBoxes(link.collisionBoxes)
   const { vertices, triangles, meshes, materials } = link.statistics
   if (
     [vertices, triangles, meshes, materials].some(
@@ -80,7 +101,7 @@ function validateLink(link: RobotLinkGeometryRecordV1): void {
   }
 }
 
-function validateRobot(links: readonly RobotLinkGeometryRecordV1[]): void {
+function validateRobot(links: readonly RobotLinkGeometryRecordV2[]): void {
   if (links.length !== LINK_IDS.length) {
     throw new Error('A new Robot import requires exactly seven Link STEP files.')
   }
@@ -109,13 +130,26 @@ function cloneTransform(transform: SerializableTransform): SerializableTransform
   }
 }
 
-function cloneLink(link: RobotLinkGeometryRecordV1): RobotLinkGeometryRecordV1 {
+function cloneCollisionBox(box: ProjectCollisionBoxV2): ProjectCollisionBoxV2 {
+  const normalized = validateCollisionBox(box)
+  return {
+    id: normalized.id,
+    center: [...normalized.center],
+    halfExtents: [...normalized.halfExtents],
+    quaternion: [...normalized.quaternion],
+  }
+}
+
+function cloneLink(link: RobotLinkGeometryRecordV2): RobotLinkGeometryRecordV2 {
+  const collisionBoxes = link.collisionBoxes.map(cloneCollisionBox)
+  const first = collisionBoxes[0]!
   return {
     ...link,
     sourceBytes: link.sourceBytes.slice(0),
     localTransform: cloneTransform(link.localTransform),
-    collisionCenter: [...link.collisionCenter],
-    collisionHalfExtents: [...link.collisionHalfExtents],
+    collisionCenter: [...first.center],
+    collisionHalfExtents: [...first.halfExtents],
+    collisionBoxes,
     statistics: { ...link.statistics },
   }
 }
@@ -131,7 +165,7 @@ function createRobotGeometryState(database: RobotGeometryDatabase) {
     ) => void,
     get: () => RobotGeometryStoreState,
   ): RobotGeometryStoreState => {
-    const persistLink = async (link: RobotLinkGeometryRecordV1) => {
+    const persistLink = async (link: RobotLinkGeometryRecordV2) => {
       if (get().persistenceStatus === 'memory-only') return
       try {
         await database.links.put(link)
@@ -141,7 +175,7 @@ function createRobotGeometryState(database: RobotGeometryDatabase) {
     }
     const updateLink = async (
       linkId: RobotLinkId,
-      update: (link: RobotLinkGeometryRecordV1) => RobotLinkGeometryRecordV1,
+      update: (link: RobotLinkGeometryRecordV2) => RobotLinkGeometryRecordV2,
     ) => {
       await get().hydrate()
       const current = get().links.find((link) => link.linkId === linkId)
@@ -204,11 +238,22 @@ function createRobotGeometryState(database: RobotGeometryDatabase) {
       setVisible: (linkId, visible) =>
         updateLink(linkId, (link) => ({ ...link, visible })),
       setCollision: (linkId, collisionCenter, collisionHalfExtents) =>
-        updateLink(linkId, (link) => ({
-          ...link,
-          collisionCenter,
-          collisionHalfExtents,
-        })),
+        updateLink(linkId, (link) => {
+          const first = link.collisionBoxes[0]!
+          return {
+            ...link,
+            collisionCenter,
+            collisionHalfExtents,
+            collisionBoxes: [
+              {
+                ...first,
+                center: [...collisionCenter],
+                halfExtents: [...collisionHalfExtents],
+              },
+              ...link.collisionBoxes.slice(1),
+            ],
+          }
+        }),
       clear: async () => {
         await hydrate()
         if (get().persistenceStatus !== 'memory-only') await database.links.clear()

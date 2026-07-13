@@ -4,9 +4,16 @@ import type {
   SerializableTransform,
 } from '../equipment/equipment'
 import type { RobotJointDefinition, RobotLinkId, Vector3Tuple } from '../robot/crb15000'
+import {
+  validateCollisionBox,
+  validateCollisionPolicy,
+  type CollisionBox,
+  type CollisionPolicy,
+} from '../collision/collision'
 
 export const WORKCELL_PROJECT_FORMAT = 'WebDigitalTwinProject'
-export const WORKCELL_PROJECT_SCHEMA_VERSION = 1
+export const WORKCELL_PROJECT_SCHEMA_VERSION_V1 = 1
+export const WORKCELL_PROJECT_SCHEMA_VERSION = 2
 
 export const MAX_ROBOT_LINKS = 7
 export const MAX_ROBOT_LINK_BYTES = 25 * 1024 * 1024
@@ -19,6 +26,8 @@ export const MAX_OBJECT_ASSET_TRIANGLES = 250_000
 export const MAX_SCENE_TRIANGLES = 1_500_000
 export const MAX_ASSET_MESHES = 64
 export const MAX_ASSET_MATERIALS = 32
+export const MAX_COLLISION_BOXES_PER_ENTITY = 16
+export const MAX_COLLISION_BOXES_PER_PROJECT = 1_024
 
 const ROBOT_LINK_IDS = [
   'LINK00',
@@ -41,11 +50,30 @@ export interface GeometryStatistics {
 
 export interface WorkcellProjectManifestV1 {
   format: typeof WORKCELL_PROJECT_FORMAT
-  schemaVersion: typeof WORKCELL_PROJECT_SCHEMA_VERSION
+  schemaVersion: typeof WORKCELL_PROJECT_SCHEMA_VERSION_V1
   projectId: string
   name: string
   createdAt: string
   updatedAt: string
+}
+
+export interface WorkcellProjectManifestV2
+  extends Omit<WorkcellProjectManifestV1, 'schemaVersion'> {
+  schemaVersion: typeof WORKCELL_PROJECT_SCHEMA_VERSION
+}
+
+export interface ProjectCollisionBoxV2 {
+  id: string
+  center: [number, number, number]
+  halfExtents: [number, number, number]
+  quaternion: [number, number, number, number]
+}
+
+export interface ProjectCollisionPolicyV2 {
+  enabled: boolean
+  warningDistanceM: number
+  ignoredPairKeys: string[]
+  enabledRobotSelfPairs: string[]
 }
 
 export interface RobotLinkGeometryRecordV1 {
@@ -57,6 +85,10 @@ export interface RobotLinkGeometryRecordV1 {
   collisionCenter: [number, number, number]
   collisionHalfExtents: [number, number, number]
   statistics: GeometryStatistics
+}
+
+export interface RobotLinkGeometryRecordV2 extends RobotLinkGeometryRecordV1 {
+  collisionBoxes: ProjectCollisionBoxV2[]
 }
 
 export interface ProjectRobotJointV1 extends RobotJointDefinition {
@@ -73,6 +105,11 @@ export interface ProjectRobotV1 {
   joints: ProjectRobotJointV1[]
 }
 
+
+export interface ProjectRobotV2 extends Omit<ProjectRobotV1, 'links'> {
+  links: RobotLinkGeometryRecordV2[]
+}
+
 export interface ObjectAssetRecordV1 {
   id: string
   name: string
@@ -83,6 +120,10 @@ export interface ObjectAssetRecordV1 {
   colliderCenter: [number, number, number]
   collisionHalfExtents: [number, number, number]
   statistics: GeometryStatistics
+}
+
+export interface ObjectAssetRecordV2 extends ObjectAssetRecordV1 {
+  collisionBoxes: ProjectCollisionBoxV2[]
 }
 
 export interface ObjectInstanceRecordV1 {
@@ -136,6 +177,19 @@ export interface WorkcellProjectSnapshotV1 {
     equipment: ProjectOpcUaEquipmentBindingV1[]
   }
 }
+
+export interface WorkcellProjectSnapshotV2
+  extends Omit<
+    WorkcellProjectSnapshotV1,
+    'manifest' | 'robot' | 'objectAssets'
+  > {
+  manifest: WorkcellProjectManifestV2
+  robot: ProjectRobotV2
+  objectAssets: ObjectAssetRecordV2[]
+  collisionPolicy: ProjectCollisionPolicyV2
+}
+
+export type CurrentProjectSnapshot = WorkcellProjectSnapshotV2
 
 function fail(message: string): never {
   throw new Error(`Invalid workcell project: ${message}`)
@@ -260,10 +314,15 @@ function requireUniqueId(
   return id
 }
 
-function validateManifest(value: unknown): void {
+function validateManifest(
+  value: unknown,
+  schemaVersion:
+    | typeof WORKCELL_PROJECT_SCHEMA_VERSION_V1
+    | typeof WORKCELL_PROJECT_SCHEMA_VERSION,
+): void {
   const manifest = requireRecord(value, 'manifest')
   if (manifest.format !== WORKCELL_PROJECT_FORMAT) fail('Unsupported project format.')
-  if (manifest.schemaVersion !== WORKCELL_PROJECT_SCHEMA_VERSION) {
+  if (manifest.schemaVersion !== schemaVersion) {
     fail('Unsupported project schema version.')
   }
   requireString(manifest.projectId, 'Project id')
@@ -274,9 +333,47 @@ function validateManifest(value: unknown): void {
   }
 }
 
-function validateRobot(value: unknown): {
+function validateCollisionBoxes(value: unknown, label: string): number {
+  const boxes = requireArray(value, `${label} collision Boxes`)
+  if (boxes.length === 0) fail(`${label} must contain at least one collision Box.`)
+  if (boxes.length > MAX_COLLISION_BOXES_PER_ENTITY) {
+    fail(
+      `${label} cannot exceed ${MAX_COLLISION_BOXES_PER_ENTITY} collision Boxes.`,
+    )
+  }
+  const ids = new Set<string>()
+  boxes.forEach((rawBox, index) => {
+    const box = requireRecord(rawBox, `${label} collision Box ${index}`)
+    const id = requireUniqueId(box.id, `${label} collision Box`, ids)
+    const center = requireTuple(
+      box.center,
+      3,
+      `${label} collision Box ${id} center`,
+    ) as [number, number, number]
+    const halfExtents = requireTuple(
+      box.halfExtents,
+      3,
+      `${label} collision Box ${id} half extents`,
+      true,
+    ) as [number, number, number]
+    const quaternion = requireTuple(
+      box.quaternion,
+      4,
+      `${label} collision Box ${id} quaternion`,
+    ) as [number, number, number, number]
+    try {
+      validateCollisionBox({ id, center, halfExtents, quaternion })
+    } catch (error) {
+      fail(error instanceof Error ? error.message : `${label} collision Box is invalid.`)
+    }
+  })
+  return boxes.length
+}
+
+function validateRobot(value: unknown, v2: boolean): {
   sourceBytes: number
   triangles: number
+  collisionBoxes: number
 } {
   const robot = requireRecord(value, 'robot')
   requireString(robot.name, 'Robot name')
@@ -291,6 +388,7 @@ function validateRobot(value: unknown): {
   const linkIds = new Set<string>()
   let sourceBytes = 0
   let triangles = 0
+  let collisionBoxes = 0
   for (const [index, rawLink] of links.entries()) {
     const link = requireRecord(rawLink, `Robot link ${index}`)
     const linkId = requireString(link.linkId, `Robot link ${index} id`)
@@ -308,6 +406,9 @@ function validateRobot(value: unknown): {
     requireBoolean(link.visible, `${linkId} visibility`)
     requireTuple(link.collisionCenter, 3, `${linkId} collision center`)
     requireTuple(link.collisionHalfExtents, 3, `${linkId} collision half extents`, true)
+    if (v2) {
+      collisionBoxes += validateCollisionBoxes(link.collisionBoxes, linkId)
+    }
     const stats = requireStatistics(
       link.statistics,
       linkId,
@@ -337,18 +438,20 @@ function validateRobot(value: unknown): {
     if (minDeg >= maxDeg) fail(`${JOINT_IDS[index]} limits are invalid.`)
     requirePositive(joint.maxVelocityDegPerSec, `${JOINT_IDS[index]} velocity`)
   })
-  return { sourceBytes, triangles }
+  return { sourceBytes, triangles, collisionBoxes }
 }
 
-function validateAssets(value: unknown): {
+function validateAssets(value: unknown, v2: boolean): {
   ids: Set<string>
   sourceBytes: number
   triangles: Map<string, number>
+  collisionBoxes: number
 } {
   const assets = requireArray(value, 'Object Assets')
   const ids = new Set<string>()
   const triangles = new Map<string, number>()
   let sourceBytes = 0
+  let collisionBoxes = 0
   assets.forEach((rawAsset, index) => {
     const asset = requireRecord(rawAsset, `Object Asset ${index}`)
     const id = requireUniqueId(asset.id, 'Object Asset', ids)
@@ -364,6 +467,9 @@ function validateAssets(value: unknown): {
     }
     requireTuple(asset.colliderCenter, 3, `${id} collider center`)
     requireTuple(asset.collisionHalfExtents, 3, `${id} collision half extents`, true)
+    if (v2) {
+      collisionBoxes += validateCollisionBoxes(asset.collisionBoxes, `Object Asset ${id}`)
+    }
     const stats = requireStatistics(
       asset.statistics,
       `Object Asset ${id}`,
@@ -371,7 +477,7 @@ function validateAssets(value: unknown): {
     )
     triangles.set(id, stats.triangles)
   })
-  return { ids, sourceBytes, triangles }
+  return { ids, sourceBytes, triangles, collisionBoxes }
 }
 
 function validateInstances(
@@ -451,18 +557,51 @@ function validateOpcUa(value: unknown, instanceIds: Set<string>): void {
   )
 }
 
-export function validateWorkcellProjectSnapshot(
+function validateProjectCollisionPolicy(value: unknown): CollisionPolicy {
+  const policy = requireRecord(value, 'collision policy')
+  const ignoredPairKeys = requireArray(
+    policy.ignoredPairKeys,
+    'Ignored collision pair keys',
+  ).map((entry, index) =>
+    requireString(entry, `Ignored collision pair key ${index}`),
+  )
+  const enabledRobotSelfPairs = requireArray(
+    policy.enabledRobotSelfPairs,
+    'Enabled Robot self pair keys',
+  ).map((entry, index) =>
+    requireString(entry, `Enabled Robot self pair key ${index}`),
+  )
+  try {
+    return validateCollisionPolicy({
+      enabled: requireBoolean(policy.enabled, 'Collision policy enabled'),
+      warningDistanceM: requireFinite(
+        policy.warningDistanceM,
+        'Collision warning distance',
+      ),
+      ignoredPairKeys,
+      enabledRobotSelfPairs,
+    })
+  } catch (error) {
+    fail(error instanceof Error ? error.message : 'Collision policy is invalid.')
+  }
+}
+
+function validateSnapshotStructure(
   value: unknown,
-): WorkcellProjectSnapshotV1 {
+  schemaVersion:
+    | typeof WORKCELL_PROJECT_SCHEMA_VERSION_V1
+    | typeof WORKCELL_PROJECT_SCHEMA_VERSION,
+): Record<string, unknown> {
   const snapshot = requireRecord(value, 'project')
-  validateManifest(snapshot.manifest)
-  const robot = validateRobot(snapshot.robot)
+  const v2 = schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION
+  validateManifest(snapshot.manifest, schemaVersion)
+  const robot = validateRobot(snapshot.robot, v2)
 
   const frames = requireRecord(snapshot.frames, 'coordinate frames')
   requireFrameTransform(frames.mcp, 'MCP frame')
   requireFrameTransform(frames.tcp, 'TCP frame')
 
-  const assets = validateAssets(snapshot.objectAssets)
+  const assets = validateAssets(snapshot.objectAssets, v2)
   const visibleObjectTriangles = validateInstances(
     snapshot.objectInstances,
     assets.ids,
@@ -474,6 +613,15 @@ export function validateWorkcellProjectSnapshot(
   if (robot.sourceBytes + assets.sourceBytes > MAX_PROJECT_SOURCE_BYTES) {
     fail('Project exceeds the raw STEP byte budget.')
   }
+  if (
+    v2 &&
+    robot.collisionBoxes + assets.collisionBoxes >
+      MAX_COLLISION_BOXES_PER_PROJECT
+  ) {
+    fail(
+      `Project cannot exceed ${MAX_COLLISION_BOXES_PER_PROJECT.toLocaleString('en-US')} collision Boxes.`,
+    )
+  }
 
   validatePoses(snapshot.poses)
   const instanceIds = new Set(
@@ -482,5 +630,69 @@ export function validateWorkcellProjectSnapshot(
     ),
   )
   validateOpcUa(snapshot.opcUa, instanceIds)
+  if (v2) validateProjectCollisionPolicy(snapshot.collisionPolicy)
+  return snapshot
+}
+
+function projectCollisionBox(box: CollisionBox): ProjectCollisionBoxV2 {
+  return {
+    id: box.id,
+    center: [...box.center],
+    halfExtents: [...box.halfExtents],
+    quaternion: [...box.quaternion],
+  }
+}
+
+function normalizedCollisionBoxes(
+  boxes: readonly ProjectCollisionBoxV2[],
+): ProjectCollisionBoxV2[] {
+  return boxes.map((box) => projectCollisionBox(validateCollisionBox(box)))
+}
+
+function normalizedCollisionPolicy(
+  policy: ProjectCollisionPolicyV2,
+): ProjectCollisionPolicyV2 {
+  const normalized = validateCollisionPolicy(policy)
+  return {
+    enabled: normalized.enabled,
+    warningDistanceM: normalized.warningDistanceM,
+    ignoredPairKeys: [...normalized.ignoredPairKeys],
+    enabledRobotSelfPairs: [...normalized.enabledRobotSelfPairs],
+  }
+}
+
+export function validateWorkcellProjectSnapshotV1(
+  value: unknown,
+): WorkcellProjectSnapshotV1 {
+  validateSnapshotStructure(value, WORKCELL_PROJECT_SCHEMA_VERSION_V1)
   return value as WorkcellProjectSnapshotV1
+}
+
+export function validateWorkcellProjectSnapshot(
+  value: unknown,
+): CurrentProjectSnapshot {
+  validateSnapshotStructure(value, WORKCELL_PROJECT_SCHEMA_VERSION)
+  const snapshot = structuredClone(value as WorkcellProjectSnapshotV2)
+  snapshot.robot.links = snapshot.robot.links.map((link) => {
+    const collisionBoxes = normalizedCollisionBoxes(link.collisionBoxes)
+    const first = collisionBoxes[0]!
+    return {
+      ...link,
+      collisionCenter: [...first.center],
+      collisionHalfExtents: [...first.halfExtents],
+      collisionBoxes,
+    }
+  })
+  snapshot.objectAssets = snapshot.objectAssets.map((asset) => {
+    const collisionBoxes = normalizedCollisionBoxes(asset.collisionBoxes)
+    const first = collisionBoxes[0]!
+    return {
+      ...asset,
+      colliderCenter: [...first.center],
+      collisionHalfExtents: [...first.halfExtents],
+      collisionBoxes,
+    }
+  })
+  snapshot.collisionPolicy = normalizedCollisionPolicy(snapshot.collisionPolicy)
+  return snapshot
 }

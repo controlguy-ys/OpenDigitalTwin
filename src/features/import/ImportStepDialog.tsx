@@ -5,7 +5,7 @@ import type {
   EquipmentSourceUnit,
 } from '../../domain/equipment/equipment'
 import type {
-  ObjectAssetRecordV1,
+  ObjectAssetRecordV2,
   ObjectInstanceRecordV1,
 } from '../../domain/project/project'
 import {
@@ -45,7 +45,7 @@ export interface ImportStepDialogProps {
   cache: ImportStepGeometryCache
   onCommit?(record: EquipmentRecord): Promise<void>
   onCommitAsset?(
-    asset: ObjectAssetRecordV1,
+    asset: ObjectAssetRecordV2,
     instance: ObjectInstanceRecordV1,
   ): Promise<void>
   onSelect(id: string): void
@@ -416,7 +416,7 @@ export function ImportStepDialog({
       },
     }
 
-    const objectAsset: ObjectAssetRecordV1 = {
+    const objectAsset: ObjectAssetRecordV2 = {
       id: assetId,
       name: draft.name.trim(),
       sourceFileName: draft.sourceFileName,
@@ -425,6 +425,12 @@ export function ImportStepDialog({
       originMode: draft.originMode,
       colliderCenter: [...asset.colliderCenter],
       collisionHalfExtents: [...draft.collisionHalfExtents],
+      collisionBoxes: [{
+        id: 'default',
+        center: [...asset.colliderCenter],
+        halfExtents: [...draft.collisionHalfExtents],
+        quaternion: [0, 0, 0, 1],
+      }],
       statistics: geometryStatistics(draft.result),
     }
     const objectInstance: ObjectInstanceRecordV1 = {

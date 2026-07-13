@@ -1,11 +1,11 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
-import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
+import type { RobotLinkGeometryRecordV2 } from '../../domain/project/project'
 import { RobotGeometryDialog } from './RobotGeometryDialog'
 import { useRobotGeometryStore } from './robot-geometry-store'
 
-const link: RobotLinkGeometryRecordV1 = {
+const link: RobotLinkGeometryRecordV2 = {
   linkId: 'LINK00',
   sourceFileName: 'LINK00.step',
   sourceBytes: new Uint8Array([1]).buffer,
@@ -17,6 +17,12 @@ const link: RobotLinkGeometryRecordV1 = {
   visible: true,
   collisionCenter: [0, 0, 0],
   collisionHalfExtents: [0.1, 0.1, 0.1],
+  collisionBoxes: [{
+    id: 'default',
+    center: [0, 0, 0],
+    halfExtents: [0.1, 0.1, 0.1],
+    quaternion: [0, 0, 0, 1],
+  }],
   statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
 }
 
