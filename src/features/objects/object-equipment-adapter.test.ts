@@ -3,7 +3,11 @@ import type {
   ObjectAssetRecordV1,
   ObjectInstanceRecordV1,
 } from '../../domain/project/project'
-import { objectInstanceToEquipmentRecord } from './object-equipment-adapter'
+import { Group } from 'three'
+import {
+  objectInstanceToEquipmentRecord,
+  objectInstanceToGeometryEntity,
+} from './object-equipment-adapter'
 
 it('keeps Asset collision center while adapting a reusable Instance for the scene', () => {
   const asset: ObjectAssetRecordV1 = {
@@ -36,5 +40,16 @@ it('keeps Asset collision center while adapting a reusable Instance for the scen
     assetId: 'asset-01',
     collisionCenter: [0.2, -0.1, 0.4],
     numericStatus: 7,
+  })
+
+  expect(objectInstanceToGeometryEntity(asset, instance, new Group())).toMatchObject({
+    id: 'object:instance-01',
+    category: 'object',
+    boxes: [
+      {
+        center: asset.colliderCenter,
+        halfExtents: asset.collisionHalfExtents,
+      },
+    ],
   })
 })

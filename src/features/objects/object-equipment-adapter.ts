@@ -3,6 +3,37 @@ import type {
   ObjectAssetRecordV1,
   ObjectInstanceRecordV1,
 } from '../../domain/project/project'
+import type { Object3D } from 'three'
+import type { GeometryEntityRegistration } from '../collision/geometry-entity-registry'
+
+export function objectInstanceToGeometryEntity(
+  asset: ObjectAssetRecordV1,
+  instance: ObjectInstanceRecordV1,
+  object: Object3D | null,
+  held = false,
+  colliderRevision = 0,
+): GeometryEntityRegistration {
+  const center: [number, number, number] = [...asset.colliderCenter]
+  const halfExtents: [number, number, number] = [
+    ...asset.collisionHalfExtents,
+  ]
+  const quaternion: [number, number, number, number] = [0, 0, 0, 1]
+  return Object.freeze({
+    id: `object:${instance.id}`,
+    name: instance.name,
+    category: held ? 'held-object' : 'object',
+    boxes: Object.freeze([
+      Object.freeze({
+        id: 'default',
+        center: Object.freeze(center),
+        halfExtents: Object.freeze(halfExtents),
+        quaternion: Object.freeze(quaternion),
+      }),
+    ]),
+    object,
+    colliderRevision,
+  })
+}
 
 export function objectInstanceToEquipmentRecord(
   instance: ObjectInstanceRecordV1,

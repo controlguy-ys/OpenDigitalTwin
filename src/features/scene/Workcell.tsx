@@ -1,5 +1,11 @@
 import { OrbitControls } from '@react-three/drei/core/OrbitControls.js'
-import { forwardRef, useCallback, useRef, useState } from 'react'
+import {
+  forwardRef,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type { Group, Object3D } from 'three'
 import { EquipmentScene } from '../equipment/EquipmentScene'
 import { CollisionSystem } from '../interaction/CollisionSystem'
@@ -16,6 +22,8 @@ import {
   WORKBENCH_TOP_Z,
 } from './workcell-constants'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
+import { registerGeometryEntity } from '../collision/geometry-entity-registry'
+import { workbenchToGeometryEntity } from '../collision/scene-entity-adapter'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
@@ -109,6 +117,14 @@ export function Workcell({
   const handleEquipmentDraggingChange = useCallback((dragging: boolean) => {
     setOrbitEnabled(!dragging)
   }, [])
+
+  useLayoutEffect(
+    () =>
+      registerGeometryEntity(
+        workbenchToGeometryEntity(workbenchObjectRef.current),
+      ),
+    [],
+  )
 
   return (
     <>

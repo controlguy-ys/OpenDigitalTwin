@@ -1,5 +1,14 @@
 import type { RefObject } from 'react'
 import type { Object3D } from 'three'
+import { updateGeometryEntityObject } from '../collision/geometry-entity-registry'
+
+function syncGeometryEntityObject(
+  equipmentId: string,
+  object: Object3D | null,
+): void {
+  updateGeometryEntityObject(`equipment:${equipmentId}`, object)
+  updateGeometryEntityObject(`object:${equipmentId}`, object)
+}
 
 export function updateEquipmentObjectRegistration(
   registry: Map<string, Object3D>,
@@ -16,9 +25,11 @@ export function updateEquipmentObjectRegistration(
       registry.delete(equipmentId)
     }
     ownerRef.current = null
+    syncGeometryEntityObject(equipmentId, registry.get(equipmentId) ?? null)
     return
   }
 
   ownerRef.current = object
   registry.set(equipmentId, object)
+  syncGeometryEntityObject(equipmentId, object)
 }

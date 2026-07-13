@@ -2,6 +2,8 @@ import { Group, Quaternion, Vector3 } from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION } from '../../domain/robot/crb15000'
 import { createRobotRig } from '../../domain/robot/kinematics'
+import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
+import { geometryEntityRegistry } from '../collision/geometry-entity-registry'
 import {
   ROBOT_LINK_ASSETS,
   attachRobotRigRegistration,
@@ -9,7 +11,9 @@ import {
   describeRobotLoadError,
   detachRobotRigRegistration,
   isCompleteRobotRigRegistration,
+  registerRobotGeometryEntities,
 } from './RobotModel'
+import { registerRobotToolGeometryEntity } from './RobotGripper'
 
 vi.mock('@react-three/fiber', () => ({
   createPortal: vi.fn(),
@@ -34,6 +38,23 @@ function linkModelsForSlot(
   return registration.linkSlots[id].children.filter(
     (child) => child.name === `${id}-model`,
   )
+}
+
+function geometryRecords(): RobotLinkGeometryRecordV1[] {
+  return ROBOT_LINK_ASSETS.map(({ id }, index) => ({
+    linkId: id,
+    sourceFileName: `${id}.step`,
+    sourceBytes: new Uint8Array([1]).buffer,
+    localTransform: {
+      position: [0, 0, 0],
+      quaternion: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    },
+    visible: true,
+    collisionCenter: [index, index + 0.1, index + 0.2],
+    collisionHalfExtents: [0.1, 0.2, 0.3],
+    statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
+  }))
 }
 
 describe('RobotModel asset registration', () => {
@@ -137,5 +158,51 @@ describe('RobotModel asset registration', () => {
     expect(describeRobotLoadError(error)).toBe(
       'Failed to load LINK04: fetch for "/models/robot/LINK04.glb" responded with 404: Not Found',
     )
+  })
+
+  it('registers all seven live Link models with active custom colliders', () => {
+    geometryEntityRegistry.clear()
+    const registration = createRobotRigRegistration(
+      createRobotRig(CRB15000_DEFINITION),
+      createLoadedScenes(),
+    )
+
+    const cleanup = registerRobotGeometryEntities(
+      registration,
+      geometryRecords(),
+      7,
+    )
+
+    expect([...geometryEntityRegistry.keys()].sort()).toEqual(
+      ROBOT_LINK_ASSETS.map(({ id }) => `robot-link:${id}`).sort(),
+    )
+    expect(geometryEntityRegistry.get('robot-link:LINK03')).toMatchObject({
+      object: registration.links.LINK03,
+      colliderRevision: 7,
+      boxes: [
+        {
+          center: [3, 3.1, 3.2],
+          halfExtents: [0.1, 0.2, 0.3],
+        },
+      ],
+    })
+
+    cleanup()
+    expect(geometryEntityRegistry.size).toBe(0)
+  })
+
+  it('registers the default gripper as the Tool Entity', () => {
+    geometryEntityRegistry.clear()
+    const tool = new Group()
+
+    const cleanup = registerRobotToolGeometryEntity(tool)
+
+    expect(geometryEntityRegistry.get('tool:default')).toMatchObject({
+      id: 'tool:default',
+      category: 'tool',
+      object: tool,
+    })
+    cleanup()
+    expect(geometryEntityRegistry.has('tool:default')).toBe(false)
   })
 })

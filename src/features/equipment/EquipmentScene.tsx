@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
@@ -21,6 +22,9 @@ import { EquipmentStatusOverlay } from './EquipmentStatusOverlay'
 import { useEquipmentStore } from './equipment-store'
 import { useObjectAssetStore } from '../objects/object-asset-store'
 import { objectRecords } from '../objects/object-equipment-adapter'
+import { objectInstanceToGeometryEntity } from '../objects/object-equipment-adapter'
+import { registerGeometryEntity } from '../collision/geometry-entity-registry'
+import { equipmentRecordToGeometryEntity } from '../collision/scene-entity-adapter'
 
 interface EquipmentInstanceProps {
   record: EquipmentRecord
@@ -225,6 +229,50 @@ export function EquipmentScene({
   const localEquipmentObjectsRef = useRef(new Map<string, Object3D>())
   const equipmentObjectsRef =
     providedEquipmentObjectsRef ?? localEquipmentObjectsRef
+
+  useLayoutEffect(() => {
+    const cleanups: (() => void)[] = []
+    for (const record of records) {
+      if (hiddenEntityIds.includes(record.id)) continue
+      cleanups.push(
+        registerGeometryEntity(
+          equipmentRecordToGeometryEntity(
+            record,
+            equipmentObjectsRef.current.get(record.id) ?? null,
+            heldEquipmentId === record.id,
+          ),
+        ),
+      )
+    }
+
+    const assetsById = new Map(objectAssets.map((asset) => [asset.id, asset]))
+    for (const instance of objectInstances) {
+      if (!instance.visible || hiddenEntityIds.includes(instance.id)) continue
+      const asset = assetsById.get(instance.assetId)
+      if (asset === undefined) continue
+      cleanups.push(
+        registerGeometryEntity(
+          objectInstanceToGeometryEntity(
+            asset,
+            instance,
+            equipmentObjectsRef.current.get(instance.id) ?? null,
+            heldEquipmentId === instance.id,
+          ),
+        ),
+      )
+    }
+
+    return () => {
+      for (const cleanup of cleanups.reverse()) cleanup()
+    }
+  }, [
+    equipmentObjectsRef,
+    heldEquipmentId,
+    hiddenEntityIds,
+    objectAssets,
+    objectInstances,
+    records,
+  ])
 
   return (
     <group name="equipment-scene">

@@ -19,6 +19,12 @@ function pairEnabledByCategory(
   second: GeometryCollisionEntity,
   policy: CollisionPolicy,
 ): boolean {
+  if (
+    (first.id === 'workcell:workbench' && second.id === 'robot-link:LINK00') ||
+    (second.id === 'workcell:workbench' && first.id === 'robot-link:LINK00')
+  ) {
+    return false
+  }
   if (first.category === 'robot-link' && second.category === 'robot-link') {
     return policy.enabledRobotSelfPairs.includes(pairKey(first.id, second.id))
   }

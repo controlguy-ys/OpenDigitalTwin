@@ -3,6 +3,7 @@ import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react'
 import { Euler, MathUtils, Mesh, type Object3D } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
+import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
 import {
   createRobotRig,
   setRigAngles,
@@ -20,6 +21,8 @@ import {
 } from './robot-configuration-store'
 import { useRobotGeometryStore } from './robot-geometry-store'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
+import { registerGeometryEntity } from '../collision/geometry-entity-registry'
+import { robotLinkToGeometryEntity } from '../collision/scene-entity-adapter'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -115,6 +118,41 @@ export function isCompleteRobotRigRegistration(
   return ROBOT_LINK_ASSETS.every(
     ({ id }) => registration.links[id].parent === registration.linkSlots[id],
   )
+}
+
+export function registerRobotGeometryEntities(
+  registration: RobotRigRegistration,
+  geometryRecords: readonly RobotLinkGeometryRecordV1[],
+  colliderRevision = 0,
+  hiddenEntityIds: readonly string[] = [],
+): () => void {
+  const recordsByLink = new Map(
+    geometryRecords.map((record) => [record.linkId, record]),
+  )
+  const cleanups: (() => void)[] = []
+
+  for (const { id } of ROBOT_LINK_ASSETS) {
+    const record = recordsByLink.get(id)
+    if (hiddenEntityIds.includes(id) || record?.visible === false) continue
+    const bounds = record ?? {
+      linkId: id,
+      collisionCenter: ROBOT_LINK_COLLISION_BOUNDS[id].center,
+      collisionHalfExtents: ROBOT_LINK_COLLISION_BOUNDS[id].halfExtents,
+    }
+    cleanups.push(
+      registerGeometryEntity(
+        robotLinkToGeometryEntity(
+          bounds,
+          registration.links[id],
+          colliderRevision,
+        ),
+      ),
+    )
+  }
+
+  return () => {
+    for (const cleanup of cleanups.reverse()) cleanup()
+  }
 }
 
 export function describeRobotLoadError(error: unknown): string {
@@ -218,6 +256,22 @@ export function RobotModel({ registerRig }: RobotModelProps) {
       detachRobotRigRegistration(registration)
     }
   }, [registerRig, registration])
+
+  useLayoutEffect(
+    () =>
+      registerRobotGeometryEntities(
+        registration,
+        geometryRecords,
+        geometryRevision,
+        hiddenEntityIds,
+      ),
+    [
+      geometryRecords,
+      geometryRevision,
+      hiddenEntityIds,
+      registration,
+    ],
+  )
 
   useLayoutEffect(() => {
     rig.root.visible = !hiddenEntityIds.includes('robot')
