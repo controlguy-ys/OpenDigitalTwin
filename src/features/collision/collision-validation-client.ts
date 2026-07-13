@@ -114,6 +114,7 @@ export class CollisionValidationClient {
       return
     }
     this.failActive(cancellation)
+    this.resetWorker()
   }
 
   dispose(): void {

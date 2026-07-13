@@ -143,26 +143,41 @@ describe('CollisionPanel', () => {
       quaternion: [0, 0, 0, 1] as [number, number, number, number],
     }
 
+    const geometryLinks = [
+      {
+        linkId: 'LINK00' as const,
+        visible: true,
+        localTransform: identity,
+        collisionBoxes: [box],
+      },
+      {
+        linkId: 'LINK01' as const,
+        visible: false,
+        localTransform: identity,
+        collisionBoxes: [box],
+      },
+    ]
+    const activeEntityIds = new Set([
+      'robot-link:LINK00',
+      'robot-link:LINK01',
+      'robot-link:LINK02',
+    ])
+    const hiddenRobotPayload = buildCollisionValidationRobotGeometry(
+      geometryLinks,
+      activeEntityIds,
+      false,
+    )
+
+    expect(
+      hiddenRobotPayload.linkEntities.every(
+        ({ collisionActive }) => !collisionActive,
+      ),
+    ).toBe(true)
+
     const payload = buildCollisionValidationRobotGeometry(
-      [
-        {
-          linkId: 'LINK00',
-          visible: true,
-          localTransform: identity,
-          collisionBoxes: [box],
-        },
-        {
-          linkId: 'LINK01',
-          visible: false,
-          localTransform: identity,
-          collisionBoxes: [box],
-        },
-      ],
-      new Set([
-        'robot-link:LINK00',
-        'robot-link:LINK01',
-        'robot-link:LINK02',
-      ]),
+      geometryLinks,
+      activeEntityIds,
+      true,
     )
 
     expect(payload.linkEntities).toHaveLength(7)
@@ -471,6 +486,73 @@ describe('CollisionPanel', () => {
       expect(cancel).toHaveBeenCalledTimes(1)
       expect(useCollisionStore.getState().validationReportStale).toBe(true)
     })
+  })
+
+  it('gates all validation Links when the Robot root hides and restores live Link conditions when shown', async () => {
+    registerGeometryEntity({
+      id: 'robot-link:LINK00',
+      name: 'LINK00',
+      category: 'robot-link',
+      boxes: [{
+        id: 'default',
+        center: [0, 0, 0],
+        halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object: new Group(),
+    })
+    const user = userEvent.setup()
+    const { validate, cancel } = startDefaultValidation()
+    render(<CollisionPanel />)
+
+    await user.click(screen.getByRole('button', { name: 'Validate Sequence' }))
+    expect(validate).toHaveBeenCalledTimes(1)
+    expect(
+      validate.mock.calls[0]?.[0].robot.linkEntities.find(
+        ({ linkId }) => linkId === 'LINK00',
+      )?.collisionActive,
+    ).toBe(true)
+    cancel.mockClear()
+
+    act(() => {
+      useInteractionStore.getState().setEntityVisible('robot', false)
+    })
+
+    await waitFor(() => {
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(useCollisionStore.getState().validationReportStale).toBe(true)
+    })
+    await user.click(screen.getByRole('button', { name: 'Validate Sequence' }))
+    expect(validate).toHaveBeenCalledTimes(2)
+    expect(
+      validate.mock.calls[1]?.[0].robot.linkEntities.every(
+        ({ collisionActive }) => !collisionActive,
+      ),
+    ).toBe(true)
+    cancel.mockClear()
+
+    act(() => {
+      useInteractionStore.getState().setEntityVisible('robot', true)
+    })
+
+    await waitFor(() => {
+      expect(cancel).toHaveBeenCalledTimes(1)
+    })
+    await user.click(screen.getByRole('button', { name: 'Validate Sequence' }))
+    expect(validate).toHaveBeenCalledTimes(3)
+    expect(
+      validate.mock.calls[2]?.[0].robot.linkEntities.map(
+        ({ linkId, collisionActive }) => ({ linkId, collisionActive }),
+      ),
+    ).toEqual([
+      { linkId: 'LINK00', collisionActive: true },
+      { linkId: 'LINK01', collisionActive: false },
+      { linkId: 'LINK02', collisionActive: false },
+      { linkId: 'LINK03', collisionActive: false },
+      { linkId: 'LINK04', collisionActive: false },
+      { linkId: 'LINK05', collisionActive: false },
+      { linkId: 'LINK06', collisionActive: false },
+    ])
   })
 
   it('marks a completed report stale when Entity validation visibility changes', () => {

@@ -74,6 +74,7 @@ type CollisionValidationGeometryLink = Pick<
 export function buildCollisionValidationRobotGeometry(
   geometryLinks: readonly CollisionValidationGeometryLink[],
   activeEntityIds: ReadonlySet<string>,
+  robotCollisionActive = true,
 ): Pick<
   CollisionValidationRequest['robot'],
   'geometryTransforms' | 'linkEntities'
@@ -91,7 +92,9 @@ export function buildCollisionValidationRobotGeometry(
       id: `robot-link:${linkId}` as const,
       name: linkId,
       collisionActive:
-        (geometry?.visible ?? true) && activeEntityIds.has(`robot-link:${linkId}`),
+        robotCollisionActive &&
+        (geometry?.visible ?? true) &&
+        activeEntityIds.has(`robot-link:${linkId}`),
       boxes: geometry?.collisionBoxes ?? [{
         id: 'default',
         center: fallback.center,
@@ -258,7 +261,11 @@ function useDefaultValidationRuntime(
       const {
         geometryTransforms,
         linkEntities,
-      } = buildCollisionValidationRobotGeometry(geometryLinks, activeEntityIds)
+      } = buildCollisionValidationRobotGeometry(
+        geometryLinks,
+        activeEntityIds,
+        !hiddenEntityIds.includes('robot'),
+      )
       const staticEntities = registrySnapshot.entities.filter(
         (entity) =>
           entity.id !== heldEntityId &&
@@ -321,6 +328,7 @@ function useDefaultValidationRuntime(
       geometryLinks,
       gripOffset,
       heldEntityId,
+      hiddenEntityIds,
       keyframes,
       policy,
       revision,

@@ -194,21 +194,50 @@ describe('CollisionValidationClient', () => {
     )
   })
 
-  it('sends cancel and rejects the active run without accepting late results', async () => {
-    const worker = new FakeWorker()
-    const client = new CollisionValidationClient(() => worker)
-    const candidate = request()
+  it('retires a cancelled Worker before restarting and ignores its late events', async () => {
+    const workers = [new FakeWorker(), new FakeWorker()]
+    let factoryIndex = 0
+    const client = new CollisionValidationClient(() => workers[factoryIndex++]!)
+    const candidate = request('cancelled-run')
     const completion = client.validate(candidate)
 
     client.cancel()
-    worker.emitMessage({ type: 'result', result: result(candidate) })
 
+    expect(workers[0]!.terminated).toBe(true)
     await expect(completion).rejects.toBeInstanceOf(
       CollisionValidationCancelledError,
     )
-    expect(worker.messages.at(-1)).toEqual({
+    expect(workers[0]!.messages.at(-1)).toEqual({
       type: 'cancel',
       requestId: candidate.requestId,
+    })
+
+    const nextRequest = request('restart-after-cancel')
+    const nextCompletion = client.validate(nextRequest)
+    const onNextSettlement = vi.fn()
+    void nextCompletion.then(onNextSettlement, onNextSettlement)
+
+    expect(factoryIndex).toBe(2)
+    expect(
+      workers[0]!.messages.filter(
+        (message) => (message as { type?: string }).type === 'validate',
+      ),
+    ).toHaveLength(1)
+    expect(workers[1]!.messages).toHaveLength(1)
+
+    workers[0]!.emitMessage({
+      type: 'result',
+      result: result(nextRequest),
+    })
+    await Promise.resolve()
+    expect(onNextSettlement).not.toHaveBeenCalled()
+
+    workers[1]!.emitMessage({
+      type: 'result',
+      result: result(nextRequest),
+    })
+    await expect(nextCompletion).resolves.toMatchObject({
+      revision: 'restart-after-cancel',
     })
   })
 
@@ -230,6 +259,8 @@ describe('CollisionValidationClient', () => {
 
     const nextRequest = request('after-cancel-transport')
     const nextCompletion = client.validate(nextRequest)
+    expect(factoryIndex).toBe(2)
+    workers[0]!.emitError('late cancelled worker failure')
     workers[1]!.emitMessage({ type: 'result', result: result(nextRequest) })
     await expect(nextCompletion).resolves.toMatchObject({
       revision: 'after-cancel-transport',

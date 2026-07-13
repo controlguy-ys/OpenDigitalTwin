@@ -297,3 +297,80 @@ Results:
 
 Per task scope, no CAD conversion or validation command was run. Vite retained
 the pre-existing OCCT browser-externalization messages and chunk-size warning.
+
+## Final Follow-up: Robot Root Visibility and Cancel Restart Isolation
+
+Sequence validation now treats the Robot root as an explicit collision
+participation gate. When `hiddenEntityIds` contains `robot`, every Link request
+row has `collisionActive: false`. Re-showing the Robot restores the existing
+per-Link geometry visibility and live registry-participation conditions. Root
+visibility remains part of the default runtime revision, so changing it cancels
+an active run and marks a completed report stale without a manual rerender.
+
+Successful client cancellation now retires the current Worker after posting the
+cancel command and rejecting the active promise. Listener removal, termination,
+and Worker reset happen synchronously, so an immediate restart creates a fresh
+Worker and cannot overlap a still-running validation in the old Worker. The
+transport-failure path retains the same reset behavior, and late events from
+either retired Worker cannot settle the restarted request. The Worker's
+cooperative 250-sample cancellation-boundary behavior was not changed.
+
+### Final Follow-up TDD Evidence
+
+Production files were unchanged at commit `03b57c7` when the focused RED command
+ran:
+
+```text
+npm run test:run -- src/features/collision/CollisionPanel.test.tsx src/features/collision/collision-validation-client.test.ts
+```
+
+Observed RED: 2 files failed with 3 expected failures and 20 passing tests.
+
+- a successfully cancelled Worker remained unterminated;
+- the pure Robot-root-hidden mapping retained active Link rows;
+- the default runtime request after `setEntityVisible('robot', false)` retained
+  an active Link.
+
+The same command passed 2 files and 23 tests after the minimal production
+changes.
+
+Expanded Task 6 GREEN, including protocol ownership, Worker cancellation
+boundaries, registry reactivity, current-pose behavior, and Robot registration:
+
+```text
+npm run test:run -- src/features/collision/collision-validation-client.test.ts src/features/collision/collision-validation-protocol.test.ts src/features/collision/validate-pose-sequence.test.ts src/features/collision/CollisionPanel.test.tsx src/features/collision/geometry-entity-registry.test.ts src/features/collision/current-pose-collision.test.ts src/features/robot/RobotModel.test.ts
+```
+
+Result: 7 files, 61 tests passed, 0 failed.
+
+After strengthening the client lifecycle checks to require synchronous Worker
+termination and late-event isolation on both successful and failed cancel
+transport, the client/Worker-boundary/Panel command passed 3 files and 35 tests.
+
+### Final Follow-up Verification
+
+Full suite:
+
+```text
+npm run test:run
+```
+
+Result: 72 files, 435 tests passed, 0 failed.
+
+Static and production gates:
+
+```text
+npm run lint
+npm run build
+git diff --check
+```
+
+Results:
+
+- oxlint passed without diagnostics;
+- TypeScript and Vite production build passed and emitted the collision Worker;
+- diff check passed.
+
+Per task scope, no CAD conversion, plan, or specification command was run. Vite
+retained the pre-existing OCCT browser-externalization messages and chunk-size
+warning.
