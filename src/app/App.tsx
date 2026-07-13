@@ -26,7 +26,6 @@ import { RobotGeometryDialog } from '../features/robot/RobotGeometryDialog'
 import { AppShell } from './AppShell'
 import { useObjectAssetStore } from '../features/objects/object-asset-store'
 import { objectRecords } from '../features/objects/object-equipment-adapter'
-import type { SerializableTransform } from '../domain/equipment/equipment'
 import { useProjectStore } from '../features/project/project-store-browser'
 import { ProjectMenu } from '../features/project/ProjectMenu'
 import { CoordinateFramesDialog } from '../features/frames/CoordinateFramesDialog'
@@ -34,6 +33,7 @@ import type { RobotRigRegistration } from '../features/robot/RobotModel'
 import type { ExternalCollisionEntityId } from '../features/interaction/interaction-store'
 import { removeCanonicalExternalEntity } from './external-entity-removal'
 import { findEquipmentRecordByEntityId } from '../features/equipment/equipment-entity-selection'
+import { createCanonicalExternalEntityMutations } from './external-entity-mutations'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -227,74 +227,43 @@ export function App() {
     [clearSelection, removeEquipment, removeObjectInstance],
   )
 
-  const findObjectInstance = useCallback(
-    (id: string) => objectInstances.find((instance) => instance.id === id),
-    [objectInstances],
-  )
-
-  const handlePreviewEquipmentTransform = useCallback(
-    (id: string, transform: SerializableTransform) => {
-      if (findObjectInstance(id) === undefined) {
-        previewEquipmentTransform(id, transform)
-      } else {
-        previewObjectTransform(id, transform)
-      }
-    },
-    [findObjectInstance, previewEquipmentTransform, previewObjectTransform],
-  )
-
-  const handleCommitEquipmentTransform = useCallback(
-    async (id: string) => {
-      await (findObjectInstance(id) === undefined
-        ? commitEquipmentTransform(id)
-        : commitObjectTransform(id))
-    },
-    [commitEquipmentTransform, commitObjectTransform, findObjectInstance],
-  )
-
-  const handleCancelEquipmentTransform = useCallback(
-    (id: string) => {
-      if (findObjectInstance(id) === undefined) cancelEquipmentTransform(id)
-      else cancelObjectTransform(id)
-    },
-    [cancelEquipmentTransform, cancelObjectTransform, findObjectInstance],
-  )
-
   const updateObjectField = useCallback(
     async (id: string, update: Record<string, unknown>) => {
-      const instance = findObjectInstance(id)
-      if (instance === undefined) return false
+      const instance = useObjectAssetStore
+        .getState()
+        .instances.find((candidate) => candidate.id === id)
+      if (instance === undefined) return
       await updateObjectInstance({ ...instance, ...update })
-      return true
     },
-    [findObjectInstance, updateObjectInstance],
+    [updateObjectInstance],
   )
 
-  const handleNumericStatus = useCallback(
-    async (id: string, value: number) => {
-      if (!(await updateObjectField(id, { numericStatus: value, statusSource: 'manual' }))) {
-        await setEquipmentNumericStatus(id, value)
-      }
-    },
-    [setEquipmentNumericStatus, updateObjectField],
-  )
-
-  const handleOverlayVisible = useCallback(
-    async (id: string, visible: boolean) => {
-      if (!(await updateObjectField(id, { statusOverlayVisible: visible }))) {
-        await setEquipmentStatusOverlayVisible(id, visible)
-      }
-    },
-    [setEquipmentStatusOverlayVisible, updateObjectField],
-  )
-
-  const handleStatusSource = useCallback(
-    async (id: string, statusSource: 'manual' | 'opcua') => {
-      if (!(await updateObjectField(id, { statusSource }))) {
-        await setEquipmentStatusSource(id, statusSource)
-      }
-    },
-    [setEquipmentStatusSource, updateObjectField],
+  const externalEntityMutations = useMemo(
+    () =>
+      createCanonicalExternalEntityMutations({
+        previewEquipment: previewEquipmentTransform,
+        previewObject: previewObjectTransform,
+        commitEquipment: commitEquipmentTransform,
+        commitObject: commitObjectTransform,
+        cancelEquipment: cancelEquipmentTransform,
+        cancelObject: cancelObjectTransform,
+        setEquipmentNumericStatus,
+        setEquipmentOverlayVisible: setEquipmentStatusOverlayVisible,
+        setEquipmentStatusSource,
+        updateObject: updateObjectField,
+      }),
+    [
+      cancelEquipmentTransform,
+      cancelObjectTransform,
+      commitEquipmentTransform,
+      commitObjectTransform,
+      previewEquipmentTransform,
+      previewObjectTransform,
+      setEquipmentNumericStatus,
+      setEquipmentStatusOverlayVisible,
+      setEquipmentStatusSource,
+      updateObjectField,
+    ],
   )
 
   const handleResetInteraction = useCallback(async () => {
@@ -335,13 +304,13 @@ export function App() {
           ) : (
             <EquipmentInspector
               disabled={controlsDisabled}
-              onApply={handleCommitEquipmentTransform}
-              onCancel={handleCancelEquipmentTransform}
+              onApply={externalEntityMutations.commit}
+              onCancel={externalEntityMutations.cancel}
               onDelete={handleRemoveEquipment}
-              onNumericStatus={handleNumericStatus}
-              onOverlayVisible={handleOverlayVisible}
-              onStatusSource={handleStatusSource}
-              onPreview={handlePreviewEquipmentTransform}
+              onNumericStatus={externalEntityMutations.setNumericStatus}
+              onOverlayVisible={externalEntityMutations.setOverlayVisible}
+              onStatusSource={externalEntityMutations.setStatusSource}
+              onPreview={externalEntityMutations.preview}
               record={selectedEquipmentRecord}
             />
           )

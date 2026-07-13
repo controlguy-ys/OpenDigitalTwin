@@ -10,12 +10,21 @@ import { equipmentRecordEntityId } from './equipment-entity-selection'
 interface EquipmentInspectorProps {
   record: EquipmentRecord
   disabled?: boolean
-  onPreview(id: string, transform: SerializableTransform): void
-  onApply(id: string): void | Promise<void>
-  onCancel(id: string): void
-  onNumericStatus(id: string, value: number): void | Promise<void>
-  onStatusSource(id: string, source: 'manual' | 'opcua'): void | Promise<void>
-  onOverlayVisible(id: string, visible: boolean): void | Promise<void>
+  onPreview(id: ExternalCollisionEntityId, transform: SerializableTransform): void
+  onApply(id: ExternalCollisionEntityId): void | Promise<void>
+  onCancel(id: ExternalCollisionEntityId): void
+  onNumericStatus(
+    id: ExternalCollisionEntityId,
+    value: number,
+  ): void | Promise<void>
+  onStatusSource(
+    id: ExternalCollisionEntityId,
+    source: 'manual' | 'opcua',
+  ): void | Promise<void>
+  onOverlayVisible(
+    id: ExternalCollisionEntityId,
+    visible: boolean,
+  ): void | Promise<void>
   onDelete(id: ExternalCollisionEntityId): void | Promise<void>
 }
 
@@ -83,6 +92,7 @@ export function EquipmentInspector({
   onOverlayVisible,
   onDelete,
 }: EquipmentInspectorProps) {
+  const entityId = equipmentRecordEntityId(record)
   const [draft, setDraft] = useState(() => draftFromRecord(record))
   const [numericStatus, setNumericStatus] = useState(
     String(record.numericStatus ?? 0),
@@ -100,7 +110,7 @@ export function EquipmentInspector({
 
   const preview = (): boolean => {
     try {
-      onPreview(record.id, transformFromDraft(record, draft))
+      onPreview(entityId, transformFromDraft(record, draft))
       setError(null)
       return true
     } catch (nextError) {
@@ -149,7 +159,7 @@ export function EquipmentInspector({
           <button onClick={preview} type="button">Preview transform</button>
           <button
             onClick={() => {
-              if (preview()) void onApply(record.id)
+              if (preview()) void onApply(entityId)
             }}
             type="button"
           >
@@ -157,7 +167,7 @@ export function EquipmentInspector({
           </button>
           <button
             onClick={() => {
-              onCancel(record.id)
+              onCancel(entityId)
               setError(null)
             }}
             type="button"
@@ -173,7 +183,7 @@ export function EquipmentInspector({
           <select
             aria-label="Status source"
             onChange={(event) => void onStatusSource(
-              record.id,
+              entityId,
               event.currentTarget.value as 'manual' | 'opcua',
             )}
             value={record.statusSource ?? 'manual'}
@@ -198,7 +208,7 @@ export function EquipmentInspector({
             aria-label="Show status overlay"
             checked={record.statusOverlayVisible ?? true}
             onChange={(event) => {
-              void onOverlayVisible(record.id, event.currentTarget.checked)
+              void onOverlayVisible(entityId, event.currentTarget.checked)
             }}
             type="checkbox"
           />
@@ -213,7 +223,7 @@ export function EquipmentInspector({
               return
             }
             setError(null)
-            void onNumericStatus(record.id, value)
+            void onNumericStatus(entityId, value)
           }}
           type="button"
         >
@@ -226,7 +236,7 @@ export function EquipmentInspector({
         disabled={disabled}
         onClick={() => {
           if (window.confirm(`Delete ${record.name}?`)) {
-            void onDelete(equipmentRecordEntityId(record))
+            void onDelete(entityId)
           }
         }}
         type="button"
