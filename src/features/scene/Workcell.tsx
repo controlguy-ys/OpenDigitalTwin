@@ -24,6 +24,7 @@ import {
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { workbenchToGeometryEntity } from '../collision/scene-entity-adapter'
+import type { ExternalCollisionEntityId } from '../interaction/interaction-store'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
@@ -105,7 +106,9 @@ export function Workcell({
   const [rig, setRig] = useState<RobotRigRegistration | null>(null)
   const [orbitEnabled, setOrbitEnabled] = useState(true)
   const mcp = useCoordinateFrameStore((state) => state.frames.mcp)
-  const equipmentObjectsRef = useRef(new Map<string, Object3D>())
+  const equipmentObjectsRef = useRef(
+    new Map<ExternalCollisionEntityId, Object3D>(),
+  )
   const workbenchObjectRef = useRef<Group>(null)
   const handleRigRegistration = useCallback(
     (registration: RobotRigRegistration | null) => {

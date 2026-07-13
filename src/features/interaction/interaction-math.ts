@@ -208,7 +208,9 @@ export function isCollisionPairAllowed(
   }
 
   return (
-    (firstRobotIndex !== null && second.startsWith('equipment:')) ||
-    (secondRobotIndex !== null && first.startsWith('equipment:'))
+    (firstRobotIndex !== null &&
+      (second.startsWith('equipment:') || second.startsWith('object:'))) ||
+    (secondRobotIndex !== null &&
+      (first.startsWith('equipment:') || first.startsWith('object:')))
   )
 }

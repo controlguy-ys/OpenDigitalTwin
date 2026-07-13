@@ -53,7 +53,7 @@ export function objectInstanceToEquipmentRecord(
       quaternion: [...instance.transform.quaternion],
       scale: [...instance.transform.scale],
     },
-    graspable: false,
+    graspable: true,
     collisionHalfExtents: [...asset.collisionHalfExtents],
     collisionCenter: [...asset.colliderCenter],
     stackLightAnchor: null,

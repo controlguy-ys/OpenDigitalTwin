@@ -165,16 +165,19 @@ export function App() {
         .getState()
         .instances.find((instance) => instance.id === id)
       if (objectInstance !== undefined) {
-        useInteractionStore.getState().beginEquipmentRemoval(id)
+        const entityId = `object:${id}`
+        useInteractionStore.getState().beginEquipmentRemoval(entityId)
         try {
           const controller = interactionControllerRef.current
-          if (controller !== null) await controller.releaseHeldEquipment(id)
+          if (controller !== null) {
+            await controller.releaseHeldEquipment(entityId)
+          }
           await removeObjectInstance(id)
           if (useInteractionStore.getState().selectedEquipmentId === id) {
             clearSelection()
           }
         } finally {
-          useInteractionStore.getState().endEquipmentRemoval(id)
+          useInteractionStore.getState().endEquipmentRemoval(entityId)
         }
         return
       }
@@ -188,17 +191,16 @@ export function App() {
         },
         releaseHeldEquipment: async (equipmentId) => {
           const controller = interactionControllerRef.current
-          const heldEquipmentId =
-            useInteractionStore.getState().heldEquipmentId
+          const heldEntityId = useInteractionStore.getState().heldEntityId
           if (controller === null) {
-            if (heldEquipmentId === equipmentId) {
+            if (heldEntityId === `equipment:${equipmentId}`) {
               throw new Error(
                 'The held equipment cannot be released while the 3D scene is unavailable.',
               )
             }
             return
           }
-          await controller.releaseHeldEquipment(equipmentId)
+          await controller.releaseHeldEquipment(`equipment:${equipmentId}`)
         },
         removeEquipment,
         invalidateGeometry: (equipmentId) => {

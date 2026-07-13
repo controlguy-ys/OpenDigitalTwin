@@ -23,6 +23,7 @@ import {
   EquipmentVisual,
 } from '../equipment/EquipmentScene'
 import { useEquipmentStore } from '../equipment/equipment-store'
+import { useObjectAssetStore } from '../objects/object-asset-store'
 import { useRobotStore } from '../joints/robot-store'
 import type { RobotRigRegistration } from '../robot/RobotModel'
 import {
@@ -38,11 +39,19 @@ import {
   getWorldColliderCenter,
   matrixToTransform,
 } from './interaction-math'
-import { useInteractionStore } from './interaction-store'
+import {
+  externalCollisionEntityLocalId,
+  type ExternalCollisionEntityId,
+  useInteractionStore,
+} from './interaction-store'
 import { updateEquipmentObjectRegistration } from './equipment-object-registry'
-import { getEquipmentOutlineState } from './outline-state'
+import { getExternalEntityOutlineState } from './outline-state'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { worldTransformToMcpLocal } from '../frames/frame-runtime'
+import {
+  collisionEntityToGraspParticipantId,
+  runtimeGraspParticipants,
+} from './grasp-participants'
 
 const GRASP_GROUPS = interactionGroups(3, [1])
 
@@ -53,18 +62,20 @@ export interface InteractionRuntimeController {
 
 export interface GraspControllerProps {
   rig: RobotRigRegistration
-  equipmentObjectsRef: RefObject<Map<string, Object3D>>
+  equipmentObjectsRef: RefObject<
+    Map<ExternalCollisionEntityId, Object3D>
+  >
   workbenchTopZ: number
   registerController?:
     | ((controller: InteractionRuntimeController | null) => void)
     | undefined
 }
 
-function getOtherEquipmentId(payload: IntersectionEnterPayload): string | null {
+function getOtherParticipantId(
+  payload: IntersectionEnterPayload,
+): ExternalCollisionEntityId | null {
   const entity = payload.other.rigidBodyObject?.userData.collisionEntityId
-  return typeof entity === 'string' && entity.startsWith('equipment:')
-    ? entity.slice('equipment:'.length)
-    : null
+  return collisionEntityToGraspParticipantId(entity)
 }
 
 export function GraspController({
@@ -76,7 +87,20 @@ export function GraspController({
   const rigidBodyRef = useRef<RapierRigidBody>(null)
   const gripperOpen = useRobotStore((state) => state.gripperOpen)
   const records = useEquipmentStore((state) => state.records)
-  const heldEquipmentId = useInteractionStore((state) => state.heldEquipmentId)
+  const objectAssets = useObjectAssetStore((state) => state.assets)
+  const objectInstances = useObjectAssetStore((state) => state.instances)
+  const participants = useMemo(
+    () => runtimeGraspParticipants(records, objectAssets, objectInstances),
+    [objectAssets, objectInstances, records],
+  )
+  const participantsById = useMemo(
+    () =>
+      new Map(
+        participants.map((participant) => [participant.entityId, participant]),
+      ),
+    [participants],
+  )
+  const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const gripOffset = useInteractionStore((state) => state.gripOffset)
   const selection = useInteractionStore((state) => state.selection)
   const activeCollisionPairs = useInteractionStore(
@@ -91,23 +115,55 @@ export function GraspController({
     () => ({
       getHeld: () => {
         const state = useInteractionStore.getState()
-        return state.heldEquipmentId === null || state.gripOffset === null
+        return state.heldEntityId === null ||
+          state.heldEquipmentId === null ||
+          state.gripOffset === null
           ? null
           : {
+              entityId: state.heldEntityId,
               equipmentId: state.heldEquipmentId,
               gripOffset: state.gripOffset,
             }
       },
-      getEquipment: (id) =>
-        useEquipmentStore.getState().records.find((record) => record.id === id),
-      previewTransform: (id, transform) => {
-        useEquipmentStore.getState().previewEquipmentTransform(id, transform)
+      getEquipment: (entityId) => {
+        const canonicalId = entityId as ExternalCollisionEntityId
+        const localId = externalCollisionEntityLocalId(canonicalId)
+        if (canonicalId.startsWith('object:')) {
+          const objectState = useObjectAssetStore.getState()
+          return runtimeGraspParticipants(
+            [],
+            objectState.assets,
+            objectState.instances,
+          ).find(({ entityId: candidateId }) => candidateId === canonicalId)
+            ?.record
+        }
+        return useEquipmentStore
+          .getState()
+          .records.find((record) => record.id === localId)
       },
-      clearHeld: (id) => {
-        useInteractionStore.getState().releaseHeldEquipment(id)
+      previewTransform: (entityId, transform) => {
+        const canonicalId = entityId as ExternalCollisionEntityId
+        const localId = externalCollisionEntityLocalId(canonicalId)
+        if (canonicalId.startsWith('object:')) {
+          useObjectAssetStore
+            .getState()
+            .previewInstanceTransform(localId, transform)
+        } else {
+          useEquipmentStore
+            .getState()
+            .previewEquipmentTransform(localId, transform)
+        }
       },
-      commitTransform: (id) =>
-        useEquipmentStore.getState().commitEquipmentTransform(id),
+      clearHeld: (entityId) => {
+        useInteractionStore.getState().releaseHeldEquipment(entityId)
+      },
+      commitTransform: (entityId) => {
+        const canonicalId = entityId as ExternalCollisionEntityId
+        const localId = externalCollisionEntityLocalId(canonicalId)
+        return canonicalId.startsWith('object:')
+          ? useObjectAssetStore.getState().commitInstanceTransform(localId)
+          : useEquipmentStore.getState().commitEquipmentTransform(localId)
+      },
       resetInteraction: () => {
         useInteractionStore.getState().resetInteraction()
       },
@@ -147,16 +203,16 @@ export function GraspController({
 
   const attemptGrasp = useCallback(() => {
     const interaction = useInteractionStore.getState()
-    if (interaction.heldEquipmentId !== null) {
+    if (interaction.heldEntityId !== null) {
       return
     }
     const sensorWorld = getGraspSensorWorldTransform(rig.tcpFrame)
     sensorPosition.fromArray(sensorWorld.position)
-    const candidates = interaction.graspCandidateIds.flatMap((equipmentId) => {
-      const record = useEquipmentStore
-        .getState()
-        .records.find(({ id }) => id === equipmentId)
-      const object = equipmentObjectsRef.current.get(equipmentId)
+    const candidates = interaction.graspCandidateIds.flatMap((candidateId) => {
+      const entityId = collisionEntityToGraspParticipantId(candidateId)
+      if (entityId === null) return []
+      const record = participantsById.get(entityId)?.record
+      const object = equipmentObjectsRef.current.get(entityId)
       if (record?.graspable !== true || object === undefined) {
         return []
       }
@@ -164,16 +220,23 @@ export function GraspController({
       const equipmentPosition = new Vector3().fromArray(
         getWorldColliderCenter(
           object,
-          record.importMetadata?.colliderCenter ?? [0, 0, 0],
+          record.collisionCenter ??
+            record.importMetadata?.colliderCenter ??
+            [0, 0, 0],
         ),
       )
-      return [{ equipmentId, distanceSq: equipmentPosition.distanceToSquared(sensorPosition) }]
+      return [{
+        equipmentId: entityId,
+        distanceSq: equipmentPosition.distanceToSquared(sensorPosition),
+      }]
     })
-    const equipmentId = chooseNearestGraspCandidate(candidates)
-    if (equipmentId === null) {
+    const entityId = chooseNearestGraspCandidate(candidates) as
+      | ExternalCollisionEntityId
+      | null
+    if (entityId === null) {
       return
     }
-    const equipmentObject = equipmentObjectsRef.current.get(equipmentId)
+    const equipmentObject = equipmentObjectsRef.current.get(entityId)
     if (equipmentObject === undefined) {
       return
     }
@@ -182,10 +245,18 @@ export function GraspController({
       getToolWorld(),
       matrixToTransform(equipmentObject.matrixWorld),
     )
-    if (useInteractionStore.getState().holdEquipment(equipmentId, grip)) {
-      useInteractionStore.getState().selectEquipment(equipmentId)
+    if (useInteractionStore.getState().holdEquipment(entityId, grip)) {
+      useInteractionStore
+        .getState()
+        .selectEquipment(externalCollisionEntityLocalId(entityId))
     }
-  }, [equipmentObjectsRef, getToolWorld, rig.tcpFrame, sensorPosition])
+  }, [
+    equipmentObjectsRef,
+    getToolWorld,
+    participantsById,
+    rig.tcpFrame,
+    sensorPosition,
+  ])
 
   useBeforePhysicsStep(() => {
     const rigidBody = rigidBodyRef.current
@@ -227,9 +298,9 @@ export function GraspController({
   }, [registerController, releaseHeld, resetInteraction])
 
   const heldRecord =
-    heldEquipmentId === null
+    heldEntityId === null
       ? undefined
-      : records.find(({ id }) => id === heldEquipmentId)
+      : participantsById.get(heldEntityId)?.record
   const heldSelected =
     heldRecord !== undefined &&
     selection?.kind === 'equipment' &&
@@ -237,24 +308,24 @@ export function GraspController({
   const heldOutlineState =
     heldRecord === undefined
       ? null
-      : getEquipmentOutlineState(
-          heldRecord.id,
+      : getExternalEntityOutlineState(
+          heldEntityId!,
           heldSelected,
           activeCollisionPairs,
         )
   const registerHeldObject = useCallback(
     (object: Group | null) => {
-      if (heldRecord === undefined) {
+      if (heldRecord === undefined || heldEntityId === null) {
         return
       }
       updateEquipmentObjectRegistration(
         equipmentObjectsRef.current,
-        heldRecord.id,
+        heldEntityId,
         heldObjectOwnerRef,
         object,
       )
     },
-    [equipmentObjectsRef, heldRecord],
+    [equipmentObjectsRef, heldEntityId, heldRecord],
   )
 
   return (
@@ -270,18 +341,19 @@ export function GraspController({
           args={[...GRASP_SENSOR_HALF_EXTENTS]}
           collisionGroups={GRASP_GROUPS}
           onIntersectionEnter={(payload) => {
-            const equipmentId = getOtherEquipmentId(payload)
-            const record = useEquipmentStore
-              .getState()
-              .records.find(({ id }) => id === equipmentId)
-            if (equipmentId !== null && record?.graspable === true) {
-              useInteractionStore.getState().enterGraspCandidate(equipmentId)
+            const entityId = getOtherParticipantId(payload)
+            const record =
+              entityId === null
+                ? undefined
+                : participantsById.get(entityId)?.record
+            if (entityId !== null && record?.graspable === true) {
+              useInteractionStore.getState().enterGraspCandidate(entityId)
             }
           }}
           onIntersectionExit={(payload) => {
-            const equipmentId = getOtherEquipmentId(payload)
-            if (equipmentId !== null) {
-              useInteractionStore.getState().exitGraspCandidate(equipmentId)
+            const entityId = getOtherParticipantId(payload)
+            if (entityId !== null) {
+              useInteractionStore.getState().exitGraspCandidate(entityId)
             }
           }}
           sensor
@@ -302,7 +374,11 @@ export function GraspController({
               quaternion={gripOffset.quaternion}
               ref={registerHeldObject}
               scale={gripOffset.scale}
-              userData={{ equipmentId: heldRecord.id, held: true }}
+              userData={{
+                collisionEntityId: heldEntityId,
+                equipmentId: heldRecord.id,
+                held: true,
+              }}
             >
               <EquipmentVisual record={heldRecord} />
               {heldOutlineState === null ? null : (

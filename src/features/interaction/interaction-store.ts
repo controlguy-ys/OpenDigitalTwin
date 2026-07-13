@@ -12,11 +12,16 @@ export type SceneSelection =
 export type CollisionEntityId =
   | `robot-link:${RobotLinkId}`
   | `equipment:${string}`
+  | `object:${string}`
   | 'workcell:workbench'
   | 'grasp-sensor'
+export type ExternalCollisionEntityId =
+  | `equipment:${string}`
+  | `object:${string}`
 export type CollisionPairKey = `${CollisionEntityId}|${CollisionEntityId}`
 
 export interface ReleasedEquipment {
+  entityId: ExternalCollisionEntityId
   equipmentId: string
   gripOffset: SerializableTransform
 }
@@ -27,6 +32,7 @@ export interface InteractionStoreState {
   hiddenEntityIds: readonly string[]
   removingEquipmentIds: readonly string[]
   graspCandidateIds: readonly string[]
+  heldEntityId: ExternalCollisionEntityId | null
   heldEquipmentId: string | null
   gripOffset: SerializableTransform | null
   activeCollisionPairs: readonly CollisionPairKey[]
@@ -84,6 +90,7 @@ const INITIAL_INTERACTION_STATE = {
   removingEquipmentIds: [] as readonly string[],
   graspCandidateIds: [] as readonly string[],
   heldEquipmentId: null,
+  heldEntityId: null,
   gripOffset: null,
   activeCollisionPairs: [] as readonly CollisionPairKey[],
 }
@@ -138,8 +145,13 @@ function createInteractionState(
       })
     },
     enterGraspCandidate: (id) => {
+      const entityId = toExternalCollisionEntityId(id)
+      const localId = externalCollisionEntityLocalId(entityId)
       set((state) => ({
-        graspCandidateIds: state.removingEquipmentIds.includes(id)
+        graspCandidateIds:
+          state.removingEquipmentIds.includes(entityId) ||
+          (entityId.startsWith('equipment:') &&
+            state.removingEquipmentIds.includes(localId))
           ? state.graspCandidateIds
           : state.graspCandidateIds.includes(id)
           ? state.graspCandidateIds
@@ -155,32 +167,47 @@ function createInteractionState(
     },
     holdEquipment: (id, gripOffset) => {
       const state = get()
+      const entityId = toExternalCollisionEntityId(id)
+      const localId = externalCollisionEntityLocalId(entityId)
       if (
-        state.heldEquipmentId !== null ||
-        state.removingEquipmentIds.includes(id) ||
+        state.heldEntityId !== null ||
+        state.removingEquipmentIds.includes(entityId) ||
+        (entityId.startsWith('equipment:') &&
+          state.removingEquipmentIds.includes(localId)) ||
         !state.graspCandidateIds.includes(id)
       ) {
         return false
       }
 
-      set({ heldEquipmentId: id, gripOffset: cloneTransform(gripOffset) })
+      set({
+        heldEntityId: entityId,
+        heldEquipmentId: localId,
+        gripOffset: cloneTransform(gripOffset),
+      })
       return true
     },
     releaseHeldEquipment: (id) => {
       const state = get()
+      const requestedMatches =
+        id === undefined ||
+        (id.includes(':')
+          ? state.heldEntityId === id
+          : state.heldEquipmentId === id)
       if (
+        state.heldEntityId === null ||
         state.heldEquipmentId === null ||
         state.gripOffset === null ||
-        (id !== undefined && state.heldEquipmentId !== id)
+        !requestedMatches
       ) {
         return null
       }
 
       const released = {
+        entityId: state.heldEntityId,
         equipmentId: state.heldEquipmentId,
         gripOffset: cloneTransform(state.gripOffset),
       }
-      set({ heldEquipmentId: null, gripOffset: null })
+      set({ heldEntityId: null, heldEquipmentId: null, gripOffset: null })
       return released
     },
     beginEquipmentRemoval: (id) => {
@@ -191,7 +218,8 @@ function createInteractionState(
       set({
         removingEquipmentIds: [...state.removingEquipmentIds, id],
         graspCandidateIds: state.graspCandidateIds.filter(
-          (candidateId) => candidateId !== id,
+          (candidateId) =>
+            candidateId !== id && candidateId !== `equipment:${id}`,
         ),
       })
       return true
@@ -244,11 +272,34 @@ function createInteractionState(
         hiddenEntityIds: [],
         graspCandidateIds: [],
         heldEquipmentId: null,
+        heldEntityId: null,
         gripOffset: null,
         activeCollisionPairs: [],
       })
     },
   }
+}
+
+export function toExternalCollisionEntityId(
+  id: string,
+): ExternalCollisionEntityId {
+  if (id.startsWith('equipment:') || id.startsWith('object:')) {
+    const separator = id.indexOf(':')
+    if (separator < 0 || separator === id.length - 1) {
+      throw new Error('External collision Entity id must include a local id.')
+    }
+    return id as ExternalCollisionEntityId
+  }
+  if (id.includes(':')) {
+    throw new Error(`Unsupported external collision Entity id: ${id}`)
+  }
+  return `equipment:${id}`
+}
+
+export function externalCollisionEntityLocalId(
+  entityId: ExternalCollisionEntityId,
+): string {
+  return entityId.slice(entityId.indexOf(':') + 1)
 }
 
 export function createInteractionStore() {

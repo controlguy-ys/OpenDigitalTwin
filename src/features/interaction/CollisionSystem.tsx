@@ -13,15 +13,18 @@ import { Quaternion, Vector3, type Object3D } from 'three'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
 import { useEquipmentStore } from '../equipment/equipment-store'
+import { useObjectAssetStore } from '../objects/object-asset-store'
 import { useRobotStore } from '../joints/robot-store'
 import type { RobotRigRegistration } from '../robot/RobotModel'
 import { useEventStore } from '../../state/event-store'
 import { handleCollisionEnter, handleCollisionExit } from './collision-events'
 import {
   type CollisionEntityId,
+  type ExternalCollisionEntityId,
   useInteractionStore,
 } from './interaction-store'
 import { ROBOT_LINK_COLLISION_BOUNDS } from './robot-collision-bounds'
+import { runtimeGraspParticipants } from './grasp-participants'
 
 const ROBOT_GROUPS = interactionGroups(0, [0, 1, 2])
 const EQUIPMENT_GROUPS = interactionGroups(1, [0, 3])
@@ -113,7 +116,10 @@ function KinematicSensor({
 function equipmentColliderCenter(
   record: EquipmentRecord,
 ): readonly [number, number, number] {
-  const center = record.importMetadata?.colliderCenter ?? [0, 0, 0]
+  const center =
+    record.collisionCenter ??
+    record.importMetadata?.colliderCenter ??
+    [0, 0, 0]
   return [
     center[0] * record.transform.scale[0],
     center[1] * record.transform.scale[1],
@@ -133,7 +139,9 @@ function equipmentColliderHalfExtents(
 
 export interface CollisionSystemProps {
   rig: RobotRigRegistration | null
-  equipmentObjectsRef: RefObject<Map<string, Object3D>>
+  equipmentObjectsRef: RefObject<
+    Map<ExternalCollisionEntityId, Object3D>
+  >
   workbenchObjectRef: RefObject<Object3D | null>
 }
 
@@ -143,6 +151,12 @@ export function CollisionSystem({
   workbenchObjectRef,
 }: CollisionSystemProps) {
   const records = useEquipmentStore((state) => state.records)
+  const objectAssets = useObjectAssetStore((state) => state.assets)
+  const objectInstances = useObjectAssetStore((state) => state.instances)
+  const participants = useMemo(
+    () => runtimeGraspParticipants(records, objectAssets, objectInstances),
+    [objectAssets, objectInstances, records],
+  )
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
 
   return (
@@ -164,19 +178,19 @@ export function CollisionSystem({
               )
             },
           )}
-      {records
+      {participants
         .filter(
-          (record) =>
+          ({ record }) =>
             !hiddenEntityIds.includes(record.id),
         )
-        .map((record) => (
+        .map(({ entityId, record }) => (
           <KinematicSensor
             center={equipmentColliderCenter(record)}
             collisionGroups={EQUIPMENT_GROUPS}
-            entityId={`equipment:${record.id}`}
-            getSource={() => equipmentObjectsRef.current.get(record.id)}
+            entityId={entityId}
+            getSource={() => equipmentObjectsRef.current.get(entityId)}
             halfExtents={equipmentColliderHalfExtents(record)}
-            key={`${record.id}-${record.transform.scale.join('-')}`}
+            key={`${entityId}-${record.transform.scale.join('-')}`}
           />
         ))}
       <KinematicSensor

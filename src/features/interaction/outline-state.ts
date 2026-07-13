@@ -3,6 +3,7 @@ import type {
   CollisionEntityId,
   CollisionPairKey,
   SceneSelection,
+  ExternalCollisionEntityId,
 } from './interaction-store'
 
 export type OutlineState = 'selection' | 'collision' | null
@@ -26,6 +27,18 @@ export function getEquipmentOutlineState(
     return 'collision'
   }
   return selected ? 'selection' : null
+}
+
+export function getExternalEntityOutlineState(
+  entityId: ExternalCollisionEntityId,
+  selected: boolean,
+  pairs: readonly CollisionPairKey[],
+): OutlineState {
+  return hasActiveCollision(entityId, pairs)
+    ? 'collision'
+    : selected
+      ? 'selection'
+      : null
 }
 
 export function getRobotLinkOutlineState(

@@ -29,13 +29,19 @@ const GRIP_OFFSET: SerializableTransform = {
 }
 
 function createDependencies(calls: string[] = []) {
-  let held = { equipmentId: 'cup-01', gripOffset: GRIP_OFFSET } as {
+  let held = {
+    entityId: 'equipment:cup-01' as const,
+    equipmentId: 'cup-01',
+    gripOffset: GRIP_OFFSET,
+  } as {
+    entityId: 'equipment:cup-01'
     equipmentId: string
     gripOffset: SerializableTransform
   } | null
   return {
     getHeld: () => held,
-    getEquipment: (id: string) => (id === RECORD.id ? RECORD : undefined),
+    getEquipment: (id: string) =>
+      id === 'equipment:cup-01' ? RECORD : undefined,
     previewTransform: vi.fn((_id: string, _transform: SerializableTransform) => {
       calls.push('preview')
     }),
@@ -54,6 +60,49 @@ function createDependencies(calls: string[] = []) {
 }
 
 describe('grasp release actions', () => {
+  it('routes an imported Object release through its canonical persistence owner', async () => {
+    const objectRecord: EquipmentRecord = {
+      ...RECORD,
+      id: 'shared-01',
+      name: 'Imported Object',
+      kind: 'imported',
+      assetId: 'asset-01',
+      collisionCenter: [0.02, 0, 0.03],
+    }
+    const dependencies = {
+      getHeld: () => ({
+        entityId: 'object:shared-01' as const,
+        equipmentId: 'shared-01',
+        gripOffset: GRIP_OFFSET,
+      }),
+      getEquipment: vi.fn((entityId: string) =>
+        entityId === 'object:shared-01' ? objectRecord : undefined,
+      ),
+      previewTransform: vi.fn(),
+      clearHeld: vi.fn(),
+      commitTransform: vi.fn(async () => undefined),
+      resetInteraction: vi.fn(),
+      toPersistedTransform: (world: SerializableTransform) => world,
+    }
+
+    const released = await releaseHeldEquipmentAtTool(
+      'object:shared-01',
+      { ...RECORD.transform, position: [0.65, 0, 1.1265] },
+      1.08,
+      dependencies,
+    )
+
+    expect(released).not.toBeNull()
+    expect(released?.position[2]).toBeCloseTo(1.125, 6)
+    expect(dependencies.getEquipment).toHaveBeenCalledWith('object:shared-01')
+    expect(dependencies.previewTransform).toHaveBeenCalledWith(
+      'object:shared-01',
+      expect.any(Object),
+    )
+    expect(dependencies.clearHeld).toHaveBeenCalledWith('object:shared-01')
+    expect(dependencies.commitTransform).toHaveBeenCalledWith('object:shared-01')
+  })
+
   it('moves the tool, releases to toolWorld * gripOffset, and commits after preview', async () => {
     const calls: string[] = []
     const dependencies = createDependencies(calls)
@@ -72,7 +121,7 @@ describe('grasp release actions', () => {
 
     expect(released?.position).toEqual([1.1, 2, 1.155])
     expect(dependencies.previewTransform).toHaveBeenCalledWith(
-      'cup-01',
+      'equipment:cup-01',
       released,
     )
     expect(calls).toEqual(['preview', 'clear-held', 'commit'])

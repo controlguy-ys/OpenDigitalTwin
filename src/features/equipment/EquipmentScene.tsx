@@ -13,22 +13,28 @@ import type { Group, Object3D } from 'three'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import { EquipmentTransformControls } from '../interaction/EquipmentTransformControls'
 import { updateEquipmentObjectRegistration } from '../interaction/equipment-object-registry'
-import { useInteractionStore } from '../interaction/interaction-store'
-import { getEquipmentOutlineState } from '../interaction/outline-state'
+import {
+  type ExternalCollisionEntityId,
+  useInteractionStore,
+} from '../interaction/interaction-store'
+import { getExternalEntityOutlineState } from '../interaction/outline-state'
 import { importedGeometryRepository } from '../import/imported-geometry-repository'
 import { BuiltInEquipment } from './BuiltInEquipment'
 import { StackLight } from './StackLight'
 import { EquipmentStatusOverlay } from './EquipmentStatusOverlay'
 import { useEquipmentStore } from './equipment-store'
 import { useObjectAssetStore } from '../objects/object-asset-store'
-import { objectRecords } from '../objects/object-equipment-adapter'
 import { objectInstanceToGeometryEntity } from '../objects/object-equipment-adapter'
 import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { equipmentRecordToGeometryEntity } from '../collision/scene-entity-adapter'
+import { runtimeGraspParticipants } from '../interaction/grasp-participants'
 
 interface EquipmentInstanceProps {
+  entityId: ExternalCollisionEntityId
   record: EquipmentRecord
-  equipmentObjectsRef: RefObject<Map<string, Object3D>>
+  equipmentObjectsRef: RefObject<
+    Map<ExternalCollisionEntityId, Object3D>
+  >
   onDraggingChange(dragging: boolean): void
 }
 
@@ -78,6 +84,7 @@ export function EquipmentOutline({
 }
 
 const EquipmentInstance = memo(function EquipmentInstance({
+  entityId,
   record,
   equipmentObjectsRef,
   onDraggingChange,
@@ -102,8 +109,8 @@ const EquipmentInstance = memo(function EquipmentInstance({
   )
   const selected =
     selection?.kind === 'equipment' && selection.equipmentId === record.id
-  const outlineState = getEquipmentOutlineState(
-    record.id,
+  const outlineState = getExternalEntityOutlineState(
+    entityId,
     selected,
     activeCollisionPairs,
   )
@@ -113,12 +120,12 @@ const EquipmentInstance = memo(function EquipmentInstance({
     (object: Group | null) => {
       updateEquipmentObjectRegistration(
         equipmentObjectsRef.current,
-        record.id,
+        entityId,
         objectRef,
         object,
       )
     },
-    [equipmentObjectsRef, record.id],
+    [entityId, equipmentObjectsRef],
   )
 
   return (
@@ -135,6 +142,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
         scale={record.transform.scale}
         userData={{
           equipmentId: record.id,
+          collisionEntityId: entityId,
           selected,
           collision,
         }}
@@ -207,7 +215,9 @@ function ImportedEquipment({ record }: { record: EquipmentRecord }) {
 }
 
 export interface EquipmentSceneProps {
-  equipmentObjectsRef?: RefObject<Map<string, Object3D>>
+  equipmentObjectsRef?: RefObject<
+    Map<ExternalCollisionEntityId, Object3D>
+  >
   onDraggingChange?(dragging: boolean): void
 }
 
@@ -220,13 +230,15 @@ export function EquipmentScene({
   const records = useEquipmentStore((state) => state.records)
   const objectAssets = useObjectAssetStore((state) => state.assets)
   const objectInstances = useObjectAssetStore((state) => state.instances)
-  const allRecords = useMemo(
-    () => [...records, ...objectRecords(objectAssets, objectInstances)],
+  const participants = useMemo(
+    () => runtimeGraspParticipants(records, objectAssets, objectInstances),
     [objectAssets, objectInstances, records],
   )
-  const heldEquipmentId = useInteractionStore((state) => state.heldEquipmentId)
+  const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
-  const localEquipmentObjectsRef = useRef(new Map<string, Object3D>())
+  const localEquipmentObjectsRef = useRef(
+    new Map<ExternalCollisionEntityId, Object3D>(),
+  )
   const equipmentObjectsRef =
     providedEquipmentObjectsRef ?? localEquipmentObjectsRef
 
@@ -238,8 +250,8 @@ export function EquipmentScene({
         registerGeometryEntity(
           equipmentRecordToGeometryEntity(
             record,
-            equipmentObjectsRef.current.get(record.id) ?? null,
-            heldEquipmentId === record.id,
+            equipmentObjectsRef.current.get(`equipment:${record.id}`) ?? null,
+            heldEntityId === `equipment:${record.id}`,
           ),
         ),
       )
@@ -255,8 +267,8 @@ export function EquipmentScene({
           objectInstanceToGeometryEntity(
             asset,
             instance,
-            equipmentObjectsRef.current.get(instance.id) ?? null,
-            heldEquipmentId === instance.id,
+            equipmentObjectsRef.current.get(`object:${instance.id}`) ?? null,
+            heldEntityId === `object:${instance.id}`,
           ),
         ),
       )
@@ -267,7 +279,7 @@ export function EquipmentScene({
     }
   }, [
     equipmentObjectsRef,
-    heldEquipmentId,
+    heldEntityId,
     hiddenEntityIds,
     objectAssets,
     objectInstances,
@@ -276,16 +288,17 @@ export function EquipmentScene({
 
   return (
     <group name="equipment-scene">
-      {allRecords
+      {participants
         .filter(
-          (record) =>
-            record.id !== heldEquipmentId &&
+          ({ entityId, record }) =>
+            entityId !== heldEntityId &&
             !hiddenEntityIds.includes(record.id),
         )
-        .map((record) => (
+        .map(({ entityId, record }) => (
           <EquipmentInstance
+            entityId={entityId}
             equipmentObjectsRef={equipmentObjectsRef}
-            key={record.id}
+            key={entityId}
             onDraggingChange={onDraggingChange}
             record={record}
           />

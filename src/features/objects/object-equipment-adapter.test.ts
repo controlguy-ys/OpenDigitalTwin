@@ -39,6 +39,7 @@ it('keeps Asset collision center while adapting a reusable Instance for the scen
   expect(objectInstanceToEquipmentRecord(instance, asset)).toMatchObject({
     assetId: 'asset-01',
     collisionCenter: [0.2, -0.1, 0.4],
+    graspable: true,
     numericStatus: 7,
   })
 

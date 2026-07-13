@@ -179,6 +179,9 @@ describe('collision exclusions', () => {
       isCollisionPairAllowed('equipment:cup-01', 'robot-link:LINK04'),
     ).toBe(true)
     expect(
+      isCollisionPairAllowed('object:fixture-01', 'robot-link:LINK04'),
+    ).toBe(true)
+    expect(
       isCollisionPairAllowed('robot-link:LINK02', 'robot-link:LINK04'),
     ).toBe(true)
     expect(

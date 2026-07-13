@@ -48,6 +48,38 @@ describe('interaction selection and visibility', () => {
 })
 
 describe('grasp transitions', () => {
+  it('distinguishes canonical Equipment and Object candidates with the same local id', () => {
+    const store = createInteractionStore()
+    store.getState().enterGraspCandidate('equipment:shared-01')
+    store.getState().enterGraspCandidate('object:shared-01')
+
+    expect(store.getState().graspCandidateIds).toEqual([
+      'equipment:shared-01',
+      'object:shared-01',
+    ])
+    expect(
+      store.getState().holdEquipment('object:shared-01', IDENTITY_OFFSET),
+    ).toBe(true)
+    expect(store.getState()).toMatchObject({
+      heldEntityId: 'object:shared-01',
+      heldEquipmentId: 'shared-01',
+    })
+
+    expect(
+      store.getState().releaseHeldEquipment('equipment:shared-01'),
+    ).toBeNull()
+    expect(store.getState().releaseHeldEquipment('object:shared-01')).toMatchObject({
+      entityId: 'object:shared-01',
+      equipmentId: 'shared-01',
+    })
+
+    expect(store.getState().beginEquipmentRemoval('object:shared-01')).toBe(true)
+    store.getState().enterGraspCandidate('object:shared-01')
+    expect(
+      store.getState().holdEquipment('object:shared-01', IDENTITY_OFFSET),
+    ).toBe(false)
+  })
+
   it('locks a removing asset against candidates and re-grasp until removal ends', () => {
     const store = createInteractionStore()
     store.getState().enterGraspCandidate('cup-01')
@@ -104,6 +136,7 @@ describe('grasp transitions', () => {
     const released = store.getState().releaseHeldEquipment('cup-01')
 
     expect(released).toEqual({
+      entityId: 'equipment:cup-01',
       equipmentId: 'cup-01',
       gripOffset: IDENTITY_OFFSET,
     })

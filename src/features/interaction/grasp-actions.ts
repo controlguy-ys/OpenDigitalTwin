@@ -27,30 +27,35 @@ export async function releaseHeldEquipmentAtTool(
   const held = dependencies.getHeld()
   if (
     held === null ||
-    (requestedId !== undefined && requestedId !== held.equipmentId)
+    (requestedId !== undefined &&
+      (requestedId.includes(':')
+        ? requestedId !== held.entityId
+        : requestedId !== held.equipmentId))
   ) {
     return null
   }
 
-  const record = dependencies.getEquipment(held.equipmentId)
+  const record = dependencies.getEquipment(held.entityId)
   if (record === undefined) {
-    dependencies.clearHeld(held.equipmentId)
+    dependencies.clearHeld(held.entityId)
     return null
   }
 
   const worldTransform = composeWorldTransform(toolWorld, held.gripOffset)
   const releasedTransform = snapTransformToWorkbench(
     worldTransform,
-    record.importMetadata?.colliderCenter ?? [0, 0, 0],
+    record.collisionCenter ??
+      record.importMetadata?.colliderCenter ??
+      [0, 0, 0],
     record.collisionHalfExtents,
     workbenchTopZ,
   )
   dependencies.previewTransform(
-    held.equipmentId,
+    held.entityId,
     dependencies.toPersistedTransform(releasedTransform),
   )
-  dependencies.clearHeld(held.equipmentId)
-  await dependencies.commitTransform(held.equipmentId)
+  dependencies.clearHeld(held.entityId)
+  await dependencies.commitTransform(held.entityId)
   return releasedTransform
 }
 
@@ -59,7 +64,7 @@ export async function resetInteractionAtTool(
   workbenchTopZ: number,
   dependencies: GraspActionDependencies,
 ): Promise<void> {
-  const heldId = dependencies.getHeld()?.equipmentId
+  const heldId = dependencies.getHeld()?.entityId
   await releaseHeldEquipmentAtTool(
     heldId,
     toolWorld,
