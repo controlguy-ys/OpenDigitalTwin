@@ -252,11 +252,11 @@ export interface ProjectCollisionPolicyV2 {
 - Produces: repeatable acceptance evidence for current pose, near miss, ignored pair, sequence scan, V1 migration, V2 round-trip, runtime telemetry, and Docker deployment compatibility.
 - Consumes: completed UI, project codec/store, collision Worker, and existing Playwright/Docker gates.
 
-- [ ] **Step 1: Add browser acceptance** that positions an imported Object into collision and near-miss, confirms no pose response, verifies the pre-existing Workbench collision pair, ignores/restores a pair, validates a two-Pose sequence with a TCP-held Object, navigates to the first finding, exports reports, saves/exports/imports V2, and verifies the same policy/findings inputs after reload.
-- [ ] **Step 2: Add deterministic performance fixtures** for 7 Link Boxes, 1 Tool Box, 50 external Boxes, and 1,000 sequence samples. Assert broad-phase candidate count is below unconstrained all-pairs, result caps hold, current scheduler never exceeds 10 Hz, and Worker progress keeps a browser animation counter advancing.
-- [ ] **Step 3: Document operator workflow** for proxy editing, collision vs near miss, Collision Pair ignore, current/sequence validation, approximate clearance, reports, and limitations. Document migration, Worker/resource caps, and the absence of physics/safety validation for developers.
-- [ ] **Step 4: Run final gates:** `npm run verify`, `npm run test:e2e`, `npm run deploy:validate`, `npm run deploy:smoke`, `npm run deploy:smoke:opcua`, `npm audit --audit-level=high`, placeholder scan, and `git diff --check`.
-- [ ] **Step 5: Commit** browser/docs/evidence as `docs: verify geometry collision workflows`.
+- [x] **Step 1: Add browser acceptance** that positions an imported Object into collision and near-miss, confirms no pose response, verifies the pre-existing Workbench collision pair, ignores/restores a pair, validates a two-Pose sequence with a TCP-held Object, navigates to the first finding, exports reports, saves/exports/imports V2, and verifies the same policy/findings inputs after reload.
+- [x] **Step 2: Add deterministic performance fixtures** for 7 Link Boxes, 1 Tool Box, 50 external Boxes, and 1,000 sequence samples. Assert broad-phase candidate count is below unconstrained all-pairs, result caps hold, current scheduler never exceeds 10 Hz, and Worker progress keeps a browser animation counter advancing.
+- [x] **Step 3: Document operator workflow** for proxy editing, collision vs near miss, Collision Pair ignore, current/sequence validation, approximate clearance, reports, and limitations. Document migration, Worker/resource caps, and the absence of physics/safety validation for developers.
+- [x] **Step 4: Run final gates:** `npm run verify`, `npm run test:e2e`, `npm run deploy:validate`, `npm run deploy:smoke`, `npm run deploy:smoke:opcua`, `npm audit --audit-level=high`, placeholder scan, and `git diff --check`.
+- [x] **Step 5: Commit** browser/docs/evidence as `docs: verify geometry collision workflows`.
 
 ## Delivery Success Criteria
 

@@ -1,7 +1,9 @@
 import type { Object3D } from 'three'
 import type { StoreApi } from 'zustand/vanilla'
 import type { CollisionPolicy } from '../../domain/collision/collision'
-import { queryGeometryCollisions } from '../../domain/collision/query-collision'
+import {
+  queryGeometryCollisionsWithTelemetry,
+} from '../../domain/collision/query-collision'
 import type { CollisionStoreState } from './collision-store'
 import {
   geometryEntityRegistry,
@@ -12,7 +14,12 @@ import {
 export const CURRENT_POSE_COLLISION_INTERVAL_MS = 100
 
 export interface CurrentPoseCollisionResult {
-  readonly findings: ReturnType<typeof queryGeometryCollisions>
+  readonly findings: ReturnType<
+    typeof queryGeometryCollisionsWithTelemetry
+  >['findings']
+  readonly telemetry: ReturnType<
+    typeof queryGeometryCollisionsWithTelemetry
+  >['telemetry']
   readonly diagnostics: ReturnType<
     typeof snapshotGeometryEntities
   >['diagnostics']
@@ -69,8 +76,10 @@ export function queryCurrentPoseCollision(
   registry: GeometryEntityRegistry = geometryEntityRegistry,
 ): CurrentPoseCollisionResult {
   const snapshot = snapshotGeometryEntities(registry)
+  const query = queryGeometryCollisionsWithTelemetry(snapshot.entities, policy)
   return Object.freeze({
-    findings: queryGeometryCollisions(snapshot.entities, policy),
+    findings: query.findings,
+    telemetry: query.telemetry,
     diagnostics: snapshot.diagnostics,
   })
 }

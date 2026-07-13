@@ -1,5 +1,11 @@
 import { createPortal, useLoader, type ThreeEvent } from '@react-three/fiber'
-import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react'
+import {
+  Fragment,
+  useLayoutEffect,
+  useMemo,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react'
 import { Euler, MathUtils, Mesh, type Object3D } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
@@ -131,6 +137,18 @@ export function isCompleteRobotRigRegistration(
 ): boolean {
   return ROBOT_LINK_ASSETS.every(
     ({ id }) => registration.links[id].parent === registration.linkSlots[id],
+  )
+}
+
+export function createRobotLinkInteractionPortal(
+  linkId: RobotLinkId,
+  children: ReactNode,
+  container: Object3D,
+) {
+  return (
+    <Fragment key={`robot-link:${linkId}-interaction`}>
+      {createPortal(children, container)}
+    </Fragment>
   )
 }
 
@@ -319,7 +337,8 @@ export function RobotModel({ registerRig }: RobotModelProps) {
     const collision = outlineState === 'collision'
     const nearMiss = outlineState === 'near-miss'
     return [
-      createPortal(
+      createRobotLinkInteractionPortal(
+        id,
         <group name={`${id}-interaction`}>
           <mesh
             name={`${id}-selection-target`}

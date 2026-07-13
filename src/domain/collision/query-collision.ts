@@ -14,6 +14,19 @@ export interface CollisionQueryMetadata {
   readonly timeMs?: number | null
 }
 
+export interface CollisionQueryTelemetry {
+  readonly entityCount: number
+  readonly boxCount: number
+  readonly broadPhaseCandidateCount: number
+  readonly narrowPhaseTestCount: number
+  readonly findingCount: number
+}
+
+export interface CollisionQueryResult {
+  readonly findings: readonly CollisionFinding[]
+  readonly telemetry: CollisionQueryTelemetry
+}
+
 function pairEnabledByCategory(
   first: GeometryCollisionEntity,
   second: GeometryCollisionEntity,
@@ -99,10 +112,37 @@ export function queryGeometryCollisions(
   policyCandidate: CollisionPolicy,
   metadata: CollisionQueryMetadata = {},
 ): readonly CollisionFinding[] {
+  return queryGeometryCollisionsWithTelemetry(
+    entityCandidates,
+    policyCandidate,
+    metadata,
+  ).findings
+}
+
+export function queryGeometryCollisionsWithTelemetry(
+  entityCandidates: readonly GeometryCollisionEntity[],
+  policyCandidate: CollisionPolicy,
+  metadata: CollisionQueryMetadata = {},
+): CollisionQueryResult {
   const policy = validateCollisionPolicy(policyCandidate)
   const entities = entityCandidates.map(validateGeometryCollisionEntity)
   validateMetadata(metadata)
-  if (!policy.enabled) return Object.freeze([])
+  const boxCount = entities.reduce(
+    (total, entity) => total + entity.boxes.length,
+    0,
+  )
+  if (!policy.enabled) {
+    return Object.freeze({
+      findings: Object.freeze([]),
+      telemetry: Object.freeze({
+        entityCount: entities.length,
+        boxCount,
+        broadPhaseCandidateCount: 0,
+        narrowPhaseTestCount: 0,
+        findingCount: 0,
+      }),
+    })
+  }
 
   const entitiesById = new Map<string, GeometryCollisionEntity>()
   for (const entity of entities) {
@@ -116,16 +156,19 @@ export function queryGeometryCollisions(
   )
   const ignored = new Set(policy.ignoredPairKeys)
   const findingsByPair = new Map<string, CollisionFinding>()
-  for (const [firstObb, secondObb] of broadPhasePairs(
+  const broadPhaseCandidates = broadPhasePairs(
     worldObbs,
     policy.warningDistanceM,
-  )) {
+  )
+  let narrowPhaseTestCount = 0
+  for (const [firstObb, secondObb] of broadPhaseCandidates) {
     const firstEntity = entitiesById.get(firstObb.entityId)!
     const secondEntity = entitiesById.get(secondObb.entityId)!
     const key = pairKey(firstEntity.id, secondEntity.id)
     if (ignored.has(key) || !pairEnabledByCategory(firstEntity, secondEntity, policy)) {
       continue
     }
+    narrowPhaseTestCount += 1
     const finding = queryObbPair(
       firstObb,
       secondObb,
@@ -138,5 +181,17 @@ export function queryGeometryCollisions(
       findingsByPair.set(key, finding)
     }
   }
-  return Object.freeze([...findingsByPair.values()].sort(compareFindings))
+  const findings = Object.freeze(
+    [...findingsByPair.values()].sort(compareFindings),
+  )
+  return Object.freeze({
+    findings,
+    telemetry: Object.freeze({
+      entityCount: entities.length,
+      boxCount,
+      broadPhaseCandidateCount: broadPhaseCandidates.length,
+      narrowPhaseTestCount,
+      findingCount: findings.length,
+    }),
+  })
 }

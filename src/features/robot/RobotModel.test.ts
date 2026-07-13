@@ -1,3 +1,5 @@
+import { createPortal } from '@react-three/fiber'
+import { createElement } from 'react'
 import { Group, Quaternion, Vector3 } from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION } from '../../domain/robot/crb15000'
@@ -7,6 +9,7 @@ import { geometryEntityRegistry } from '../collision/geometry-entity-registry'
 import {
   ROBOT_LINK_ASSETS,
   attachRobotRigRegistration,
+  createRobotLinkInteractionPortal,
   createRobotRigRegistration,
   describeRobotLoadError,
   detachRobotRigRegistration,
@@ -58,6 +61,16 @@ function geometryRecords(): RobotLinkGeometryRecordV1[] {
 }
 
 describe('RobotModel asset registration', () => {
+  it('gives every Link interaction portal a stable React key', () => {
+    const slot = new Group()
+    const child = createElement('group')
+
+    const portal = createRobotLinkInteractionPortal('LINK03', child, slot)
+
+    expect(portal.key).toBe('robot-link:LINK03-interaction')
+    expect(createPortal).toHaveBeenCalledWith(child, slot)
+  })
+
   it('keeps one ordered LINK id and URL source', () => {
     expect(ROBOT_LINK_ASSETS).toEqual([
       { id: 'LINK00', url: '/models/robot/LINK00.glb' },

@@ -70,6 +70,43 @@
   `/opcua` WebSocket handshake, and cleanup passed without an OPC UA server.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
 
+## Delivered in the geometry-collision slice
+
+- Replaced the physics collision runtime with deterministic Box/Compound-Box
+  OBB queries for Robot Links, Tool, held Objects, Workbench, Equipment, and
+  imported Object Instances.
+- Added collision and near-miss policy, pair ignore/restore, stable finding
+  navigation, red/yellow outlines, approximate-clearance JSON/CSV reports, and
+  a non-safety disclaimer.
+- Added a revision-driven current-pose scheduler capped at 10 Hz and a
+  cancellable Web Worker for deterministic Preview/Validate Pose-sequence
+  sampling. Sequence runs cap at 20,000 samples and 10,000 findings.
+- Advanced `.wdtwin` persistence to schema V2 for Compound Boxes and collision
+  policy while preserving V1 visible placement through owned migration.
+- Added query telemetry plus a deterministic fixture covering seven Robot Link
+  Boxes, one Tool Box, 50 external Boxes, and 1,000 Worker samples.
+- Added browser acceptance for V1 migration, current collision/near-miss,
+  no-pose-response behavior, Workbench participation, ignore/restore,
+  navigation, report downloads, reload parity, and held-Object sequence
+  validation. V2 save/export/import remains an independent project-roundtrip
+  browser gate.
+
+## Geometry collision verification evidence
+
+- `npm run verify`: 73 test files and 439 tests passed; seven CAD Links were
+  valid with zero errors and zero warnings; lint and production build passed.
+- Geometry browser acceptance: one test passed in 3.2 minutes with one
+  Playwright Worker and a 300-second bound.
+- Independent V2 project round-trip: one test passed in 1.6 minutes.
+- Playwright is serialized to one Worker because concurrent OCCT-heavy project
+  imports exhausted browser resources. The last combined command exposed only
+  a strict test-locator ambiguity; after correction, both component browser
+  gates passed independently.
+- Static deployment validation, real Web-only Docker smoke, real OPC UA-profile
+  Docker smoke, and automatic Compose cleanup passed.
+- High-severity dependency audit reported zero vulnerabilities. Production
+  source/runtime dependencies contain no Rapier integration.
+
 ## Deferred next slices
 
 - Scene draw-call telemetry and enforcement at runtime.

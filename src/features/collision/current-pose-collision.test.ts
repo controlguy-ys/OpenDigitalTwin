@@ -101,6 +101,13 @@ describe('current-pose collision scheduler', () => {
     )
 
     expect(result.findings).toHaveLength(1)
+    expect(result.telemetry).toMatchObject({
+      entityCount: 2,
+      boxCount: 2,
+      broadPhaseCandidateCount: 1,
+      narrowPhaseTestCount: 1,
+      findingCount: 1,
+    })
     expect(robot.position.toArray()).toEqual(before.position)
     expect(robot.quaternion.toArray()).toEqual(before.quaternion)
     expect(robot.scale.toArray()).toEqual(before.scale)

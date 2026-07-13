@@ -21,9 +21,13 @@ UA joint/status input.
   Robot Base, and TCP are editable in mm/degrees; World and Flange are
   read-only. The gripper and held Object follow TCP.
 - Simulation Poses can be saved, reordered, speed-adjusted, and deleted.
+- Geometry Proxy Collision evaluates Robot Links, Tool, held Objects,
+  Workbench, Equipment, and imported Object Instances with Box/Compound-Box
+  proxies. It reports current-pose collision/near-miss findings and runs
+  deterministic Pose-sequence validation in a cancellable Web Worker.
 - `.wdtwin` project Save, Export, and Import covers Robot source STEP files,
-  mechanics, Geometry configuration, Objects, Poses, frame placeholders, and
-  OPC UA bindings.
+  mechanics, Geometry configuration, collision policy, Objects, Poses, frame
+  placeholders, and OPC UA bindings. V1 projects migrate to schema V2 on load.
 - Import is decoded, resource-validated, and geometry-staged before the active
   project changes; failure retains the previous central snapshot.
 - Optional anonymous, read-only OPC UA Client middleware publishes joint angles
@@ -72,7 +76,10 @@ the OPC UA profile.
 4. Arrange Objects with the inspector and build the Simulation Pose sequence.
 5. Use **Coordinate Frames** to position MCP, Robot Base, and TCP. Moving MCP
    carries the Robot and Objects together without changing their local poses.
-6. Use **Save**, then **Export** to create a portable `.wdtwin`. **Import**
+6. Use **Geometry Proxy Collision** to set the warning distance, inspect
+   collision/near-miss findings, ignore intentional pairs, and validate the
+   Simulation Pose sequence.
+7. Use **Save**, then **Export** to create a portable `.wdtwin`. **Import**
    restores a validated archive.
 
 ### Resource limits
@@ -115,8 +122,8 @@ npm audit --audit-level=high
 ```
 
 `verify` runs lint, unit/integration tests, CAD validation, TypeScript, and the
-production build. The Playwright test exports the default workcell, clears
-browser persistence, imports the archive, and compares semantic project state.
+production build. Playwright separately exercises Geometry Proxy Collision V1
+migration/current/sequence workflows and the V2 project semantic round-trip.
 
 ## Architecture
 
@@ -129,13 +136,17 @@ src/features/objects     Reusable Object Asset and Object Instance persistence
 src/features/import      STEP Worker, OCCT conversion, shared geometry cache
 src/features/joints      Simulation/OPC UA sources, Poses, playback
 src/features/equipment   Scene adapter, inspector, status overlay, stack lights
+src/features/collision   Geometry registry, OBB queries, policy/report UI, Worker
 middleware               Read-only OPC UA Client and WebSocket gateway
 ```
 
 ## Documentation
 
 - [Fixed Coordinate Frames operator guide](docs/operator/fixed-coordinate-frames.md)
+- [Geometry Proxy Collision operator guide](docs/operator/geometry-collision.md)
+- [Geometry Proxy Collision verification](docs/verification/geometry-collision-verification.md)
 - [Docker on-prem operator guide](docs/operator/docker-deployment.md)
+- [Geometry Collision Core Tech Spec](docs/superpowers/specs/2026-07-13-geometry-collision-core-design.md)
 - [Docker deployment Tech Spec](docs/superpowers/specs/2026-07-13-on-prem-docker-deployment-design.md)
 - [Portable Workcell Project Tech Spec](docs/superpowers/specs/2026-07-13-portable-workcell-project-format.md)
 - [Implementation plan](docs/superpowers/plans/2026-07-13-portable-workcell-project-core.md)
