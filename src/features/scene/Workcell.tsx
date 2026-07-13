@@ -9,8 +9,7 @@ import {
 import type { Group, Object3D } from 'three'
 import { CurrentPoseCollisionSystem } from '../collision/CurrentPoseCollisionSystem'
 import { EquipmentScene } from '../equipment/EquipmentScene'
-import { useInteractionStore } from '../interaction/interaction-store'
-import { hasActiveCollision } from '../interaction/outline-state'
+import { getExternalEntityOutlineState } from '../interaction/outline-state'
 import {
   GraspController,
   type InteractionRuntimeController,
@@ -25,6 +24,11 @@ import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { workbenchToGeometryEntity } from '../collision/scene-entity-adapter'
 import type { ExternalCollisionEntityId } from '../interaction/interaction-store'
+import {
+  selectCollisionNavigationFindings,
+  selectFocusedCollisionPairKey,
+  useCollisionStore,
+} from '../collision/collision-store'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
@@ -43,13 +47,18 @@ const WORKBENCH_LEGS = [
 ] as const
 
 const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
-  const activeCollisionPairs = useInteractionStore(
-    (state) => state.activeCollisionPairs,
+  const collisionFindings = useCollisionStore(
+    selectCollisionNavigationFindings,
   )
-  const collision = hasActiveCollision(
+  const focusedPairKey = useCollisionStore(selectFocusedCollisionPairKey)
+  const outlineState = getExternalEntityOutlineState(
     'workcell:workbench',
-    activeCollisionPairs,
+    false,
+    collisionFindings,
+    focusedPairKey,
   )
+  const collision = outlineState === 'collision'
+  const nearMiss = outlineState === 'near-miss'
   return (
     <group name="workbench" ref={ref}>
       <mesh
@@ -61,12 +70,12 @@ const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
         <boxGeometry args={[1.8, 1.2, WORKBENCH_TOP_THICKNESS]} />
         <meshStandardMaterial color="#6f767c" metalness={0.8} roughness={0.34} />
       </mesh>
-      {collision ? (
+      {collision || nearMiss ? (
         <mesh
-          name="workbench-collision-outline"
+          name={`workbench-${outlineState}-outline`}
           position={[0, 0, WORKBENCH_TOP_Z - WORKBENCH_TOP_THICKNESS / 2]}
           renderOrder={1000}
-          userData={{ outline: 'collision', workcellId: 'workbench' }}
+          userData={{ outline: outlineState, workcellId: 'workbench' }}
         >
           <boxGeometry
             args={[
@@ -76,7 +85,7 @@ const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
             ]}
           />
           <meshBasicMaterial
-            color="#ff3b30"
+            color={collision ? '#ff3b30' : '#f5c542'}
             depthTest={false}
             opacity={0.86}
             transparent

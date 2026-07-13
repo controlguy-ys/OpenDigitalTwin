@@ -28,6 +28,12 @@ import { objectInstanceToGeometryEntity } from '../objects/object-equipment-adap
 import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { equipmentRecordToGeometryEntity } from '../collision/scene-entity-adapter'
 import { runtimeGraspParticipants } from '../interaction/grasp-participants'
+import {
+  selectCollisionNavigationFindings,
+  selectFocusedCollisionPairKey,
+  useCollisionStore,
+} from '../collision/collision-store'
+import type { OutlineState } from '../interaction/outline-state'
 
 interface EquipmentInstanceProps {
   entityId: ExternalCollisionEntityId
@@ -48,21 +54,22 @@ export function EquipmentVisual({ record }: { record: EquipmentRecord }) {
 
 export function EquipmentOutline({
   record,
-  collision,
+  outlineState,
 }: {
   record: EquipmentRecord
-  collision: boolean
+  outlineState: Exclude<OutlineState, null>
 }) {
+  const collision = outlineState === 'collision'
   const center =
     record.collisionCenter ?? record.importMetadata?.colliderCenter ?? [0, 0, 0]
   return (
     <mesh
-      name={`${record.id}-${collision ? 'collision' : 'selection'}-outline`}
+      name={`${record.id}-${outlineState}-outline`}
       position={center}
       renderOrder={1000}
       userData={{
         equipmentId: record.id,
-        outline: collision ? 'collision' : 'selection',
+        outline: outlineState,
       }}
     >
       <boxGeometry
@@ -73,7 +80,13 @@ export function EquipmentOutline({
         ]}
       />
       <meshBasicMaterial
-        color={collision ? '#ff3b30' : '#4da3ff'}
+        color={
+          collision
+            ? '#ff3b30'
+            : outlineState === 'near-miss'
+              ? '#f5c542'
+              : '#4da3ff'
+        }
         depthTest={false}
         transparent
         opacity={0.86}
@@ -91,9 +104,10 @@ const EquipmentInstance = memo(function EquipmentInstance({
 }: EquipmentInstanceProps) {
   const objectRef = useRef<Group>(null)
   const selection = useInteractionStore((state) => state.selection)
-  const activeCollisionPairs = useInteractionStore(
-    (state) => state.activeCollisionPairs,
+  const collisionFindings = useCollisionStore(
+    selectCollisionNavigationFindings,
   )
+  const focusedPairKey = useCollisionStore(selectFocusedCollisionPairKey)
   const selectEquipment = useInteractionStore((state) => state.selectEquipment)
   const previewTransform = useEquipmentStore(
     (state) => state.previewEquipmentTransform,
@@ -112,7 +126,8 @@ const EquipmentInstance = memo(function EquipmentInstance({
   const outlineState = getExternalEntityOutlineState(
     entityId,
     selected,
-    activeCollisionPairs,
+    collisionFindings,
+    focusedPairKey,
   )
   const collision = outlineState === 'collision'
 
@@ -150,7 +165,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
         <EquipmentVisual record={record} />
         <EquipmentStatusOverlay record={record} />
         {outlineState === null ? null : (
-          <EquipmentOutline collision={collision} record={record} />
+          <EquipmentOutline outlineState={outlineState} record={record} />
         )}
       </group>
       {selected ? (

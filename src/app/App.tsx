@@ -34,6 +34,7 @@ import type { ExternalCollisionEntityId } from '../features/interaction/interact
 import { removeCanonicalExternalEntity } from './external-entity-removal'
 import { findEquipmentRecordByEntityId } from '../features/equipment/equipment-entity-selection'
 import { createCanonicalExternalEntityMutations } from './external-entity-mutations'
+import { CollisionPanel } from '../features/collision/CollisionPanel'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -288,10 +289,13 @@ export function App() {
           />
         }
         bottomRail={
-          <Timeline
-            disabled={jointControlsDisabled}
-            source={simulationJointSource}
-          />
+          <>
+            <Timeline
+              disabled={jointControlsDisabled}
+              source={simulationJointSource}
+            />
+            <CollisionPanel />
+          </>
         }
         controlsDisabled={controlsDisabled}
         inspector={

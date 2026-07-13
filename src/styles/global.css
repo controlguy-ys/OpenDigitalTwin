@@ -183,9 +183,12 @@ button {
 }
 
 .bottom-rail-content {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(640px, 1.35fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow-x: auto;
 }
 
 .asset-rail {
@@ -1080,6 +1083,197 @@ button {
   z-index: 3;
   grid-area: bottom;
   border-top: 1px solid var(--color-border);
+}
+
+.collision-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.75fr) minmax(330px, 1.4fr) minmax(220px, 0.9fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 7px 12px;
+  min-width: 640px;
+  height: 100%;
+  padding: 8px 12px;
+  overflow: auto;
+  border-left: 1px solid var(--color-border);
+}
+
+.collision-panel-header {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 12px;
+}
+
+.collision-panel h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.collision-counts {
+  display: flex;
+  gap: 7px;
+  font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.collision-counts span {
+  padding: 3px 6px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius);
+}
+
+.collision-counts [data-kind='collision'],
+.collision-finding[data-kind='collision'] > strong {
+  color: var(--color-fault);
+}
+
+.collision-counts [data-kind='near-miss'],
+.collision-finding[data-kind='near-miss'] > strong {
+  color: var(--color-warning);
+}
+
+.collision-policy-controls {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+
+.collision-policy-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.collision-policy-controls label:nth-child(2) {
+  display: grid;
+  grid-template-columns: 1fr 62px;
+}
+
+.collision-policy-controls input[type='number'] {
+  width: 62px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 5px;
+  color: var(--color-text);
+  font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.collision-policy-controls input[type='checkbox'] {
+  accent-color: var(--color-accent);
+}
+
+.collision-finding-navigation {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+
+.collision-navigation-buttons,
+.collision-panel-footer > div {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.collision-navigation-buttons output {
+  min-width: 82px;
+  color: var(--color-muted);
+  font-size: 9px;
+  text-align: center;
+}
+
+.collision-panel button {
+  min-height: 23px;
+  padding: 2px 6px;
+  color: var(--color-text);
+  font-size: 9px;
+  cursor: pointer;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.collision-panel button:hover:not(:disabled),
+.collision-panel button:focus-visible {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.collision-panel button:focus-visible,
+.collision-panel input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.collision-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.collision-finding {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  font-size: 9px;
+}
+
+.collision-finding code,
+.collision-ignored-pairs code {
+  overflow: hidden;
+  color: var(--color-muted);
+  font: 9px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collision-finding output {
+  font: 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.collision-ignored-pairs,
+.collision-diagnostics {
+  font-size: 9px;
+}
+
+.collision-ignored-pairs ul,
+.collision-diagnostics ul {
+  padding: 0;
+  margin: 3px 0 0;
+  list-style: none;
+}
+
+.collision-ignored-pairs li {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.collision-diagnostics {
+  color: var(--color-warning);
+}
+
+.collision-diagnostics p {
+  margin: 0 0 3px;
+}
+
+.collision-panel-footer {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.collision-panel-footer p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 8px;
+  line-height: 1.3;
 }
 
 .visually-hidden {

@@ -41,6 +41,11 @@ import {
   runtimeGraspParticipants,
 } from './grasp-participants'
 import {
+  selectCollisionNavigationFindings,
+  selectFocusedCollisionPairKey,
+  useCollisionStore,
+} from '../collision/collision-store'
+import {
   createGeometryGraspSensorEntity,
   findGraspCandidates,
 } from './geometry-grasp-sensor'
@@ -97,9 +102,10 @@ export function GraspController({
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const gripOffset = useInteractionStore((state) => state.gripOffset)
   const selection = useInteractionStore((state) => state.selection)
-  const activeCollisionPairs = useInteractionStore(
-    (state) => state.activeCollisionPairs,
+  const collisionFindings = useCollisionStore(
+    selectCollisionNavigationFindings,
   )
+  const focusedPairKey = useCollisionStore(selectFocusedCollisionPairKey)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
   const heldObjectOwnerRef = useRef<Object3D>(null)
   const previousGripperOpen = useRef(true)
@@ -286,7 +292,8 @@ export function GraspController({
       : getExternalEntityOutlineState(
           heldEntityId!,
           heldSelected,
-          activeCollisionPairs,
+          collisionFindings,
+          focusedPairKey,
         )
   const registerHeldObject = useCallback(
     (object: Group | null) => {
@@ -329,7 +336,7 @@ export function GraspController({
               <EquipmentVisual record={heldRecord} />
               {heldOutlineState === null ? null : (
                 <EquipmentOutline
-                  collision={heldOutlineState === 'collision'}
+                  outlineState={heldOutlineState}
                   record={heldRecord}
                 />
               )}

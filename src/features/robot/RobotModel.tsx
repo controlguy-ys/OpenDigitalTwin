@@ -23,6 +23,11 @@ import { useRobotGeometryStore } from './robot-geometry-store'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { robotLinkToGeometryEntity } from '../collision/scene-entity-adapter'
+import {
+  selectCollisionNavigationFindings,
+  selectFocusedCollisionPairKey,
+  useCollisionStore,
+} from '../collision/collision-store'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -213,9 +218,10 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   const j5 = useRobotStore(jointAngleSelectors[4])
   const j6 = useRobotStore(jointAngleSelectors[5])
   const selection = useInteractionStore((state) => state.selection)
-  const activeCollisionPairs = useInteractionStore(
-    (state) => state.activeCollisionPairs,
+  const collisionFindings = useCollisionStore(
+    selectCollisionNavigationFindings,
   )
+  const focusedPairKey = useCollisionStore(selectFocusedCollisionPairKey)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
   const selectRobotLink = useInteractionStore((state) => state.selectRobotLink)
 
@@ -296,10 +302,12 @@ export function RobotModel({ registerRig }: RobotModelProps) {
     const outlineState = getRobotLinkOutlineState(
       selection,
       id,
-      activeCollisionPairs,
+      collisionFindings,
+      focusedPairKey,
     )
     const selected = outlineState === 'selection'
     const collision = outlineState === 'collision'
+    const nearMiss = outlineState === 'near-miss'
     return [
       createPortal(
         <group name={`${id}-interaction`}>
@@ -327,12 +335,12 @@ export function RobotModel({ registerRig }: RobotModelProps) {
           </mesh>
           {outlineState === null ? null : (
             <mesh
-              name={`${id}-${collision ? 'collision' : 'selection'}-outline`}
+              name={`${id}-${outlineState}-outline`}
               position={bounds.center}
               renderOrder={1000}
               userData={{
                 robotLinkId: id,
-                outline: collision ? 'collision' : 'selection',
+                outline: outlineState,
               }}
             >
               <boxGeometry
@@ -343,7 +351,9 @@ export function RobotModel({ registerRig }: RobotModelProps) {
                 ]}
               />
               <meshBasicMaterial
-                color={collision ? '#ff3b30' : '#4da3ff'}
+                color={
+                  collision ? '#ff3b30' : nearMiss ? '#f5c542' : '#4da3ff'
+                }
                 depthTest={false}
                 opacity={0.86}
                 transparent

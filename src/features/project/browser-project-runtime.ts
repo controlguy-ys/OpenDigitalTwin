@@ -183,6 +183,7 @@ export const browserProjectRuntime: ProjectRuntime<BrowserStagedProject> = {
       currentFindings: [],
       diagnostics: [],
     })
+    useCollisionStore.getState().setValidationReport(null)
   },
   dispose: (staged) => {
     for (const asset of staged.robotAssets.values()) asset.dispose()

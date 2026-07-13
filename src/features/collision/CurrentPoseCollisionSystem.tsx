@@ -16,7 +16,7 @@ export interface CurrentPoseCollisionSystemProps {
 }
 
 export function CurrentPoseCollisionSystem({
-  pausePlaybackOnCollision = true,
+  pausePlaybackOnCollision,
 }: CurrentPoseCollisionSystemProps) {
   const scheduler = useMemo(() => new CurrentPoseCollisionScheduler(), [])
 
@@ -25,11 +25,14 @@ export function CurrentPoseCollisionSystem({
     const revision = currentPoseCollisionRevision(policy)
     scheduler.observe(clock.elapsedTime * 1_000, revision, () => {
       const result = publishCurrentPoseCollision(useCollisionStore)
+      const shouldPause =
+        pausePlaybackOnCollision ??
+        useCollisionStore.getState().pausePlaybackOnCollision
       synchronizeCollisionFindings(result.findings, {
         interactionStore: useInteractionStore,
         eventStore: useEventStore,
         now: Date.now,
-        ...(pausePlaybackOnCollision
+        ...(shouldPause
           ? {
               pausePlayback: () =>
                 useRobotStore.getState().setPlaying(false),
