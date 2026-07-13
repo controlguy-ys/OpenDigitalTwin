@@ -1,4 +1,48 @@
-import { useMemo } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import type { CollisionPolicy } from '../../domain/collision/collision'
+import {
+  composePose3D,
+  pose3DToSerializableTransform,
+  rpyToQuaternion,
+  serializableTransformToPose3D,
+  type Pose3D,
+} from '../../domain/frames/pose3d'
+import type { SerializableTransform } from '../../domain/equipment/equipment'
+import type { RobotLinkId } from '../../domain/robot/crb15000'
+import { useEquipmentStore } from '../equipment/equipment-store'
+import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
+import { useInteractionStore } from '../interaction/interaction-store'
+import { ROBOT_LINK_COLLISION_BOUNDS } from '../interaction/robot-collision-bounds'
+import { useRobotStore } from '../joints/robot-store'
+import { useObjectAssetStore } from '../objects/object-asset-store'
+import {
+  robotConfigurationToDefinition,
+  useRobotConfigurationStore,
+} from '../robot/robot-configuration-store'
+import { useRobotGeometryStore } from '../robot/robot-geometry-store'
+import { WORKBENCH_TOP_Z } from '../scene/workcell-constants'
+import {
+  CollisionValidationCancelledError,
+  CollisionValidationClient,
+  type CollisionValidationOptions,
+} from './collision-validation-client'
+import type {
+  CollisionValidationMode,
+} from './validate-pose-sequence'
+import type {
+  CollisionValidationRequest,
+  CollisionValidationResult,
+} from './collision-validation-protocol'
+import {
+  geometryEntityRegistry,
+  snapshotGeometryEntities,
+} from './geometry-entity-registry'
 import {
   encodeCollisionReportCsv,
   encodeCollisionReportJson,
@@ -7,6 +51,266 @@ import {
   selectCollisionNavigationFindings,
   useCollisionStore,
 } from './collision-store'
+
+const LINK_IDS = Object.freeze([
+  'LINK00', 'LINK01', 'LINK02', 'LINK03', 'LINK04', 'LINK05', 'LINK06',
+] as const satisfies readonly RobotLinkId[])
+const IDENTITY_TRANSFORM: SerializableTransform = Object.freeze({
+  position: Object.freeze([0, 0, 0]) as unknown as [number, number, number],
+  quaternion: Object.freeze([0, 0, 0, 1]) as unknown as [number, number, number, number],
+  scale: Object.freeze([1, 1, 1]) as unknown as [number, number, number],
+})
+const collisionValidationClient = new CollisionValidationClient()
+let nextValidationRequestId = 1
+
+export interface CollisionPanelValidationClient {
+  validate(
+    request: CollisionValidationRequest,
+    options?: CollisionValidationOptions,
+  ): Promise<CollisionValidationResult>
+  cancel(): void
+}
+
+export interface CollisionPanelValidationRuntime {
+  readonly revision: string
+  readonly canValidate: boolean
+  readonly client: CollisionPanelValidationClient
+  createRequest(mode: CollisionValidationMode): CollisionValidationRequest
+}
+
+export interface CollisionPanelProps {
+  readonly validationRuntime?: CollisionPanelValidationRuntime
+}
+
+function rootPose(
+  mcp: SerializableTransform,
+  basePosition: readonly [number, number, number],
+  baseRotationDeg: readonly [number, number, number],
+): SerializableTransform {
+  const mount: Pose3D = {
+    position: [0, 0, WORKBENCH_TOP_Z],
+    quaternion: [0, 0, 0, 1],
+  }
+  const base: Pose3D = {
+    position: basePosition,
+    quaternion: rpyToQuaternion([
+      baseRotationDeg[0] * Math.PI / 180,
+      baseRotationDeg[1] * Math.PI / 180,
+      baseRotationDeg[2] * Math.PI / 180,
+    ]),
+  }
+  return pose3DToSerializableTransform(
+    composePose3D(
+      composePose3D(serializableTransformToPose3D(mcp), mount),
+      base,
+    ),
+  )
+}
+
+function serializableRevision(
+  policy: CollisionPolicy,
+  registrySignature: string,
+  inputs: {
+    readonly keyframes: ReturnType<typeof useRobotStore.getState>['keyframes']
+    readonly configuration: ReturnType<typeof useRobotConfigurationStore.getState>['configuration']
+    readonly geometryLinks: ReturnType<typeof useRobotGeometryStore.getState>['links']
+    readonly frames: ReturnType<typeof useCoordinateFrameStore.getState>['frames']
+    readonly equipment: ReturnType<typeof useEquipmentStore.getState>['records']
+    readonly objectAssets: ReturnType<typeof useObjectAssetStore.getState>['assets']
+    readonly objectInstances: ReturnType<typeof useObjectAssetStore.getState>['instances']
+    readonly heldEntityId: ReturnType<typeof useInteractionStore.getState>['heldEntityId']
+    readonly gripOffset: ReturnType<typeof useInteractionStore.getState>['gripOffset']
+    readonly hiddenEntityIds: ReturnType<typeof useInteractionStore.getState>['hiddenEntityIds']
+  },
+): string {
+  return JSON.stringify({
+    policy,
+    registrySignature,
+    keyframes: inputs.keyframes,
+    configuration: inputs.configuration,
+    frames: inputs.frames,
+    geometryLinks: inputs.geometryLinks.map((link) => ({
+      linkId: link.linkId,
+      localTransform: link.localTransform,
+      visible: link.visible,
+      collisionBoxes: link.collisionBoxes,
+    })),
+    equipment: inputs.equipment.map((record) => ({
+      id: record.id,
+      transform: record.transform,
+      collisionCenter: record.collisionCenter,
+      collisionHalfExtents: record.collisionHalfExtents,
+    })),
+    objectAssets: inputs.objectAssets.map((asset) => ({
+      id: asset.id,
+      collisionBoxes: asset.collisionBoxes,
+    })),
+    objectInstances: inputs.objectInstances.map((instance) => ({
+      id: instance.id,
+      assetId: instance.assetId,
+      transform: instance.transform,
+      visible: instance.visible,
+    })),
+    heldEntityId: inputs.heldEntityId,
+    gripOffset: inputs.gripOffset,
+    hiddenEntityIds: inputs.hiddenEntityIds,
+  })
+}
+
+function useDefaultValidationRuntime(
+  policy: CollisionPolicy,
+): CollisionPanelValidationRuntime {
+  const keyframes = useRobotStore((state) => state.keyframes)
+  const configuration = useRobotConfigurationStore((state) => state.configuration)
+  const geometryLinks = useRobotGeometryStore((state) => state.links)
+  const frames = useCoordinateFrameStore((state) => state.frames)
+  const equipment = useEquipmentStore((state) => state.records)
+  const objectAssets = useObjectAssetStore((state) => state.assets)
+  const objectInstances = useObjectAssetStore((state) => state.instances)
+  const heldEntityId = useInteractionStore((state) => state.heldEntityId)
+  const gripOffset = useInteractionStore((state) => state.gripOffset)
+  const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
+  const registrySignature = JSON.stringify(
+    [...geometryEntityRegistry.values()]
+      .sort((first, second) => first.id.localeCompare(second.id))
+      .map((registration) => ({
+        id: registration.id,
+        category: registration.category,
+        colliderRevision: registration.colliderRevision,
+        boxes: registration.boxes,
+      })),
+  )
+  const revisionInputs = useMemo(
+    () => ({
+      keyframes,
+      configuration,
+      geometryLinks,
+      frames,
+      equipment,
+      objectAssets,
+      objectInstances,
+      heldEntityId,
+      gripOffset,
+      hiddenEntityIds,
+    }),
+    [
+      configuration,
+      equipment,
+      frames,
+      geometryLinks,
+      gripOffset,
+      heldEntityId,
+      hiddenEntityIds,
+      keyframes,
+      objectAssets,
+      objectInstances,
+    ],
+  )
+  const revision = useMemo(
+    () => serializableRevision(policy, registrySignature, revisionInputs),
+    [policy, registrySignature, revisionInputs],
+  )
+  const createRequest = useCallback(
+    (mode: CollisionValidationMode): CollisionValidationRequest => {
+      const definition = robotConfigurationToDefinition(configuration)
+      const geometryByLink = new Map(
+        geometryLinks.map((link) => [link.linkId, link]),
+      )
+      const geometryTransforms = {} as Record<RobotLinkId, SerializableTransform>
+      const linkEntities = LINK_IDS.map((linkId) => {
+        const geometry = geometryByLink.get(linkId)
+        geometryTransforms[linkId] = geometry?.localTransform ?? IDENTITY_TRANSFORM
+        const fallback = ROBOT_LINK_COLLISION_BOUNDS[linkId]
+        return {
+          linkId,
+          id: `robot-link:${linkId}` as const,
+          name: linkId,
+          boxes: geometry?.collisionBoxes ?? [{
+            id: 'default',
+            center: fallback.center,
+            halfExtents: fallback.halfExtents,
+            quaternion: [0, 0, 0, 1] as const,
+          }],
+        }
+      })
+      const registrySnapshot = snapshotGeometryEntities()
+      const staticEntities = registrySnapshot.entities.filter(
+        (entity) =>
+          entity.id !== heldEntityId &&
+          (entity.category === 'environment' ||
+            entity.category === 'equipment' ||
+            entity.category === 'object'),
+      )
+      const toolRegistration = geometryEntityRegistry.get('tool:default')
+      const heldRegistration = heldEntityId === null
+        ? undefined
+        : geometryEntityRegistry.get(heldEntityId)
+      const halfToolRotation = definition.toolRotationYRad / 2
+
+      return {
+        requestId: `collision-validation-${nextValidationRequestId++}`,
+        revision,
+        mode,
+        sequence: keyframes,
+        robot: {
+          definition,
+          rootPose: rootPose(
+            frames.mcp,
+            configuration.basePosition,
+            configuration.baseRotationDeg,
+          ),
+          geometryTransforms,
+          toolFrames: {
+            flange: IDENTITY_TRANSFORM,
+            tool: {
+              position: [0, 0, 0],
+              quaternion: [0, Math.sin(halfToolRotation), 0, Math.cos(halfToolRotation)],
+              scale: [1, 1, 1],
+            },
+            tcp: frames.tcp,
+          },
+          linkEntities,
+          toolEntity: toolRegistration === undefined
+            ? null
+            : {
+                id: 'tool:default',
+                name: toolRegistration.name,
+                boxes: toolRegistration.boxes,
+              },
+        },
+        heldObject:
+          heldEntityId === null || gripOffset === null || heldRegistration === undefined
+            ? null
+            : {
+                id: heldEntityId,
+                name: heldRegistration.name,
+                boxes: heldRegistration.boxes,
+                tcpLocalTransform: gripOffset,
+              },
+        staticEntities,
+        policy,
+      }
+    }, [
+      configuration,
+      frames,
+      geometryLinks,
+      gripOffset,
+      heldEntityId,
+      keyframes,
+      policy,
+      revision,
+    ],
+  )
+  return useMemo(
+    () => ({
+      revision,
+      canValidate: keyframes.length >= 2,
+      client: collisionValidationClient,
+      createRequest,
+    }),
+    [createRequest, keyframes.length, revision],
+  )
+}
 
 function downloadText(fileName: string, type: string, text: string): void {
   const url = URL.createObjectURL(new Blob([text], { type }))
@@ -21,7 +325,7 @@ function clearanceText(separationM: number): string {
   return `${(separationM * 1_000).toFixed(3)} mm`
 }
 
-export function CollisionPanel() {
+export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) {
   const policy = useCollisionStore((state) => state.policy)
   const currentFindings = useCollisionStore((state) => state.currentFindings)
   const diagnostics = useCollisionStore((state) => state.diagnostics)
@@ -54,6 +358,103 @@ export function CollisionPanel() {
   const setPausePlaybackOnCollision = useCollisionStore(
     (state) => state.setPausePlaybackOnCollision,
   )
+  const setValidationReport = useCollisionStore(
+    (state) => state.setValidationReport,
+  )
+  const markValidationReportStale = useCollisionStore(
+    (state) => state.markValidationReportStale,
+  )
+  const defaultValidationRuntime = useDefaultValidationRuntime(policy)
+  const activeValidationRuntime = validationRuntime ?? defaultValidationRuntime
+  const runtimeRef = useRef(activeValidationRuntime)
+  runtimeRef.current = activeValidationRuntime
+  const previousRevisionRef = useRef(activeValidationRuntime.revision)
+  const runTokenRef = useRef(0)
+  const [validationRunning, setValidationRunning] = useState(false)
+  const [validationProgress, setValidationProgress] = useState<{
+    readonly processedSamples: number
+    readonly totalSamples: number
+  } | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (previousRevisionRef.current === activeValidationRuntime.revision) return
+    previousRevisionRef.current = activeValidationRuntime.revision
+    runTokenRef.current += 1
+    activeValidationRuntime.client.cancel()
+    setValidationRunning(false)
+    setValidationProgress(null)
+    if (useCollisionStore.getState().validationReport !== null) {
+      markValidationReportStale()
+    }
+  }, [activeValidationRuntime.client, activeValidationRuntime.revision, markValidationReportStale])
+
+  const startValidation = useCallback(
+    (mode: CollisionValidationMode) => {
+      if (validationRunning || !activeValidationRuntime.canValidate) return
+      const token = ++runTokenRef.current
+      setValidationRunning(true)
+      setValidationProgress(null)
+      setValidationError(null)
+      let request: CollisionValidationRequest
+      try {
+        request = activeValidationRuntime.createRequest(mode)
+      } catch (error) {
+        setValidationRunning(false)
+        setValidationError(
+          error instanceof Error ? error.message : 'Unable to prepare validation.',
+        )
+        return
+      }
+      void activeValidationRuntime.client.validate(request, {
+        getCurrentRevision: () => runtimeRef.current.revision,
+        onProgress: (progress) => {
+          if (runTokenRef.current !== token) return
+          setValidationProgress({
+            processedSamples: progress.processedSamples,
+            totalSamples: progress.totalSamples,
+          })
+        },
+      }).then((result) => {
+        if (runTokenRef.current !== token) return
+        setValidationReport({
+          revision: result.revision,
+          sampleCount: result.sampleCount,
+          findings: result.findings,
+          truncated: result.truncated,
+        })
+      }).catch((error: unknown) => {
+        if (
+          runTokenRef.current !== token ||
+          error instanceof CollisionValidationCancelledError
+        ) {
+          return
+        }
+        const message = error instanceof Error
+          ? error.message
+          : 'Collision validation failed.'
+        setValidationError(message)
+        if (useCollisionStore.getState().validationReport !== null) {
+          markValidationReportStale(message)
+        }
+      }).finally(() => {
+        if (runTokenRef.current !== token) return
+        setValidationRunning(false)
+      })
+    }, [
+      activeValidationRuntime,
+      markValidationReportStale,
+      setValidationReport,
+      validationRunning,
+    ],
+  )
+
+  const cancelValidation = useCallback(() => {
+    runTokenRef.current += 1
+    activeValidationRuntime.client.cancel()
+    setValidationRunning(false)
+    setValidationProgress(null)
+  }, [activeValidationRuntime.client])
 
   const counts = useMemo(
     () => ({
@@ -113,6 +514,46 @@ export function CollisionPanel() {
           />
           Pause Simulation playback on collision
         </label>
+      </div>
+
+      <div className="collision-validation-controls">
+        {validationRunning ? (
+          <button
+            aria-label="Cancel Validation"
+            onClick={cancelValidation}
+            type="button"
+          >
+            Cancel Validation
+          </button>
+        ) : (
+          <>
+            <button
+              disabled={!policy.enabled || !activeValidationRuntime.canValidate}
+              onClick={() => startValidation('preview')}
+              type="button"
+            >
+              Preview Sequence
+            </button>
+            <button
+              disabled={!policy.enabled || !activeValidationRuntime.canValidate}
+              onClick={() => startValidation('validate')}
+              type="button"
+            >
+              Validate Sequence
+            </button>
+          </>
+        )}
+        {validationProgress === null ? null : (
+          <output
+            aria-label="Sequence validation progress"
+            role="status"
+          >
+            {validationProgress.processedSamples} / {validationProgress.totalSamples}
+          </output>
+        )}
+        {validationError === null ? null : (
+          <p role="alert">{validationError}</p>
+        )}
       </div>
 
       <div className="collision-finding-navigation">

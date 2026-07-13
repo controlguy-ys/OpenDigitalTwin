@@ -1,10 +1,22 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Group } from 'three'
 import type { CollisionFinding } from '../../domain/collision/collision'
-import { CollisionPanel } from './CollisionPanel'
+import { useInteractionStore } from '../interaction/interaction-store'
+import type {
+  CollisionValidationRequest,
+  CollisionValidationResult,
+} from './collision-validation-protocol'
+import {
+  CollisionPanel,
+  type CollisionPanelValidationRuntime,
+} from './CollisionPanel'
 import { useCollisionStore } from './collision-store'
+import {
+  geometryEntityRegistry,
+  registerGeometryEntity,
+} from './geometry-entity-registry'
 
 const COLLISION: CollisionFinding = {
   pairKey: 'object:cup-01|robot-link:LINK03',
@@ -46,11 +58,33 @@ function seedFindings() {
   })
   state.setSelectedFindingIndex(0)
   state.setPausePlaybackOnCollision(true)
+  state.setValidationReport(null)
+}
+
+function runtime(
+  revision: string,
+  overrides: Partial<CollisionPanelValidationRuntime> = {},
+): CollisionPanelValidationRuntime {
+  return {
+    revision,
+    canValidate: true,
+    createRequest: (mode) => ({ mode, revision }) as CollisionValidationRequest,
+    client: {
+      validate: vi.fn(() => Promise.reject(new Error('not configured'))),
+      cancel: vi.fn(),
+    },
+    ...overrides,
+  }
 }
 
 describe('CollisionPanel', () => {
   beforeEach(() => {
     seedFindings()
+    useInteractionStore.getState().resetInteraction()
+  })
+
+  afterEach(() => {
+    geometryEntityRegistry.clear()
   })
 
   it('exposes collision policy with warning distance in millimetres', async () => {
@@ -160,5 +194,146 @@ describe('CollisionPanel', () => {
     expect(click).toHaveBeenCalledTimes(2)
     expect(revokeObjectURL).toHaveBeenCalledTimes(2)
     click.mockRestore()
+  })
+
+  it('starts validation, reports progress, and commits the current revision', async () => {
+    const user = userEvent.setup()
+    let resolveResult!: (result: CollisionValidationResult) => void
+    const completion = new Promise<CollisionValidationResult>((resolve) => {
+      resolveResult = resolve
+    })
+    const validate = vi.fn((_request, options) => {
+      options?.onProgress?.({
+        requestId: 'request-1',
+        revision: 'runtime-1',
+        processedSamples: 250,
+        totalSamples: 1_000,
+      })
+      return completion
+    }) as CollisionPanelValidationRuntime['client']['validate']
+    const validationRuntime = runtime('runtime-1', {
+      client: { validate, cancel: vi.fn() },
+    })
+    render(<CollisionPanel validationRuntime={validationRuntime} />)
+
+    await user.click(screen.getByRole('button', { name: 'Validate Sequence' }))
+
+    expect(screen.getByRole('status', { name: 'Sequence validation progress' }))
+      .toHaveTextContent('250 / 1000')
+    expect(screen.getByRole('button', { name: 'Cancel Validation' })).toBeVisible()
+
+    await act(async () => {
+      resolveResult({
+        requestId: 'request-1',
+        revision: 'runtime-1',
+        mode: 'validate',
+        sampleCount: 1_000,
+        durationMs: 2_000,
+        findings: [{ ...COLLISION, sampleIndex: 4, timeMs: 80 }],
+        truncated: false,
+      })
+      await completion
+    })
+
+    expect(useCollisionStore.getState().validationReport).toMatchObject({
+      revision: 'runtime-1',
+      sampleCount: 1_000,
+      truncated: false,
+    })
+    expect(screen.getByRole('button', { name: 'Validate Sequence' })).toBeVisible()
+  })
+
+  it('cancels the active sequence validation', async () => {
+    const user = userEvent.setup()
+    const cancel = vi.fn()
+    const validate = vi.fn(
+      () => new Promise<CollisionValidationResult>(() => undefined),
+    ) as CollisionPanelValidationRuntime['client']['validate']
+    render(
+      <CollisionPanel
+        validationRuntime={runtime('runtime-1', {
+          client: { validate, cancel },
+        })}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Preview Sequence' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel Validation' }))
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Preview Sequence' })).toBeVisible()
+  })
+
+  it('marks a completed report stale when a relevant revision changes', () => {
+    useCollisionStore.getState().setValidationReport({
+      revision: 'runtime-1',
+      sampleCount: 1,
+      findings: [COLLISION],
+      truncated: false,
+    })
+    const { rerender } = render(
+      <CollisionPanel validationRuntime={runtime('runtime-1')} />,
+    )
+
+    rerender(<CollisionPanel validationRuntime={runtime('runtime-2')} />)
+
+    expect(useCollisionStore.getState().validationReportStale).toBe(true)
+  })
+
+  it('marks a completed report stale when a registered collider revision changes', () => {
+    const object = new Group()
+    registerGeometryEntity({
+      id: 'tool:revision-probe',
+      name: 'Revision probe',
+      category: 'tool',
+      boxes: [{
+        id: 'default',
+        center: [0, 0, 0],
+        halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object,
+      colliderRevision: 1,
+    })
+    useCollisionStore.getState().setValidationReport({
+      revision: 'runtime-1',
+      sampleCount: 1,
+      findings: [COLLISION],
+      truncated: false,
+    })
+    const { rerender } = render(<CollisionPanel />)
+
+    registerGeometryEntity({
+      id: 'tool:revision-probe',
+      name: 'Revision probe',
+      category: 'tool',
+      boxes: [{
+        id: 'default',
+        center: [0, 0, 0],
+        halfExtents: [0.2, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object,
+      colliderRevision: 2,
+    })
+    rerender(<CollisionPanel />)
+
+    expect(useCollisionStore.getState().validationReportStale).toBe(true)
+  })
+
+  it('marks a completed report stale when Entity validation visibility changes', () => {
+    useCollisionStore.getState().setValidationReport({
+      revision: 'runtime-1',
+      sampleCount: 1,
+      findings: [COLLISION],
+      truncated: false,
+    })
+    render(<CollisionPanel />)
+
+    act(() => {
+      useInteractionStore.getState().setEntityVisible('fixture-01', false)
+    })
+
+    expect(useCollisionStore.getState().validationReportStale).toBe(true)
   })
 })
