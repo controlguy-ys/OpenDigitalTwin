@@ -7,8 +7,18 @@ export interface WorldAabb {
 
 interface SweepEntry {
   readonly obb: WorldObb
-  readonly key: string
   readonly aabb: WorldAabb
+}
+
+function compareStrings(first: string, second: string): number {
+  return first < second ? -1 : first > second ? 1 : 0
+}
+
+function compareObbIdentity(first: WorldObb, second: WorldObb): number {
+  return (
+    compareStrings(first.entityId, second.entityId) ||
+    compareStrings(first.boxId, second.boxId)
+  )
 }
 
 function validateWarningDistance(warningDistanceM: number): void {
@@ -50,9 +60,7 @@ function orderedPair(
   first: WorldObb,
   second: WorldObb,
 ): readonly [WorldObb, WorldObb] {
-  const firstKey = `${first.entityId}\u0000${first.boxId}`
-  const secondKey = `${second.entityId}\u0000${second.boxId}`
-  return firstKey <= secondKey
+  return compareObbIdentity(first, second) <= 0
     ? [first, second]
     : [second, first]
 }
@@ -72,13 +80,12 @@ export function broadPhasePairs(
   validateWarningDistance(warningDistanceM)
   const entries: SweepEntry[] = obbs.map((obb) => ({
     obb,
-    key: `${obb.entityId}/${obb.boxId}`,
     aabb: worldAabbFromObb(obb, warningDistanceM),
   }))
   entries.sort(
     (first, second) =>
       first.aabb.min[0] - second.aabb.min[0] ||
-      (first.key < second.key ? -1 : first.key > second.key ? 1 : 0),
+      compareObbIdentity(first.obb, second.obb),
   )
 
   const active: SweepEntry[] = []
@@ -100,10 +107,10 @@ export function broadPhasePairs(
     }
     active.push(current)
   }
-  pairs.sort((first, second) => {
-    const firstKey = `${first[0].entityId}/${first[0].boxId}|${first[1].entityId}/${first[1].boxId}`
-    const secondKey = `${second[0].entityId}/${second[0].boxId}|${second[1].entityId}/${second[1].boxId}`
-    return firstKey < secondKey ? -1 : firstKey > secondKey ? 1 : 0
-  })
+  pairs.sort(
+    (first, second) =>
+      compareObbIdentity(first[0], second[0]) ||
+      compareObbIdentity(first[1], second[1]),
+  )
   return Object.freeze(pairs)
 }

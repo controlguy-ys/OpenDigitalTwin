@@ -74,6 +74,11 @@ function requireNonEmpty(value: string, label: string): string {
   if (value.trim().length === 0) {
     throw new Error(`${label} must not be empty.`)
   }
+  return value
+}
+
+function requireIdentifier(value: string, label: string): string {
+  requireNonEmpty(value, label)
   if (value.includes('|')) {
     throw new Error(`${label} must not contain the pair-key separator.`)
   }
@@ -102,7 +107,17 @@ function ownedQuaternion(values: readonly number[]): QuaternionTuple {
   if (lengthSquared <= 1e-24) {
     throw new Error('Collision Box quaternion must be non-zero.')
   }
-  return Object.freeze([values[0]!, values[1]!, values[2]!, values[3]!])
+  const length = Math.sqrt(lengthSquared)
+  const normalized = values.map((value) => {
+    const component = value / length
+    return Object.is(component, -0) ? 0 : component
+  })
+  return Object.freeze([
+    normalized[0]!,
+    normalized[1]!,
+    normalized[2]!,
+    normalized[3]!,
+  ])
 }
 
 function expectedIdPrefix(category: CollisionEntityCategory): string | null {
@@ -141,7 +156,7 @@ function validateEntityNamespace(
 
 export function validateCollisionBox(candidate: CollisionBox): CollisionBox {
   return Object.freeze({
-    id: requireNonEmpty(candidate.id, 'Collision Box id'),
+    id: requireIdentifier(candidate.id, 'Collision Box id'),
     center: ownedVector3(candidate.center, 'Collision Box center'),
     halfExtents: ownedVector3(
       candidate.halfExtents,
@@ -155,7 +170,7 @@ export function validateCollisionBox(candidate: CollisionBox): CollisionBox {
 export function validateGeometryCollisionEntity(
   candidate: GeometryCollisionEntity,
 ): GeometryCollisionEntity {
-  const id = requireNonEmpty(candidate.id, 'Collision Entity id')
+  const id = requireIdentifier(candidate.id, 'Collision Entity id')
   requireNonEmpty(candidate.name, 'Collision Entity name')
   validateEntityNamespace(id, candidate.category)
   if (
@@ -184,7 +199,7 @@ export function validateGeometryCollisionEntity(
 }
 
 function validateEntityId(id: string): string {
-  requireNonEmpty(id, 'Collision Entity id')
+  requireIdentifier(id, 'Collision Entity id')
   if (!id.includes(':') || id.endsWith(':')) {
     throw new Error(`Collision Entity id ${id} must use a namespace.`)
   }
@@ -252,6 +267,9 @@ export function validateCollisionFinding(
   if (!Number.isFinite(candidate.separationM)) {
     throw new Error('Collision finding separation must be finite.')
   }
+  if (candidate.kind !== 'collision' && candidate.kind !== 'near-miss') {
+    throw new Error('Collision finding kind must be collision or near-miss.')
+  }
   if (
     (candidate.kind === 'collision' && candidate.separationM > 0) ||
     (candidate.kind === 'near-miss' && candidate.separationM <= 0)
@@ -274,8 +292,8 @@ export function validateCollisionFinding(
     pairKey: candidate.pairKey,
     firstEntityId,
     secondEntityId,
-    firstBoxId: requireNonEmpty(candidate.firstBoxId, 'First Collision Box id'),
-    secondBoxId: requireNonEmpty(candidate.secondBoxId, 'Second Collision Box id'),
+    firstBoxId: requireIdentifier(candidate.firstBoxId, 'First Collision Box id'),
+    secondBoxId: requireIdentifier(candidate.secondBoxId, 'Second Collision Box id'),
     kind: candidate.kind,
     separationM: candidate.separationM,
     sampleIndex: candidate.sampleIndex,

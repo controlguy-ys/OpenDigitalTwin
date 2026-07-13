@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   pairKey,
   validateCollisionBox,
+  validateCollisionDiagnostic,
+  validateCollisionFinding,
   validateGeometryCollisionEntity,
   type WorldObb,
 } from './collision'
@@ -165,6 +167,20 @@ describe('collision domain validation', () => {
     ).toThrow(/positive/i)
   })
 
+  it('normalizes an owned Box quaternion for persistence-safe rotation data', () => {
+    const quaternion: [number, number, number, number] = [0, 0, 0, 2]
+    const validated = validateCollisionBox({
+      id: 'main',
+      center: [0, 0, 0],
+      halfExtents: [0.4, 0.5, 0.6],
+      quaternion,
+    })
+
+    quaternion[3] = 99
+    expect(validated.quaternion).toEqual([0, 0, 0, 1])
+    expect(Math.hypot(...validated.quaternion)).toBeCloseTo(1)
+  })
+
   it('requires category-specific namespaces including workcell:workbench', () => {
     expect(
       validateGeometryCollisionEntity({
@@ -211,6 +227,42 @@ describe('collision domain validation', () => {
     expect(pairKey('object:cup-01', 'robot-link:LINK03')).toBe(
       'object:cup-01|robot-link:LINK03',
     )
+    expect(() => pairKey('object:cup|01', 'robot-link:LINK03')).toThrow(
+      /separator/i,
+    )
+  })
+
+  it('allows human-readable names and diagnostics to contain a pipe', () => {
+    const entity = validateGeometryCollisionEntity({
+      id: 'object:fixture',
+      name: 'Fixture | Press',
+      category: 'object',
+      worldMatrix: IDENTITY_MATRIX,
+      boxes: [],
+    })
+    const diagnostic = validateCollisionDiagnostic({
+      entityId: entity.id,
+      message: 'Object missing | inactive collision proxy',
+    })
+
+    expect(entity.name).toBe('Fixture | Press')
+    expect(diagnostic.message).toBe('Object missing | inactive collision proxy')
+  })
+
+  it('rejects a runtime Collision Finding kind outside the domain union', () => {
+    expect(() =>
+      validateCollisionFinding({
+        pairKey: 'object:cup-01|robot-link:LINK03',
+        firstEntityId: 'object:cup-01',
+        secondEntityId: 'robot-link:LINK03',
+        firstBoxId: 'main',
+        secondBoxId: 'main',
+        kind: 'warning' as 'collision',
+        separationM: -0.05,
+        sampleIndex: null,
+        timeMs: null,
+      }),
+    ).toThrow(/kind/i)
   })
 })
 

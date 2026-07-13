@@ -57,4 +57,16 @@ describe('sweep-and-prune broad phase', () => {
     expect(keys(broadPhasePairs([...input].reverse(), 0))).toEqual(expected)
     expect(expected).toEqual([...expected].sort())
   })
+
+  it('sorts Entity and Box fields independently when display keys collide', () => {
+    const input = [
+      obb('object:a/one', 'two', 0),
+      obb('object:a', 'one/two', 0),
+      obb('robot-link:LINK00', 'main', 0),
+    ]
+
+    expect(broadPhasePairs(input, 0)).toEqual(
+      broadPhasePairs([...input].reverse(), 0),
+    )
+  })
 })
