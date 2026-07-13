@@ -13,7 +13,6 @@ import { Quaternion, Vector3, type Object3D } from 'three'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
 import { useEquipmentStore } from '../equipment/equipment-store'
-import { useObjectAssetStore } from '../objects/object-asset-store'
 import { useRobotStore } from '../joints/robot-store'
 import type { RobotRigRegistration } from '../robot/RobotModel'
 import { useEventStore } from '../../state/event-store'
@@ -24,7 +23,6 @@ import {
   useInteractionStore,
 } from './interaction-store'
 import { ROBOT_LINK_COLLISION_BOUNDS } from './robot-collision-bounds'
-import { runtimeGraspParticipants } from './grasp-participants'
 
 const ROBOT_GROUPS = interactionGroups(0, [0, 1, 2])
 const EQUIPMENT_GROUPS = interactionGroups(1, [0, 3])
@@ -151,12 +149,6 @@ export function CollisionSystem({
   workbenchObjectRef,
 }: CollisionSystemProps) {
   const records = useEquipmentStore((state) => state.records)
-  const objectAssets = useObjectAssetStore((state) => state.assets)
-  const objectInstances = useObjectAssetStore((state) => state.instances)
-  const participants = useMemo(
-    () => runtimeGraspParticipants(records, objectAssets, objectInstances),
-    [objectAssets, objectInstances, records],
-  )
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
 
   return (
@@ -178,21 +170,21 @@ export function CollisionSystem({
               )
             },
           )}
-      {participants
-        .filter(
-          ({ record }) =>
-            !hiddenEntityIds.includes(record.id),
-        )
-        .map(({ entityId, record }) => (
-          <KinematicSensor
-            center={equipmentColliderCenter(record)}
-            collisionGroups={EQUIPMENT_GROUPS}
-            entityId={entityId}
-            getSource={() => equipmentObjectsRef.current.get(entityId)}
-            halfExtents={equipmentColliderHalfExtents(record)}
-            key={`${entityId}-${record.transform.scale.join('-')}`}
-          />
-        ))}
+      {records
+        .filter((record) => !hiddenEntityIds.includes(record.id))
+        .map((record) => {
+          const entityId = `equipment:${record.id}` as const
+          return (
+            <KinematicSensor
+              center={equipmentColliderCenter(record)}
+              collisionGroups={EQUIPMENT_GROUPS}
+              entityId={entityId}
+              getSource={() => equipmentObjectsRef.current.get(entityId)}
+              halfExtents={equipmentColliderHalfExtents(record)}
+              key={`${entityId}-${record.transform.scale.join('-')}`}
+            />
+          )
+        })}
       <KinematicSensor
         center={[0, 0, 1.03]}
         collisionGroups={WORKCELL_GROUPS}

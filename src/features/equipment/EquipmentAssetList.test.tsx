@@ -30,6 +30,42 @@ const IMPORTED: EquipmentRecord = {
 }
 
 describe('EquipmentAssetList', () => {
+  it('emits canonical delete ids for same-local-id Equipment and Object rows', async () => {
+    const user = userEvent.setup()
+    const onRemove = vi.fn(async () => undefined)
+    const equipment: EquipmentRecord = {
+      ...BUILT_IN_EQUIPMENT[0]!,
+      id: 'shared-01',
+      name: 'Equipment Shared',
+    }
+    const object: EquipmentRecord = {
+      ...IMPORTED,
+      id: 'shared-01',
+      assetId: 'asset-01',
+      name: 'Object Shared',
+    }
+    render(
+      <EquipmentAssetList
+        onRemove={onRemove}
+        onSelect={vi.fn()}
+        records={[equipment, object]}
+        selectedEquipmentId={null}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Delete Equipment Shared' }),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Delete Object Shared' }),
+    )
+
+    expect(onRemove.mock.calls).toEqual([
+      ['equipment:shared-01'],
+      ['object:shared-01'],
+    ])
+  })
+
   it('selects equipment and exposes deletion for built-in and imported objects', async () => {
     const user = userEvent.setup()
     const onSelect = vi.fn()
@@ -54,7 +90,10 @@ describe('EquipmentAssetList', () => {
     await user.click(screen.getByRole('button', { name: 'Delete Cup 01' }))
     await user.click(screen.getByRole('button', { name: 'Delete Imported Fixture' }))
     expect(onSelect).toHaveBeenCalledWith('cup-01')
-    expect(onRemove.mock.calls).toEqual([['cup-01'], [IMPORTED.id]])
+    expect(onRemove.mock.calls).toEqual([
+      ['equipment:cup-01'],
+      [`equipment:${IMPORTED.id}`],
+    ])
   })
 
   it('shows deletion failure, blocks duplicate pending calls, and clears the error on retry', async () => {

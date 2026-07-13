@@ -31,6 +31,8 @@ import { useProjectStore } from '../features/project/project-store-browser'
 import { ProjectMenu } from '../features/project/ProjectMenu'
 import { CoordinateFramesDialog } from '../features/frames/CoordinateFramesDialog'
 import type { RobotRigRegistration } from '../features/robot/RobotModel'
+import type { ExternalCollisionEntityId } from '../features/interaction/interaction-store'
+import { removeCanonicalExternalEntity } from './external-entity-removal'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -160,55 +162,60 @@ export function App() {
   }, [activeJointSource])
 
   const handleRemoveEquipment = useCallback(
-    async (id: string) => {
-      const objectInstance = useObjectAssetStore
-        .getState()
-        .instances.find((instance) => instance.id === id)
-      if (objectInstance !== undefined) {
-        const entityId = `object:${id}`
-        useInteractionStore.getState().beginEquipmentRemoval(entityId)
-        try {
-          const controller = interactionControllerRef.current
-          if (controller !== null) {
-            await controller.releaseHeldEquipment(entityId)
-          }
-          await removeObjectInstance(id)
-          if (useInteractionStore.getState().selectedEquipmentId === id) {
-            clearSelection()
-          }
-        } finally {
-          useInteractionStore.getState().endEquipmentRemoval(entityId)
-        }
-        return
-      }
-      await deleteImportedEquipment(id, {
-        beginEquipmentRemoval: (equipmentId) =>
-          useInteractionStore
+    async (entityId: ExternalCollisionEntityId) => {
+      await removeCanonicalExternalEntity(entityId, {
+        removeObject: async (id) => {
+          const objectInstance = useObjectAssetStore
             .getState()
-            .beginEquipmentRemoval(equipmentId),
-        endEquipmentRemoval: (equipmentId) => {
-          useInteractionStore.getState().endEquipmentRemoval(equipmentId)
-        },
-        releaseHeldEquipment: async (equipmentId) => {
-          const controller = interactionControllerRef.current
-          const heldEntityId = useInteractionStore.getState().heldEntityId
-          if (controller === null) {
-            if (heldEntityId === `equipment:${equipmentId}`) {
-              throw new Error(
-                'The held equipment cannot be released while the 3D scene is unavailable.',
-              )
+            .instances.find((instance) => instance.id === id)
+          if (objectInstance === undefined) return
+          useInteractionStore.getState().beginEquipmentRemoval(entityId)
+          try {
+            const controller = interactionControllerRef.current
+            if (controller !== null) {
+              await controller.releaseHeldEquipment(entityId)
             }
-            return
+            await removeObjectInstance(id)
+            if (useInteractionStore.getState().selectedEquipmentId === id) {
+              clearSelection()
+            }
+          } finally {
+            useInteractionStore.getState().endEquipmentRemoval(entityId)
           }
-          await controller.releaseHeldEquipment(`equipment:${equipmentId}`)
         },
-        removeEquipment,
-        invalidateGeometry: (equipmentId) => {
-          importedGeometryRepository.invalidate(equipmentId)
+        removeEquipment: async (id) => {
+          await deleteImportedEquipment(id, {
+            beginEquipmentRemoval: () =>
+              useInteractionStore
+                .getState()
+                .beginEquipmentRemoval(entityId),
+            endEquipmentRemoval: () => {
+              useInteractionStore.getState().endEquipmentRemoval(entityId)
+            },
+            releaseHeldEquipment: async (equipmentId) => {
+              const controller = interactionControllerRef.current
+              const heldEntityId = useInteractionStore.getState().heldEntityId
+              if (controller === null) {
+                if (heldEntityId === entityId) {
+                  throw new Error(
+                    'The held equipment cannot be released while the 3D scene is unavailable.',
+                  )
+                }
+                return
+              }
+              await controller.releaseHeldEquipment(
+                `equipment:${equipmentId}`,
+              )
+            },
+            removeEquipment,
+            invalidateGeometry: (equipmentId) => {
+              importedGeometryRepository.invalidate(equipmentId)
+            },
+            getSelectedEquipmentId: () =>
+              useInteractionStore.getState().selectedEquipmentId,
+            clearSelection,
+          })
         },
-        getSelectedEquipmentId: () =>
-          useInteractionStore.getState().selectedEquipmentId,
-        clearSelection,
       })
     },
     [clearSelection, removeEquipment, removeObjectInstance],
@@ -324,7 +331,13 @@ export function App() {
               disabled={controlsDisabled}
               onApply={handleCommitEquipmentTransform}
               onCancel={handleCancelEquipmentTransform}
-              onDelete={handleRemoveEquipment}
+              onDelete={(id) =>
+                handleRemoveEquipment(
+                  selectedEquipmentRecord.assetId === undefined
+                    ? `equipment:${id}`
+                    : `object:${id}`,
+                )
+              }
               onNumericStatus={handleNumericStatus}
               onOverlayVisible={handleOverlayVisible}
               onStatusSource={handleStatusSource}
