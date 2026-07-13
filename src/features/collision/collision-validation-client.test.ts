@@ -83,6 +83,7 @@ function request(revision = 'scene-7'): CollisionValidationRequest {
         id: `robot-link:${linkId}` as const,
         name: linkId,
         boxes: [BOX],
+        collisionActive: true,
       })),
       toolEntity: null,
     },
@@ -159,6 +160,40 @@ describe('CollisionValidationClient', () => {
     })
   })
 
+  it('keeps progress monotonic when a later event changes the total sample count', async () => {
+    const worker = new FakeWorker()
+    const client = new CollisionValidationClient(() => worker)
+    const candidate = request()
+    const onProgress = vi.fn()
+    const completion = client.validate(candidate, { onProgress })
+
+    worker.emitMessage({
+      type: 'progress',
+      progress: {
+        requestId: candidate.requestId,
+        revision: candidate.revision,
+        processedSamples: 500,
+        totalSamples: 1_000,
+      },
+    })
+    worker.emitMessage({
+      type: 'progress',
+      progress: {
+        requestId: candidate.requestId,
+        revision: candidate.revision,
+        processedSamples: 600,
+        totalSamples: 2_000,
+      },
+    })
+    worker.emitMessage({ type: 'result', result: result(candidate) })
+
+    await expect(completion).resolves.toMatchObject({ revision: 'scene-7' })
+    expect(onProgress).toHaveBeenCalledTimes(1)
+    expect(onProgress).toHaveBeenLastCalledWith(
+      expect.objectContaining({ processedSamples: 500, totalSamples: 1_000 }),
+    )
+  })
+
   it('sends cancel and rejects the active run without accepting late results', async () => {
     const worker = new FakeWorker()
     const client = new CollisionValidationClient(() => worker)
@@ -175,6 +210,69 @@ describe('CollisionValidationClient', () => {
       type: 'cancel',
       requestId: candidate.requestId,
     })
+  })
+
+  it('rejects cancellation and resets the Worker when cancel postMessage throws', async () => {
+    const workers = [new FakeWorker(), new FakeWorker()]
+    let factoryIndex = 0
+    const client = new CollisionValidationClient(() => workers[factoryIndex++]!)
+    const candidate = request('cancel-transport')
+    const completion = client.validate(candidate)
+    vi.spyOn(workers[0]!, 'postMessage').mockImplementationOnce(() => {
+      throw new Error('cancel transport failed')
+    })
+
+    expect(() => client.cancel()).not.toThrow()
+    await expect(completion).rejects.toBeInstanceOf(
+      CollisionValidationCancelledError,
+    )
+    expect(workers[0]!.terminated).toBe(true)
+
+    const nextRequest = request('after-cancel-transport')
+    const nextCompletion = client.validate(nextRequest)
+    workers[1]!.emitMessage({ type: 'result', result: result(nextRequest) })
+    await expect(nextCompletion).resolves.toMatchObject({
+      revision: 'after-cancel-transport',
+    })
+  })
+
+  it('ignores stale-revision cancelled and error events for the active request id', async () => {
+    const worker = new FakeWorker()
+    const client = new CollisionValidationClient(() => worker)
+    const candidate = request('current-revision')
+    const completion = client.validate(candidate)
+
+    worker.emitMessage({
+      type: 'cancelled',
+      requestId: candidate.requestId,
+      revision: 'stale-revision',
+    })
+    worker.emitMessage({
+      type: 'error',
+      requestId: candidate.requestId,
+      revision: 'stale-revision',
+      message: 'stale failure',
+    })
+    worker.emitMessage({ type: 'result', result: result(candidate) })
+
+    await expect(completion).resolves.toMatchObject({
+      revision: 'current-revision',
+    })
+  })
+
+  it('rejects and resets when the result mode differs from the active request', async () => {
+    const worker = new FakeWorker()
+    const client = new CollisionValidationClient(() => worker)
+    const candidate = request('mode-mismatch')
+    const completion = client.validate(candidate)
+
+    worker.emitMessage({
+      type: 'result',
+      result: { ...result(candidate), mode: 'validate' },
+    })
+
+    await expect(completion).rejects.toThrow(/mode/i)
+    expect(worker.terminated).toBe(true)
   })
 
   it('rejects a result when the relevant runtime revision changed', async () => {

@@ -9,6 +9,7 @@ import type {
   CollisionValidationResult,
 } from './collision-validation-protocol'
 import {
+  buildCollisionValidationRobotGeometry,
   CollisionPanel,
   type CollisionPanelValidationRuntime,
 } from './CollisionPanel'
@@ -85,6 +86,56 @@ describe('CollisionPanel', () => {
 
   afterEach(() => {
     geometryEntityRegistry.clear()
+  })
+
+  it('maps Robot geometry visibility and live registry participation into validation links', () => {
+    const identity = {
+      position: [0, 0, 0] as [number, number, number],
+      quaternion: [0, 0, 0, 1] as [number, number, number, number],
+      scale: [1, 1, 1] as [number, number, number],
+    }
+    const box = {
+      id: 'default',
+      center: [0, 0, 0] as [number, number, number],
+      halfExtents: [0.1, 0.1, 0.1] as [number, number, number],
+      quaternion: [0, 0, 0, 1] as [number, number, number, number],
+    }
+
+    const payload = buildCollisionValidationRobotGeometry(
+      [
+        {
+          linkId: 'LINK00',
+          visible: true,
+          localTransform: identity,
+          collisionBoxes: [box],
+        },
+        {
+          linkId: 'LINK01',
+          visible: false,
+          localTransform: identity,
+          collisionBoxes: [box],
+        },
+      ],
+      new Set([
+        'robot-link:LINK00',
+        'robot-link:LINK01',
+        'robot-link:LINK02',
+      ]),
+    )
+
+    expect(payload.linkEntities).toHaveLength(7)
+    expect(payload.linkEntities.map(({ linkId, collisionActive }) => ({
+      linkId,
+      collisionActive,
+    }))).toEqual([
+      { linkId: 'LINK00', collisionActive: true },
+      { linkId: 'LINK01', collisionActive: false },
+      { linkId: 'LINK02', collisionActive: true },
+      { linkId: 'LINK03', collisionActive: false },
+      { linkId: 'LINK04', collisionActive: false },
+      { linkId: 'LINK05', collisionActive: false },
+      { linkId: 'LINK06', collisionActive: false },
+    ])
   })
 
   it('exposes collision policy with warning distance in millimetres', async () => {

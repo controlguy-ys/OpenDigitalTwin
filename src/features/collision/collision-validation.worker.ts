@@ -45,8 +45,9 @@ function dynamicEntities(
     anglesDeg,
     request.robot.rootPose,
   )
-  const entities: GeometryCollisionEntity[] = request.robot.linkEntities.map(
-    (link) =>
+  const entities: GeometryCollisionEntity[] = request.robot.linkEntities
+    .filter((link) => link.collisionActive)
+    .map((link) =>
       validateGeometryCollisionEntity({
         id: link.id,
         name: link.name,
@@ -54,7 +55,7 @@ function dynamicEntities(
         boxes: link.boxes,
         worldMatrix: matrices.linkGeometry[link.linkId],
       }),
-  )
+    )
   if (request.robot.toolEntity !== null) {
     entities.push(
       validateGeometryCollisionEntity({

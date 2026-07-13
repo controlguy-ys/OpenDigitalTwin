@@ -28,6 +28,7 @@ interface ActiveValidation {
   readonly resolve: (result: CollisionValidationResult) => void
   readonly reject: (error: Error) => void
   latestProcessedSamples: number
+  latestProgressRatio: number
 }
 
 export class CollisionValidationCancelledError extends Error {
@@ -78,6 +79,7 @@ export class CollisionValidationClient {
         resolve,
         reject,
         latestProcessedSamples: -1,
+        latestProgressRatio: -1,
       }
       const command: CollisionValidationWorkerCommand = {
         type: 'validate',
@@ -103,8 +105,15 @@ export class CollisionValidationClient {
       type: 'cancel',
       requestId: active.request.requestId,
     }
-    this.worker?.postMessage(command)
-    this.failActive(new CollisionValidationCancelledError())
+    const cancellation = new CollisionValidationCancelledError()
+    try {
+      this.worker?.postMessage(command)
+    } catch {
+      this.failActive(cancellation)
+      this.resetWorker()
+      return
+    }
+    this.failActive(cancellation)
   }
 
   dispose(): void {
@@ -139,24 +148,39 @@ export class CollisionValidationClient {
     if (eventRequestId !== active.request.requestId) return
 
     if (event.type === 'progress') {
+      const progressRatio = event.progress.totalSamples === 0
+        ? 1
+        : event.progress.processedSamples / event.progress.totalSamples
       if (
         event.progress.revision !== active.request.revision ||
-        event.progress.processedSamples < active.latestProcessedSamples
+        event.progress.processedSamples < active.latestProcessedSamples ||
+        progressRatio < active.latestProgressRatio
       ) {
         return
       }
       active.latestProcessedSamples = event.progress.processedSamples
+      active.latestProgressRatio = progressRatio
       active.options.onProgress?.(event.progress)
       return
     }
 
     if (event.type === 'cancelled') {
+      if (event.revision !== active.request.revision) return
       this.failActive(new CollisionValidationCancelledError())
       return
     }
 
     if (event.type === 'error') {
+      if (event.revision !== active.request.revision) return
       this.failActive(new Error(event.message))
+      return
+    }
+
+    if (event.result.mode !== active.request.mode) {
+      this.failActive(
+        new Error('Collision validation result mode does not match the active request.'),
+      )
+      this.resetWorker()
       return
     }
 

@@ -171,6 +171,7 @@ function validationRequest(
     linkId,
     id: `robot-link:${linkId}` as const,
     name: linkId,
+    collisionActive: true,
     boxes: [{
       id: 'default',
       center: [0, 0, 0] as [number, number, number],
@@ -254,6 +255,59 @@ function validationRequest(
 }
 
 describe('runCollisionValidation', () => {
+  it('keeps all seven FK links but excludes an inactive colliding Link proxy', async () => {
+    const baseRequest = validationRequest([
+      pose('start', 0),
+      pose('end', 0),
+    ])
+    const staticEntity = {
+      id: 'equipment:link-probe' as const,
+      name: 'Link probe',
+      category: 'equipment' as const,
+      boxes: [{
+        id: 'origin',
+        center: [0, 0, 0] as [number, number, number],
+        halfExtents: [0.01, 0.01, 0.01] as [number, number, number],
+        quaternion: [0, 0, 0, 1] as [number, number, number, number],
+      }],
+      worldMatrix: [
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+      ],
+    }
+    const withLinkParticipation = (collisionActive: boolean) => ({
+      ...baseRequest,
+      heldObject: null,
+      staticEntities: [staticEntity],
+      robot: {
+        ...baseRequest.robot,
+        linkEntities: baseRequest.robot.linkEntities.map((link) => ({
+          ...link,
+          collisionActive: link.linkId === 'LINK00' ? collisionActive : false,
+        })),
+      },
+    })
+
+    expect(withLinkParticipation(false).robot.linkEntities).toHaveLength(7)
+    const hiddenResult = await runCollisionValidation(
+      withLinkParticipation(false),
+    )
+    const visibleResult = await runCollisionValidation(
+      withLinkParticipation(true),
+    )
+
+    expect(hiddenResult?.findings).toEqual([])
+    expect(visibleResult?.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pairKey: 'equipment:link-probe|robot-link:LINK00',
+        }),
+      ]),
+    )
+  })
+
   it('recomputes a TCP-held Object and includes Workbench findings with sample metadata', async () => {
     const request = validationRequest([
       pose('start', 0, 1_000),

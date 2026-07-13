@@ -148,3 +148,71 @@ Results:
 - Vite retains the pre-existing OCCT `path` / `crypto` browser-externalization
   messages and large main-chunk warning. The dedicated collision Worker is
   approximately 110 kB and the production build succeeds.
+
+## Review Follow-up: Link Participation and Client Hardening
+
+The review follow-up added an owned `collisionActive` boolean to every Robot
+Link protocol row. The default CollisionPanel request maps that flag from both
+the persisted Link geometry visibility and the live geometry-registry snapshot.
+The Worker still computes FK for all seven Links, but creates collision proxies
+only for active Link rows. This prevents hidden or unregistered Link fallback
+boxes from producing sequence-validation findings.
+
+The client now:
+
+- rejects cancellation locally and recreates the Worker when cancel transport
+  throws;
+- ignores `cancelled` and `error` events whose revision does not match the
+  active request;
+- rejects a result whose mode differs from the active request and recreates the
+  Worker;
+- suppresses progress updates that regress either processed samples or the
+  processed/total ratio.
+
+The result guard determines truncation from the original findings length and
+validates only the first 10,000 owned findings.
+
+### Follow-up TDD Evidence
+
+Production files were unchanged when this focused command first ran:
+
+```text
+npm run test:run -- src/features/collision/collision-validation-client.test.ts src/features/collision/collision-validation-protocol.test.ts src/features/collision/validate-pose-sequence.test.ts
+```
+
+Observed RED: 3 files failed with 8 expected failures and 20 passing tests. The
+failures covered regressing progress ratio, cancel transport failure, stale
+terminal events, result-mode mismatch, missing/invalid Link participation,
+overflow finding validation, and inactive-Link collider participation.
+
+The Link collision probe was corrected from the intentionally excluded
+Workbench/LINK00 policy pair to a general equipment/LINK00 pair. With the Worker
+filter temporarily removed, the corrected test failed because the inactive Link
+produced two collision findings. Restoring the filter made the regression green.
+
+Focused GREEN:
+
+```text
+npm run test:run -- src/features/collision/collision-validation-client.test.ts src/features/collision/collision-validation-protocol.test.ts src/features/collision/validate-pose-sequence.test.ts src/features/collision/CollisionPanel.test.tsx
+```
+
+Result: 4 files, 39 tests passed, 0 failed.
+
+### Follow-up Final Verification
+
+```text
+npm run lint
+npm run build
+npm run test:run
+git diff --check
+```
+
+Results:
+
+- oxlint passed without diagnostics;
+- TypeScript and Vite production build passed and emitted the collision Worker;
+- full Vitest suite passed: 72 files, 428 tests, 0 failures;
+- diff check passed.
+
+Per task scope, no CAD conversion or validation command was run. Vite retained
+the pre-existing OCCT browser-externalization messages and chunk-size warning.

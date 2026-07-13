@@ -33,6 +33,7 @@ export interface CollisionValidationLinkEntity {
   readonly linkId: RobotLinkId
   readonly id: `robot-link:${RobotLinkId}`
   readonly name: string
+  readonly collisionActive: boolean
   readonly boxes: readonly CollisionBox[]
 }
 
@@ -279,10 +280,16 @@ function linkEntities(candidate: unknown): readonly CollisionValidationLinkEntit
     if (entity.id !== `robot-link:${id}`) {
       throw new Error(`Collision validation Robot Link ${id} has an invalid Entity id.`)
     }
+    if (typeof entity.collisionActive !== 'boolean') {
+      throw new Error(
+        `Collision validation Robot Link ${id} collision participation must be boolean.`,
+      )
+    }
     return Object.freeze({
       linkId: id,
       id: entity.id as `robot-link:${RobotLinkId}`,
       name: nonEmptyString(entity.name, `Collision validation Robot Link ${id} name`),
+      collisionActive: entity.collisionActive,
       boxes: boxes(entity.boxes, `Collision validation Robot Link ${id}`),
     })
   })
@@ -432,29 +439,29 @@ export function validateCollisionValidationResult(
   if (!Array.isArray(value.findings)) {
     throw new Error('Collision validation result findings must be an array.')
   }
-  const validatedFindings = value.findings.map((findingCandidate) => {
-    const finding = validateCollisionFinding(findingCandidate as CollisionFinding)
-    if (finding.sampleIndex !== null && finding.sampleIndex >= sampleCount) {
-      throw new Error('Collision validation finding sample index exceeds the result.')
-    }
-    if (finding.timeMs !== null && finding.timeMs > durationMs) {
-      throw new Error('Collision validation finding time exceeds the result duration.')
-    }
-    return finding
-  })
+  const findingsTruncated = value.findings.length > MAX_COLLISION_VALIDATION_FINDINGS
+  const validatedFindings = value.findings
+    .slice(0, MAX_COLLISION_VALIDATION_FINDINGS)
+    .map((findingCandidate) => {
+      const finding = validateCollisionFinding(findingCandidate as CollisionFinding)
+      if (finding.sampleIndex !== null && finding.sampleIndex >= sampleCount) {
+        throw new Error('Collision validation finding sample index exceeds the result.')
+      }
+      if (finding.timeMs !== null && finding.timeMs > durationMs) {
+        throw new Error('Collision validation finding time exceeds the result duration.')
+      }
+      return finding
+    })
   if (typeof value.truncated !== 'boolean') {
     throw new Error('Collision validation result truncated flag must be boolean.')
   }
-  const findingsTruncated = validatedFindings.length > MAX_COLLISION_VALIDATION_FINDINGS
   return Object.freeze({
     requestId: nonEmptyString(value.requestId, 'Collision validation request id'),
     revision: nonEmptyString(value.revision, 'Collision validation revision'),
     mode: value.mode,
     sampleCount,
     durationMs,
-    findings: Object.freeze(
-      validatedFindings.slice(0, MAX_COLLISION_VALIDATION_FINDINGS),
-    ),
+    findings: Object.freeze(validatedFindings),
     truncated: value.truncated || findingsTruncated,
   })
 }

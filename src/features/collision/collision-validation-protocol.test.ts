@@ -69,6 +69,7 @@ function request(): CollisionValidationRequest {
         id: `robot-link:${linkId}` as const,
         name: linkId,
         boxes: [BOX],
+        collisionActive: true,
       })),
       toolEntity: {
         id: 'tool:default',
@@ -126,7 +127,40 @@ describe('collision validation protocol', () => {
     expect(validated.robot.definition.joints).not.toBe(
       candidate.robot.definition.joints,
     )
+    expect(validated.robot.linkEntities[0]).not.toBe(
+      candidate.robot.linkEntities[0],
+    )
+    expect(
+      (validated.robot.linkEntities[0] as unknown as { collisionActive: boolean })
+        .collisionActive,
+    ).toBe(true)
     expect(() => structuredClone(validated)).not.toThrow()
+  })
+
+  it('requires and defensively owns each Robot Link collision participation flag', () => {
+    const candidate = request() as unknown as {
+      robot: { linkEntities: Array<Record<string, unknown>> }
+    }
+    candidate.robot.linkEntities[0]!.collisionActive = false
+
+    const validated = validateCollisionValidationRequest(candidate)
+    candidate.robot.linkEntities[0]!.collisionActive = true
+
+    expect(
+      (validated.robot.linkEntities[0] as unknown as { collisionActive: boolean })
+        .collisionActive,
+    ).toBe(false)
+    expect(() =>
+      validateCollisionValidationRequest({
+        ...request(),
+        robot: {
+          ...request().robot,
+          linkEntities: request().robot.linkEntities.map((link, index) =>
+            index === 0 ? { ...link, collisionActive: 'yes' } : link,
+          ),
+        },
+      }),
+    ).toThrow(/collision participation/i)
   })
 
   it('rejects malformed request identifiers, transforms, and incomplete Robot links', () => {
@@ -188,6 +222,27 @@ describe('collision validation protocol', () => {
         { length: MAX_COLLISION_VALIDATION_FINDINGS + 1 },
         () => FINDING,
       ),
+      truncated: false,
+    })
+
+    expect(result.findings).toHaveLength(MAX_COLLISION_VALIDATION_FINDINGS)
+    expect(result.truncated).toBe(true)
+  })
+
+  it('does not validate findings beyond the owned 10,000-result cap', () => {
+    const result = validateCollisionValidationResult({
+      requestId: 'validation-1',
+      revision: 'scene-7',
+      mode: 'validate',
+      sampleCount: 20_000,
+      durationMs: 4_000,
+      findings: [
+        ...Array.from(
+          { length: MAX_COLLISION_VALIDATION_FINDINGS },
+          () => FINDING,
+        ),
+        { invalid: true },
+      ],
       truncated: false,
     })
 

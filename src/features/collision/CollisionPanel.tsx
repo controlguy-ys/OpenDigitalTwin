@@ -63,6 +63,46 @@ const IDENTITY_TRANSFORM: SerializableTransform = Object.freeze({
 const collisionValidationClient = new CollisionValidationClient()
 let nextValidationRequestId = 1
 
+type CollisionValidationGeometryLink = Pick<
+  ReturnType<typeof useRobotGeometryStore.getState>['links'][number],
+  'linkId' | 'visible' | 'localTransform' | 'collisionBoxes'
+>
+
+export function buildCollisionValidationRobotGeometry(
+  geometryLinks: readonly CollisionValidationGeometryLink[],
+  activeEntityIds: ReadonlySet<string>,
+): Pick<
+  CollisionValidationRequest['robot'],
+  'geometryTransforms' | 'linkEntities'
+> {
+  const geometryByLink = new Map(
+    geometryLinks.map((link) => [link.linkId, link]),
+  )
+  const geometryTransforms = {} as Record<RobotLinkId, SerializableTransform>
+  const linkEntities = LINK_IDS.map((linkId) => {
+    const geometry = geometryByLink.get(linkId)
+    geometryTransforms[linkId] = geometry?.localTransform ?? IDENTITY_TRANSFORM
+    const fallback = ROBOT_LINK_COLLISION_BOUNDS[linkId]
+    return Object.freeze({
+      linkId,
+      id: `robot-link:${linkId}` as const,
+      name: linkId,
+      collisionActive:
+        (geometry?.visible ?? true) && activeEntityIds.has(`robot-link:${linkId}`),
+      boxes: geometry?.collisionBoxes ?? [{
+        id: 'default',
+        center: fallback.center,
+        halfExtents: fallback.halfExtents,
+        quaternion: [0, 0, 0, 1] as const,
+      }],
+    })
+  })
+  return Object.freeze({
+    geometryTransforms: Object.freeze(geometryTransforms),
+    linkEntities: Object.freeze(linkEntities),
+  })
+}
+
 export interface CollisionPanelValidationClient {
   validate(
     request: CollisionValidationRequest,
@@ -213,27 +253,14 @@ function useDefaultValidationRuntime(
   const createRequest = useCallback(
     (mode: CollisionValidationMode): CollisionValidationRequest => {
       const definition = robotConfigurationToDefinition(configuration)
-      const geometryByLink = new Map(
-        geometryLinks.map((link) => [link.linkId, link]),
-      )
-      const geometryTransforms = {} as Record<RobotLinkId, SerializableTransform>
-      const linkEntities = LINK_IDS.map((linkId) => {
-        const geometry = geometryByLink.get(linkId)
-        geometryTransforms[linkId] = geometry?.localTransform ?? IDENTITY_TRANSFORM
-        const fallback = ROBOT_LINK_COLLISION_BOUNDS[linkId]
-        return {
-          linkId,
-          id: `robot-link:${linkId}` as const,
-          name: linkId,
-          boxes: geometry?.collisionBoxes ?? [{
-            id: 'default',
-            center: fallback.center,
-            halfExtents: fallback.halfExtents,
-            quaternion: [0, 0, 0, 1] as const,
-          }],
-        }
-      })
       const registrySnapshot = snapshotGeometryEntities()
+      const activeEntityIds = new Set(
+        registrySnapshot.entities.map((entity) => entity.id),
+      )
+      const {
+        geometryTransforms,
+        linkEntities,
+      } = buildCollisionValidationRobotGeometry(geometryLinks, activeEntityIds)
       const staticEntities = registrySnapshot.entities.filter(
         (entity) =>
           entity.id !== heldEntityId &&
