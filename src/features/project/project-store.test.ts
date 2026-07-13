@@ -1,6 +1,9 @@
 import Dexie from 'dexie'
 import { afterEach, expect, it, vi } from 'vitest'
-import type { CurrentProjectSnapshot } from '../../domain/project/project'
+import type {
+  CurrentProjectSnapshot,
+  WorkcellProjectSnapshotV1,
+} from '../../domain/project/project'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../../domain/robot/crb15000'
 import { ProjectDatabase } from './project-db'
 import { createProjectStore, type ProjectRuntime } from './project-store'
@@ -90,6 +93,94 @@ afterEach(async () => {
   for (const item of databases.splice(0)) item.close()
   for (const name of names) await Dexie.delete(name)
   names.clear()
+})
+
+function runtime(snapshot: CurrentProjectSnapshot): ProjectRuntime {
+  return {
+    capture: vi.fn(async () => snapshot),
+    stage: vi.fn(async () => ({ staged: true })),
+    commit: vi.fn(async () => undefined),
+    dispose: vi.fn(),
+  }
+}
+
+it('rejects invalid stored V2 data without activating or rewriting it', async () => {
+  const invalid = project('invalid-stored-v2')
+  invalid.robot.links[0]!.collisionBoxes = []
+  const db = database()
+  await db.projects.put({ key: 'active', snapshot: invalid })
+  const projectRuntime = runtime(project('runtime-project'))
+  const store = createProjectStore(db, projectRuntime)
+
+  await store.getState().hydrate()
+
+  expect(store.getState().status).toBe('error')
+  expect(store.getState().activeSnapshot).toBeNull()
+  expect(projectRuntime.stage).not.toHaveBeenCalled()
+  expect(
+    (await db.projects.get('active'))?.snapshot.robot.links[0]!.collisionBoxes,
+  ).toEqual([])
+})
+
+it('normalizes stored V2 collision data and persists the canonical snapshot', async () => {
+  const stale = project('stale-stored-v2')
+  stale.robot.links[0]!.collisionCenter = [9, 9, 9]
+  stale.robot.links[0]!.collisionHalfExtents = [8, 8, 8]
+  stale.robot.links[0]!.collisionBoxes[0]!.quaternion = [0, 0, 0, 2]
+  stale.collisionPolicy.ignoredPairKeys = [
+    'robot-link:LINK01|robot-link:LINK03',
+    'robot-link:LINK00|robot-link:LINK02',
+    'robot-link:LINK01|robot-link:LINK03',
+  ]
+  const db = database()
+  await db.projects.put({ key: 'active', snapshot: stale })
+  const store = createProjectStore(db, runtime(project('runtime-project')))
+
+  await store.getState().hydrate()
+
+  const active = store.getState().activeSnapshot!
+  expect(active.robot.links[0]!.collisionCenter).toEqual([0, 0, 0])
+  expect(active.robot.links[0]!.collisionHalfExtents).toEqual([0.1, 0.1, 0.1])
+  expect(active.robot.links[0]!.collisionBoxes[0]!.quaternion).toEqual([
+    0, 0, 0, 1,
+  ])
+  expect(active.collisionPolicy.ignoredPairKeys).toEqual([
+    'robot-link:LINK00|robot-link:LINK02',
+    'robot-link:LINK01|robot-link:LINK03',
+  ])
+  expect((await db.projects.get('active'))?.snapshot).toEqual(active)
+})
+
+it('migrates a stored V1 project and persists the V2 result', async () => {
+  const source = project('stored-v1')
+  const v1 = {
+    ...structuredClone(source),
+    manifest: { ...source.manifest, schemaVersion: 1 },
+    robot: {
+      ...source.robot,
+      links: source.robot.links.map(({ collisionBoxes: _boxes, ...link }) => link),
+    },
+  } as unknown as WorkcellProjectSnapshotV1
+  delete (v1 as unknown as { collisionPolicy?: unknown }).collisionPolicy
+  const db = database()
+  await db.projects.put({
+    key: 'active',
+    snapshot: v1 as unknown as CurrentProjectSnapshot,
+  })
+  const store = createProjectStore(db, runtime(project('runtime-project')))
+
+  await store.getState().hydrate()
+
+  const active = store.getState().activeSnapshot!
+  expect(active.manifest.schemaVersion).toBe(2)
+  expect(active.robot.links[0]!.collisionBoxes).toEqual([{
+    id: 'default',
+    center: [0, 0, 0],
+    halfExtents: [0.1, 0.1, 0.1],
+    quaternion: [0, 0, 0, 1],
+  }])
+  expect(Array.from(new Uint8Array(active.robot.links[0]!.sourceBytes))).toEqual([1])
+  expect((await db.projects.get('active'))?.snapshot.manifest.schemaVersion).toBe(2)
 })
 
 it('rejects an invalid decoded snapshot before staging or mutating active state', async () => {

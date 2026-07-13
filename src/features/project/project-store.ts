@@ -59,6 +59,29 @@ export function createProjectStore<Staged>(
       : validateWorkcellProjectSnapshot(candidate)
   }
 
+  const collisionPersistenceSignature = (candidate: unknown): string => {
+    const snapshot = candidate as {
+      manifest?: { schemaVersion?: unknown }
+      robot?: { links?: Array<Record<string, unknown>> }
+      objectAssets?: Array<Record<string, unknown>>
+      collisionPolicy?: unknown
+    }
+    return JSON.stringify({
+      schemaVersion: snapshot.manifest?.schemaVersion,
+      robotLinks: snapshot.robot?.links?.map((link) => ({
+        collisionCenter: link.collisionCenter,
+        collisionHalfExtents: link.collisionHalfExtents,
+        collisionBoxes: link.collisionBoxes,
+      })),
+      objectAssets: snapshot.objectAssets?.map((asset) => ({
+        colliderCenter: asset.colliderCenter,
+        collisionHalfExtents: asset.collisionHalfExtents,
+        collisionBoxes: asset.collisionBoxes,
+      })),
+      collisionPolicy: snapshot.collisionPolicy,
+    })
+  }
+
   return createStore<ProjectStoreState>()((set, get) => {
     const activate = (snapshot: CurrentProjectSnapshot) => ({
       activeSnapshot: snapshot,
@@ -78,12 +101,11 @@ export function createProjectStore<Staged>(
           const stored = await database.projects.get('active')
           if (stored === undefined) set({ status: 'idle' })
           else {
-            const snapshot =
-              (stored.snapshot.manifest.schemaVersion as number) ===
-              WORKCELL_PROJECT_SCHEMA_VERSION_V1
-                ? currentSnapshot(stored.snapshot)
-                : stored.snapshot
-            if (stored.snapshot.manifest.schemaVersion !== snapshot.manifest.schemaVersion) {
+            const snapshot = currentSnapshot(stored.snapshot)
+            if (
+              collisionPersistenceSignature(stored.snapshot) !==
+              collisionPersistenceSignature(snapshot)
+            ) {
               await database.projects.put({ key: 'active', snapshot })
             }
             set(activate(snapshot))

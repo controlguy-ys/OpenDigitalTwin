@@ -1,6 +1,9 @@
 import Dexie from 'dexie'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { RobotLinkGeometryRecordV2 } from '../../domain/project/project'
+import type {
+  RobotLinkGeometryRecordV1,
+  RobotLinkGeometryRecordV2,
+} from '../../domain/project/project'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
 import { RobotGeometryDatabase } from './robot-geometry-db'
 import { createRobotGeometryStore } from './robot-geometry-store'
@@ -58,6 +61,50 @@ afterEach(async () => {
 })
 
 describe('Robot Geometry store', () => {
+  it('migrates legacy IndexedDB Link rows and persists default Boxes', async () => {
+    const db = database('legacy-rows')
+    const legacy = LINK_IDS.map((linkId) => {
+      const { collisionBoxes: _boxes, ...record } = link(linkId)
+      return record
+    }) satisfies RobotLinkGeometryRecordV1[]
+    legacy[3]!.localTransform.position = [0.03, 0.02, 0.01]
+    await db.links.bulkAdd(
+      legacy as unknown as RobotLinkGeometryRecordV2[],
+    )
+    const store = createRobotGeometryStore(db)
+
+    await store.getState().hydrate()
+
+    expect(store.getState().persistenceStatus).toBe('persistent')
+    expect(store.getState().links[0]!.collisionBoxes).toEqual([{
+      id: 'default',
+      center: [0, 0, 0],
+      halfExtents: [0.1, 0.1, 0.1],
+      quaternion: [0, 0, 0, 1],
+    }])
+    expect(store.getState().links[3]!.localTransform.position).toEqual([
+      0.03, 0.02, 0.01,
+    ])
+    expect(Array.from(new Uint8Array(store.getState().links[0]!.sourceBytes))).toEqual([
+      1, 2, 3,
+    ])
+    expect((await db.links.get('LINK00'))?.collisionBoxes[0]!.id).toBe('default')
+  })
+
+  it('does not reinterpret an invalid V2 Box array as legacy data', async () => {
+    const db = database('invalid-v2-row')
+    const records = LINK_IDS.map(link)
+    records[0]!.collisionBoxes = []
+    await db.links.bulkAdd(records)
+    const store = createRobotGeometryStore(db)
+
+    await store.getState().hydrate()
+
+    expect(store.getState().persistenceStatus).toBe('memory-only')
+    expect(store.getState().links).toEqual([])
+    expect((await db.links.get('LINK00'))?.collisionBoxes).toEqual([])
+  })
+
   it('persists seven Link records and a Geometry local pose', async () => {
     const first = database('persist')
     const store = createRobotGeometryStore(first)

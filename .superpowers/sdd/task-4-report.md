@@ -64,3 +64,39 @@
 - No CAD, implementation-plan, or approved specification files were modified.
 - Vite continues to report its existing large-chunk and OCCT browser
   externalization warnings; they do not fail the production build.
+
+## Fix Review
+
+### Findings Addressed
+
+- Project hydration now validates and normalizes both stored V1 and V2 snapshots
+  before activation. Invalid stored V2 remains untouched and produces the
+  Project Store error state.
+- Stored Project collision data is rewritten only when its persisted collision
+  signature differs after migration or normalization. This covers schema
+  migration, legacy first-Box mirrors, normalized quaternions, and canonical
+  policy pair-key arrays.
+- Robot Geometry and Object Asset hydration now recognizes only records where
+  `collisionBoxes` is absent as legacy V1 rows. It creates one identity-rotation
+  `default` Box, preserves bytes and visible placement data, validates the full
+  record set, and atomically rewrites the IndexedDB table.
+- A present but invalid V2 `collisionBoxes` property is never treated as legacy
+  data and is never rewritten with fallback bounds.
+
+### Review TDD Evidence
+
+1. RED:
+   `npm run test:run -- src/features/project/project-store.test.ts src/features/robot/robot-geometry-store.test.ts src/features/objects/object-asset-store.test.ts`
+   - 3 files ran; 4 expected failures / 17 passed.
+   - The failures proved invalid V2 Project activation, stale Project collision
+     data, and Robot/Object V1 rows falling to memory-only mode.
+2. GREEN: the same command passed 3 files / 21 tests.
+
+### Review Final Verification
+
+- `npm run test:run`: 65 files / 369 tests passed.
+- `npm run lint`: passed with no warnings.
+- `npm run build`: passed (`tsc -b` and Vite production build).
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `npx playwright test tests/project-roundtrip.spec.ts`: 1 passed.
+- `git diff --check`: passed.

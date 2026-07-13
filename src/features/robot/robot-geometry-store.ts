@@ -4,6 +4,7 @@ import type { SerializableTransform } from '../../domain/equipment/equipment'
 import { validateCollisionBox } from '../../domain/collision/collision'
 import type {
   ProjectCollisionBoxV2,
+  RobotLinkGeometryRecordV1,
   RobotLinkGeometryRecordV2,
 } from '../../domain/project/project'
 import {
@@ -140,6 +141,23 @@ function cloneCollisionBox(box: ProjectCollisionBoxV2): ProjectCollisionBoxV2 {
   }
 }
 
+function migrateLegacyLink(
+  link: RobotLinkGeometryRecordV1 | RobotLinkGeometryRecordV2,
+): RobotLinkGeometryRecordV2 {
+  if (Object.prototype.hasOwnProperty.call(link, 'collisionBoxes')) {
+    return link as RobotLinkGeometryRecordV2
+  }
+  return {
+    ...link,
+    collisionBoxes: [{
+      id: 'default',
+      center: [...link.collisionCenter],
+      halfExtents: [...link.collisionHalfExtents],
+      quaternion: [0, 0, 0, 1],
+    }],
+  }
+}
+
 function cloneLink(link: RobotLinkGeometryRecordV2): RobotLinkGeometryRecordV2 {
   const collisionBoxes = link.collisionBoxes.map(cloneCollisionBox)
   const first = collisionBoxes[0]!
@@ -194,10 +212,24 @@ function createRobotGeometryState(database: RobotGeometryDatabase) {
       hydrationPromise = (async () => {
         try {
           await database.open()
-          const links = await database.links.toArray()
+          const storedLinks = await database.links.toArray()
+          const requiresMigration = storedLinks.some(
+            (link) =>
+              !Object.prototype.hasOwnProperty.call(link, 'collisionBoxes'),
+          )
+          const links = storedLinks.map(migrateLegacyLink)
           if (links.length > 0) validateRobot(links)
+          const next = links
+            .map(cloneLink)
+            .sort((a, b) => a.linkId.localeCompare(b.linkId))
+          if (requiresMigration) {
+            await database.transaction('rw', database.links, async () => {
+              await database.links.clear()
+              await database.links.bulkAdd(next)
+            })
+          }
           set({
-            links: links.map(cloneLink).sort((a, b) => a.linkId.localeCompare(b.linkId)),
+            links: next,
             persistenceStatus: 'persistent',
           })
         } catch {

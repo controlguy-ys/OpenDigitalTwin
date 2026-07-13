@@ -71,6 +71,51 @@ afterEach(async () => {
 })
 
 describe('Object Asset persistence', () => {
+  it('migrates legacy IndexedDB Asset rows and preserves Instances', async () => {
+    const db = createDatabase('legacy-rows')
+    const { collisionBoxes: _boxes, ...legacy } = machineAsset()
+    const instance = machineInstance('machine-legacy')
+    instance.transform.position = [0.9, 0.8, 0.7]
+    await db.transaction('rw', db.assets, db.instances, async () => {
+      await db.assets.add(legacy as unknown as ObjectAssetRecordV2)
+      await db.instances.add(instance)
+    })
+    const store = createObjectAssetStore(db)
+
+    await store.getState().hydrate()
+
+    expect(store.getState().persistenceStatus).toBe('persistent')
+    expect(store.getState().assets[0]!.collisionBoxes).toEqual([{
+      id: 'default',
+      center: [0, 0, 0.1],
+      halfExtents: [0.5, 0.4, 0.3],
+      quaternion: [0, 0, 0, 1],
+    }])
+    expect(store.getState().instances[0]!.transform.position).toEqual([
+      0.9, 0.8, 0.7,
+    ])
+    expect(Array.from(new Uint8Array(store.getState().assets[0]!.sourceBytes))).toEqual([
+      1, 2, 3, 4,
+    ])
+    expect((await db.assets.get('machine-asset'))?.collisionBoxes[0]!.id).toBe(
+      'default',
+    )
+  })
+
+  it('does not reinterpret an invalid V2 Box array as legacy data', async () => {
+    const db = createDatabase('invalid-v2-row')
+    const invalid = machineAsset()
+    invalid.collisionBoxes = []
+    await db.assets.add(invalid)
+    const store = createObjectAssetStore(db)
+
+    await store.getState().hydrate()
+
+    expect(store.getState().persistenceStatus).toBe('memory-only')
+    expect(store.getState().assets).toEqual([])
+    expect((await db.assets.get('machine-asset'))?.collisionBoxes).toEqual([])
+  })
+
   it('stores one STEP Asset and restores two Instances that reference it', async () => {
     const firstDatabase = createDatabase('sharing')
     const store = createObjectAssetStore(firstDatabase)

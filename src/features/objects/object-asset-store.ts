@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { createStore } from 'zustand/vanilla'
 import type {
+  ObjectAssetRecordV1,
   ObjectAssetRecordV2,
   ObjectInstanceRecordV1,
   ProjectCollisionBoxV2,
@@ -159,6 +160,23 @@ function cloneCollisionBox(box: ProjectCollisionBoxV2): ProjectCollisionBoxV2 {
   }
 }
 
+function migrateLegacyAsset(
+  asset: ObjectAssetRecordV1 | ObjectAssetRecordV2,
+): ObjectAssetRecordV2 {
+  if (Object.prototype.hasOwnProperty.call(asset, 'collisionBoxes')) {
+    return asset as ObjectAssetRecordV2
+  }
+  return {
+    ...asset,
+    collisionBoxes: [{
+      id: 'default',
+      center: [...asset.colliderCenter],
+      halfExtents: [...asset.collisionHalfExtents],
+      quaternion: [0, 0, 0, 1],
+    }],
+  }
+}
+
 function cloneAsset(asset: ObjectAssetRecordV2): ObjectAssetRecordV2 {
   const collisionBoxes = asset.collisionBoxes.map(cloneCollisionBox)
   const first = collisionBoxes[0]!
@@ -231,7 +249,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
       hydrationPromise = (async () => {
         try {
           await database.open()
-          const [assets, instances] = await database.transaction(
+          const [storedAssets, instances] = await database.transaction(
             'r',
             database.assets,
             database.instances,
@@ -240,6 +258,11 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
               database.instances.toArray(),
             ]),
           )
+          const requiresMigration = storedAssets.some(
+            (asset) =>
+              !Object.prototype.hasOwnProperty.call(asset, 'collisionBoxes'),
+          )
+          const assets = storedAssets.map(migrateLegacyAsset)
           assets.forEach(validateAsset)
           const assetIds = new Set(assets.map(({ id }) => id))
           instances.forEach((instance) => {
@@ -248,13 +271,21 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
               throw new Error(`Object Instance ${instance.id} references a missing Asset.`)
             }
           })
+          const nextAssets = assets.map(cloneAsset)
+          const nextInstances = instances.map(cloneInstance)
+          if (requiresMigration) {
+            await database.transaction('rw', database.assets, async () => {
+              await database.assets.clear()
+              await database.assets.bulkAdd(nextAssets)
+            })
+          }
           committedTransforms.clear()
-          instances.forEach((instance) => {
+          nextInstances.forEach((instance) => {
             committedTransforms.set(instance.id, cloneTransform(instance.transform))
           })
           set({
-            assets: assets.map(cloneAsset),
-            instances: instances.map(cloneInstance),
+            assets: nextAssets,
+            instances: nextInstances,
             persistenceStatus: 'persistent',
             warnings: [],
           })
