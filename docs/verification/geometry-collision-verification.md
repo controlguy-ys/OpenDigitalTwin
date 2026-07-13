@@ -78,11 +78,10 @@ runtime smoke.
   --timeout=300000`: passed one test in 3.2 minutes.
 - `npx playwright test tests/project-roundtrip.spec.ts --timeout=180000`:
   passed one test in 1.6 minutes.
-- `npm run test:e2e`: its test build passed, but the last combined run ended
-  with one pass and one test-locator failure before the locator was corrected.
-  The corrected geometry test and the independent V2 round-trip test then both
-  passed with the commands above. Playwright now uses one Worker so the two
-  OCCT-heavy imports do not compete for browser resources.
+- `npm run test:e2e`: passed after the locator corrections. The geometry
+  collision scenario passed in 2.9 minutes, the V2 project round-trip passed in
+  1.3 minutes, and the full command completed two tests in 4.3 minutes using one
+  Worker so the two OCCT-heavy imports do not compete for browser resources.
 - `npm run deploy:validate`: static deployment contract passed.
 - `npm run deploy:smoke`: Web image build, `nginx -t`, health probe, and cleanup
   passed on port 18080.

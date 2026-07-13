@@ -57,10 +57,23 @@ npx playwright test tests/geometry-collision.spec.ts --workers=1 --timeout=30000
 
 Result: one test passed in 3.2 minutes. No additional browser run was made.
 
+After the Task 7 commit, the complete checked-in E2E command was run once more
+to close the combined-gate evidence:
+
+```text
+npm run test:e2e
+```
+
+Result: exit 0, two tests passed using one Worker. The geometry collision
+scenario passed in 2.9 minutes, the V2 project round-trip passed in 1.3 minutes,
+and the complete command finished in 4.3 minutes.
+
 ## Final gates
 
 - `npm run verify`: passed; 73 Vitest files and 439 tests, seven valid CAD Links,
   zero CAD errors/warnings, clean lint, and successful TypeScript/Vite build.
+- `npm run test:e2e`: passed; two Playwright tests completed sequentially in
+  4.3 minutes.
 - `npm run deploy:validate`: passed.
 - `npm run deploy:smoke`: passed with real Web image build, Nginx validation,
   health probe, and cleanup.
@@ -75,8 +88,6 @@ Result: one test passed in 3.2 minutes. No additional browser run was made.
 
 ## Remaining concern
 
-The corrected geometry and V2 project-roundtrip browser gates are both green,
-but there is no final green recording of the combined `npm run test:e2e`
-command after the last locator correction. The two files are serialized by the
-checked-in Playwright configuration and passed independently under that same
-resource model.
+No geometry-collision acceptance gate remains unverified. Existing Vite
+OCCT-browser-externalization and large-chunk notices remain non-fatal and are
+documented performance constraints rather than test failures.
