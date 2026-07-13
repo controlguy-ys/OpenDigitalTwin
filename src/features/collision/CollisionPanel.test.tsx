@@ -1,9 +1,11 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Group } from 'three'
 import type { CollisionFinding } from '../../domain/collision/collision'
 import { useInteractionStore } from '../interaction/interaction-store'
+import { useRobotStore } from '../joints/robot-store'
+import { CollisionValidationClient } from './collision-validation-client'
 import type {
   CollisionValidationRequest,
   CollisionValidationResult,
@@ -86,7 +88,47 @@ describe('CollisionPanel', () => {
 
   afterEach(() => {
     geometryEntityRegistry.clear()
+    useRobotStore.setState({ keyframes: [] })
+    vi.restoreAllMocks()
   })
+
+  function startDefaultValidation() {
+    useRobotStore.setState({
+      keyframes: [
+        {
+          id: 'registry-start',
+          name: 'Registry start',
+          anglesDeg: [0, 0, 0, 0, 0, 0],
+          durationMs: 1_000,
+          easing: 'linear',
+        },
+        {
+          id: 'registry-end',
+          name: 'Registry end',
+          anglesDeg: [1, 0, 0, 0, 0, 0],
+          durationMs: 1_000,
+          easing: 'linear',
+        },
+      ],
+    })
+    const validate = vi.spyOn(
+      CollisionValidationClient.prototype,
+      'validate',
+    ).mockImplementation(
+      () => new Promise<CollisionValidationResult>(() => undefined),
+    )
+    const cancel = vi.spyOn(
+      CollisionValidationClient.prototype,
+      'cancel',
+    ).mockImplementation(() => undefined)
+    useCollisionStore.getState().setValidationReport({
+      revision: 'completed-registry-run',
+      sampleCount: 1,
+      findings: [COLLISION],
+      truncated: false,
+    })
+    return { validate, cancel }
+  }
 
   it('maps Robot geometry visibility and live registry participation into validation links', () => {
     const identity = {
@@ -370,6 +412,65 @@ describe('CollisionPanel', () => {
     rerender(<CollisionPanel />)
 
     expect(useCollisionStore.getState().validationReportStale).toBe(true)
+  })
+
+  it('cancels active validation and marks its report stale on registry mutation without rerender', async () => {
+    const user = userEvent.setup()
+    const { validate, cancel } = startDefaultValidation()
+    render(<CollisionPanel />)
+    await user.click(screen.getByRole('button', { name: 'Validate Sequence' }))
+    expect(validate).toHaveBeenCalledTimes(1)
+    cancel.mockClear()
+
+    act(() => {
+      registerGeometryEntity({
+        id: 'tool:reactive-probe',
+        name: 'Reactive probe',
+        category: 'tool',
+        boxes: [{
+          id: 'default',
+          center: [0, 0, 0],
+          halfExtents: [0.1, 0.1, 0.1],
+          quaternion: [0, 0, 0, 1],
+        }],
+        object: new Group(),
+        colliderRevision: 1,
+      })
+    })
+
+    await waitFor(() => {
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(useCollisionStore.getState().validationReportStale).toBe(true)
+    })
+  })
+
+  it('cancels active validation and marks its report stale when a live registration cleans up', async () => {
+    const cleanupRegistration = registerGeometryEntity({
+      id: 'tool:cleanup-probe',
+      name: 'Cleanup probe',
+      category: 'tool',
+      boxes: [{
+        id: 'default',
+        center: [0, 0, 0],
+        halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object: new Group(),
+      colliderRevision: 1,
+    })
+    const user = userEvent.setup()
+    const { validate, cancel } = startDefaultValidation()
+    render(<CollisionPanel />)
+    await user.click(screen.getByRole('button', { name: 'Validate Sequence' }))
+    expect(validate).toHaveBeenCalledTimes(1)
+    cancel.mockClear()
+
+    act(() => cleanupRegistration())
+
+    await waitFor(() => {
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(useCollisionStore.getState().validationReportStale).toBe(true)
+    })
   })
 
   it('marks a completed report stale when Entity validation visibility changes', () => {

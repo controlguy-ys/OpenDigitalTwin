@@ -2,9 +2,12 @@ import { Group } from 'three'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CollisionBox } from '../../domain/collision/collision'
 import {
+  getGeometryEntityRegistryRevision,
   geometryEntityRegistry,
   registerGeometryEntity,
   snapshotGeometryEntities,
+  subscribeGeometryEntityRegistry,
+  updateGeometryEntityObject,
 } from './geometry-entity-registry'
 
 const IDENTITY = [
@@ -31,6 +34,133 @@ beforeEach(() => {
 })
 
 describe('geometry Entity registry', () => {
+  it('publishes monotonic revisions for registration, replacement, live ownership, and cleanup', () => {
+    const first = new Group()
+    const second = new Group()
+    const initialRevision = getGeometryEntityRegistryRevision()
+    const observedRevisions: number[] = []
+    const unsubscribe = subscribeGeometryEntityRegistry(() => {
+      observedRevisions.push(getGeometryEntityRegistryRevision())
+    })
+
+    registerGeometryEntity({
+      id: 'equipment:reactive',
+      name: 'Reactive fixture',
+      category: 'equipment',
+      boxes: [box()],
+      object: first,
+      colliderRevision: 1,
+    })
+    const cleanupCurrent = registerGeometryEntity({
+      id: 'equipment:reactive',
+      name: 'Reactive held fixture',
+      category: 'held-object',
+      boxes: [box([0.1, 0, 0])],
+      object: second,
+      colliderRevision: 2,
+    })
+    updateGeometryEntityObject('equipment:reactive', null)
+    updateGeometryEntityObject('equipment:reactive', second)
+    cleanupCurrent()
+
+    expect(observedRevisions).toEqual([
+      initialRevision + 1,
+      initialRevision + 2,
+      initialRevision + 3,
+      initialRevision + 4,
+      initialRevision + 5,
+    ])
+    expect(getGeometryEntityRegistryRevision()).toBe(initialRevision + 5)
+    unsubscribe()
+  })
+
+  it('does not revise for stale cleanup or no-op ownership and stops notifying after unsubscribe', () => {
+    const first = new Group()
+    const second = new Group()
+    const listener = vi.fn()
+    const unsubscribe = subscribeGeometryEntityRegistry(listener)
+    const cleanupFirst = registerGeometryEntity({
+      id: 'equipment:stable',
+      name: 'First',
+      category: 'equipment',
+      boxes: [box()],
+      object: first,
+    })
+    const cleanupSecond = registerGeometryEntity({
+      id: 'equipment:stable',
+      name: 'Second',
+      category: 'equipment',
+      boxes: [box()],
+      object: second,
+    })
+    const replacementRevision = getGeometryEntityRegistryRevision()
+    const notificationsAfterReplacement = listener.mock.calls.length
+
+    cleanupFirst()
+    updateGeometryEntityObject('equipment:stable', second)
+
+    expect(getGeometryEntityRegistryRevision()).toBe(replacementRevision)
+    expect(listener).toHaveBeenCalledTimes(notificationsAfterReplacement)
+    expect(geometryEntityRegistry.get('equipment:stable')?.object).toBe(second)
+
+    unsubscribe()
+    cleanupSecond()
+
+    expect(getGeometryEntityRegistryRevision()).toBe(replacementRevision + 1)
+    expect(listener).toHaveBeenCalledTimes(notificationsAfterReplacement)
+    expect(geometryEntityRegistry.has('equipment:stable')).toBe(false)
+  })
+
+  it('publishes direct deletion only when the registration exists', () => {
+    registerGeometryEntity({
+      id: 'equipment:direct-delete',
+      name: 'Direct delete fixture',
+      category: 'equipment',
+      boxes: [box()],
+      object: new Group(),
+    })
+    const revisionBeforeDelete = getGeometryEntityRegistryRevision()
+    const listener = vi.fn()
+    const unsubscribe = subscribeGeometryEntityRegistry(listener)
+
+    expect(geometryEntityRegistry.delete('equipment:missing')).toBe(false)
+    expect(getGeometryEntityRegistryRevision()).toBe(revisionBeforeDelete)
+    expect(listener).not.toHaveBeenCalled()
+
+    expect(geometryEntityRegistry.delete('equipment:direct-delete')).toBe(true)
+    expect(getGeometryEntityRegistryRevision()).toBe(revisionBeforeDelete + 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+
+    expect(geometryEntityRegistry.delete('equipment:direct-delete')).toBe(false)
+    expect(getGeometryEntityRegistryRevision()).toBe(revisionBeforeDelete + 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsubscribe()
+  })
+
+  it('publishes direct clear once only when the registry is non-empty', () => {
+    registerGeometryEntity({
+      id: 'equipment:direct-clear',
+      name: 'Direct clear fixture',
+      category: 'equipment',
+      boxes: [box()],
+      object: new Group(),
+    })
+    const revisionBeforeClear = getGeometryEntityRegistryRevision()
+    const listener = vi.fn()
+    const unsubscribe = subscribeGeometryEntityRegistry(listener)
+
+    geometryEntityRegistry.clear()
+
+    expect(getGeometryEntityRegistryRevision()).toBe(revisionBeforeClear + 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+
+    geometryEntityRegistry.clear()
+
+    expect(getGeometryEntityRegistryRevision()).toBe(revisionBeforeClear + 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsubscribe()
+  })
+
   it('replaces a registration without allowing stale cleanup to remove its successor', () => {
     const first = new Group()
     const second = new Group()

@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react'
 import type { CollisionPolicy } from '../../domain/collision/collision'
 import {
@@ -40,8 +41,10 @@ import type {
   CollisionValidationResult,
 } from './collision-validation-protocol'
 import {
+  getGeometryEntityRegistryRevision,
   geometryEntityRegistry,
   snapshotGeometryEntities,
+  subscribeGeometryEntityRegistry,
 } from './geometry-entity-registry'
 import {
   encodeCollisionReportCsv,
@@ -149,7 +152,7 @@ function rootPose(
 
 function serializableRevision(
   policy: CollisionPolicy,
-  registrySignature: string,
+  registryRevision: number,
   inputs: {
     readonly keyframes: ReturnType<typeof useRobotStore.getState>['keyframes']
     readonly configuration: ReturnType<typeof useRobotConfigurationStore.getState>['configuration']
@@ -165,7 +168,7 @@ function serializableRevision(
 ): string {
   return JSON.stringify({
     policy,
-    registrySignature,
+    registryRevision,
     keyframes: inputs.keyframes,
     configuration: inputs.configuration,
     frames: inputs.frames,
@@ -210,15 +213,10 @@ function useDefaultValidationRuntime(
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const gripOffset = useInteractionStore((state) => state.gripOffset)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
-  const registrySignature = JSON.stringify(
-    [...geometryEntityRegistry.values()]
-      .sort((first, second) => first.id.localeCompare(second.id))
-      .map((registration) => ({
-        id: registration.id,
-        category: registration.category,
-        colliderRevision: registration.colliderRevision,
-        boxes: registration.boxes,
-      })),
+  const registryRevision = useSyncExternalStore(
+    subscribeGeometryEntityRegistry,
+    getGeometryEntityRegistryRevision,
+    getGeometryEntityRegistryRevision,
   )
   const revisionInputs = useMemo(
     () => ({
@@ -247,8 +245,8 @@ function useDefaultValidationRuntime(
     ],
   )
   const revision = useMemo(
-    () => serializableRevision(policy, registrySignature, revisionInputs),
-    [policy, registrySignature, revisionInputs],
+    () => serializableRevision(policy, registryRevision, revisionInputs),
+    [policy, registryRevision, revisionInputs],
   )
   const createRequest = useCallback(
     (mode: CollisionValidationMode): CollisionValidationRequest => {

@@ -216,3 +216,84 @@ Results:
 
 Per task scope, no CAD conversion or validation command was run. Vite retained
 the pre-existing OCCT browser-externalization messages and chunk-size warning.
+
+## Registry Reactivity Follow-up
+
+The geometry Entity registry now acts as a React-compatible external store. It
+exposes stable subscribe and revision-snapshot functions and increments a
+monotonic revision for meaningful registration, replacement, live Object
+ownership, deletion, and clearing changes. Stale lifecycle cleanup, missing
+deletion, empty clearing, same-registration assignment, missing Object updates,
+and same-Object updates do not increment the revision.
+
+The exported registry remains Map-compatible. Its observable Map implementation
+also captures direct `set`, `delete`, and `clear` calls, while custom registries
+used by current-pose queries retain their existing plain-Map behavior.
+
+`CollisionPanel` subscribes with `useSyncExternalStore` and includes the
+registry revision in its default validation revision. A registry-only change
+after render now cancels an active sequence validation and marks a completed
+report stale without requiring a parent rerender. The existing
+`currentPoseCollisionRevision()` transform and hierarchy semantics were not
+changed.
+
+### Registry Reactivity TDD Evidence
+
+Production files were unchanged when the first focused RED command ran:
+
+```text
+npm run test:run -- src/features/collision/geometry-entity-registry.test.ts src/features/collision/CollisionPanel.test.tsx
+```
+
+Observed RED: 2 files failed with 4 expected failures and 15 passing tests. The
+registry tests reported missing revision-snapshot and subscribe functions. The
+panel tests expected one cancellation after post-render registration and
+cleanup changes but observed zero.
+
+After the initial implementation, the same command passed 2 files and 19 tests.
+
+A second test-first pass covered direct public Map mutations:
+
+```text
+npm run test:run -- src/features/collision/geometry-entity-registry.test.ts
+```
+
+Observed RED: 1 file failed with 2 expected failures and 6 passing tests. Direct
+deletion of an existing registration and direct non-empty clearing both left
+the revision unchanged. The observable Map implementation made the registry
+suite pass 8 tests, including no-op deletion/clearing and subscription cleanup.
+
+### Registry Reactivity Final Verification
+
+Focused registry, panel, and current-pose regression command:
+
+```text
+npm run test:run -- src/features/collision/geometry-entity-registry.test.ts src/features/collision/CollisionPanel.test.tsx src/features/collision/current-pose-collision.test.ts
+```
+
+Result: 3 files, 25 tests passed, 0 failed.
+
+Full suite:
+
+```text
+npm run test:run
+```
+
+Result: exit 0, 72 files, 434 tests passed, 0 failed in 72.57 seconds.
+
+Static and production gates:
+
+```text
+npm run lint
+npm run build
+git diff --check
+```
+
+Results:
+
+- oxlint passed without diagnostics;
+- TypeScript and Vite production build passed and emitted the collision Worker;
+- diff check passed.
+
+Per task scope, no CAD conversion or validation command was run. Vite retained
+the pre-existing OCCT browser-externalization messages and chunk-size warning.

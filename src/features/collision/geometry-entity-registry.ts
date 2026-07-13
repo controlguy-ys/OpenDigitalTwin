@@ -37,7 +37,51 @@ export interface GeometryEntitySnapshot {
   readonly diagnostics: readonly CollisionDiagnostic[]
 }
 
-export const geometryEntityRegistry: GeometryEntityRegistry = new Map()
+let geometryEntityRegistryRevision = 0
+const geometryEntityRegistryListeners = new Set<() => void>()
+
+function publishGeometryEntityRegistryMutation(): void {
+  geometryEntityRegistryRevision += 1
+  for (const listener of Array.from(geometryEntityRegistryListeners)) {
+    listener()
+  }
+}
+
+class ReactiveGeometryEntityRegistry
+  extends Map<string, RegisteredGeometryEntity> {
+  override set(key: string, value: RegisteredGeometryEntity): this {
+    const unchanged = this.has(key) && this.get(key) === value
+    super.set(key, value)
+    if (!unchanged) publishGeometryEntityRegistryMutation()
+    return this
+  }
+
+  override delete(key: string): boolean {
+    const deleted = super.delete(key)
+    if (deleted) publishGeometryEntityRegistryMutation()
+    return deleted
+  }
+
+  override clear(): void {
+    if (this.size === 0) return
+    super.clear()
+    publishGeometryEntityRegistryMutation()
+  }
+}
+
+export const geometryEntityRegistry: GeometryEntityRegistry =
+  new ReactiveGeometryEntityRegistry()
+
+export function getGeometryEntityRegistryRevision(): number {
+  return geometryEntityRegistryRevision
+}
+
+export function subscribeGeometryEntityRegistry(listener: () => void): () => void {
+  geometryEntityRegistryListeners.add(listener)
+  return () => {
+    geometryEntityRegistryListeners.delete(listener)
+  }
+}
 
 function ownedRegistration(
   candidate: GeometryEntityRegistration,
