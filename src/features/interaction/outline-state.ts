@@ -36,14 +36,10 @@ export function hasActiveCollision(
 function findingOutlineState(
   entityId: CollisionEntityId,
   findings: readonly OutlineFinding[],
-  focusedPairKey?: string | null,
 ): Extract<OutlineState, 'collision' | 'near-miss'> | null {
   let result: Extract<OutlineState, 'collision' | 'near-miss'> | null = null
   for (const finding of findings) {
     const pair = findingPairKey(finding)
-    if (focusedPairKey !== undefined && focusedPairKey !== null && pair !== focusedPairKey) {
-      continue
-    }
     if (!entityParticipates(entityId, pair)) continue
     const kind = typeof finding === 'string' ? 'collision' : finding.kind
     if (kind === 'collision') return 'collision'
@@ -56,12 +52,10 @@ export function getEquipmentOutlineState(
   equipmentId: string,
   selected: boolean,
   pairs: readonly OutlineFinding[],
-  focusedPairKey?: string | null,
 ): OutlineState {
   const finding = findingOutlineState(
     `equipment:${equipmentId}`,
     pairs,
-    focusedPairKey,
   )
   if (finding !== null) return finding
   return selected ? 'selection' : null
@@ -71,9 +65,8 @@ export function getExternalEntityOutlineState(
   entityId: ExternalCollisionEntityId | CollisionEntityId,
   selected: boolean,
   pairs: readonly OutlineFinding[],
-  focusedPairKey?: string | null,
 ): OutlineState {
-  const finding = findingOutlineState(entityId, pairs, focusedPairKey)
+  const finding = findingOutlineState(entityId, pairs)
   return finding ?? (selected ? 'selection' : null)
 }
 
@@ -81,12 +74,10 @@ export function getRobotLinkOutlineState(
   selection: SceneSelection,
   linkId: RobotLinkId,
   pairs: readonly OutlineFinding[],
-  focusedPairKey?: string | null,
 ): OutlineState {
   const finding = findingOutlineState(
     `robot-link:${linkId}`,
     pairs,
-    focusedPairKey,
   )
   if (finding !== null) return finding
   return selection?.kind === 'robot' ||

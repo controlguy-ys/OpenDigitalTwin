@@ -38,6 +38,8 @@ function compareFinding(
     compareNumberOrNull(first.sampleIndex, second.sampleIndex) ||
     (first.kind === second.kind ? 0 : first.kind === 'collision' ? -1 : 1) ||
     compareString(first.pairKey, second.pairKey) ||
+    compareString(first.firstEntityId, second.firstEntityId) ||
+    compareString(first.secondEntityId, second.secondEntityId) ||
     compareString(first.firstBoxId, second.firstBoxId) ||
     compareString(first.secondBoxId, second.secondBoxId) ||
     first.separationM - second.separationM

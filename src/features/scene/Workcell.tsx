@@ -25,8 +25,7 @@ import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { workbenchToGeometryEntity } from '../collision/scene-entity-adapter'
 import type { ExternalCollisionEntityId } from '../interaction/interaction-store'
 import {
-  selectCollisionNavigationFindings,
-  selectFocusedCollisionPairKey,
+  createCollisionEntityOutlineSelector,
   useCollisionStore,
 } from '../collision/collision-store'
 
@@ -46,17 +45,14 @@ const WORKBENCH_LEGS = [
   [0.78, 0.48],
 ] as const
 
+const selectWorkbenchCollisionOutline =
+  createCollisionEntityOutlineSelector('workcell:workbench')
+
 const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
-  const collisionFindings = useCollisionStore(
-    selectCollisionNavigationFindings,
-  )
-  const focusedPairKey = useCollisionStore(selectFocusedCollisionPairKey)
-  const outlineState = getExternalEntityOutlineState(
-    'workcell:workbench',
-    false,
-    collisionFindings,
-    focusedPairKey,
-  )
+  const collisionOutline = useCollisionStore(selectWorkbenchCollisionOutline)
+  const outlineState =
+    collisionOutline ??
+    getExternalEntityOutlineState('workcell:workbench', false, [])
   const collision = outlineState === 'collision'
   const nearMiss = outlineState === 'near-miss'
   return (

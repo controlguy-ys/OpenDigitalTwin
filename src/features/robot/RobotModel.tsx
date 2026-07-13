@@ -24,8 +24,7 @@ import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { robotLinkToGeometryEntity } from '../collision/scene-entity-adapter'
 import {
-  selectCollisionNavigationFindings,
-  selectFocusedCollisionPairKey,
+  createCollisionEntityOutlineSelector,
   useCollisionStore,
 } from '../collision/collision-store'
 
@@ -42,6 +41,16 @@ export const ROBOT_LINK_ASSETS = [
 export const ROBOT_LINK_URLS: string[] = ROBOT_LINK_ASSETS.map(
   ({ url }) => url,
 )
+
+const ROBOT_COLLISION_OUTLINE_SELECTORS = {
+  LINK00: createCollisionEntityOutlineSelector('robot-link:LINK00'),
+  LINK01: createCollisionEntityOutlineSelector('robot-link:LINK01'),
+  LINK02: createCollisionEntityOutlineSelector('robot-link:LINK02'),
+  LINK03: createCollisionEntityOutlineSelector('robot-link:LINK03'),
+  LINK04: createCollisionEntityOutlineSelector('robot-link:LINK04'),
+  LINK05: createCollisionEntityOutlineSelector('robot-link:LINK05'),
+  LINK06: createCollisionEntityOutlineSelector('robot-link:LINK06'),
+} as const satisfies Record<RobotLinkId, ReturnType<typeof createCollisionEntityOutlineSelector>>
 
 export interface RobotRigRegistration {
   readonly rig: RobotRig
@@ -218,10 +227,15 @@ export function RobotModel({ registerRig }: RobotModelProps) {
   const j5 = useRobotStore(jointAngleSelectors[4])
   const j6 = useRobotStore(jointAngleSelectors[5])
   const selection = useInteractionStore((state) => state.selection)
-  const collisionFindings = useCollisionStore(
-    selectCollisionNavigationFindings,
-  )
-  const focusedPairKey = useCollisionStore(selectFocusedCollisionPairKey)
+  const robotCollisionOutlines = {
+    LINK00: useCollisionStore(ROBOT_COLLISION_OUTLINE_SELECTORS.LINK00),
+    LINK01: useCollisionStore(ROBOT_COLLISION_OUTLINE_SELECTORS.LINK01),
+    LINK02: useCollisionStore(ROBOT_COLLISION_OUTLINE_SELECTORS.LINK02),
+    LINK03: useCollisionStore(ROBOT_COLLISION_OUTLINE_SELECTORS.LINK03),
+    LINK04: useCollisionStore(ROBOT_COLLISION_OUTLINE_SELECTORS.LINK04),
+    LINK05: useCollisionStore(ROBOT_COLLISION_OUTLINE_SELECTORS.LINK05),
+    LINK06: useCollisionStore(ROBOT_COLLISION_OUTLINE_SELECTORS.LINK06),
+  } as const satisfies Record<RobotLinkId, 'collision' | 'near-miss' | null>
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
   const selectRobotLink = useInteractionStore((state) => state.selectRobotLink)
 
@@ -299,12 +313,8 @@ export function RobotModel({ registerRig }: RobotModelProps) {
           center: geometry.collisionCenter,
           halfExtents: geometry.collisionHalfExtents,
         }
-    const outlineState = getRobotLinkOutlineState(
-      selection,
-      id,
-      collisionFindings,
-      focusedPairKey,
-    )
+    const outlineState =
+      robotCollisionOutlines[id] ?? getRobotLinkOutlineState(selection, id, [])
     const selected = outlineState === 'selection'
     const collision = outlineState === 'collision'
     const nearMiss = outlineState === 'near-miss'

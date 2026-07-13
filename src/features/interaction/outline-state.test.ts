@@ -65,16 +65,14 @@ describe('semantic interaction outlines', () => {
       getRobotLinkOutlineState(
         null,
         'LINK04',
-        findings,
-        'object:fixture-01|robot-link:LINK03',
+        [findings[1]!],
       ),
     ).toBeNull()
     expect(
       getRobotLinkOutlineState(
         null,
         'LINK03',
-        findings,
-        'object:fixture-01|robot-link:LINK03',
+        [findings[1]!],
       ),
     ).toBe('near-miss')
   })

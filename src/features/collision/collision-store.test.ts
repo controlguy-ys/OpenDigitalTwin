@@ -5,7 +5,10 @@ import type {
   CollisionPolicy,
 } from '../../domain/collision/collision'
 import {
+  collisionFindingKey,
   createCollisionStore,
+  createCollisionEntityOutlineSelector,
+  selectSelectedCollisionFinding,
   type CollisionValidationReport,
 } from './collision-store'
 
@@ -183,5 +186,61 @@ describe('collision store', () => {
 
     expect(store.getState().currentFindings).toBe(findings)
     expect(store.getState().diagnostics).toBe(diagnostics)
+  })
+
+  it('tracks selection by full finding identity across report reorder and stale state', () => {
+    const store = createCollisionStore()
+    const collision = { ...FINDING, sampleIndex: 2, timeMs: 100 }
+    const nearMiss: CollisionFinding = {
+      ...FINDING,
+      kind: 'near-miss',
+      separationM: 0.012,
+      sampleIndex: 8,
+      timeMs: 400,
+    }
+    const report = (findings: readonly CollisionFinding[]) => ({
+      revision: 'sequence-17',
+      sampleCount: 12,
+      findings,
+      truncated: false,
+    })
+
+    store.getState().setValidationReport(report([collision, nearMiss]))
+    store.getState().setSelectedFindingIndex(1)
+    const selectedKey = store.getState().selectedFindingKey
+    expect(selectedKey).toBe(collisionFindingKey(nearMiss))
+    expect(
+      createCollisionEntityOutlineSelector('object:cup-01')(store.getState()),
+    ).toBe('near-miss')
+
+    store.getState().markValidationReportStale('Worker stopped.')
+    store.getState().setValidationReport(report([nearMiss, collision]))
+
+    expect(store.getState().selectedFindingIndex).toBe(0)
+    expect(store.getState().selectedFindingKey).toBe(selectedKey)
+    expect(selectSelectedCollisionFinding(store.getState())).toEqual(nearMiss)
+  })
+
+  it('resets selection to the first exact row when a replacement removes it', () => {
+    const store = createCollisionStore()
+    const removed = { ...FINDING, sampleIndex: 3, timeMs: 150 }
+    const retained = { ...FINDING, sampleIndex: 4, timeMs: 200 }
+    store.getState().replaceCollisionState({
+      policy: POLICY,
+      currentFindings: [removed, retained],
+      diagnostics: [],
+    })
+    store.getState().setSelectedFindingIndex(1)
+
+    store.getState().replaceCollisionState({
+      policy: POLICY,
+      currentFindings: [removed],
+      diagnostics: [],
+    })
+
+    expect(store.getState().selectedFindingIndex).toBe(0)
+    expect(store.getState().selectedFindingKey).toBe(
+      collisionFindingKey(removed),
+    )
   })
 })

@@ -29,8 +29,7 @@ import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { equipmentRecordToGeometryEntity } from '../collision/scene-entity-adapter'
 import { runtimeGraspParticipants } from '../interaction/grasp-participants'
 import {
-  selectCollisionNavigationFindings,
-  selectFocusedCollisionPairKey,
+  createCollisionEntityOutlineSelector,
   useCollisionStore,
 } from '../collision/collision-store'
 import type { OutlineState } from '../interaction/outline-state'
@@ -104,10 +103,11 @@ const EquipmentInstance = memo(function EquipmentInstance({
 }: EquipmentInstanceProps) {
   const objectRef = useRef<Group>(null)
   const selection = useInteractionStore((state) => state.selection)
-  const collisionFindings = useCollisionStore(
-    selectCollisionNavigationFindings,
+  const collisionOutlineSelector = useMemo(
+    () => createCollisionEntityOutlineSelector(entityId),
+    [entityId],
   )
-  const focusedPairKey = useCollisionStore(selectFocusedCollisionPairKey)
+  const collisionOutline = useCollisionStore(collisionOutlineSelector)
   const selectEquipment = useInteractionStore((state) => state.selectEquipment)
   const previewTransform = useEquipmentStore(
     (state) => state.previewEquipmentTransform,
@@ -123,12 +123,8 @@ const EquipmentInstance = memo(function EquipmentInstance({
   )
   const selected =
     selection?.kind === 'equipment' && selection.entityId === entityId
-  const outlineState = getExternalEntityOutlineState(
-    entityId,
-    selected,
-    collisionFindings,
-    focusedPairKey,
-  )
+  const outlineState =
+    collisionOutline ?? getExternalEntityOutlineState(entityId, selected, [])
   const collision = outlineState === 'collision'
 
   const registerObject = useCallback(

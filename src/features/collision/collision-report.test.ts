@@ -93,4 +93,25 @@ describe('collision report encoders', () => {
     expect(decoded.findings).toHaveLength(COLLISION_REPORT_MAX_FINDINGS)
     expect(csvRows).toHaveLength(COLLISION_REPORT_MAX_FINDINGS + 1)
   })
+
+  it('is byte-stable for shuffled rows with reversed Entity orientation', () => {
+    const canonical = finding(
+      'object:a|robot-link:LINK02',
+      'collision',
+      -0.002,
+      { firstBoxId: 'main', secondBoxId: 'main' },
+    )
+    const reversed: CollisionFinding = {
+      ...canonical,
+      firstEntityId: canonical.secondEntityId,
+      secondEntityId: canonical.firstEntityId,
+    }
+
+    expect(encodeCollisionReportJson([canonical, reversed])).toBe(
+      encodeCollisionReportJson([reversed, canonical]),
+    )
+    expect(encodeCollisionReportCsv([canonical, reversed])).toBe(
+      encodeCollisionReportCsv([reversed, canonical]),
+    )
+  })
 })

@@ -96,3 +96,29 @@ Download tests verify that both generated Blob URLs are revoked.
 - Vite retains the pre-existing OCCT `path` / `crypto` browser-externalization
   messages and large-chunk warning; neither is introduced by this task and the
   production build succeeds.
+
+## Fix Review
+
+The post-implementation review identified three precision and render-isolation
+gaps. They were corrected with a second RED-to-GREEN cycle:
+
+- selected navigation now owns a stable full-row key containing both Entity
+  IDs, both Box IDs, kind, signed clearance, sample index, and time. Reordered
+  reports preserve the exact row; stale reports preserve selection; removal or
+  source replacement resets to the first valid row;
+- collision, near-miss, and selection color now come from the exact selected
+  finding. A near-miss row and collision row sharing one pair no longer collapse
+  to the collision severity;
+- Robot Link, Equipment/Object, held Object, and Workbench rendering subscribe
+  only to primitive per-Entity outline selectors. Unrelated navigation keeps
+  unrelated participants and the top-level Canvas boundary from rerendering;
+- report ordering now includes `firstEntityId` and `secondEntityId` before Box
+  tie-breaks, making shuffled reversed-orientation JSON and CSV byte-identical.
+
+Review RED result: 3 files failed with 5 expected failures and 11 existing
+tests passing. Review GREEN results:
+
+- focused: 5 files, 24 tests passed;
+- expanded collision/UI integration: 23 files, 104 tests passed;
+- full suite: 69 files, 390 tests passed with 0 failures;
+- lint, production build, and diff-check passed.

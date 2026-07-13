@@ -34,15 +34,14 @@ import {
   useInteractionStore,
 } from './interaction-store'
 import { updateEquipmentObjectRegistration } from './equipment-object-registry'
-import { getExternalEntityOutlineState } from './outline-state'
+import type { OutlineState } from './outline-state'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { worldTransformToMcpLocal } from '../frames/frame-runtime'
 import {
   runtimeGraspParticipants,
 } from './grasp-participants'
 import {
-  selectCollisionNavigationFindings,
-  selectFocusedCollisionPairKey,
+  createCollisionEntityOutlineSelector,
   useCollisionStore,
 } from '../collision/collision-store'
 import {
@@ -102,10 +101,11 @@ export function GraspController({
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const gripOffset = useInteractionStore((state) => state.gripOffset)
   const selection = useInteractionStore((state) => state.selection)
-  const collisionFindings = useCollisionStore(
-    selectCollisionNavigationFindings,
+  const heldOutlineSelector = useMemo(
+    () => createCollisionEntityOutlineSelector(heldEntityId ?? ''),
+    [heldEntityId],
   )
-  const focusedPairKey = useCollisionStore(selectFocusedCollisionPairKey)
+  const heldCollisionOutline = useCollisionStore(heldOutlineSelector)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
   const heldObjectOwnerRef = useRef<Object3D>(null)
   const previousGripperOpen = useRef(true)
@@ -286,15 +286,10 @@ export function GraspController({
     heldRecord !== undefined &&
     selection?.kind === 'equipment' &&
     selection.entityId === heldEntityId
-  const heldOutlineState =
+  const heldOutlineState: OutlineState =
     heldRecord === undefined
       ? null
-      : getExternalEntityOutlineState(
-          heldEntityId!,
-          heldSelected,
-          collisionFindings,
-          focusedPairKey,
-        )
+      : heldCollisionOutline ?? (heldSelected ? 'selection' : null)
   const registerHeldObject = useCallback(
     (object: Group | null) => {
       if (heldRecord === undefined || heldEntityId === null) {

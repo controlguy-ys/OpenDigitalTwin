@@ -29,6 +29,7 @@ export interface CollisionStoreState extends CollisionStateSnapshot {
   readonly validationReportStale: boolean
   readonly validationReportError: string | null
   readonly selectedFindingIndex: number | null
+  readonly selectedFindingKey: string | null
   readonly pausePlaybackOnCollision: boolean
   replaceCollisionState(snapshot: CollisionStateSnapshot): void
   setCollisionEnabled(enabled: boolean): void
@@ -89,20 +90,48 @@ function ownedValidationReport(
   })
 }
 
-function navigationFindingCount(state: CollisionStoreState): number {
-  return state.validationReport?.findings.length ?? state.currentFindings.length
+export function collisionFindingKey(finding: CollisionFinding): string {
+  return JSON.stringify([
+    finding.firstEntityId,
+    finding.secondEntityId,
+    finding.firstBoxId,
+    finding.secondBoxId,
+    finding.kind,
+    finding.separationM,
+    finding.sampleIndex,
+    finding.timeMs,
+  ])
 }
 
-function clampedFindingIndex(
-  index: number | null,
-  findingCount: number,
-): number | null {
-  if (findingCount === 0) return null
-  if (index === null) return 0
+function selectedFindingPatch(
+  findings: readonly CollisionFinding[],
+  selectedFindingKey: string | null,
+  fallbackIndex: number | null,
+): Pick<CollisionStoreState, 'selectedFindingIndex' | 'selectedFindingKey'> {
+  if (findings.length === 0) {
+    return { selectedFindingIndex: null, selectedFindingKey: null }
+  }
+  if (selectedFindingKey !== null) {
+    const preservedIndex = findings.findIndex(
+      (finding) => collisionFindingKey(finding) === selectedFindingKey,
+    )
+    if (preservedIndex >= 0) {
+      return { selectedFindingIndex: preservedIndex, selectedFindingKey }
+    }
+    return {
+      selectedFindingIndex: 0,
+      selectedFindingKey: collisionFindingKey(findings[0]!),
+    }
+  }
+  const index = fallbackIndex ?? 0
   if (!Number.isInteger(index)) {
     throw new Error('Selected collision finding index must be an integer.')
   }
-  return Math.min(Math.max(index, 0), findingCount - 1)
+  const clampedIndex = Math.min(Math.max(index, 0), findings.length - 1)
+  return {
+    selectedFindingIndex: clampedIndex,
+    selectedFindingKey: collisionFindingKey(findings[clampedIndex]!),
+  }
 }
 
 function staleReportPatch(state: CollisionStoreState) {
@@ -125,18 +154,19 @@ function collisionStateCreator(
     validationReportStale: false,
     validationReportError: null,
     selectedFindingIndex: null,
+    selectedFindingKey: null,
     pausePlaybackOnCollision: true,
     replaceCollisionState: (candidate) => {
       const snapshot = ownedSnapshot(candidate)
       set((state) => ({
         ...snapshot,
-        selectedFindingIndex:
-          state.validationReport === null
-            ? clampedFindingIndex(
-                state.selectedFindingIndex,
-                snapshot.currentFindings.length,
-              )
-            : state.selectedFindingIndex,
+        ...(state.validationReport === null
+          ? selectedFindingPatch(
+              snapshot.currentFindings,
+              state.selectedFindingKey,
+              state.selectedFindingIndex,
+            )
+          : {}),
       }))
     },
     setCollisionEnabled: (enabled) => {
@@ -182,9 +212,10 @@ function collisionStateCreator(
         validationReport: owned,
         validationReportStale: false,
         validationReportError: null,
-        selectedFindingIndex: clampedFindingIndex(
+        ...selectedFindingPatch(
+          owned?.findings ?? state.currentFindings,
+          state.selectedFindingKey,
           state.selectedFindingIndex,
-          owned?.findings.length ?? state.currentFindings.length,
         ),
       }))
     },
@@ -202,12 +233,12 @@ function collisionStateCreator(
       )
     },
     setSelectedFindingIndex: (index) => {
-      set({
-        selectedFindingIndex: clampedFindingIndex(
-          index,
-          navigationFindingCount(get()),
-        ),
-      })
+      const findings = selectCollisionNavigationFindings(get())
+      if (index === null) {
+        set({ selectedFindingIndex: null, selectedFindingKey: null })
+        return
+      }
+      set(selectedFindingPatch(findings, null, index))
     },
     setPausePlaybackOnCollision: (enabled) => {
       if (typeof enabled !== 'boolean') {
@@ -232,10 +263,16 @@ export function selectSelectedCollisionFinding(
   return index === null ? null : findings[index] ?? null
 }
 
-export function selectFocusedCollisionPairKey(
-  state: CollisionStoreState,
-): string | null {
-  return selectSelectedCollisionFinding(state)?.pairKey ?? null
+export type CollisionOutlineKind = CollisionFinding['kind'] | null
+
+export function createCollisionEntityOutlineSelector(entityId: string) {
+  return (state: CollisionStoreState): CollisionOutlineKind => {
+    const finding = selectSelectedCollisionFinding(state)
+    return finding !== null &&
+      (finding.firstEntityId === entityId || finding.secondEntityId === entityId)
+      ? finding.kind
+      : null
+  }
 }
 
 export function createCollisionStore() {
