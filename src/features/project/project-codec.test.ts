@@ -1,13 +1,31 @@
-import { unzipSync, zipSync } from 'fflate'
-import { describe, expect, it } from 'vitest'
+import { zipSync } from 'fflate'
+import { describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../../domain/robot/crb15000'
 import {
   WORKCELL_PROJECT_FORMAT,
   WORKCELL_PROJECT_SCHEMA_VERSION_V2 as WORKCELL_PROJECT_SCHEMA_VERSION,
-  WORKCELL_PROJECT_SCHEMA_VERSION_V1,
   type LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
 } from '../../domain/project/project'
-import { decodeWorkcellProject, encodeWorkcellProject } from './project-codec'
+import {
+  createProjectSourceMigrationFoundationInternalV1,
+  createProjectSourceStagingService,
+} from '../../domain/project/project-v3'
+import {
+  createProjectHashService,
+  createProjectRevisionIdentityHasher,
+  createProjectSourceDigest,
+} from '../../lib/hash/sha256'
+import {
+  createProjectArchiveWorkerSession,
+  type ProjectArchiveWorkerLike,
+  type ProjectArchiveWorkerRequest,
+  type ProjectArchiveWorkerResponse,
+} from './project-archive-worker'
+import {
+  decodeLegacyRuntimeProjectV2,
+  decodeWorkcellProject,
+  encodeLegacyRuntimeProjectV2,
+} from './project-codec'
 
 const LINKS = [
   'LINK00', 'LINK01', 'LINK02', 'LINK03', 'LINK04', 'LINK05', 'LINK06',
@@ -133,111 +151,151 @@ function snapshot(): CurrentProjectSnapshot {
   }
 }
 
-const decoder = new TextDecoder()
-const encoder = new TextEncoder()
+class SessionWorker implements ProjectArchiveWorkerLike {
+  onmessage: ((event: MessageEvent<ProjectArchiveWorkerResponse>) => void) | null = null
+  onerror: ((event: ErrorEvent) => void) | null = null
+  onmessageerror: ((event: MessageEvent<unknown>) => void) | null = null
+  private readonly session = createProjectArchiveWorkerSession((response, transfer = []) => {
+    const owned = structuredClone(response, { transfer })
+    queueMicrotask(() => this.onmessage?.({ data: owned } as MessageEvent<ProjectArchiveWorkerResponse>))
+  })
 
-function parseEntry<T>(entries: Record<string, Uint8Array>, path: string): T {
-  return JSON.parse(decoder.decode(entries[path]!)) as T
+  postMessage(message: ProjectArchiveWorkerRequest, transfer: Transferable[] = []): void {
+    const owned = structuredClone(message, { transfer })
+    queueMicrotask(() => this.session.handle(owned))
+  }
+
+  terminate(): void {}
 }
 
-function writeEntry(
-  entries: Record<string, Uint8Array>,
-  path: string,
-  value: unknown,
-): void {
-  entries[path] = encoder.encode(JSON.stringify(value))
+const workerFactory = (): ProjectArchiveWorkerLike => new SessionWorker()
+const testEncoder = new TextEncoder()
+
+function legacyJson(value: unknown): Uint8Array {
+  return testEncoder.encode(JSON.stringify(value))
 }
 
-describe('.wdtwin archive codec', () => {
-  it('round-trips JSON records and raw STEP bytes', async () => {
+function legacyArchive(version: 1 | 2): Uint8Array {
+  const source = structuredClone(snapshot())
+  const entries: Record<string, Uint8Array> = {}
+  entries['manifest.json'] = legacyJson({ ...source.manifest, schemaVersion: version })
+  entries['frames.json'] = legacyJson(source.frames)
+  entries['robot/configuration.json'] = legacyJson({
+    name: source.robot.name,
+    basePosition: source.robot.basePosition,
+    baseRotationDeg: source.robot.baseRotationDeg,
+    joints: source.robot.joints,
+  })
+  entries['robot/links/index.json'] = legacyJson(source.robot.links.map((link) => {
+    const { sourceBytes, ...metadata } = link
+    const archived = { ...metadata, archivePath: `robot/links/${link.linkId}.step` }
+    if (version === 1) delete (archived as { collisionBoxes?: unknown }).collisionBoxes
+    entries[archived.archivePath] = new Uint8Array(sourceBytes)
+    return archived
+  }))
+  entries['objects/assets.json'] = legacyJson(source.objectAssets.map((asset, index) => {
+    const { sourceBytes, ...metadata } = asset
+    const archived = {
+      ...metadata,
+      archivePath: `objects/assets/${index.toString().padStart(4, '0')}.step`,
+    }
+    if (version === 1) delete (archived as { collisionBoxes?: unknown }).collisionBoxes
+    entries[archived.archivePath] = new Uint8Array(sourceBytes)
+    return archived
+  }))
+  entries['objects/instances.json'] = legacyJson(source.objectInstances)
+  entries['poses/sequences.json'] = legacyJson(source.poses)
+  entries['opcua/bindings.json'] = legacyJson(source.opcUa)
+  if (version === 2) entries['collision/policy.json'] = legacyJson(source.collisionPolicy)
+  return zipSync(entries, { mtime: new Date(1980, 0, 1, 0, 0, 0, 0) })
+}
+
+function migrationCodecDependencies() {
+  const hashService = createProjectHashService({ subtle: crypto.subtle })
+  const sourceDigest = createProjectSourceDigest(hashService)
+  const digestSource = vi.fn(sourceDigest.digestSource.bind(sourceDigest))
+  const foundation = createProjectSourceMigrationFoundationInternalV1({
+    sourceDigest: { digestSource },
+    lockedLegacyAnalyzer: async ({ tokenId, generation, sourceBytes }) => ({
+      tokenId,
+      generation,
+      sourceBytes,
+      analysis: { detectedUnit: 'meter', meshIndices: [0] },
+    }),
+  })
+  const projectRevisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+  const legacyMigration = {
+    sourceStaging: foundation.sourceStaging,
+    projectRevisionIdentityHasher,
+    builtInEquipmentDefaults: [],
+    builtInEquipmentTransformDefaults: [],
+  }
+  return {
+    digestSource,
+    options: {
+      workerFactory,
+      sourceStaging: foundation.sourceStaging,
+      projectRevisionIdentityHasher,
+      legacyMigration,
+    },
+  }
+}
+
+describe('.wdtwin streaming legacy dispatch', () => {
+  it('keeps the temporary V2 browser runtime on streaming Blob/File transport', async () => {
     const source = snapshot()
-    const encoded = await encodeWorkcellProject(source)
-    const decoded = await decodeWorkcellProject(encoded)
+    const archive = await encodeLegacyRuntimeProjectV2(source, { workerFactory })
+    const file = new File([archive], 'runtime.wdtwin')
+    const wholeFileRead = vi.spyOn(file, 'arrayBuffer').mockRejectedValue(
+      new Error('whole-file reads are forbidden'),
+    )
 
+    const decoded = await decodeLegacyRuntimeProjectV2(file, { workerFactory })
+
+    expect(archive).toBeInstanceOf(Blob)
     expect(decoded.manifest).toEqual(source.manifest)
-    expect(decoded.robot.links.map(({ sourceBytes }) =>
-      Array.from(new Uint8Array(sourceBytes))),
-    ).toEqual(source.robot.links.map(({ sourceBytes }) =>
-      Array.from(new Uint8Array(sourceBytes))))
-    expect(Array.from(new Uint8Array(decoded.objectAssets[0]!.sourceBytes))).toEqual([
-      8, 9, 10,
-    ])
-    expect(decoded.objectInstances).toEqual(source.objectInstances)
-    expect(decoded.poses).toEqual(source.poses)
-    expect(decoded.robot.links[0]!.collisionBoxes).toEqual(
-      source.robot.links[0]!.collisionBoxes,
+    expect(new Uint8Array(decoded.robot.links[0]!.sourceBytes)).toEqual(
+      new Uint8Array(source.robot.links[0]!.sourceBytes),
     )
-    expect(decoded.objectAssets[0]!.collisionBoxes).toEqual(
-      source.objectAssets[0]!.collisionBoxes,
-    )
-    expect(decoded.collisionPolicy).toEqual(source.collisionPolicy)
-
-    const entries = unzipSync(encoded)
-    expect(parseEntry(entries, 'collision/policy.json')).toEqual(
-      source.collisionPolicy,
-    )
+    expect(wholeFileRead).not.toHaveBeenCalled()
   })
 
-  it('decodes V1 archives and atomically migrates legacy bounds to V2', async () => {
-    const encoded = await encodeWorkcellProject(snapshot())
-    const entries = unzipSync(encoded)
-    const manifest = parseEntry<Record<string, unknown>>(entries, 'manifest.json')
-    manifest.schemaVersion = WORKCELL_PROJECT_SCHEMA_VERSION_V1
-    writeEntry(entries, 'manifest.json', manifest)
-    const links = parseEntry<Array<Record<string, unknown>>>(
-      entries,
-      'robot/links/index.json',
-    )
-    links.forEach((link) => delete link.collisionBoxes)
-    writeEntry(entries, 'robot/links/index.json', links)
-    const assets = parseEntry<Array<Record<string, unknown>>>(
-      entries,
-      'objects/assets.json',
-    )
-    assets.forEach((asset) => delete asset.collisionBoxes)
-    writeEntry(entries, 'objects/assets.json', assets)
-    delete entries['collision/policy.json']
+  it.each([1, 2] as const)('streams and migrates a V%s archive to byte-free V3', async (version) => {
+    const { options, digestSource } = migrationCodecDependencies()
 
-    const migrated = await decodeWorkcellProject(zipSync(entries))
+    const decoded = await decodeWorkcellProject(legacyArchive(version), options)
 
-    expect(migrated.manifest.schemaVersion).toBe(WORKCELL_PROJECT_SCHEMA_VERSION)
-    expect(migrated.robot.links[0]!.collisionBoxes).toEqual([{
-      id: 'default',
-      center: [0, 0, 0],
-      halfExtents: [0.1, 0.1, 0.1],
-      quaternion: [0, 0, 0, 1],
-    }])
-    expect(migrated.objectAssets[0]!.collisionBoxes[0]!.id).toBe('default')
-    expect(migrated.collisionPolicy.warningDistanceM).toBe(0.02)
+    expect(decoded.projection.manifest.schemaVersion).toBe(3)
+    expect(decoded.preparedSourceGroups).toHaveLength(8)
+    expect(digestSource).toHaveBeenCalledTimes(8)
+    expect(JSON.stringify(decoded)).not.toContain('sourceBytes')
   })
 
-  it('rejects invalid V2 canonical Box data instead of using its legacy mirror', async () => {
-    const entries = unzipSync(await encodeWorkcellProject(snapshot()))
-    const links = parseEntry<Array<Record<string, unknown>>>(
-      entries,
-      'robot/links/index.json',
-    )
-    links[0]!.collisionBoxes = []
-    writeEntry(entries, 'robot/links/index.json', links)
+  it('requires the complete legacy bundle before expanding or hashing STEP bytes', async () => {
+    const hashService = createProjectHashService({ subtle: crypto.subtle })
+    const sourceDigest = createProjectSourceDigest(hashService)
+    const digestSource = vi.fn(sourceDigest.digestSource.bind(sourceDigest))
+    const sourceStaging = createProjectSourceStagingService({
+      sourceDigest: { digestSource },
+    })
 
-    await expect(decodeWorkcellProject(zipSync(entries))).rejects.toThrow(/Box/i)
+    await expect(decodeWorkcellProject(legacyArchive(2), {
+      workerFactory,
+      sourceStaging,
+      projectRevisionIdentityHasher: createProjectRevisionIdentityHasher(hashService),
+    })).rejects.toMatchObject({ code: 'PROJECT_LEGACY_MIGRATION_DEPENDENCIES_REQUIRED' })
+    expect(digestSource).not.toHaveBeenCalled()
   })
 
-  it('requires the collision policy entry for V2 archives', async () => {
-    const entries = unzipSync(await encodeWorkcellProject(snapshot()))
-    delete entries['collision/policy.json']
+  it('rejects a mismatched legacy staging identity before archive reads or hashes', async () => {
+    const first = migrationCodecDependencies()
+    const second = migrationCodecDependencies()
 
-    await expect(decodeWorkcellProject(zipSync(entries))).rejects.toThrow(
-      /collision\/policy\.json/i,
-    )
-  })
-
-  it('rejects a corrupt archive and path traversal entries', async () => {
-    await expect(
-      decodeWorkcellProject(new Uint8Array([1, 2, 3])),
-    ).rejects.toThrow(/archive/i)
-
-    const traversal = zipSync({ '../manifest.json': new Uint8Array([1]) })
-    await expect(decodeWorkcellProject(traversal)).rejects.toThrow(/path/i)
+    await expect(decodeWorkcellProject(legacyArchive(1), {
+      ...first.options,
+      legacyMigration: second.options.legacyMigration,
+    })).rejects.toMatchObject({ code: 'PROJECT_LEGACY_MIGRATION_DEPENDENCIES_INVALID' })
+    expect(first.digestSource).not.toHaveBeenCalled()
+    expect(second.digestSource).not.toHaveBeenCalled()
   })
 })

@@ -226,7 +226,7 @@ it('rejects an invalid decoded snapshot before staging or mutating active state'
   }
   const store = createProjectStore(db, runtime, {
     decode: vi.fn(async () => incoming),
-    encode: vi.fn(async () => new Uint8Array([1])),
+    encode: vi.fn(async () => new Blob([new Uint8Array([1])])),
   })
   await store.getState().hydrate()
 
@@ -257,7 +257,7 @@ it('keeps the active project unchanged when imported geometry staging fails', as
   }
   const store = createProjectStore(db, runtime, {
     decode: vi.fn(async () => incoming),
-    encode: vi.fn(async () => new Uint8Array([1])),
+    encode: vi.fn(async () => new Blob([new Uint8Array([1])])),
   })
   await store.getState().hydrate()
 

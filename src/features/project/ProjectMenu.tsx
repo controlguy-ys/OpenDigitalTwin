@@ -6,31 +6,20 @@ import type { ProjectStoreState } from './project-store'
 
 export interface ProjectMenuProps {
   store?: StoreApi<ProjectStoreState>
-  download?(bytes: Uint8Array, fileName: string): void
+  download?(blob: Blob, fileName: string): void
 }
 
 function safeFileName(name: string): string {
   return name.replace(/[<>:"/\\|?*]/g, '_').trim() || 'workcell'
 }
 
-function downloadProject(bytes: Uint8Array, fileName: string): void {
-  const blob = new Blob([bytes.slice().buffer], { type: 'application/zip' })
+function downloadProject(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
   anchor.download = fileName
   anchor.click()
   URL.revokeObjectURL(url)
-}
-
-function readFile(file: File): Promise<ArrayBuffer> {
-  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer()
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(reader.error ?? new Error('Unable to read project file.'))
-    reader.onload = () => resolve(reader.result as ArrayBuffer)
-    reader.readAsArrayBuffer(file)
-  })
 }
 
 export function ProjectMenu({
@@ -45,7 +34,7 @@ export function ProjectMenu({
     const file = event.currentTarget.files?.[0]
     event.currentTarget.value = ''
     if (file === undefined) return
-    await state.importProject(await readFile(file)).catch(() => undefined)
+    await state.importProject(file).catch(() => undefined)
   }
 
   return (
@@ -75,9 +64,9 @@ export function ProjectMenu({
         onClick={() => {
           void state
             .exportActiveProject()
-            .then((bytes) =>
+            .then((blob) =>
               download(
-                bytes,
+                blob,
                 `${safeFileName(state.activeProjectName ?? 'workcell')}.wdtwin`,
               ),
             )

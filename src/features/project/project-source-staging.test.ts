@@ -143,6 +143,83 @@ async function validV3Project(): Promise<WorkcellProjectSnapshotV3> {
   return project
 }
 
+function archiveProjection(
+  project: WorkcellProjectSnapshotV3,
+  objectDigests: ReadonlyMap<string, string> = new Map(),
+) {
+  const owned = structuredClone(project) as unknown as Record<string, unknown>
+  const robot = owned.robot as Record<string, unknown>
+  robot.sources = (robot.sources as Record<string, unknown>[]).map((source) => {
+    const { sourceBytes: _sourceBytes, ...metadata } = source
+    return metadata
+  })
+  owned.objectAssets = (owned.objectAssets as Record<string, unknown>[]).map((asset) => {
+    if (asset.sourceKind !== 'step') return asset
+    const { sourceBytes: _sourceBytes, ...metadata } = asset
+    return { ...metadata, sourceSha256: objectDigests.get(String(asset.id)) }
+  })
+  return owned as unknown as Parameters<
+    ReturnType<typeof createProjectSourceStagingService>['prepareArchiveProject']
+  >[0]
+}
+
+async function twoSourceArchiveFixture() {
+  const project = await validV3Project() as unknown as Mutable<WorkcellProjectSnapshotV3>
+  project.objectAssets = [{
+    id: 'asset-a',
+    name: 'Asset A',
+    sourceKind: 'step',
+    sourceFileName: 'asset.step',
+    sourceBytes: new TextEncoder().encode('abc').buffer,
+    importScale: 1,
+    originMode: 'source',
+    colliderCenter: [0, 0, 0],
+    collisionHalfExtents: [0.1, 0.1, 0.1],
+    collisionBoxes: [{
+      id: 'body',
+      center: [0, 0, 0],
+      halfExtents: [0.1, 0.1, 0.1],
+      quaternion: [0, 0, 0, 1],
+    }],
+    statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
+  }]
+  const projection = archiveProjection(project, new Map([['asset-a', DIGEST_ABC]]))
+  const plans = [{
+    namespace: 'robot' as const,
+    entryPath: `robot/sources/${DIGEST_ABC}.step`,
+    sha256: DIGEST_ABC,
+    ownerKeys: [`robot-source:${DIGEST_ABC}` as const],
+    byteLength: 3,
+  }, {
+    namespace: 'object' as const,
+    entryPath: `objects/assets/${DIGEST_ABC}.step`,
+    sha256: DIGEST_ABC,
+    ownerKeys: ['object-asset:asset-a' as const],
+    byteLength: 3,
+  }]
+  return { projection, plans }
+}
+
+function streamedArchiveInputs<const Inputs extends readonly {
+  readonly namespace: 'robot' | 'object'
+  readonly entryPath: string
+  readonly sha256: string
+  readonly ownerKeys: readonly (`robot-source:${string}` | `object-asset:${string}`)[]
+  readonly bytes: ArrayBuffer
+}[]>(inputs: Inputs) {
+  const bytesByPath = new Map(inputs.map(({ entryPath, bytes }) => [entryPath, bytes]))
+  const plans = inputs.map(({ bytes, ...source }) => ({
+    ...source,
+    byteLength: bytes.byteLength,
+  }))
+  const readBytes = vi.fn(async ({ entryPath }: { readonly entryPath: string }) => {
+    const bytes = bytesByPath.get(entryPath)
+    if (bytes === undefined) throw new Error(`Missing test source ${entryPath}.`)
+    return bytes
+  })
+  return { plans, readBytes }
+}
+
 function nativeRevisionIdentityHasher() {
   return createProjectRevisionIdentityHasher(createProjectHashService({
     subtle: globalThis.crypto.subtle,
@@ -173,6 +250,339 @@ function nativeDigest(): ProjectSourceDigest {
 }
 
 describe('ProjectSourceStagingService', () => {
+  it('loads and stages one archive source before requesting the next payload', async () => {
+    const { projection, plans } = await twoSourceArchiveFixture()
+    let firstDigestStarted!: () => void
+    const firstDigest = new Promise<void>((resolve) => { firstDigestStarted = resolve })
+    let releaseFirstDigest!: () => void
+    const firstDigestGate = new Promise<void>((resolve) => { releaseFirstDigest = resolve })
+    let digestCalls = 0
+    const digestSource = vi.fn(async () => {
+      digestCalls += 1
+      if (digestCalls === 1) {
+        firstDigestStarted()
+        await firstDigestGate
+      }
+      return DIGEST_ABC
+    })
+    const staging = createProjectSourceStagingService({ sourceDigest: { digestSource } })
+    const loaded = [
+      new TextEncoder().encode('abc').buffer,
+      new TextEncoder().encode('abc').buffer,
+    ]
+    const readBytes = vi.fn(async () => loaded[readBytes.mock.calls.length - 1]!)
+
+    const pending = (staging.prepareArchiveProject as unknown as (
+      currentProjection: typeof projection,
+      currentPlans: typeof plans,
+      reader: typeof readBytes,
+    ) => ReturnType<typeof staging.prepareArchiveProject>)(projection, plans, readBytes)
+    await firstDigest
+
+    expect(readBytes).toHaveBeenCalledTimes(1)
+    expect(loaded[0]!.byteLength).toBe(0)
+    expect(loaded[1]!.byteLength).toBe(3)
+
+    releaseFirstDigest()
+    const result = await pending
+    expect(readBytes).toHaveBeenCalledTimes(2)
+    expect(digestSource).toHaveBeenCalledTimes(2)
+    expect(result.preparedSourceGroups).toHaveLength(2)
+  })
+
+  it('rejects promptly, revokes the issued batch, and suppresses a late stage after abort', async () => {
+    const { projection, plans } = await twoSourceArchiveFixture()
+    let secondDigestStarted!: () => void
+    const secondDigest = new Promise<void>((resolve) => { secondDigestStarted = resolve })
+    let releaseSecondDigest!: () => void
+    const secondDigestGate = new Promise<void>((resolve) => { releaseSecondDigest = resolve })
+    let digestCalls = 0
+    let issuedTokenBytes: ArrayBuffer | undefined
+    let pendingDigestBytes: ArrayBuffer | undefined
+    const digestSource = vi.fn(async (bytes: ArrayBuffer) => {
+      digestCalls += 1
+      if (digestCalls === 1) issuedTokenBytes = bytes
+      if (digestCalls === 2) {
+        pendingDigestBytes = bytes
+        secondDigestStarted()
+        await secondDigestGate
+      }
+      return DIGEST_ABC
+    })
+    let tokenSequence = 0
+    const tokenIdFactory = vi.fn(() => `archive-token-${++tokenSequence}`)
+    const staging = createProjectSourceStagingService({
+      sourceDigest: { digestSource },
+      tokenIdFactory,
+    })
+    const readBytes = vi.fn(async () => new TextEncoder().encode('abc').buffer)
+    const controller = new AbortController()
+    const pending = (staging.prepareArchiveProject as unknown as (
+      currentProjection: typeof projection,
+      currentPlans: typeof plans,
+      reader: typeof readBytes,
+      signal: AbortSignal,
+    ) => ReturnType<typeof staging.prepareArchiveProject>)(
+      projection,
+      plans,
+      readBytes,
+      controller.signal,
+    )
+    await secondDigest
+    expect(tokenIdFactory).toHaveBeenCalledTimes(1)
+
+    controller.abort()
+    const outcome = await Promise.race([
+      pending.then(
+        () => 'resolved' as const,
+        () => 'rejected' as const,
+      ),
+      new Promise<'late'>((resolve) => setTimeout(() => resolve('late'), 250)),
+    ])
+    expect(outcome).toBe('rejected')
+    expect(tokenIdFactory).toHaveBeenCalledTimes(1)
+    expect(issuedTokenBytes?.byteLength).toBe(0)
+    expect(pendingDigestBytes?.byteLength).toBe(0)
+
+    releaseSecondDigest()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(tokenIdFactory).toHaveBeenCalledTimes(1)
+  })
+
+  it('atomically adopts a closed archive Project before the first digest await', async () => {
+    const project = await validV3Project()
+    const projection = archiveProjection(project)
+    const workerOwned = new TextEncoder().encode('abc').buffer
+    let digestStarted!: () => void
+    const started = new Promise<void>((resolve) => { digestStarted = resolve })
+    let releaseDigest!: () => void
+    const digestGate = new Promise<void>((resolve) => { releaseDigest = resolve })
+    const digestSource = vi.fn(async () => {
+      digestStarted()
+      await digestGate
+      return DIGEST_ABC
+    })
+    const staging = createProjectSourceStagingService({
+      sourceDigest: { digestSource },
+    })
+
+    const { plans, readBytes } = streamedArchiveInputs([{
+      namespace: 'robot',
+      entryPath: `robot/sources/${DIGEST_ABC}.step`,
+      sha256: DIGEST_ABC,
+      ownerKeys: [`robot-source:${DIGEST_ABC}`],
+      bytes: workerOwned,
+    }])
+    const pending = staging.prepareArchiveProject(projection, plans, readBytes)
+
+    await started
+    expect(workerOwned.byteLength).toBe(0)
+    releaseDigest()
+    const result = await pending
+    expect(digestSource).toHaveBeenCalledTimes(1)
+    expect(result.projection).toEqual(projection)
+    expect(result.preparedSourceGroups).toHaveLength(1)
+    expect(JSON.stringify(result)).not.toContain('sourceBytes')
+    expect(containsArrayBuffer(result)).toBe(false)
+  })
+
+  it('rejects accessor-backed archive projections without executing getters or detaching bytes', async () => {
+    const projection = archiveProjection(await validV3Project()) as unknown as Record<string, unknown>
+    const robot = projection.robot
+    let getterCalls = 0
+    Object.defineProperty(projection, 'robot', {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        getterCalls += 1
+        return robot
+      },
+    })
+    const bytes = new TextEncoder().encode('abc').buffer
+    const staging = createProjectSourceStagingService({ sourceDigest: nativeDigest() })
+    const { plans, readBytes } = streamedArchiveInputs([{
+      namespace: 'robot',
+      entryPath: `robot/sources/${DIGEST_ABC}.step`,
+      sha256: DIGEST_ABC,
+      ownerKeys: [`robot-source:${DIGEST_ABC}`],
+      bytes,
+    }])
+
+    await expect(staging.prepareArchiveProject(
+      projection as never,
+      plans,
+      readBytes,
+    )).rejects.toThrow(/data field|accessor|projection/i)
+    expect(getterCalls).toBe(0)
+    expect(readBytes).not.toHaveBeenCalled()
+    expect(bytes.byteLength).toBe(3)
+  })
+
+  it('rejects accessor-backed source plans before invoking the captured reader', async () => {
+    const projection = archiveProjection(await validV3Project())
+    let getterCalls = 0
+    const plan = {
+      namespace: 'robot' as const,
+      entryPath: `robot/sources/${DIGEST_ABC}.step`,
+      ownerKeys: [`robot-source:${DIGEST_ABC}` as const],
+      byteLength: 3,
+    } as Record<string, unknown>
+    Object.defineProperty(plan, 'sha256', {
+      enumerable: true,
+      get: () => {
+        getterCalls += 1
+        return DIGEST_ABC
+      },
+    })
+    const readBytes = vi.fn(async () => new TextEncoder().encode('abc').buffer)
+    const staging = createProjectSourceStagingService({ sourceDigest: nativeDigest() })
+
+    await expect(staging.prepareArchiveProject(
+      projection,
+      [plan] as never,
+      readBytes,
+    )).rejects.toThrow(/data-only|data field|source plan/i)
+    expect(getterCalls).toBe(0)
+    expect(readBytes).not.toHaveBeenCalled()
+  })
+
+  it('rejects spread or rebound archive staging methods before detaching bytes', async () => {
+    const projection = archiveProjection(await validV3Project())
+    const staging = createProjectSourceStagingService({ sourceDigest: nativeDigest() })
+    const forged = { ...staging }
+    const bytes = new TextEncoder().encode('abc').buffer
+    const { plans, readBytes } = streamedArchiveInputs([{
+      namespace: 'robot',
+      entryPath: `robot/sources/${DIGEST_ABC}.step`,
+      sha256: DIGEST_ABC,
+      ownerKeys: [`robot-source:${DIGEST_ABC}`],
+      bytes,
+    }])
+
+    await expect(forged.prepareArchiveProject(projection, plans, readBytes))
+      .rejects.toThrow(/service identity|registry-backed|invalid/i)
+    expect(readBytes).not.toHaveBeenCalled()
+    expect(bytes.byteLength).toBe(3)
+  })
+
+  it('owns the archive projection and assignment graph before the first digest await', async () => {
+    const projection = archiveProjection(await validV3Project()) as unknown as Mutable<
+      ReturnType<typeof archiveProjection>
+    >
+    const bytes = new TextEncoder().encode('abc').buffer
+    const ownerKeys = [`robot-source:${DIGEST_ABC}` as const]
+    const input = {
+      namespace: 'robot' as const,
+      entryPath: `robot/sources/${DIGEST_ABC}.step`,
+      sha256: DIGEST_ABC,
+      ownerKeys,
+      bytes,
+    }
+    let releaseDigest!: () => void
+    const digestGate = new Promise<void>((resolve) => { releaseDigest = resolve })
+    const staging = createProjectSourceStagingService({
+      sourceDigest: {
+        digestSource: vi.fn(async () => {
+          await digestGate
+          return DIGEST_ABC
+        }),
+      },
+    })
+
+    const { plans, readBytes } = streamedArchiveInputs([input])
+    const pending = staging.prepareArchiveProject(projection, plans, readBytes)
+    projection.manifest.name = 'mutated after invocation'
+    ownerKeys[0] = 'robot-source:mutated' as never
+    input.sha256 = '0'.repeat(64)
+    plans[0]!.sha256 = '0'.repeat(64)
+    releaseDigest()
+    const result = await pending
+
+    expect(result.projection.manifest.name).toBe('Invocation Name')
+    expect(result.preparedSourceGroups[0]!.ownerKeys).toEqual([
+      `robot-source:${DIGEST_ABC}`,
+    ])
+  })
+
+  it('rejects replay, preserves namespace isolation, and exposes no raw archive adopter', async () => {
+    const project = await validV3Project() as unknown as Mutable<WorkcellProjectSnapshotV3>
+    const shared = new TextEncoder().encode('abc').buffer
+    project.robot.sources[0]!.sourceBytes = shared
+    project.objectAssets = [{
+      id: 'asset-a',
+      name: 'Asset A',
+      sourceKind: 'step',
+      sourceFileName: 'asset.step',
+      sourceBytes: shared,
+      importScale: 1,
+      originMode: 'source',
+      colliderCenter: [0, 0, 0],
+      collisionHalfExtents: [0.1, 0.1, 0.1],
+      collisionBoxes: [{
+        id: 'body',
+        center: [0, 0, 0],
+        halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
+    }]
+    const projection = archiveProjection(project, new Map([['asset-a', DIGEST_ABC]]))
+    const staging = createProjectSourceStagingService({ sourceDigest: nativeDigest() })
+    const inputs = [{
+      namespace: 'robot' as const,
+      entryPath: `robot/sources/${DIGEST_ABC}.step`,
+      sha256: DIGEST_ABC,
+      ownerKeys: [`robot-source:${DIGEST_ABC}` as const],
+      bytes: shared,
+    }, {
+      namespace: 'object' as const,
+      entryPath: `objects/assets/${DIGEST_ABC}.step`,
+      sha256: DIGEST_ABC,
+      ownerKeys: ['object-asset:asset-a' as const],
+      bytes: shared.slice(0),
+    }]
+    const { plans, readBytes } = streamedArchiveInputs(inputs)
+
+    const result = await staging.prepareArchiveProject(projection, plans, readBytes)
+    expect(result.preparedSourceGroups).toHaveLength(2)
+    expect(result.preparedSourceGroups[0]!.preparedSource)
+      .not.toBe(result.preparedSourceGroups[1]!.preparedSource)
+    expect(result.preparedSourceGroups.map(({ preparedSource }) => preparedSource.namespace).sort())
+      .toEqual(['object', 'robot'])
+    await expect(staging.prepareArchiveProject(projection, plans, readBytes)).rejects.toThrow(
+      /ArrayBuffer|detached|bytes/i,
+    )
+    for (const group of result.preparedSourceGroups) staging.revoke(group.preparedSource)
+    for (const group of result.preparedSourceGroups) {
+      expect(() => staging.assertPrepared(group.preparedSource)).toThrow(/revoked/i)
+    }
+    expect('adoptOwnedSource' in staging).toBe(false)
+    expect('ownedSourceStaging' in staging).toBe(false)
+    expect('consume' in staging).toBe(false)
+    expect('prepareArchiveProject' in projectSourceStagingFacade).toBe(false)
+  })
+
+  it('revokes the complete archive batch when any expected digest mismatches', async () => {
+    const project = await validV3Project()
+    const projection = archiveProjection(project)
+    const bytes = new TextEncoder().encode('abc').buffer
+    const staging = createProjectSourceStagingService({
+      sourceDigest: { digestSource: vi.fn(async () => '0'.repeat(64)) },
+    })
+    const { plans, readBytes } = streamedArchiveInputs([{
+      namespace: 'robot',
+      entryPath: `robot/sources/${DIGEST_ABC}.step`,
+      sha256: DIGEST_ABC,
+      ownerKeys: [`robot-source:${DIGEST_ABC}`],
+      bytes,
+    }])
+
+    await expect(staging.prepareArchiveProject(projection, plans, readBytes))
+      .rejects.toThrow(/digest|path|mismatch/i)
+    expect(bytes.byteLength).toBe(0)
+  })
+
   it('locks construction adapters against later mutation', async () => {
     const digestSource = vi.fn(nativeDigest().digestSource)
     const copySource = vi.fn((bytes: ArrayBuffer) => bytes.slice(0))

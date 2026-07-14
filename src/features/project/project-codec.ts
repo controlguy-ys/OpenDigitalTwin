@@ -1,310 +1,263 @@
-import { unzipSync, zipSync } from 'fflate'
-import type {
-  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
-  ObjectAssetRecordV1,
-  ObjectAssetRecordV2,
-  RobotLinkGeometryRecordV1,
-  RobotLinkGeometryRecordV2,
-  WorkcellProjectSnapshotV1,
-  WorkcellProjectSnapshotV2,
-} from '../../domain/project/project'
 import {
-  MAX_OBJECT_ASSET_BYTES,
-  MAX_PROJECT_SOURCE_BYTES,
-  MAX_ROBOT_LINK_BYTES,
-  validateWorkcellProjectSnapshotV2 as validateWorkcellProjectSnapshot,
-  validateWorkcellProjectSnapshotV1,
-  WORKCELL_PROJECT_SCHEMA_VERSION_V2 as WORKCELL_PROJECT_SCHEMA_VERSION,
   WORKCELL_PROJECT_SCHEMA_VERSION_V1,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V2,
+  validateWorkcellProjectSnapshotV1,
+  validateWorkcellProjectSnapshotV2,
+  type WorkcellProjectSnapshotV1,
+  type WorkcellProjectSnapshotV2,
 } from '../../domain/project/project'
 import { migrateV1ToV2 } from '../../domain/project/project-v1-migration'
+import type { WorkcellProjectSnapshotV3 } from '../../domain/project/project-v3'
+import {
+  decodeWorkcellProjectV3,
+  encodeWorkcellProjectV3,
+  type ProjectArchiveDecodeOptions,
+  type ProjectArchiveEncodeOptions,
+  type ProjectDecodeResultV3,
+} from './project-v3-archive'
+import {
+  ProjectArchiveCodecWorker,
+  ProjectArchiveError,
+  type ProjectArchiveEncodeEntry,
+  type ProjectArchiveReader,
+  type ProjectArchiveWorkerLike,
+} from './project-archive-worker'
 
-const encoder = new TextEncoder()
-const decoder = new TextDecoder('utf-8', { fatal: true })
-const MAX_JSON_ENTRY_BYTES = 8 * 1024 * 1024
-const MAX_ARCHIVE_ENTRIES = 1024
-const MAX_ARCHIVE_BYTES = 300 * 1024 * 1024
-const MAX_UNCOMPRESSED_ARCHIVE_BYTES =
-  MAX_PROJECT_SOURCE_BYTES + MAX_JSON_ENTRY_BYTES * 8
-const FIXED_ZIP_TIME = new Date('1980-01-01T00:00:00.000Z')
+export type {
+  ArchivedObjectAssetRecordV3,
+  ArchivedStepObjectAssetRecordV3,
+  ProjectArchiveDecodeOptions,
+  ProjectArchiveEncodeOptions,
+  ProjectDecodeResultV3,
+} from './project-v3-archive'
+export { revokeProjectDecodeResult } from './project-v3-archive'
 
-interface ArchivedRobotLink extends Omit<RobotLinkGeometryRecordV1, 'sourceBytes'> {
-  archivePath: string
+export function encodeWorkcellProject(
+  snapshot: WorkcellProjectSnapshotV3,
+  options: ProjectArchiveEncodeOptions = {},
+  signal?: AbortSignal,
+): Promise<Blob> {
+  return encodeWorkcellProjectV3(snapshot, options, signal)
 }
 
-interface ArchivedObjectAsset extends Omit<ObjectAssetRecordV1, 'sourceBytes'> {
-  archivePath: string
+export async function decodeWorkcellProject(
+  source: Blob | Uint8Array | ArrayBuffer,
+  options: ProjectArchiveDecodeOptions,
+  signal?: AbortSignal,
+): Promise<ProjectDecodeResultV3> {
+  return decodeWorkcellProjectV3(source, options, signal)
 }
 
-interface ArchivedRobotLinkV2 extends Omit<RobotLinkGeometryRecordV2, 'sourceBytes'> {
-  archivePath: string
+export interface LegacyRuntimeProjectCodecOptions {
+  readonly workerFactory?: (() => ProjectArchiveWorkerLike) | undefined
 }
 
-interface ArchivedObjectAssetV2 extends Omit<ObjectAssetRecordV2, 'sourceBytes'> {
-  archivePath: string
+interface ArchivedLegacyRecord {
+  readonly archivePath: string
+  readonly [key: string]: unknown
 }
 
-function json(value: unknown): Uint8Array {
-  return encoder.encode(JSON.stringify(value, null, 2))
+const legacyEncoder = new TextEncoder()
+const legacyDecoder = new TextDecoder('utf-8', { fatal: true })
+
+function legacyJson(path: string, value: unknown): ProjectArchiveEncodeEntry {
+  const bytes = legacyEncoder.encode(JSON.stringify(value))
+  return { path, bytes: bytes.slice().buffer, compression: 'deflate' }
 }
 
-function ownBytes(bytes: Uint8Array): ArrayBuffer {
-  return bytes.slice().buffer
+function legacyCodec(options: LegacyRuntimeProjectCodecOptions): ProjectArchiveCodecWorker {
+  return options.workerFactory === undefined
+    ? new ProjectArchiveCodecWorker()
+    : new ProjectArchiveCodecWorker({ workerFactory: options.workerFactory })
 }
 
-function safeArchivePath(path: string): boolean {
-  return (
-    path.length > 0 &&
-    !path.startsWith('/') &&
-    !path.startsWith('\\') &&
-    !/^[a-z]:/i.test(path) &&
-    !path.includes('\\') &&
-    path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..')
-  )
-}
-
-function findEndOfCentralDirectory(bytes: Uint8Array): number {
-  const minimum = Math.max(0, bytes.length - 65_557)
-  for (let offset = bytes.length - 22; offset >= minimum; offset -= 1) {
-    if (
-      bytes[offset] === 0x50 &&
-      bytes[offset + 1] === 0x4b &&
-      bytes[offset + 2] === 0x05 &&
-      bytes[offset + 3] === 0x06
-    ) {
-      return offset
-    }
-  }
-  throw new Error('Invalid .wdtwin archive: ZIP directory is missing.')
-}
-
-function inspectArchive(bytes: Uint8Array): void {
-  if (bytes.byteLength > MAX_ARCHIVE_BYTES) {
-    throw new Error('Invalid .wdtwin archive: compressed file is too large.')
-  }
-  const endOffset = findEndOfCentralDirectory(bytes)
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  const entryCount = view.getUint16(endOffset + 10, true)
-  const centralSize = view.getUint32(endOffset + 12, true)
-  const centralOffset = view.getUint32(endOffset + 16, true)
-  if (entryCount > MAX_ARCHIVE_ENTRIES) {
-    throw new Error('Invalid .wdtwin archive: too many entries.')
-  }
-  if (centralOffset + centralSize > endOffset) {
-    throw new Error('Invalid .wdtwin archive: ZIP directory is out of bounds.')
-  }
-
-  const paths = new Set<string>()
-  let offset = centralOffset
-  let totalSize = 0
-  for (let index = 0; index < entryCount; index += 1) {
-    if (offset + 46 > bytes.byteLength || view.getUint32(offset, true) !== 0x02014b50) {
-      throw new Error('Invalid .wdtwin archive: malformed ZIP entry.')
-    }
-    const flags = view.getUint16(offset + 8, true)
-    if ((flags & 0x0001) !== 0) {
-      throw new Error('Invalid .wdtwin archive: encrypted entries are unsupported.')
-    }
-    const uncompressedSize = view.getUint32(offset + 24, true)
-    const nameLength = view.getUint16(offset + 28, true)
-    const extraLength = view.getUint16(offset + 30, true)
-    const commentLength = view.getUint16(offset + 32, true)
-    if (uncompressedSize === 0xffffffff) {
-      throw new Error('Invalid .wdtwin archive: ZIP64 entries are unsupported.')
-    }
-    const nameStart = offset + 46
-    const nameEnd = nameStart + nameLength
-    if (nameEnd > bytes.byteLength) {
-      throw new Error('Invalid .wdtwin archive: entry name is out of bounds.')
-    }
-    const path = decoder.decode(bytes.subarray(nameStart, nameEnd))
-    if (!safeArchivePath(path)) {
-      throw new Error(`Invalid .wdtwin archive path: ${path}.`)
-    }
-    if (paths.has(path)) {
-      throw new Error(`Invalid .wdtwin archive: duplicate path ${path}.`)
-    }
-    paths.add(path)
-    const entryLimit = path.endsWith('.step')
-      ? path.startsWith('robot/')
-        ? MAX_ROBOT_LINK_BYTES
-        : MAX_OBJECT_ASSET_BYTES
-      : MAX_JSON_ENTRY_BYTES
-    if (uncompressedSize > entryLimit) {
-      throw new Error(`Invalid .wdtwin archive: ${path} exceeds its size limit.`)
-    }
-    totalSize += uncompressedSize
-    if (totalSize > MAX_UNCOMPRESSED_ARCHIVE_BYTES) {
-      throw new Error('Invalid .wdtwin archive: expanded content is too large.')
-    }
-    offset = nameEnd + extraLength + commentLength
-  }
-  if (offset !== centralOffset + centralSize) {
-    throw new Error('Invalid .wdtwin archive: ZIP directory length is inconsistent.')
-  }
-}
-
-function required(entries: Record<string, Uint8Array>, path: string): Uint8Array {
-  const value = entries[path]
-  if (value === undefined) {
-    throw new Error(`Invalid .wdtwin archive: missing ${path}.`)
+function legacyPath(value: unknown, prefix: string): string {
+  if (
+    typeof value !== 'string' ||
+    !value.startsWith(prefix) ||
+    !value.endsWith('.step') ||
+    value.includes('\\') ||
+    value.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
+  ) {
+    throw new ProjectArchiveError(
+      'PROJECT_ARCHIVE_INVALID',
+      'Temporary legacy runtime archive contains an invalid source path.',
+    )
   }
   return value
 }
 
-function parseJson<T>(entries: Record<string, Uint8Array>, path: string): T {
-  try {
-    return JSON.parse(decoder.decode(required(entries, path))) as T
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Invalid .wdtwin')) {
-      throw error
+function legacyRecordArray(value: unknown, path: string): ArchivedLegacyRecord[] {
+  if (!Array.isArray(value)) {
+    throw new ProjectArchiveError('PROJECT_ARCHIVE_INVALID', `${path} must be an Array.`)
+  }
+  return value.map((record, index) => {
+    if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+      throw new ProjectArchiveError(
+        'PROJECT_ARCHIVE_INVALID',
+        `${path}[${index}] must be an Object.`,
+      )
     }
-    throw new Error(`Invalid .wdtwin archive: ${path} is not valid JSON.`)
-  }
-}
-
-export async function encodeWorkcellProject(
-  snapshot: CurrentProjectSnapshot,
-): Promise<Uint8Array> {
-  const normalized = validateWorkcellProjectSnapshot(snapshot)
-  const entries: Record<string, Uint8Array> = {}
-  entries['manifest.json'] = json(normalized.manifest)
-  entries['robot/configuration.json'] = json({
-    name: normalized.robot.name,
-    basePosition: normalized.robot.basePosition,
-    baseRotationDeg: normalized.robot.baseRotationDeg,
-    joints: normalized.robot.joints,
+    return record as ArchivedLegacyRecord
   })
-  entries['frames.json'] = json(normalized.frames)
-
-  const robotLinks: ArchivedRobotLinkV2[] = [...normalized.robot.links]
-    .sort((left, right) => left.linkId.localeCompare(right.linkId))
-    .map(({ sourceBytes, ...link }) => {
-      const archivePath = `robot/links/${link.linkId}.step`
-      entries[archivePath] = new Uint8Array(sourceBytes).slice()
-      return { ...link, archivePath }
-    })
-  entries['robot/links/index.json'] = json(robotLinks)
-
-  const objectAssets: ArchivedObjectAssetV2[] = [...normalized.objectAssets]
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .map(({ sourceBytes, ...asset }, index) => {
-      const archivePath = `objects/assets/${index.toString().padStart(4, '0')}.step`
-      entries[archivePath] = new Uint8Array(sourceBytes).slice()
-      return { ...asset, archivePath }
-    })
-  entries['objects/assets.json'] = json(objectAssets)
-  entries['objects/instances.json'] = json(normalized.objectInstances)
-  entries['poses/sequences.json'] = json(normalized.poses)
-  entries['opcua/bindings.json'] = json(normalized.opcUa)
-  entries['collision/policy.json'] = json(normalized.collisionPolicy)
-
-  const orderedEntries = Object.fromEntries(
-    Object.entries(entries).sort(([left], [right]) => left.localeCompare(right)),
-  )
-  return zipSync(orderedEntries, { level: 6, mtime: FIXED_ZIP_TIME })
 }
 
-export async function decodeWorkcellProject(
-  source: Uint8Array | ArrayBuffer,
-): Promise<CurrentProjectSnapshot> {
-  const bytes = source instanceof Uint8Array ? source : new Uint8Array(source)
-  inspectArchive(bytes)
-  let entries: Record<string, Uint8Array>
+async function legacyReadJson(reader: ProjectArchiveReader, path: string): Promise<unknown> {
   try {
-    entries = unzipSync(bytes)
-  } catch {
-    throw new Error('Invalid .wdtwin archive: ZIP data cannot be expanded.')
+    return JSON.parse(legacyDecoder.decode(new Uint8Array(await reader.readEntry(path)))) as unknown
+  } catch (error) {
+    if (error instanceof ProjectArchiveError) throw error
+    throw new ProjectArchiveError(
+      'PROJECT_ARCHIVE_INVALID',
+      `${path} is not valid UTF-8 JSON.`,
+      error,
+    )
   }
+}
 
-  const manifest = parseJson<
-    WorkcellProjectSnapshotV1['manifest'] | WorkcellProjectSnapshotV2['manifest']
-  >(
-    entries,
-    'manifest.json',
-  )
+function legacyExactEntries(reader: ProjectArchiveReader, paths: readonly string[]): void {
+  const actual = new Set(reader.entries.map(({ path }) => path))
+  const expected = new Set(paths)
   if (
-    manifest.schemaVersion !== WORKCELL_PROJECT_SCHEMA_VERSION_V1 &&
-    manifest.schemaVersion !== WORKCELL_PROJECT_SCHEMA_VERSION
+    actual.size !== expected.size ||
+    [...actual].some((path) => !expected.has(path)) ||
+    [...expected].some((path) => !actual.has(path))
   ) {
-    throw new Error('Invalid .wdtwin archive: unsupported project schema version.')
+    throw new ProjectArchiveError(
+      'PROJECT_ARCHIVE_INVALID',
+      'Temporary legacy runtime archive has a missing, unknown, or unreferenced entry.',
+    )
   }
+}
 
-  if (manifest.schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V1) {
-    const robotConfiguration = parseJson<
-      Omit<WorkcellProjectSnapshotV1['robot'], 'links'>
-    >(entries, 'robot/configuration.json')
-    const archivedLinks = parseJson<ArchivedRobotLink[]>(
-      entries,
+/**
+ * Temporary browser-runtime lane. Task 4 removes this once the runtime can
+ * consume prepared V3 source groups. It is deliberately not a V2 branch in
+ * the public V3 encoder.
+ */
+export async function encodeLegacyRuntimeProjectV2(
+  snapshot: WorkcellProjectSnapshotV2,
+  options: LegacyRuntimeProjectCodecOptions = {},
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const owned = validateWorkcellProjectSnapshotV2(snapshot)
+  const entries: ProjectArchiveEncodeEntry[] = [
+    legacyJson('manifest.json', owned.manifest),
+    legacyJson('frames.json', owned.frames),
+    legacyJson('robot/configuration.json', {
+      name: owned.robot.name,
+      basePosition: owned.robot.basePosition,
+      baseRotationDeg: owned.robot.baseRotationDeg,
+      joints: owned.robot.joints,
+    }),
+    legacyJson('robot/links/index.json', owned.robot.links.map(({ sourceBytes: _sourceBytes, ...link }) => ({
+      ...link,
+      archivePath: `robot/links/${link.linkId}.step`,
+    }))),
+    legacyJson('objects/assets.json', owned.objectAssets.map(({ sourceBytes: _sourceBytes, ...asset }, index) => ({
+      ...asset,
+      archivePath: `objects/assets/${index.toString().padStart(4, '0')}.step`,
+    }))),
+    legacyJson('objects/instances.json', owned.objectInstances),
+    legacyJson('poses/sequences.json', owned.poses),
+    legacyJson('opcua/bindings.json', owned.opcUa),
+    legacyJson('collision/policy.json', owned.collisionPolicy),
+    ...owned.robot.links.map(({ linkId, sourceBytes }) => ({
+      path: `robot/links/${linkId}.step`,
+      bytes: sourceBytes,
+      compression: 'store' as const,
+    })),
+    ...owned.objectAssets.map(({ sourceBytes }, index) => ({
+      path: `objects/assets/${index.toString().padStart(4, '0')}.step`,
+      bytes: sourceBytes,
+      compression: 'store' as const,
+    })),
+  ]
+  entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
+  return legacyCodec(options).encode(entries, signal)
+}
+
+/** Temporary counterpart to encodeLegacyRuntimeProjectV2; see its comment. */
+export async function decodeLegacyRuntimeProjectV2(
+  source: Blob | Uint8Array | ArrayBuffer,
+  options: LegacyRuntimeProjectCodecOptions = {},
+  signal?: AbortSignal,
+): Promise<WorkcellProjectSnapshotV2> {
+  const ownedSource = source instanceof Blob
+    ? source
+    : source instanceof Uint8Array
+      ? source.slice().buffer
+      : source.slice(0)
+  const reader = await legacyCodec(options).open(ownedSource, signal)
+  try {
+    const manifest = await legacyReadJson(reader, 'manifest.json') as
+      WorkcellProjectSnapshotV1['manifest'] | WorkcellProjectSnapshotV2['manifest']
+    const version = manifest.schemaVersion
+    if (version !== WORKCELL_PROJECT_SCHEMA_VERSION_V1 && version !== WORKCELL_PROJECT_SCHEMA_VERSION_V2) {
+      throw new ProjectArchiveError(
+        'PROJECT_ARCHIVE_SCHEMA_UNSUPPORTED',
+        'Temporary legacy runtime accepts only Project schema V1 or V2.',
+      )
+    }
+    const frames = await legacyReadJson(reader, 'frames.json')
+    const robotConfiguration = await legacyReadJson(reader, 'robot/configuration.json') as Record<string, unknown>
+    const archivedLinks = legacyRecordArray(
+      await legacyReadJson(reader, 'robot/links/index.json'),
       'robot/links/index.json',
     )
-    const robotLinks: RobotLinkGeometryRecordV1[] = archivedLinks.map(
-      ({ archivePath, ...link }) => {
-        if (!safeArchivePath(archivePath) || !archivePath.startsWith('robot/links/')) {
-          throw new Error(`Invalid .wdtwin archive path: ${archivePath}.`)
-        }
-        return { ...link, sourceBytes: ownBytes(required(entries, archivePath)) }
-      },
-    )
-    const archivedAssets = parseJson<ArchivedObjectAsset[]>(
-      entries,
+    const archivedAssets = legacyRecordArray(
+      await legacyReadJson(reader, 'objects/assets.json'),
       'objects/assets.json',
     )
-    const objectAssets: ObjectAssetRecordV1[] = archivedAssets.map(
-      ({ archivePath, ...asset }) => {
-        if (!safeArchivePath(archivePath) || !archivePath.startsWith('objects/assets/')) {
-          throw new Error(`Invalid .wdtwin archive path: ${archivePath}.`)
-        }
-        return { ...asset, sourceBytes: ownBytes(required(entries, archivePath)) }
-      },
-    )
-    const snapshot = validateWorkcellProjectSnapshotV1({
+    const objectInstances = await legacyReadJson(reader, 'objects/instances.json')
+    const poses = await legacyReadJson(reader, 'poses/sequences.json')
+    const opcUa = await legacyReadJson(reader, 'opcua/bindings.json')
+    const collisionPolicy = version === WORKCELL_PROJECT_SCHEMA_VERSION_V2
+      ? await legacyReadJson(reader, 'collision/policy.json')
+      : undefined
+    const sourcePaths = new Set<string>()
+    for (const link of archivedLinks) sourcePaths.add(legacyPath(link.archivePath, 'robot/links/'))
+    for (const asset of archivedAssets) sourcePaths.add(legacyPath(asset.archivePath, 'objects/assets/'))
+    legacyExactEntries(reader, [
+      'manifest.json',
+      'frames.json',
+      'robot/configuration.json',
+      'robot/links/index.json',
+      'objects/assets.json',
+      'objects/instances.json',
+      'poses/sequences.json',
+      'opcua/bindings.json',
+      ...(version === WORKCELL_PROJECT_SCHEMA_VERSION_V2 ? ['collision/policy.json'] : []),
+      ...sourcePaths,
+    ])
+    const bytesByPath = new Map<string, ArrayBuffer>()
+    for (const path of [...sourcePaths].sort()) bytesByPath.set(path, await reader.readEntry(path))
+    reader.finish()
+    const robotLinks = archivedLinks.map((link) => {
+      const path = legacyPath(link.archivePath, 'robot/links/')
+      const { archivePath: _archivePath, ...metadata } = link
+      return { ...metadata, sourceBytes: bytesByPath.get(path)! }
+    })
+    const objectAssets = archivedAssets.map((asset) => {
+      const path = legacyPath(asset.archivePath, 'objects/assets/')
+      const { archivePath: _archivePath, ...metadata } = asset
+      return { ...metadata, sourceBytes: bytesByPath.get(path)! }
+    })
+    const candidate = {
       manifest,
       robot: { ...robotConfiguration, links: robotLinks },
-      frames: parseJson(entries, 'frames.json'),
+      frames,
       objectAssets,
-      objectInstances: parseJson(entries, 'objects/instances.json'),
-      poses: parseJson(entries, 'poses/sequences.json'),
-      opcUa: parseJson(entries, 'opcua/bindings.json'),
-    })
-    return migrateV1ToV2(snapshot)
+      objectInstances,
+      poses,
+      opcUa,
+      ...(version === WORKCELL_PROJECT_SCHEMA_VERSION_V2 ? { collisionPolicy } : {}),
+    }
+    if (version === WORKCELL_PROJECT_SCHEMA_VERSION_V1) {
+      return migrateV1ToV2(validateWorkcellProjectSnapshotV1(candidate))
+    }
+    return validateWorkcellProjectSnapshotV2(candidate)
+  } finally {
+    reader.close()
   }
-
-  const robotConfiguration = parseJson<
-    Omit<WorkcellProjectSnapshotV2['robot'], 'links'>
-  >(entries, 'robot/configuration.json')
-  const archivedLinks = parseJson<ArchivedRobotLinkV2[]>(
-    entries,
-    'robot/links/index.json',
-  )
-  const robotLinks: RobotLinkGeometryRecordV2[] = archivedLinks.map(
-    ({ archivePath, ...link }) => {
-      if (!safeArchivePath(archivePath) || !archivePath.startsWith('robot/links/')) {
-        throw new Error(`Invalid .wdtwin archive path: ${archivePath}.`)
-      }
-      return { ...link, sourceBytes: ownBytes(required(entries, archivePath)) }
-    },
-  )
-  const archivedAssets = parseJson<ArchivedObjectAssetV2[]>(
-    entries,
-    'objects/assets.json',
-  )
-  const objectAssets: ObjectAssetRecordV2[] = archivedAssets.map(
-    ({ archivePath, ...asset }) => {
-      if (!safeArchivePath(archivePath) || !archivePath.startsWith('objects/assets/')) {
-        throw new Error(`Invalid .wdtwin archive path: ${archivePath}.`)
-      }
-      return { ...asset, sourceBytes: ownBytes(required(entries, archivePath)) }
-    },
-  )
-  return validateWorkcellProjectSnapshot({
-    manifest,
-    robot: { ...robotConfiguration, links: robotLinks },
-    frames: parseJson(entries, 'frames.json'),
-    objectAssets,
-    objectInstances: parseJson(entries, 'objects/instances.json'),
-    poses: parseJson(entries, 'poses/sequences.json'),
-    opcUa: parseJson(entries, 'opcua/bindings.json'),
-    collisionPolicy: parseJson(entries, 'collision/policy.json'),
-  })
 }

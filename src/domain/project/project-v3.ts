@@ -1941,7 +1941,12 @@ interface ProjectSourceOwnershipBoundaryOptionsV1 {
 
 interface ProjectSourceOwnershipBoundaryV1 {
   stage(namespace: ProjectSourceNamespaceV1, bytes: ArrayBuffer, signal?: AbortSignal): Promise<PreparedProjectSourceV1>
-  stageOwned(namespace: ProjectSourceNamespaceV1, bytes: ArrayBuffer, signal?: AbortSignal): Promise<PreparedProjectSourceV1>
+  stageOwned(
+    namespace: ProjectSourceNamespaceV1,
+    bytes: ArrayBuffer,
+    signal?: AbortSignal,
+    expectedSha256?: string,
+  ): Promise<PreparedProjectSourceV1>
   assertPrepared(source: PreparedProjectSourceV1): void
   revoke(source: PreparedProjectSourceV1): void
   analyzeLegacyRobotSource(
@@ -1967,6 +1972,10 @@ function sourceCancelled(): Error & { readonly code: 'PROJECT_SOURCE_LEASE_CANCE
     new Error('PROJECT_SOURCE_LEASE_CANCELLED: Project source lease was cancelled.'),
     { code: 'PROJECT_SOURCE_LEASE_CANCELLED' as const },
   )
+}
+
+function sourceSignalAborted(signal?: AbortSignal): boolean {
+  return signal?.aborted === true
 }
 
 function validateClosedLegacyAnalysis(value: unknown): LegacyProjectSourceAnalysisV1 {
@@ -2035,6 +2044,7 @@ function createProjectSourceOwnershipBoundaryV1(
     namespace: ProjectSourceNamespaceV1,
     bytes: ArrayBuffer,
     signal?: AbortSignal,
+    expectedSha256?: string,
   ): Promise<PreparedProjectSourceV1> => {
     const ownedByteLength = typeof bytes === 'object' && bytes !== null
       ? tryArrayBufferByteLength(bytes)
@@ -2052,11 +2062,51 @@ function createProjectSourceOwnershipBoundaryV1(
         error,
       )
     }
-    const digest = await digestSource(adoptedBytes, signal)
+    const disposeAdoptedBytes = (): void => {
+      if (tryArrayBufferByteLength(adoptedBytes) === 0) return
+      try {
+        structuredClone(adoptedBytes, { transfer: [adoptedBytes] })
+      } catch {
+        // A concurrent cancellation may already have detached the buffer.
+      }
+    }
+    if (sourceSignalAborted(signal)) {
+      disposeAdoptedBytes()
+      throw sourceCancelled()
+    }
+    let removeDigestAbort = (): void => {}
+    const abortedDigest = signal === undefined
+      ? undefined
+      : new Promise<never>((_resolve, reject) => {
+          const onAbort = (): void => {
+            disposeAdoptedBytes()
+            reject(sourceCancelled())
+          }
+          signal.addEventListener('abort', onAbort, { once: true })
+          removeDigestAbort = () => signal.removeEventListener('abort', onAbort)
+        })
+    let digest: string
+    try {
+      const pendingDigest = Promise.resolve(digestSource(adoptedBytes, signal))
+      digest = abortedDigest === undefined
+        ? await pendingDigest
+        : await Promise.race([pendingDigest, abortedDigest])
+    } finally {
+      removeDigestAbort()
+    }
     if (!HEX_SHA256.test(digest)) {
       return sourceFailure('PROJECT_SOURCE_DIGEST_INVALID', 'Project source digest must be lowercase 64-hex.')
     }
-    if (signal?.aborted === true) throw sourceCancelled()
+    if (expectedSha256 !== undefined && digest !== expectedSha256) {
+      return sourceFailure(
+        'PROJECT_SOURCE_DIGEST_MISMATCH',
+        'Archive source bytes do not match the path and index digest.',
+      )
+    }
+    if (sourceSignalAborted(signal)) {
+      disposeAdoptedBytes()
+      throw sourceCancelled()
+    }
     const tokenId = tokenIdFactory?.() ?? `prepared-source-${nextTokenId++}`
     if (typeof tokenId !== 'string' || tokenId.length === 0) {
       return sourceFailure('PROJECT_SOURCE_TOKEN_INVALID', 'Prepared Project source token ID is invalid.')
@@ -2102,6 +2152,13 @@ function createProjectSourceOwnershipBoundaryV1(
       const state = stateFor(source)
       if (state.status === 'revoked') return
       state.status = 'revoked'
+      if (state.sourceBytes !== undefined && tryArrayBufferByteLength(state.sourceBytes) !== 0) {
+        try {
+          structuredClone(state.sourceBytes, { transfer: [state.sourceBytes] })
+        } catch {
+          // A leased or concurrently cancelled buffer may already be detached.
+        }
+      }
       state.sourceBytes = undefined
       state.generation += 1
     },
@@ -2351,7 +2408,31 @@ export interface ProjectSourceStagingService {
     projection: ByteFreeWorkcellProjectProjectionV3,
     groups: readonly PreparedProjectSourceGroupV1[],
   ): ByteFreeWorkcellProjectProjectionV3
+  prepareArchiveProject(
+    projection: ByteFreeWorkcellProjectProjectionV3,
+    sources: readonly ProjectArchiveSourcePlanV1[],
+    readBytes: ProjectArchiveSourceReaderV1,
+    signal?: AbortSignal,
+  ): Promise<StagedProjectSourcesV3>
 }
+
+/**
+ * Complete byte-free source plan for streaming archive preparation. Central
+ * directory sizes make every frozen cap checkable before the first read,
+ * transfer, digest, or token mutation.
+ */
+export interface ProjectArchiveSourcePlanV1 {
+  readonly namespace: ProjectSourceNamespaceV1
+  readonly entryPath: string
+  readonly sha256: string
+  readonly ownerKeys: readonly ProjectSourceOwnerKeyV1[]
+  readonly byteLength: number
+}
+
+export type ProjectArchiveSourceReaderV1 = (
+  source: ProjectArchiveSourcePlanV1,
+  signal?: AbortSignal,
+) => Promise<ArrayBuffer>
 
 /**
  * Canonical migration-only staging surface. The analyzer is installed once at
@@ -2523,6 +2604,494 @@ function byteFreePreparedProjectionV3(
   return projection
 }
 
+function archiveExpectedOwnersV1(
+  projection: ByteFreeWorkcellProjectProjectionV3,
+): ReadonlyMap<string, readonly ProjectSourceOwnerKeyV1[]> {
+  const expected = new Map<string, ProjectSourceOwnerKeyV1[]>()
+  for (const source of projection.robot.sources) {
+    if (!HEX_SHA256.test(source.id) || source.id !== source.sha256) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Archive Robot source ID and digest must be the same lowercase SHA-256.',
+      )
+    }
+    expected.set(`robot:${source.sha256}`, [`robot-source:${source.id}`])
+  }
+  for (const asset of projection.objectAssets) {
+    if (asset.sourceKind !== 'step') continue
+    if (!HEX_SHA256.test(asset.sourceSha256)) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        `Archive Object Asset ${asset.id} has an invalid source digest.`,
+      )
+    }
+    const key = `object:${asset.sourceSha256}`
+    const owners = expected.get(key) ?? []
+    owners.push(`object-asset:${asset.id}`)
+    expected.set(key, owners)
+  }
+  for (const owners of expected.values()) owners.sort()
+  return expected
+}
+
+function preflightArchiveProjectionWithSourcesV1(
+  projection: ByteFreeWorkcellProjectProjectionV3,
+  sources: readonly {
+    readonly namespace: ProjectSourceNamespaceV1
+    readonly ownerKeys: readonly ProjectSourceOwnerKeyV1[]
+    readonly bytes: ArrayBuffer
+  }[],
+): void {
+  const candidate = structuredClone(projection) as unknown as Record<string, unknown>
+  const owners = new Map<ProjectSourceOwnerKeyV1, {
+    readonly namespace: ProjectSourceNamespaceV1
+    readonly bytes: ArrayBuffer
+  }>()
+  for (const source of sources) {
+    for (const ownerKey of source.ownerKeys) {
+      if (owners.has(ownerKey)) {
+        return sourceFailure(
+          'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+          `Duplicate Archive source owner ${ownerKey}.`,
+        )
+      }
+      owners.set(ownerKey, { namespace: source.namespace, bytes: source.bytes })
+    }
+  }
+  const robot = candidate.robot as Record<string, unknown>
+  const robotSources = robot.sources as Record<string, unknown>[]
+  for (const source of robotSources) {
+    const ownerKey = `robot-source:${String(source.id)}` as const
+    const assignment = owners.get(ownerKey)
+    if (assignment === undefined || assignment.namespace !== 'robot') {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        `Missing Archive source owner ${ownerKey}.`,
+      )
+    }
+    source.sourceBytes = assignment.bytes
+  }
+  const objectAssets = candidate.objectAssets as Record<string, unknown>[]
+  for (const asset of objectAssets) {
+    if (asset.sourceKind !== 'step') continue
+    const ownerKey = `object-asset:${String(asset.id)}` as const
+    const assignment = owners.get(ownerKey)
+    if (assignment === undefined || assignment.namespace !== 'object') {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        `Missing Archive source owner ${ownerKey}.`,
+      )
+    }
+    delete asset.sourceSha256
+    asset.sourceBytes = assignment.bytes
+  }
+  preflightWorkcellProjectShapeV3(candidate)
+}
+
+function assertByteFreeArchiveProjectionGraphV1(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  active = new WeakSet<object>(),
+): void {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return
+  }
+  if (typeof value !== 'object') {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Archive Project projection contains a non-data value.',
+    )
+  }
+  if (tryArrayBufferByteLength(value) !== undefined || ArrayBuffer.isView(value)) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Archive Project projection must be byte-free.',
+    )
+  }
+  if (active.has(value)) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Archive Project projection must not contain cycles.',
+    )
+  }
+  if (seen.has(value)) return
+  seen.add(value)
+  active.add(value)
+  const prototype = Object.getPrototypeOf(value)
+  if (Array.isArray(value)) {
+    if (prototype !== Array.prototype) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Archive Project projection arrays must use the plain Array prototype.',
+      )
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (
+      lengthDescriptor === undefined ||
+      !('value' in lengthDescriptor) ||
+      lengthDescriptor.value !== value.length
+    ) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Archive Project projection array length must be a data field.',
+      )
+    }
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = descriptors[String(index)]
+      if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+        return sourceFailure(
+          'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+          'Archive Project projection array elements must be enumerable data fields.',
+        )
+      }
+      assertByteFreeArchiveProjectionGraphV1(descriptor.value, seen, active)
+    }
+    const expectedKeyCount = value.length + 1
+    if (Reflect.ownKeys(descriptors).length !== expectedKeyCount) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Archive Project projection arrays contain unknown fields.',
+      )
+    }
+    active.delete(value)
+    return
+  }
+  if (prototype !== Object.prototype) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Archive Project projection records must use the plain Object prototype.',
+    )
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Archive Project projection records cannot contain symbol fields.',
+      )
+    }
+    const descriptor = descriptors[key]!
+    if (!descriptor.enumerable || !('value' in descriptor)) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Archive Project projection fields must be enumerable data fields.',
+      )
+    }
+    assertByteFreeArchiveProjectionGraphV1(descriptor.value, seen, active)
+  }
+  active.delete(value)
+}
+
+function waitForArchiveSourceOperationV1<Result>(
+  pending: Promise<Result>,
+  signal?: AbortSignal,
+): Promise<Result> {
+  if (signal === undefined) return pending
+  if (signal.aborted) return Promise.reject(sourceCancelled())
+  return new Promise<Result>((resolve, reject) => {
+    let settled = false
+    const onAbort = (): void => {
+      if (settled) return
+      settled = true
+      reject(sourceCancelled())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    pending.then(
+      (value) => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+async function stageArchiveSourceForOperationV1(
+  boundary: ProjectSourceOwnershipBoundaryV1,
+  source: {
+    readonly namespace: ProjectSourceNamespaceV1
+    readonly sha256: string
+    readonly bytes: ArrayBuffer
+  },
+  operationClosed: () => boolean,
+  signal?: AbortSignal,
+): Promise<PreparedProjectSourceV1> {
+  const pending = boundary.stageOwned(
+    source.namespace,
+    source.bytes,
+    signal,
+    source.sha256,
+  )
+  let accepted = false
+  void pending.then(
+    (preparedSource) => {
+      if (!accepted && (operationClosed() || signal?.aborted === true)) {
+        try {
+          boundary.revoke(preparedSource)
+        } catch {
+          // A concurrent failure may already have revoked the late token.
+        }
+      }
+    },
+    () => undefined,
+  )
+  const preparedSource = await waitForArchiveSourceOperationV1(pending, signal)
+  if (operationClosed() || signal?.aborted === true) {
+    boundary.revoke(preparedSource)
+    throw sourceCancelled()
+  }
+  accepted = true
+  return preparedSource
+}
+
+function completeArchiveProjectPreparationV1(
+  ownedProjection: ByteFreeWorkcellProjectProjectionV3,
+  groups: PreparedProjectSourceGroupV1[],
+  boundary: ProjectSourceOwnershipBoundaryV1,
+): StagedProjectSourcesV3 {
+  groups.sort((first, second) => {
+    const firstKey = first.ownerKeys[0]!
+    const secondKey = second.ownerKeys[0]!
+    return firstKey < secondKey ? -1 : firstKey > secondKey ? 1 : 0
+  })
+  const frozenGroups = Object.freeze(groups)
+  const validatedProjection = hydratePreparedProjectionV3(
+    ownedProjection,
+    frozenGroups,
+    boundary,
+  )
+  const objectDigests = new Map<string, string>()
+  for (const group of frozenGroups) {
+    for (const ownerKey of group.ownerKeys) {
+      if (ownerKey.startsWith('object-asset:')) {
+        objectDigests.set(ownerKey, group.preparedSource.sha256)
+      }
+    }
+  }
+  return Object.freeze({
+    projection: byteFreePreparedProjectionV3(validatedProjection, objectDigests),
+    preparedSourceGroups: frozenGroups,
+  })
+}
+
+function preflightArchiveSourcePlansV1(
+  projection: ByteFreeWorkcellProjectProjectionV3,
+  sources: readonly ProjectArchiveSourcePlanV1[],
+): {
+  readonly projection: ByteFreeWorkcellProjectProjectionV3
+  readonly sources: readonly ProjectArchiveSourcePlanV1[]
+} {
+  let ownedProjection: ByteFreeWorkcellProjectProjectionV3
+  let ownedSources: readonly ProjectArchiveSourcePlanV1[]
+  try {
+    assertByteFreeArchiveProjectionGraphV1(projection)
+    assertByteFreeArchiveProjectionGraphV1(sources)
+    ownedProjection = structuredClone(projection)
+    ownedSources = structuredClone(sources)
+  } catch (error) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Archive Project projection and source plan must be closed data-only graphs.',
+      error,
+    )
+  }
+  if (!Array.isArray(ownedSources)) {
+    return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Archive source plan must be an array.')
+  }
+  const expectedOwners = archiveExpectedOwnersV1(ownedProjection)
+  if (ownedSources.length !== expectedOwners.size) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Archive source plan does not resolve every Project source exactly once.',
+    )
+  }
+  const seenKeys = new Set<string>()
+  let totalSourceBytes = 0
+  const planned = ownedSources.map((input, index) => {
+    const record = closedRecord(input, `Archive source plan[${index}]`, [
+      'namespace', 'entryPath', 'sha256', 'ownerKeys', 'byteLength',
+    ])
+    const namespace = record.namespace
+    if (namespace !== 'robot' && namespace !== 'object') {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Archive source namespace is invalid.')
+    }
+    const sha256 = record.sha256
+    if (typeof sha256 !== 'string' || !HEX_SHA256.test(sha256)) {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Archive source digest is invalid.')
+    }
+    const expectedPath = namespace === 'robot'
+      ? `robot/sources/${sha256}.step`
+      : `objects/assets/${sha256}.step`
+    if (record.entryPath !== expectedPath) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Archive source path does not match its namespace and digest.',
+      )
+    }
+    const key = `${namespace}:${sha256}`
+    if (seenKeys.has(key)) {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Duplicate Archive source ${key}.`)
+    }
+    seenKeys.add(key)
+    const ownerKeys = arrayValue(record.ownerKeys, `Archive source plan[${index}].ownerKeys`)
+      .map((ownerKey) => {
+        if (
+          typeof ownerKey !== 'string' ||
+          (namespace === 'robot'
+            ? ownerKey !== `robot-source:${sha256}`
+            : !ownerKey.startsWith('object-asset:'))
+        ) {
+          return sourceFailure(
+            'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+            `Archive source ${key} has an invalid owner.`,
+          )
+        }
+        return ownerKey as ProjectSourceOwnerKeyV1
+      })
+      .sort()
+    if (ownerKeys.length === 0 || new Set(ownerKeys).size !== ownerKeys.length) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        `Archive source ${key} has duplicate or empty owners.`,
+      )
+    }
+    const expected = expectedOwners.get(key)
+    if (
+      expected === undefined ||
+      expected.length !== ownerKeys.length ||
+      expected.some((ownerKey, ownerIndex) => ownerKey !== ownerKeys[ownerIndex])
+    ) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        `Archive source ${key} does not match the Project owner graph.`,
+      )
+    }
+    const byteLength = nonNegativeInteger(
+      record.byteLength,
+      `Archive source plan[${index}].byteLength`,
+    )
+    const entryLimit = namespace === 'robot' ? MAX_ROBOT_LINK_BYTES : MAX_OBJECT_ASSET_BYTES
+    if (byteLength === 0 || byteLength > entryLimit) {
+      return sourceFailure(
+        'PROJECT_SOURCE_BYTES_INVALID',
+        `Archive source ${key} has an invalid planned byte length.`,
+      )
+    }
+    totalSourceBytes += byteLength
+    if (totalSourceBytes > MAX_PROJECT_SOURCE_BYTES) {
+      return sourceFailure('PROJECT_SOURCE_BYTES_INVALID', 'Archive sources exceed the Project byte limit.')
+    }
+    return Object.freeze({
+      namespace,
+      entryPath: expectedPath,
+      sha256,
+      ownerKeys: Object.freeze(ownerKeys),
+      byteLength,
+    }) satisfies ProjectArchiveSourcePlanV1
+  })
+  for (const key of expectedOwners.keys()) {
+    if (!seenKeys.has(key)) {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Missing Archive source ${key}.`)
+    }
+  }
+  try {
+    preflightArchiveProjectionWithSourcesV1(
+      ownedProjection,
+      planned.map((source) => ({ ...source, bytes: new ArrayBuffer(1) })),
+    )
+  } catch (error) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Archive Project projection is not a valid V3 Project.',
+      error,
+    )
+  }
+  return Object.freeze({
+    projection: ownedProjection,
+    sources: Object.freeze(planned),
+  })
+}
+
+async function prepareArchiveProjectFromReaderV1(
+  projection: ByteFreeWorkcellProjectProjectionV3,
+  sources: readonly ProjectArchiveSourcePlanV1[],
+  readBytes: ProjectArchiveSourceReaderV1,
+  boundary: ProjectSourceOwnershipBoundaryV1,
+  signal?: AbortSignal,
+): Promise<StagedProjectSourcesV3> {
+  if (typeof readBytes !== 'function') {
+    return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Archive source reader must be a function.')
+  }
+  const capturedReadBytes = readBytes
+  const capturedSignal = signal
+  const planned = preflightArchiveSourcePlansV1(projection, sources)
+  if (capturedSignal?.aborted === true) throw sourceCancelled()
+
+  const staged: PreparedProjectSourceV1[] = []
+  const groups: PreparedProjectSourceGroupV1[] = []
+  let operationClosed = false
+  try {
+    for (const source of planned.sources) {
+      const pendingRead = Promise.resolve().then(() => capturedReadBytes(source, capturedSignal))
+      const returnedBytes = await waitForArchiveSourceOperationV1(pendingRead, capturedSignal)
+      const byteLength = typeof returnedBytes === 'object' && returnedBytes !== null
+        ? tryArrayBufferByteLength(returnedBytes)
+        : undefined
+      if (byteLength !== source.byteLength) {
+        return sourceFailure(
+          'PROJECT_SOURCE_BYTES_INVALID',
+          `Archive source ${source.entryPath} does not match its planned byte length.`,
+        )
+      }
+      let ownedBytes: ArrayBuffer
+      try {
+        ownedBytes = structuredClone(returnedBytes, { transfer: [returnedBytes] })
+      } catch (error) {
+        return sourceFailure(
+          'PROJECT_SOURCE_TRANSFER_FAILED',
+          'Archive source ownership transfer failed.',
+          error,
+        )
+      }
+      const preparedSource = await stageArchiveSourceForOperationV1(
+        boundary,
+        { namespace: source.namespace, sha256: source.sha256, bytes: ownedBytes },
+        () => operationClosed,
+        capturedSignal,
+      )
+      staged.push(preparedSource)
+      groups.push(Object.freeze({ ownerKeys: source.ownerKeys, preparedSource }))
+      if (sourceSignalAborted(capturedSignal)) throw sourceCancelled()
+    }
+    return completeArchiveProjectPreparationV1(planned.projection, groups, boundary)
+  } catch (error) {
+    operationClosed = true
+    for (const source of staged) {
+      try {
+        boundary.revoke(source)
+      } catch {
+        // Revocation is best-effort for a token already invalidated by failure.
+      }
+    }
+    throw error
+  } finally {
+    operationClosed = true
+  }
+}
+
 function projectSourceStagingMethodsV1(
   boundary: ProjectSourceOwnershipBoundaryV1,
 ): ProjectSourceStagingService {
@@ -2541,6 +3110,27 @@ function projectSourceStagingMethodsV1(
         }
       }
       return byteFreePreparedProjectionV3(hydrated, objectDigests)
+    },
+    prepareArchiveProject(projection, sources, readBytes, signal) {
+      let registeredBoundary: ProjectSourceOwnershipBoundaryV1
+      try {
+        registeredBoundary = projectSourceBoundaryFor(this)
+      } catch (error) {
+        return Promise.reject(error)
+      }
+      if (registeredBoundary !== boundary) {
+        return Promise.reject(Object.assign(
+          new Error('PROJECT_SOURCE_STAGING_SERVICE_INVALID: Archive staging service identity is invalid.'),
+          { code: 'PROJECT_SOURCE_STAGING_SERVICE_INVALID' },
+        ))
+      }
+      return prepareArchiveProjectFromReaderV1(
+        projection,
+        sources,
+        readBytes,
+        boundary,
+        signal,
+      )
     },
   }
 }

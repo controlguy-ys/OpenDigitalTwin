@@ -8,7 +8,6 @@ import {
   WORKCELL_PROJECT_SCHEMA_VERSION_V1,
 } from '../../domain/project/project'
 import { migrateV1ToV2 } from '../../domain/project/project-v1-migration'
-import { decodeWorkcellProject, encodeWorkcellProject } from './project-codec'
 import type { ProjectDatabase } from './project-db'
 
 export interface ProjectRuntime<Staged = unknown> {
@@ -21,8 +20,8 @@ export interface ProjectRuntime<Staged = unknown> {
 }
 
 export interface ProjectCodec {
-  decode(bytes: Uint8Array | ArrayBuffer): Promise<CurrentProjectSnapshot>
-  encode(snapshot: CurrentProjectSnapshot): Promise<Uint8Array>
+  decode(source: Blob | Uint8Array | ArrayBuffer): Promise<CurrentProjectSnapshot>
+  encode(snapshot: CurrentProjectSnapshot): Promise<Blob>
 }
 
 export interface ProjectStoreState {
@@ -34,19 +33,14 @@ export interface ProjectStoreState {
   hydrate(): Promise<void>
   newProject(): Promise<void>
   saveActiveProject(): Promise<CurrentProjectSnapshot>
-  exportActiveProject(): Promise<Uint8Array>
-  importProject(bytes: Uint8Array | ArrayBuffer): Promise<void>
-}
-
-const defaultCodec: ProjectCodec = {
-  decode: decodeWorkcellProject,
-  encode: encodeWorkcellProject,
+  exportActiveProject(): Promise<Blob>
+  importProject(source: Blob | Uint8Array | ArrayBuffer): Promise<void>
 }
 
 export function createProjectStore<Staged>(
   database: ProjectDatabase,
   runtime: ProjectRuntime<Staged>,
-  codec: ProjectCodec = defaultCodec,
+  codec?: ProjectCodec,
 ) {
   let hydrated = false
   let hydrationPromise: Promise<void> | null = null
@@ -186,15 +180,17 @@ export function createProjectStore<Staged>(
       saveActiveProject,
       exportActiveProject: async () => {
         const snapshot = await saveActiveProject()
+        if (codec === undefined) throw new Error('Project archive codec is not configured.')
         return codec.encode(snapshot)
       },
-      importProject: async (bytes) => {
+      importProject: async (source) => {
         await hydrate()
         const previous = get().activeSnapshot
         set({ status: 'importing', error: null })
         let staged: Staged | undefined
         try {
-          const incoming = currentSnapshot(await codec.decode(bytes))
+          if (codec === undefined) throw new Error('Project archive codec is not configured.')
+          const incoming = currentSnapshot(await codec.decode(source))
           staged = await runtime.stage(incoming)
           await runtime.commit(incoming, staged)
           await database.projects.put({ key: 'active', snapshot: incoming })

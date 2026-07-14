@@ -5,6 +5,8 @@ export {
 
 export type {
   LegacyProjectSourceAnalysisV1,
+  ProjectArchiveSourcePlanV1,
+  ProjectArchiveSourceReaderV1,
   PreparedProjectSourceGroupV1,
   PreparedProjectSourceV1,
   ProjectSourceLockedLeaseInputV1,

@@ -12,7 +12,10 @@ it('saves, exports, and imports a selected .wdtwin archive', async () => {
   const save = vi.fn(async () =>
     ({ manifest: { projectId: 'project-01' } }) as CurrentProjectSnapshot,
   )
-  const exportProject = vi.fn(async () => new Uint8Array([1, 2, 3]))
+  const archive = new Blob([new Uint8Array([1, 2, 3])])
+  const file = new File([new Uint8Array([9])], 'cell.wdtwin')
+  const wholeFileRead = vi.spyOn(file, 'arrayBuffer')
+  const exportProject = vi.fn(async () => archive)
   const importProject = vi.fn(async () => undefined)
   const download = vi.fn()
   const store = createStore<ProjectStoreState>()(() => ({
@@ -34,14 +37,15 @@ it('saves, exports, and imports a selected .wdtwin archive', async () => {
   await user.click(screen.getByRole('button', { name: 'Export project' }))
   await user.upload(
     screen.getByLabelText('Import project'),
-    new File([new Uint8Array([9])], 'cell.wdtwin'),
+    file,
   )
 
   expect(save).toHaveBeenCalledOnce()
   expect(exportProject).toHaveBeenCalledOnce()
   expect(download).toHaveBeenCalledWith(
-    new Uint8Array([1, 2, 3]),
+    archive,
     'Workcell 01.wdtwin',
   )
-  expect(importProject).toHaveBeenCalledOnce()
+  expect(importProject).toHaveBeenCalledWith(file)
+  expect(wholeFileRead).not.toHaveBeenCalled()
 })
