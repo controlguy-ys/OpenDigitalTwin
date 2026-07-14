@@ -29,6 +29,8 @@ export function ProjectMenu({
   const state = useStore(store)
   const inputRef = useRef<HTMLInputElement>(null)
   const busy = state.status === 'saving' || state.status === 'importing'
+  const recoveryRequired = state.status === 'recovery-required'
+  const disabled = busy || recoveryRequired
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0]
@@ -41,10 +43,14 @@ export function ProjectMenu({
     <div className="project-menu" aria-label="Project controls">
       <span className="project-name">{state.activeProjectName ?? 'Unsaved Workcell'}</span>
       <span className="project-save-state">
-        {busy ? 'Working…' : state.activeProjectId === null ? 'Unsaved' : 'Saved'}
+        {recoveryRequired
+          ? 'Reload required'
+          : busy
+            ? 'Working…'
+            : state.activeProjectId === null ? 'Unsaved' : 'Saved'}
       </span>
       <button
-        disabled={busy}
+        disabled={disabled}
         onClick={() => void state.newProject().catch(() => undefined)}
         type="button"
       >
@@ -52,7 +58,7 @@ export function ProjectMenu({
       </button>
       <button
         aria-label="Save project"
-        disabled={busy}
+        disabled={disabled}
         onClick={() => void state.saveActiveProject().catch(() => undefined)}
         type="button"
       >
@@ -60,7 +66,7 @@ export function ProjectMenu({
       </button>
       <button
         aria-label="Export project"
-        disabled={busy}
+        disabled={disabled}
         onClick={() => {
           void state
             .exportActiveProject()
@@ -76,7 +82,7 @@ export function ProjectMenu({
       >
         Export
       </button>
-      <button disabled={busy} onClick={() => inputRef.current?.click()} type="button">
+      <button disabled={disabled} onClick={() => inputRef.current?.click()} type="button">
         Import
       </button>
       <input

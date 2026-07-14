@@ -1,0 +1,210 @@
+import Dexie from 'dexie'
+import { afterEach, expect, it, vi } from 'vitest'
+import {
+  stageProjectSourcesV3,
+  type WorkcellProjectSnapshotV3,
+} from '../../domain/project/project-v3'
+import {
+  createProjectHashService,
+  createProjectRevisionIdentityHasher,
+  createProjectSourceDigest,
+} from '../../lib/hash/sha256'
+import { ProjectDatabase } from './project-db'
+import {
+  createProjectMutationService,
+} from './project-mutation-service'
+import {
+  createProjectPublicationCoordinator,
+  type ProjectRuntimeV3,
+} from './project-publication-coordinator'
+import { createProjectRevisionFoundation } from './project-revision-repository'
+import { repositoryProjectFixture } from './project-revision-repository.test-support'
+
+const databases: ProjectDatabase[] = []
+
+afterEach(async () => {
+  for (const database of databases.splice(0)) {
+    const name = database.name
+    database.close()
+    await Dexie.delete(name)
+  }
+})
+
+function deferred() {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => { release = resolve })
+  return { promise, release }
+}
+
+it('publishes one validated V3 candidate before observers see it', async () => {
+  const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+  const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+  const database = new ProjectDatabase(`mutation-service-${crypto.randomUUID()}`)
+  databases.push(database)
+  const foundation = createProjectRevisionFoundation({
+    database,
+    revisionIdentityHasher,
+    sourceHashService: hashService,
+    sourceStagingOptions: {
+      sourceDigest: createProjectSourceDigest(hashService),
+    },
+  })
+  const barrier = deferred()
+  let prepareCount = 0
+  const runtime: ProjectRuntimeV3<{ snapshot: WorkcellProjectSnapshotV3 }> = {
+    prepare: vi.fn(async (snapshot) => {
+      prepareCount += 1
+      if (prepareCount === 2) await barrier.promise
+      return { snapshot }
+    }),
+    publish: vi.fn(),
+    dispose: vi.fn(),
+  }
+  let commitIndex = 0
+  const coordinator = createProjectPublicationCoordinator({
+    repository: foundation.repository,
+    runtime,
+    createCommitToken: () => `commit-${++commitIndex}`,
+  })
+  const service = createProjectMutationService({
+    repository: foundation.repository,
+    sourceStaging: foundation.sourceStaging,
+    coordinator,
+  })
+  const projectA = await repositoryProjectFixture({ name: 'Cell A' })
+  const staged = await stageProjectSourcesV3(
+    projectA,
+    foundation.sourceStaging,
+    revisionIdentityHasher,
+  )
+  await service.replacePreparedUntrusted({ ...staged, warnings: [] })
+
+  const pending = service.replaceFromActive((current) => ({
+    ...current,
+    manifest: { ...current.manifest, name: 'Cell B' },
+  }))
+
+  expect(service.readPublished()?.snapshot.manifest.name).toBe('Cell A')
+  barrier.release()
+  await pending
+  expect(service.readPublished()?.snapshot.manifest.name).toBe('Cell B')
+  expect(runtime.publish).toHaveBeenCalledTimes(2)
+  expect((await foundation.repository.readPointer())?.state).toBe('stable')
+})
+
+it('freezes the active recipe projection and revokes prepared sources when the recipe rejects', async () => {
+  const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+  const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+  const database = new ProjectDatabase(`mutation-recipe-failure-${crypto.randomUUID()}`)
+  databases.push(database)
+  const foundation = createProjectRevisionFoundation({
+    database,
+    revisionIdentityHasher,
+    sourceHashService: hashService,
+    sourceStagingOptions: {
+      sourceDigest: createProjectSourceDigest(hashService),
+    },
+  })
+  const runtime: ProjectRuntimeV3<{ snapshot: WorkcellProjectSnapshotV3 }> = {
+    prepare: vi.fn(async (snapshot) => ({ snapshot })),
+    publish: vi.fn(),
+    dispose: vi.fn(),
+  }
+  let commitIndex = 0
+  const coordinator = createProjectPublicationCoordinator({
+    repository: foundation.repository,
+    runtime,
+    createCommitToken: () => `commit-${++commitIndex}`,
+  })
+  const service = createProjectMutationService({
+    repository: foundation.repository,
+    sourceStaging: foundation.sourceStaging,
+    coordinator,
+  })
+  const projectA = await repositoryProjectFixture({ name: 'Cell A' })
+  const stagedProject = await stageProjectSourcesV3(
+    projectA,
+    foundation.sourceStaging,
+    revisionIdentityHasher,
+  )
+  await service.replacePreparedUntrusted({ ...stagedProject, warnings: [] })
+  const pendingSource = await foundation.sourceStaging.stage(
+    'object',
+    Uint8Array.of(9, 8, 7).buffer,
+  )
+
+  await expect(service.replaceFromActive((current) => {
+    expect(Object.isFrozen(current)).toBe(true)
+    expect(Object.isFrozen(current.manifest)).toBe(true)
+    throw new Error('recipe rejected')
+  }, [{
+    ownerKeys: ['object-asset:new-object'],
+    preparedSource: pendingSource,
+  }])).rejects.toThrow('recipe rejected')
+
+  expect(() => foundation.sourceStaging.assertPrepared(pendingSource)).toThrow(/revoked/i)
+  expect(service.readPublished()?.snapshot.manifest.name).toBe('Cell A')
+})
+
+it('recovers a committed publishing revision after a simulated browser crash', async () => {
+  const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+  const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+  const database = new ProjectDatabase(`mutation-recovery-${crypto.randomUUID()}`)
+  databases.push(database)
+  const originalFoundation = createProjectRevisionFoundation({
+    database,
+    revisionIdentityHasher,
+    sourceHashService: hashService,
+    sourceStagingOptions: {
+      sourceDigest: createProjectSourceDigest(hashService),
+    },
+  })
+  const project = await repositoryProjectFixture({ name: 'Recovered Cell' })
+  const staged = await stageProjectSourcesV3(
+    project,
+    originalFoundation.sourceStaging,
+    revisionIdentityHasher,
+  )
+  const candidate = originalFoundation.repository.createCandidate({
+    projection: staged.projection,
+    preparedSourceGroups: staged.preparedSourceGroups,
+  })
+  const prepared = await originalFoundation.repository.prepareRevision(candidate)
+  await originalFoundation.repository.commitPreparedRevision(
+    null,
+    prepared,
+    'interrupted-publication',
+  )
+  expect((await originalFoundation.repository.readPointer())?.state).toBe('publishing')
+
+  const recoveredFoundation = createProjectRevisionFoundation({
+    database,
+    revisionIdentityHasher,
+    sourceHashService: hashService,
+    sourceStagingOptions: {
+      sourceDigest: createProjectSourceDigest(hashService),
+    },
+  })
+  const runtime: ProjectRuntimeV3<{ snapshot: WorkcellProjectSnapshotV3 }> = {
+    prepare: vi.fn(async (snapshot) => ({ snapshot })),
+    publish: vi.fn(),
+    dispose: vi.fn(),
+  }
+  const coordinator = createProjectPublicationCoordinator({
+    repository: recoveredFoundation.repository,
+    runtime,
+    createCommitToken: () => 'unused-recovery-token',
+  })
+  const service = createProjectMutationService({
+    repository: recoveredFoundation.repository,
+    sourceStaging: recoveredFoundation.sourceStaging,
+    coordinator,
+  })
+
+  await service.hydrate()
+
+  expect(service.isRecoveryRequired()).toBe(false)
+  expect(service.readPublished()?.snapshot.manifest.name).toBe('Recovered Cell')
+  expect(runtime.publish).toHaveBeenCalledOnce()
+  expect((await recoveredFoundation.repository.readPointer())?.state).toBe('stable')
+})

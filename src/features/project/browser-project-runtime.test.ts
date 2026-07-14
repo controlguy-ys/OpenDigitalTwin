@@ -1,12 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type {
-  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
-  RobotLinkGeometryRecordV2,
-} from '../../domain/project/project'
+import type { RobotLinkGeometryRecordV2 } from '../../domain/project/project'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
 import { useCollisionStore } from '../collision/collision-store'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
-import { browserProjectRuntime } from './browser-project-runtime'
+import { createBrowserProjectRuntime } from './browser-project-runtime'
 
 const LINK_IDS = [
   'LINK00',
@@ -58,7 +55,7 @@ afterEach(() => {
 })
 
 describe('browser project collision policy bridge', () => {
-  it('captures the canonical ignored-pair policy in the V2 snapshot', async () => {
+  it('creates a native V3 project with the canonical collision policy', async () => {
     useRobotGeometryStore.setState({ links: LINK_IDS.map(robotLink) })
     useCollisionStore.getState().setCollisionEnabled(false)
     useCollisionStore.getState().setWarningDistanceM(0.125)
@@ -66,11 +63,17 @@ describe('browser project collision policy bridge', () => {
       .getState()
       .ignorePair('robot-link:LINK03|object:cup-01')
 
-    const captured = (await browserProjectRuntime.capture(
-      null,
-    )) as CurrentProjectSnapshot
+    const browserProjectRuntime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map(robotLink),
+      prepareRobotAssets: async () => new Map(),
+    })
+    const captured = await browserProjectRuntime.createNew()
 
-    expect(captured.manifest.schemaVersion).toBe(2)
+    expect(captured.manifest.schemaVersion).toBe(3)
+    expect(captured.robot.sources).toHaveLength(1)
+    expect(new Set(
+      captured.robot.links.map((link) => link.sourceRefs[0]?.sourceAssetId),
+    )).toEqual(new Set([captured.robot.sources[0]?.id]))
     expect(captured.collisionPolicy).toEqual({
       enabled: false,
       warningDistanceM: 0.125,
@@ -86,7 +89,11 @@ describe('browser project collision policy bridge', () => {
     useCollisionStore
       .getState()
       .ignorePair('robot-link:LINK03|object:cup-01')
-    const captured = await browserProjectRuntime.capture(null)
+    const browserProjectRuntime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map(robotLink),
+      prepareRobotAssets: async () => new Map(),
+    })
+    const captured = await browserProjectRuntime.createNew()
 
     useCollisionStore.getState().setCollisionEnabled(true)
     useCollisionStore.getState().setWarningDistanceM(0.001)
@@ -105,7 +112,13 @@ describe('browser project collision policy bridge', () => {
       'replaceCollisionState',
     )
 
-    await browserProjectRuntime.restore?.(captured)
+    const prepared = await browserProjectRuntime.prepare(captured, 'revision-test')
+    browserProjectRuntime.publish({
+      revisionId: 'revision-test',
+      snapshot: captured,
+      generation: 1,
+      resources: prepared,
+    })
 
     expect(useCollisionStore.getState().policy).toEqual({
       enabled: false,

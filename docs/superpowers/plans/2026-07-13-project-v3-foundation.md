@@ -1877,6 +1877,29 @@ git diff --cached --check
 git commit -m "docs: verify project v3 foundation"
 ```
 
+#### 2026-07-15 Task 0 browser-authority gate evidence
+
+- [x] **Task 4 Part A authority prerequisite:** repository-prepared runtime materialization is caller-owned, shares one clone per same-digest Blob within a snapshot, performs no new source hash or publication, and pre-commit discard is idempotent and revokes pending source ownership. Repository tests also cover stale compare-and-swap and integrity hydration of a publishing target.
+- [x] **Task 4 Part B browser publication subset:** one serialized coordinator validates and prepares before the atomic pointer commit, publishes one V3 runtime bundle, finalizes and activates matching sources, preserves the previous bundle on pre-publication failure, and enters `recovery-required` once runtime publication begins or later finalization fails. A fresh service recovers a simulated committed `publishing` pointer to `stable`.
+- [x] **Task 5 Task-0 authority subset:** browser composition now uses only the V3 revision foundation, mutation service, publication coordinator, and V3 codec. New/Save/Export/Import read or replace the published V3 snapshot; Save/Export do not recapture feature stores. V1/V2 runtime codec entry points, archive migration branches, snapshot aliases, and migration modules are removed. Schema 1/2 archives fail as `PROJECT_SCHEMA_UNSUPPORTED` before digesting, staging, mutation, or runtime publication. The superseded Legacy adapter steps elsewhere in Task 5 remain intentionally unchecked and are not claimed by this evidence.
+- [x] **Task 6 Task-0 browser subset:** `tests/project-v3-roundtrip.spec.ts` proves New, read-only Save, Export, a new stable import commit, byte-free revision rows, seven namespace-local source Blobs, and reload equality. Existing geometry/collision browser fixtures now generate native V3 archives instead of exercising removed V1/V2 migration.
+- [ ] **Task 6 remaining WS1 scope:** non-secure-origin acceptance, quantitative resource lane, full format/operator documentation, deployment/audit gates, and independent review remain open; this Task 0 evidence does not mark them complete.
+
+Evidence commands recorded for this gate:
+
+```text
+npm run test:run -- src/features/project src/domain/project
+  PASS: 16 files, 278 tests
+npm run test:run
+  PASS: 87 files, 727 tests
+npm run lint
+  PASS: zero lint errors
+npm run build
+  PASS: TypeScript and production Vite build
+npm run test:e2e -- tests/geometry-collision.spec.ts tests/project-v3-roundtrip.spec.ts
+  PASS: 3 tests in 11.6 minutes, including test-mode build and original timeouts
+```
+
 ## Quantitative Success Criteria
 
 1. `CurrentProjectSnapshot` has schema version `3`; v1 and v2 remain decode-only inputs.

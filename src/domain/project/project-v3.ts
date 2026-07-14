@@ -3022,6 +3022,9 @@ export function installProjectSourcePublicationRepositoryBindingInternalV1(
         0,
       )
     },
+    assignments(prepared: object) {
+      return publicationAssignmentsForV1(leaseFor(prepared), boundary)
+    },
     async commit(prepared: object): Promise<void> {
       const lease = leaseFor(prepared)
       await commitCanonicalProjectSourcesInternalV1(
@@ -3690,9 +3693,10 @@ function preflightArchiveSourcePlansV1(
       planned.map((source) => ({ ...source, bytes: new ArrayBuffer(1) })),
     )
   } catch (error) {
+    const detail = error instanceof Error ? ` ${error.message}` : ''
     return sourceFailure(
       'PROJECT_SOURCE_ASSIGNMENT_INVALID',
-      'Archive Project projection is not a valid V3 Project.',
+      `Archive Project projection is not a valid V3 Project.${detail}`,
       error,
     )
   }

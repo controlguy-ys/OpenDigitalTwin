@@ -1,141 +1,110 @@
 import { createStore } from 'zustand/vanilla'
-import type {
-  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
-  WorkcellProjectSnapshotV1,
-} from '../../domain/project/project'
-import {
-  validateWorkcellProjectSnapshotV2 as validateWorkcellProjectSnapshot,
-  WORKCELL_PROJECT_SCHEMA_VERSION_V1,
-} from '../../domain/project/project'
-import { migrateV1ToV2 } from '../../domain/project/project-v1-migration'
-import type { ProjectDatabase } from './project-db'
+import type { WorkcellProjectSnapshotV3 } from '../../domain/project/project-v3'
+import type { ProjectDecodeResultV3 } from './project-codec'
+import { revokeProjectDecodeResult } from './project-codec'
+import type { ProjectMutationService } from './project-mutation-service'
 
-export interface ProjectRuntime<Staged = unknown> {
-  createNew?(): Promise<CurrentProjectSnapshot>
-  restore?(snapshot: CurrentProjectSnapshot): Promise<void> | void
-  capture(previous: CurrentProjectSnapshot | null): Promise<CurrentProjectSnapshot>
-  stage(snapshot: CurrentProjectSnapshot): Promise<Staged>
-  commit(snapshot: CurrentProjectSnapshot, staged: Staged): Promise<void>
-  dispose(staged: Staged): void
-}
-
-export interface ProjectCodec {
-  decode(source: Blob | Uint8Array | ArrayBuffer): Promise<CurrentProjectSnapshot>
-  encode(snapshot: CurrentProjectSnapshot): Promise<Blob>
+export interface ProjectStoreOptions {
+  readonly mutationService: ProjectMutationService
+  readonly createNew: () => Promise<WorkcellProjectSnapshotV3>
+  readonly stageNew: (
+    snapshot: WorkcellProjectSnapshotV3,
+  ) => Promise<ProjectDecodeResultV3>
+  readonly decode: (
+    source: Blob | Uint8Array | ArrayBuffer,
+  ) => Promise<ProjectDecodeResultV3>
+  readonly encode: (snapshot: WorkcellProjectSnapshotV3) => Promise<Blob>
 }
 
 export interface ProjectStoreState {
   activeProjectId: string | null
   activeProjectName: string | null
-  activeSnapshot: CurrentProjectSnapshot | null
-  status: 'idle' | 'loading' | 'saving' | 'importing' | 'ready' | 'error'
+  activeSnapshot: WorkcellProjectSnapshotV3 | null
+  status:
+    | 'idle'
+    | 'loading'
+    | 'saving'
+    | 'importing'
+    | 'ready'
+    | 'error'
+    | 'recovery-required'
   error: string | null
   hydrate(): Promise<void>
   newProject(): Promise<void>
-  saveActiveProject(): Promise<CurrentProjectSnapshot>
+  saveActiveProject(): Promise<WorkcellProjectSnapshotV3>
   exportActiveProject(): Promise<Blob>
   importProject(source: Blob | Uint8Array | ArrayBuffer): Promise<void>
 }
 
-export function createProjectStore<Staged>(
-  database: ProjectDatabase,
-  runtime: ProjectRuntime<Staged>,
-  codec?: ProjectCodec,
-) {
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
+export function createProjectStore(options: ProjectStoreOptions) {
+  const mutationService = options.mutationService
   let hydrated = false
   let hydrationPromise: Promise<void> | null = null
 
-  const currentSnapshot = (candidate: unknown): CurrentProjectSnapshot => {
-    const schemaVersion = (
-      candidate as { manifest?: { schemaVersion?: unknown } }
-    ).manifest?.schemaVersion
-    return schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V1
-      ? migrateV1ToV2(candidate as WorkcellProjectSnapshotV1)
-      : validateWorkcellProjectSnapshot(candidate)
-  }
-
-  const collisionPersistenceSignature = (candidate: unknown): string => {
-    const snapshot = candidate as {
-      manifest?: { schemaVersion?: unknown }
-      robot?: { links?: Array<Record<string, unknown>> }
-      objectAssets?: Array<Record<string, unknown>>
-      collisionPolicy?: unknown
+  const store = createStore<ProjectStoreState>()((set) => {
+    const publishedState = (): Pick<
+      ProjectStoreState,
+      'activeProjectId' | 'activeProjectName' | 'activeSnapshot' | 'status' | 'error'
+    > => {
+      const published = mutationService.readPublished()
+      if (published === null) {
+        return {
+          activeProjectId: null,
+          activeProjectName: null,
+          activeSnapshot: null,
+          status: mutationService.isRecoveryRequired() ? 'recovery-required' : 'idle',
+          error: null,
+        }
+      }
+      return {
+        activeProjectId: published.snapshot.manifest.projectId,
+        activeProjectName: published.snapshot.manifest.name,
+        activeSnapshot: published.snapshot,
+        status: mutationService.isRecoveryRequired() ? 'recovery-required' : 'ready',
+        error: null,
+      }
     }
-    return JSON.stringify({
-      schemaVersion: snapshot.manifest?.schemaVersion,
-      robotLinks: snapshot.robot?.links?.map((link) => ({
-        collisionCenter: link.collisionCenter,
-        collisionHalfExtents: link.collisionHalfExtents,
-        collisionBoxes: link.collisionBoxes,
-      })),
-      objectAssets: snapshot.objectAssets?.map((asset) => ({
-        colliderCenter: asset.colliderCenter,
-        collisionHalfExtents: asset.collisionHalfExtents,
-        collisionBoxes: asset.collisionBoxes,
-      })),
-      collisionPolicy: snapshot.collisionPolicy,
-    })
-  }
 
-  return createStore<ProjectStoreState>()((set, get) => {
-    const activate = (snapshot: CurrentProjectSnapshot) => ({
-      activeSnapshot: snapshot,
-      activeProjectId: snapshot.manifest.projectId,
-      activeProjectName: snapshot.manifest.name,
-      status: 'ready' as const,
-      error: null,
+    const failState = (error: unknown, fallback: string) => ({
+      status: mutationService.isRecoveryRequired()
+        ? 'recovery-required' as const
+        : mutationService.readPublished() === null
+          ? 'error' as const
+          : 'ready' as const,
+      error: errorMessage(error, fallback),
     })
 
     const hydrate = (): Promise<void> => {
-      if (hydrated) return Promise.resolve()
+      if (hydrated) {
+        set(publishedState())
+        return Promise.resolve()
+      }
       if (hydrationPromise !== null) return hydrationPromise
       set({ status: 'loading', error: null })
-      hydrationPromise = (async () => {
-        try {
-          await database.open()
-          const stored = await database.projects.get('active')
-          if (stored === undefined) set({ status: 'idle' })
-          else {
-            const snapshot = currentSnapshot(stored.snapshot)
-            if (
-              collisionPersistenceSignature(stored.snapshot) !==
-              collisionPersistenceSignature(snapshot)
-            ) {
-              await database.projects.put({ key: 'active', snapshot })
-            }
-            await runtime.restore?.(snapshot)
-            set(activate(snapshot))
-          }
-        } catch (error) {
-          set({
-            status: 'error',
-            error: error instanceof Error ? error.message : 'Project storage failed.',
-          })
-        } finally {
+      hydrationPromise = mutationService.hydrate()
+        .then(() => set(publishedState()))
+        .catch((error) => {
+          set(failState(error, 'Project storage failed.'))
+        })
+        .finally(() => {
           hydrated = true
           hydrationPromise = null
-        }
-      })()
+        })
       return hydrationPromise
     }
 
-    const saveActiveProject = async () => {
+    const saveActiveProject = async (): Promise<WorkcellProjectSnapshotV3> => {
       await hydrate()
-      set({ status: 'saving', error: null })
-      try {
-        const snapshot = validateWorkcellProjectSnapshot(
-          await runtime.capture(get().activeSnapshot),
-        )
-        await database.projects.put({ key: 'active', snapshot })
-        set(activate(snapshot))
-        return snapshot
-      } catch (error) {
-        set({
-          status: 'error',
-          error: error instanceof Error ? error.message : 'Project save failed.',
-        })
-        throw error
+      const published = mutationService.readPublished()
+      if (published === null) {
+        throw new Error('PROJECT_ACTIVE_REVISION_MISSING: No V3 Project is active.')
       }
+      set({ ...publishedState(), status: 'ready' })
+      return published.snapshot
     }
 
     return {
@@ -147,71 +116,63 @@ export function createProjectStore<Staged>(
       hydrate,
       newProject: async () => {
         await hydrate()
-        const previous = get().activeSnapshot
         set({ status: 'importing', error: null })
-        let staged: Staged | undefined
         try {
-          const snapshot = validateWorkcellProjectSnapshot(
-            runtime.createNew === undefined
-              ? await runtime.capture(null)
-              : await runtime.createNew(),
-          )
-          staged = await runtime.stage(snapshot)
-          await runtime.commit(snapshot, staged)
-          await database.projects.put({ key: 'active', snapshot })
-          set(activate(snapshot))
+          const snapshot = await options.createNew()
+          const prepared = await options.stageNew(snapshot)
+          await mutationService.replacePreparedUntrusted(prepared)
+          set(publishedState())
         } catch (error) {
-          if (staged !== undefined) runtime.dispose(staged)
-          if (previous !== null && staged !== undefined) {
-            try {
-              const rollback = await runtime.stage(previous)
-              await runtime.commit(previous, rollback)
-            } catch {
-              // The previous central snapshot remains authoritative for next hydration.
-            }
-          }
-          set({
-            status: previous === null ? 'error' : 'ready',
-            error: error instanceof Error ? error.message : 'New project failed.',
-          })
+          set(failState(error, 'New Project failed.'))
           throw error
         }
       },
       saveActiveProject,
       exportActiveProject: async () => {
         const snapshot = await saveActiveProject()
-        if (codec === undefined) throw new Error('Project archive codec is not configured.')
-        return codec.encode(snapshot)
+        return options.encode(snapshot)
       },
       importProject: async (source) => {
         await hydrate()
-        const previous = get().activeSnapshot
         set({ status: 'importing', error: null })
-        let staged: Staged | undefined
+        let decoded: ProjectDecodeResultV3 | undefined
         try {
-          if (codec === undefined) throw new Error('Project archive codec is not configured.')
-          const incoming = currentSnapshot(await codec.decode(source))
-          staged = await runtime.stage(incoming)
-          await runtime.commit(incoming, staged)
-          await database.projects.put({ key: 'active', snapshot: incoming })
-          set(activate(incoming))
+          decoded = await options.decode(source)
+          await mutationService.replacePreparedUntrusted(decoded)
+          set(publishedState())
         } catch (error) {
-          if (staged !== undefined) runtime.dispose(staged)
-          if (previous !== null && staged !== undefined) {
+          if (decoded !== undefined) {
             try {
-              const rollback = await runtime.stage(previous)
-              await runtime.commit(previous, rollback)
+              revokeProjectDecodeResult(decoded)
             } catch {
-              // The previous central snapshot remains authoritative for next hydration.
+              // Repository publication may already have consumed or revoked it.
             }
           }
-          set({
-            status: previous === null ? 'error' : 'ready',
-            error: error instanceof Error ? error.message : 'Project import failed.',
-          })
+          set(failState(error, 'Project import failed.'))
           throw error
         }
       },
     }
   })
+
+  mutationService.subscribe(() => {
+    const published = mutationService.readPublished()
+    store.setState(published === null
+      ? {
+          activeProjectId: null,
+          activeProjectName: null,
+          activeSnapshot: null,
+          status: mutationService.isRecoveryRequired() ? 'recovery-required' : 'idle',
+          error: null,
+        }
+      : {
+          activeProjectId: published.snapshot.manifest.projectId,
+          activeProjectName: published.snapshot.manifest.name,
+          activeSnapshot: published.snapshot,
+          status: mutationService.isRecoveryRequired() ? 'recovery-required' : 'ready',
+          error: null,
+        })
+  })
+
+  return store
 }

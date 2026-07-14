@@ -1,18 +1,19 @@
 import { create } from 'zustand'
 import { createStore } from 'zustand/vanilla'
+import type { SerializableTransform } from '../../domain/equipment/equipment'
 import type { Pose3D } from '../../domain/frames/pose3d'
 import {
   IDENTITY_POSE,
   pose3DToSerializableTransform,
   serializableTransformToPose3D,
 } from '../../domain/frames/pose3d'
-import type {
-  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
-} from '../../domain/project/project'
 
 export const COORDINATE_FRAME_STORAGE_KEY = 'robot-sim.coordinate-frames.v1'
 export type CoordinateFrameId = 'mcp' | 'tcp'
-export type CoordinateFrames = CurrentProjectSnapshot['frames']
+export interface CoordinateFrames {
+  readonly mcp: SerializableTransform
+  readonly tcp: SerializableTransform
+}
 
 export interface CoordinateFrameStoreState {
   frames: CoordinateFrames

@@ -1,17 +1,58 @@
 import { useStore } from 'zustand'
-import { browserProjectRuntime } from './browser-project-runtime'
+import { stageProjectSourcesV3 } from '../../domain/project/project-v3'
 import {
-  decodeLegacyRuntimeProjectV2,
-  encodeLegacyRuntimeProjectV2,
-} from './project-codec'
+  createProjectHashService,
+  createProjectRevisionIdentityHasher,
+  createProjectSourceDigest,
+} from '../../lib/hash/sha256'
+import { browserProjectRuntime } from './browser-project-runtime'
+import { decodeWorkcellProject, encodeWorkcellProject } from './project-codec'
 import { projectDb } from './project-db'
+import { createProjectMutationService } from './project-mutation-service'
+import { createProjectPublicationCoordinator } from './project-publication-coordinator'
+import { createProjectRevisionFoundation } from './project-revision-repository'
 import { createProjectStore, type ProjectStoreState } from './project-store'
 
-// Temporary V2 runtime lane. Task 4 replaces this adapter with prepared V3
-// source consumption; transport is already streaming Blob/File end to end.
-export const projectStore = createProjectStore(projectDb, browserProjectRuntime, {
-  decode: decodeLegacyRuntimeProjectV2,
-  encode: encodeLegacyRuntimeProjectV2,
+const hashService = createProjectHashService({ subtle: crypto.subtle })
+const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+const foundation = createProjectRevisionFoundation({
+  database: projectDb,
+  revisionIdentityHasher,
+  sourceHashService: hashService,
+  sourceStagingOptions: {
+    sourceDigest: createProjectSourceDigest(hashService),
+  },
+})
+
+export const projectPublicationCoordinator = createProjectPublicationCoordinator({
+  repository: foundation.repository,
+  runtime: browserProjectRuntime,
+})
+
+export const projectMutationService = createProjectMutationService({
+  repository: foundation.repository,
+  sourceStaging: foundation.sourceStaging,
+  coordinator: projectPublicationCoordinator,
+})
+
+export const projectStore = createProjectStore({
+  mutationService: projectMutationService,
+  createNew: () => browserProjectRuntime.createNew(),
+  stageNew: async (snapshot) => ({
+    ...await stageProjectSourcesV3(
+      snapshot,
+      foundation.sourceStaging,
+      revisionIdentityHasher,
+    ),
+    warnings: [],
+  }),
+  decode: (source) => decodeWorkcellProject(source, {
+    sourceStaging: foundation.sourceStaging,
+    projectRevisionIdentityHasher: revisionIdentityHasher,
+  }),
+  encode: (snapshot) => encodeWorkcellProject(snapshot, {
+    projectRevisionIdentityHasher: revisionIdentityHasher,
+  }),
 })
 
 export function useProjectStore<T>(selector: (state: ProjectStoreState) => T): T {

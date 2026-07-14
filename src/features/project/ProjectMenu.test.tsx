@@ -2,9 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createStore } from 'zustand/vanilla'
 import { expect, it, vi } from 'vitest'
-import type {
-  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
-} from '../../domain/project/project'
+import type { WorkcellProjectSnapshotV3 as CurrentProjectSnapshot } from '../../domain/project/project-v3'
 import type { ProjectStoreState } from './project-store'
 import { ProjectMenu } from './ProjectMenu'
 
@@ -48,4 +46,27 @@ it('saves, exports, and imports a selected .wdtwin archive', async () => {
   )
   expect(importProject).toHaveBeenCalledWith(file)
   expect(wholeFileRead).not.toHaveBeenCalled()
+})
+
+it('disables durable Project actions when recovery requires a reload', () => {
+  const store = createStore<ProjectStoreState>()(() => ({
+    activeProjectId: 'project-01',
+    activeProjectName: 'Workcell 01',
+    activeSnapshot: null,
+    status: 'recovery-required',
+    error: 'Publication recovery is required.',
+    hydrate: vi.fn(async () => undefined),
+    newProject: vi.fn(async () => undefined),
+    saveActiveProject: vi.fn(),
+    exportActiveProject: vi.fn(),
+    importProject: vi.fn(async () => undefined),
+  }))
+
+  render(<ProjectMenu store={store} />)
+
+  expect(screen.getByText('Reload required')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'New' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Save project' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Export project' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled()
 })

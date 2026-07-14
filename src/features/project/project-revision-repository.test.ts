@@ -190,6 +190,20 @@ describe('ProjectRevisionRepository pointer protocol', () => {
       .toEqual(revision.storedRevision)
   })
 
+  it('integrity-hydrates the exact publishing target for startup recovery', async () => {
+    const revision = await prepared('Interrupted publication')
+    await repository.commitPreparedRevision(null, revision, 'interrupted')
+
+    const hydrated = await repository.readRevision(revision.storedRevision.revisionId)
+
+    expect(hydrated).not.toBeNull()
+    await repository.finalizePublication('interrupted')
+    await expect(repository.adoptHydratedRevision(hydrated!)).resolves.toMatchObject({
+      revisionId: revision.storedRevision.revisionId,
+      commitToken: 'interrupted',
+    })
+  })
+
   it('compensates to the exact previous stable commit token', async () => {
     const first = await prepared('First')
     await repository.commitPreparedRevision(null, first, 'commit-a')
@@ -592,6 +606,120 @@ describe('ProjectRevisionRepository canonical source binding', () => {
     for (const group of staged.preparedSourceGroups) {
       expect(() => staging.revoke(group.preparedSource)).toThrow(/consumed/i)
     }
+  })
+
+  it('materializes a caller-owned runtime snapshot without hashing and preserves same-digest sharing', async () => {
+    const sourceDigest = vi.fn(createProjectHashService({
+      subtle: globalThis.crypto.subtle,
+    }).sha256)
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const foundation = createProjectRevisionFoundation({
+      database,
+      revisionIdentityHasher: createProjectRevisionIdentityHasher(hashService),
+      sourceStagingOptions: { sourceDigest: { digestSource: sourceDigest } },
+    })
+    const fixture = await repositoryProjectFixture({
+      objectStepAssets: [
+        { id: 'asset-a', bytes: [7, 8, 9] },
+        { id: 'asset-b', bytes: [7, 8, 9] },
+      ],
+    })
+    const staged = await stageProjectSourcesV3(
+      fixture,
+      foundation.sourceStaging,
+      createProjectRevisionIdentityHasher(hashService),
+    )
+    const preparedRevision = await foundation.repository.prepareRevision(
+      foundation.repository.createCandidate({
+        projection: staged.projection,
+        preparedSourceGroups: staged.preparedSourceGroups,
+      }),
+    )
+    sourceDigest.mockClear()
+
+    const first = foundation.repository.materializePreparedRuntime(preparedRevision)
+    const second = foundation.repository.materializePreparedRuntime(preparedRevision)
+    const firstA = stepAssetBytes(first, 'asset-a')
+    const firstB = stepAssetBytes(first, 'asset-b')
+    const secondA = stepAssetBytes(second, 'asset-a')
+
+    expect(firstA).toBe(firstB)
+    expect(secondA).not.toBe(firstA)
+    new Uint8Array(firstA)[0] = 255
+    expect(new Uint8Array(secondA)[0]).toBe(7)
+    expect(sourceDigest).not.toHaveBeenCalled()
+  })
+
+  it('materializes metadata-only prepared revisions without source digest work', async () => {
+    const sourceDigest = vi.fn(createProjectHashService({
+      subtle: globalThis.crypto.subtle,
+    }).sha256)
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const foundation = createProjectRevisionFoundation({
+      database,
+      revisionIdentityHasher: createProjectRevisionIdentityHasher(hashService),
+      sourceStagingOptions: { sourceDigest: { digestSource: sourceDigest } },
+    })
+    const staged = await stageProjectSourcesV3(
+      await repositoryProjectFixture({ name: 'Cell A' }),
+      foundation.sourceStaging,
+      createProjectRevisionIdentityHasher(hashService),
+    )
+    const initial = await foundation.repository.prepareRevision(
+      foundation.repository.createCandidate({
+        projection: staged.projection,
+        preparedSourceGroups: staged.preparedSourceGroups,
+      }),
+    )
+    await foundation.repository.commitPreparedRevision(null, initial, 'initial')
+    await foundation.repository.finalizePublication('initial')
+    await foundation.repository.activatePreparedSources(initial, 'initial')
+    sourceDigest.mockClear()
+    const metadataProjection = {
+      ...structuredClone(staged.projection),
+      manifest: { ...staged.projection.manifest, name: 'Cell B' },
+    }
+    const metadata = await foundation.repository.prepareRevision(
+      foundation.repository.createCandidate({ projection: metadataProjection }),
+    )
+
+    const runtime = foundation.repository.materializePreparedRuntime(metadata)
+
+    expect(runtime.manifest.name).toBe('Cell B')
+    expect(sourceDigest).not.toHaveBeenCalled()
+  })
+
+  it('idempotently discards an uncommitted prepared revision after runtime preparation fails', async () => {
+    const staged = await stageProjectSourcesV3(
+      await repositoryProjectFixture({ name: 'Discard me' }),
+      sourceStaging,
+      createProjectRevisionIdentityHasher(
+        createProjectHashService({ subtle: globalThis.crypto.subtle }),
+      ),
+    )
+    const preparedRevision = await repository.prepareRevision(repository.createCandidate({
+      projection: staged.projection,
+      preparedSourceGroups: staged.preparedSourceGroups,
+    }))
+    repository.materializePreparedRuntime(preparedRevision)
+
+    repository.discardPreparedRevision(preparedRevision)
+    repository.discardPreparedRevision(preparedRevision)
+
+    for (const group of staged.preparedSourceGroups) {
+      expect(() => sourceStaging.assertPrepared(group.preparedSource)).toThrow(/revoked/i)
+    }
+    expect(() => repository.materializePreparedRuntime(preparedRevision)).toThrow(
+      expect.objectContaining({ code: 'PROJECT_PREPARED_REVISION_DISCARDED' }),
+    )
+    await expect(repository.commitPreparedRevision(
+      null,
+      preparedRevision,
+      'discarded',
+    )).rejects.toMatchObject({ code: 'PROJECT_PREPARED_REVISION_DISCARDED' })
+    expect(await database.projectPointers.count()).toBe(0)
+    expect(await database.projectRevisions.count()).toBe(0)
+    expect(await database.projectSourceBlobs.count()).toBe(0)
   })
 
   it('rejects staged bytes that collide with a resident namespace and digest without mutation', async () => {

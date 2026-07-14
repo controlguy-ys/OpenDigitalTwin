@@ -72,6 +72,7 @@ export interface CanonicalProjectSourceOperationsInternalV1 {
   attest(groups: readonly PreparedProjectSourceGroupV1[]): object
   lease(prepared: object, attestation: object): void
   additionalUniqueBlobBytes(prepared: object): number
+  assignments(prepared: object): readonly CanonicalProjectSourceAssignmentInternalV1[]
   commit(prepared: object): Promise<void>
   promote(prepared: object, proof: object): void
   rollback(prepared: object): void
@@ -112,6 +113,10 @@ export interface ActiveProjectRevisionContextV1 {
 export interface ProjectRevisionRepository {
   createCandidate(input: ProjectRevisionCandidateInputV1): ProjectRevisionCandidateV1
   prepareRevision(candidate: ProjectRevisionCandidateV1): Promise<PreparedProjectRevisionRecordV1>
+  materializePreparedRuntime(
+    prepared: PreparedProjectRevisionRecordV1,
+  ): WorkcellProjectSnapshotV3
+  discardPreparedRevision(prepared: PreparedProjectRevisionRecordV1): void
   commitPreparedRevision(
     expectedRevisionId: string | null,
     prepared: PreparedProjectRevisionRecordV1,
@@ -153,7 +158,7 @@ interface PreparedRevisionStateV1 {
   readonly storedRevision: StoredProjectRevisionV1
   readonly sourcePreparedKey?: object | undefined
   commitToken?: string | undefined
-  status: 'prepared' | 'committed' | 'activated' | 'failed'
+  status: 'prepared' | 'committed' | 'activated' | 'discarded' | 'failed'
 }
 
 interface ProjectRevisionCandidateStateV1 {
@@ -852,6 +857,12 @@ function createProjectRevisionRepositoryInternal(
     if (state === undefined || state.authority !== authority) {
       return fail('PROJECT_PREPARED_REVISION_INVALID', 'Prepared revision is forged or belongs to another repository.')
     }
+    if (state.status === 'discarded') {
+      return fail(
+        'PROJECT_PREPARED_REVISION_DISCARDED',
+        'Prepared revision was discarded before publication.',
+      )
+    }
     if (state.status !== requiredStatus) {
       return fail('PROJECT_PREPARED_REVISION_CONSUMED', 'Prepared revision is no longer available for this operation.')
     }
@@ -1104,6 +1115,56 @@ function createProjectRevisionRepositoryInternal(
       }
     },
 
+    materializePreparedRuntime(prepared) {
+      const state = preparedState(prepared)
+      const stagedBuffers = new Map<ProjectSourceBlobKeyV1, ArrayBuffer>()
+      if (state.sourcePreparedKey !== undefined) {
+        for (const assignment of sourceOperations!.assignments(state.sourcePreparedKey)) {
+          const key = `${assignment.namespace}:${assignment.sha256}` as ProjectSourceBlobKeyV1
+          stagedBuffers.set(key, assignment.sourceBytes)
+        }
+      }
+      const callerOwnedBuffers = new Map<ProjectSourceBlobKeyV1, ArrayBuffer>()
+      for (const key of new Set(expectedSourceOwners(state.storedRevision.snapshot).values())) {
+        const sourceBytes = stagedBuffers.get(key) ?? boundSourceState?.activeRegistry.buffers.get(key)
+        if (sourceBytes === undefined) {
+          return fail(
+            'PROJECT_REVISION_SOURCE_BLOB_MISSING',
+            `Prepared runtime source Blob ${key} is missing.`,
+          )
+        }
+        callerOwnedBuffers.set(key, sourceBytes.slice(0))
+      }
+      return materializeRepositoryProjectionV3(
+        state.storedRevision.snapshot,
+        callerOwnedBuffers,
+      )
+    },
+
+    discardPreparedRevision(prepared) {
+      const state = typeof prepared === 'object' && prepared !== null
+        ? preparedStates.get(prepared)
+        : undefined
+      if (state === undefined || state.authority !== authority) {
+        return fail(
+          'PROJECT_PREPARED_REVISION_INVALID',
+          'Prepared revision is forged or belongs to another repository.',
+        )
+      }
+      if (state.status === 'discarded') return
+      if (state.status !== 'prepared') {
+        return fail(
+          'PROJECT_PREPARED_REVISION_CONSUMED',
+          'Only an uncommitted prepared revision can be discarded.',
+        )
+      }
+      if (state.sourcePreparedKey !== undefined) {
+        sourceOperations!.rollback(state.sourcePreparedKey)
+        boundSourceState!.prepared.get(state.sourcePreparedKey)!.status = 'revoked'
+      }
+      state.status = 'discarded'
+    },
+
     async commitPreparedRevision(expectedRevisionId, prepared, commitToken) {
       validateCommitToken(commitToken)
       const state = preparedState(prepared)
@@ -1335,10 +1396,10 @@ function createProjectRevisionRepositoryInternal(
       const rawPointer = await database.projectPointers.get('active')
       if (rawPointer === undefined) return null
       const pointer = validatePointer(rawPointer)
-      if (pointer.state !== 'stable' || pointer.revisionId !== revisionId) {
+      if (pointer.revisionId !== revisionId) {
         return fail(
-          'PROJECT_REVISION_NOT_STABLE',
-          'Only the exact stable Project revision can be hydrated for adoption.',
+          'PROJECT_REVISION_NOT_ACTIVE',
+          'Only the exact stable or publishing Project revision can be integrity-hydrated.',
         )
       }
       const storedRevision = await database.projectRevisions.get(revisionId)

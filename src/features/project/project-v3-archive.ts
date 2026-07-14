@@ -8,24 +8,11 @@ import {
   type CylinderObjectAssetRecordV3,
   type PreparedProjectSourceGroupV1,
   type ProjectArchiveSourcePlanV1,
-  type LegacyProjectArchiveSourcePlanV1,
-  type LegacyProjectSourceOwnerKeyV1,
   type ProjectSourceOwnerKeyV1,
   type ProjectSourceStagingService,
   type StepObjectAssetRecordV3,
   type WorkcellProjectSnapshotV3,
 } from '../../domain/project/project-v3'
-import {
-  WORKCELL_PROJECT_SCHEMA_VERSION_V1,
-  WORKCELL_PROJECT_SCHEMA_VERSION_V2,
-  type MigratableProjectSnapshot,
-} from '../../domain/project/project'
-import {
-  migratePreparedLegacyArchiveProjectToV3InternalV1,
-  prepareLegacyArchiveProjectForMigrationInternalV1,
-  type ProjectMigrationResultV3,
-  type ProjectV3MigrationDependencies,
-} from '../../domain/project/project-v2-migration'
 import {
   createProjectHashService,
   createProjectRevisionIdentityHasher,
@@ -88,7 +75,6 @@ export interface ProjectArchiveDecodeOptions {
   readonly workerFactory?: (() => ProjectArchiveWorkerLike) | undefined
   readonly sourceStaging: ProjectSourceStagingService
   readonly projectRevisionIdentityHasher: ProjectRevisionIdentityHasher
-  readonly legacyMigration?: ProjectV3MigrationDependencies | undefined
 }
 
 interface ArchiveOperationDeadline {
@@ -160,21 +146,6 @@ function capturedRevisionHasher(
   )
   return Object.freeze({
     hashRevisionIdentity: hasher.hashRevisionIdentity.bind(hasher),
-  })
-}
-
-function captureLegacyMigrationDependencies(
-  value: ProjectV3MigrationDependencies,
-): ProjectV3MigrationDependencies {
-  return Object.freeze({
-    sourceStaging: value.sourceStaging,
-    projectRevisionIdentityHasher: capturedRevisionHasher(
-      value.projectRevisionIdentityHasher,
-    ),
-    builtInEquipmentDefaults: Object.freeze(structuredClone(value.builtInEquipmentDefaults)),
-    builtInEquipmentTransformDefaults: Object.freeze(
-      structuredClone(value.builtInEquipmentTransformDefaults),
-    ),
   })
 }
 
@@ -503,159 +474,6 @@ function planV3Sources(
     .sort((left, right) => codeUnitCompare(left.path, right.path)))
 }
 
-function legacySourcePath(value: unknown, prefix: string): string {
-  if (
-    typeof value !== 'string' ||
-    !value.startsWith(prefix) ||
-    !value.endsWith('.step') ||
-    value.includes('\\') ||
-    value.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
-  ) {
-    throw new ProjectArchiveError(
-      'PROJECT_ARCHIVE_INVALID',
-      'Legacy source index contains an unsafe or conflicting archive path.',
-    )
-  }
-  return value
-}
-
-async function decodeLegacyProject(
-  reader: ProjectArchiveReader,
-  manifest: Record<string, unknown>,
-  version: 1 | 2,
-  dependencies: ProjectV3MigrationDependencies,
-  deadline: ArchiveOperationDeadline,
-): Promise<ProjectMigrationResultV3> {
-  const fixedPaths = [
-    'manifest.json',
-    'frames.json',
-    'robot/configuration.json',
-    'robot/links/index.json',
-    'objects/assets.json',
-    'objects/instances.json',
-    'poses/sequences.json',
-    'opcua/bindings.json',
-    ...(version === 2 ? ['collision/policy.json'] : []),
-  ]
-  const frames = await readJson(reader, 'frames.json', deadline)
-  const robotConfiguration = objectRecord(
-    await readJson(reader, 'robot/configuration.json', deadline),
-    'robot/configuration.json',
-  )
-  const archivedLinks = arrayRecord(
-    await readJson(reader, 'robot/links/index.json', deadline),
-    'robot/links/index.json',
-  )
-  const archivedAssets = arrayRecord(
-    await readJson(reader, 'objects/assets.json', deadline),
-    'objects/assets.json',
-  )
-  const objectInstances = await readJson(reader, 'objects/instances.json', deadline)
-  const poses = await readJson(reader, 'poses/sequences.json', deadline)
-  const opcUa = await readJson(reader, 'opcua/bindings.json', deadline)
-  const collisionPolicy = version === 2
-    ? await readJson(reader, 'collision/policy.json', deadline)
-    : undefined
-
-  const sourcePaths = new Set<string>()
-  for (const link of archivedLinks) {
-    sourcePaths.add(legacySourcePath(link.archivePath, 'robot/links/'))
-  }
-  for (const asset of archivedAssets) {
-    sourcePaths.add(legacySourcePath(asset.archivePath, 'objects/assets/'))
-  }
-  assertExactEntrySet(reader, [...fixedPaths, ...sourcePaths])
-  const entriesByPath = new Map(reader.entries.map((entry) => [entry.path, entry] as const))
-  const plansByPath = new Map<string, {
-    readonly namespace: 'robot' | 'object'
-    readonly entryPath: string
-    readonly ownerKeys: LegacyProjectSourceOwnerKeyV1[]
-    readonly byteLength: number
-    readonly placeholder: ArrayBuffer
-  }>()
-  const placeholderFor = (
-    namespace: 'robot' | 'object',
-    entryPath: string,
-    ownerKey: LegacyProjectSourceOwnerKeyV1,
-  ): ArrayBuffer => {
-    const key = `${namespace}:${entryPath}`
-    const existing = plansByPath.get(key)
-    if (existing !== undefined) {
-      existing.ownerKeys.push(ownerKey)
-      return existing.placeholder
-    }
-    const entry = entriesByPath.get(entryPath)
-    if (entry === undefined) {
-      throw new ProjectArchiveError(
-        'PROJECT_ARCHIVE_INVALID',
-        `Legacy Archive source ${entryPath} has no validated central-directory entry.`,
-      )
-    }
-    const placeholder = new ArrayBuffer(1)
-    plansByPath.set(key, {
-      namespace,
-      entryPath,
-      ownerKeys: [ownerKey],
-      byteLength: entry.uncompressedSize,
-      placeholder,
-    })
-    return placeholder
-  }
-  const robotLinks = archivedLinks.map((link) => {
-    const archivePath = legacySourcePath(link.archivePath, 'robot/links/')
-    const { archivePath: _archivePath, ...metadata } = link
-    return {
-      ...metadata,
-      sourceBytes: placeholderFor('robot', archivePath, `robot-link:${String(link.linkId)}`),
-    }
-  })
-  const objectAssets = archivedAssets.map((asset) => {
-    const archivePath = legacySourcePath(asset.archivePath, 'objects/assets/')
-    const { archivePath: _archivePath, ...metadata } = asset
-    return {
-      ...metadata,
-      sourceBytes: placeholderFor('object', archivePath, `object-asset:${String(asset.id)}`),
-    }
-  })
-  const candidate = {
-    manifest,
-    robot: { ...robotConfiguration, links: robotLinks },
-    frames,
-    objectAssets,
-    objectInstances,
-    poses,
-    opcUa,
-    ...(version === 2 ? { collisionPolicy } : {}),
-  } as unknown as MigratableProjectSnapshot
-  const sourcePlans: readonly LegacyProjectArchiveSourcePlanV1[] = Object.freeze(
-    [...plansByPath.values()]
-      .map(({ namespace, entryPath, ownerKeys, byteLength }) => Object.freeze({
-        namespace,
-        entryPath,
-        ownerKeys: Object.freeze([...ownerKeys].sort(codeUnitCompare)),
-        byteLength,
-      }))
-      .sort((left, right) => codeUnitCompare(left.entryPath, right.entryPath)),
-  )
-  const archiveReader = Object.freeze({
-    readSource: (plan: LegacyProjectArchiveSourcePlanV1): Promise<ArrayBuffer> =>
-      reader.readEntry(plan.entryPath),
-    finish: (): void => reader.finish(),
-  })
-  const prepared = await deadline.wait(prepareLegacyArchiveProjectForMigrationInternalV1(
-    candidate,
-    sourcePlans,
-    archiveReader,
-    dependencies,
-    deadline.signal,
-  ))
-  return deadline.wait(migratePreparedLegacyArchiveProjectToV3InternalV1(
-    prepared,
-    dependencies,
-    deadline.signal,
-  ))
-}
-
 export async function decodeWorkcellProjectV3(
   source: Blob | Uint8Array | ArrayBuffer,
   options: ProjectArchiveDecodeOptions,
@@ -666,25 +484,11 @@ export async function decodeWorkcellProjectV3(
   let workerFactory: (() => ProjectArchiveWorkerLike) | undefined
   let sourceStaging!: ProjectSourceStagingService
   let revisionHasher!: ProjectRevisionIdentityHasher
-  let legacyMigration: ProjectV3MigrationDependencies | undefined
   try {
     deadline.checkpoint()
     workerFactory = options.workerFactory
     sourceStaging = options.sourceStaging
     revisionHasher = capturedRevisionHasher(options.projectRevisionIdentityHasher)
-    const requestedLegacyMigration = options.legacyMigration
-    legacyMigration = requestedLegacyMigration === undefined
-      ? undefined
-      : captureLegacyMigrationDependencies(requestedLegacyMigration)
-    if (
-      legacyMigration !== undefined &&
-      legacyMigration.sourceStaging !== sourceStaging
-    ) {
-      throw new ProjectArchiveError(
-        'PROJECT_LEGACY_MIGRATION_DEPENDENCIES_INVALID',
-        'Legacy migration staging must be the exact base staging service.',
-      )
-    }
     deadline.checkpoint()
     ownedSource = ownArchiveInput(source)
   } catch (error) {
@@ -703,37 +507,10 @@ export async function decodeWorkcellProjectV3(
       await readJson(reader, 'manifest.json', deadline),
       'manifest.json',
     )
-    if (
-      manifest.schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V1 ||
-      manifest.schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V2
-    ) {
-      if (legacyMigration === undefined) {
-        throw new ProjectArchiveError(
-          'PROJECT_LEGACY_MIGRATION_DEPENDENCIES_REQUIRED',
-          'V1 and V2 archives require the complete canonical legacy migration bundle.',
-        )
-      }
-      const migrated = await decodeLegacyProject(
-        reader,
-        manifest,
-        manifest.schemaVersion,
-        legacyMigration,
-        deadline,
-      )
-      preparedGroups = migrated.preparedSourceGroups
-      const result = ownDecodeResult(
-        migrated.projection,
-        migrated.preparedSourceGroups,
-        migrated.warnings,
-        sourceStaging,
-      )
-      published = true
-      return result
-    }
     if (manifest.schemaVersion !== WORKCELL_PROJECT_SCHEMA_VERSION_V3) {
       throw new ProjectArchiveError(
-        'PROJECT_ARCHIVE_SCHEMA_UNSUPPORTED',
-        'Project archive schema version is unsupported.',
+        'PROJECT_SCHEMA_UNSUPPORTED',
+        'Only Project schema V3 archives are supported.',
       )
     }
 

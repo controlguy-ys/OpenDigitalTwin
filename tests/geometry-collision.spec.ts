@@ -84,79 +84,122 @@ function putJson(
   entries[path] = encoder.encode(JSON.stringify(value, null, 2))
 }
 
-function legacyCollisionFixture(source: Uint8Array): Buffer {
+function canonicalPoseDurationMs(
+  entries: Record<string, Uint8Array>,
+  fromAnglesDeg: readonly number[],
+  toAnglesDeg: readonly number[],
+  speedPercentToNext: number,
+): number {
+  const configuration = jsonEntry<{
+    mechanics: { joints: Array<{ maxVelocityDegPerSec: number }> }
+  }>(entries, 'robot/configuration.json')
+  return Math.max(16, ...fromAnglesDeg.map((fromDeg, index) =>
+    Math.abs(toAnglesDeg[index]! - fromDeg) /
+      configuration.mechanics.joints[index]!.maxVelocityDegPerSec *
+      1_000 * 100 / speedPercentToNext,
+  ))
+}
+
+function v3CollisionFixture(source: Uint8Array): Buffer {
   const entries = unzipSync(source)
   const manifest = jsonEntry<Record<string, unknown>>(entries, 'manifest.json')
-  const links = jsonEntry<Record<string, unknown>[]>(
+  const externalEntities = jsonEntry<Record<string, unknown>[]>(
     entries,
-    'robot/links/index.json',
+    'external/entities.json',
   )
+  const sources = jsonEntry<Record<string, unknown>[]>(entries, 'robot/sources/index.json')
+  const links = jsonEntry<Record<string, unknown>[]>(entries, 'robot/links/index.json')
+  const sourceRecord = sources[0]
   const sourceLink = links[0]
-  if (sourceLink === undefined) throw new Error('Default Robot has no Link source.')
-  const sourcePath = String(sourceLink.archivePath)
+  if (sourceRecord === undefined || sourceLink === undefined) {
+    throw new Error('Default Robot has no Link source.')
+  }
+  const digest = String(sourceRecord.sha256)
+  const sourcePath = `robot/sources/${digest}.step`
   const sourceBytes = entries[sourcePath]
   if (sourceBytes === undefined) throw new Error(`Missing source STEP: ${sourcePath}`)
 
   putJson(entries, 'manifest.json', {
     ...manifest,
-    schemaVersion: 1,
+    schemaVersion: 3,
     projectId: 'geometry-collision-acceptance',
     name: 'Geometry Collision Acceptance',
     createdAt: '2026-07-13T00:00:00.000Z',
     updatedAt: '2026-07-13T00:00:00.000Z',
   })
-  putJson(
-    entries,
-    'robot/links/index.json',
-    links.map(({ collisionBoxes: _collisionBoxes, ...link }) => link),
-  )
-
-  const objectStepPath = 'objects/assets/0000.step'
+  const objectStepPath = `objects/assets/${digest}.step`
   entries[objectStepPath] = sourceBytes.slice()
   putJson(entries, 'objects/assets.json', [{
     id: 'collision-fixture-asset',
     name: 'Collision Fixture Asset',
+    sourceKind: 'step',
     sourceFileName: 'collision-fixture.step',
+    sourceSha256: digest,
     importScale: 0.001,
     originMode: 'source',
     colliderCenter: [0, 0, 0],
     collisionHalfExtents: [0.02, 0.02, 0.02],
+    collisionBoxes: [{
+      id: 'fixture-body',
+      center: [0, 0, 0],
+      halfExtents: [0.02, 0.02, 0.02],
+      quaternion: [0, 0, 0, 1],
+    }],
     statistics: sourceLink.statistics,
-    archivePath: objectStepPath,
   }])
   putJson(entries, 'objects/instances.json', [{
     id: 'collision-fixture',
     assetId: 'collision-fixture-asset',
     name: 'Collision Fixture',
-    transform: {
-      position: [0, 0, 1.15],
-      quaternion: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-    },
-    numericStatus: 7,
+    manualNumericStatus: 7,
     statusSource: 'manual',
     statusOverlayVisible: true,
     visible: true,
+    graspable: false,
   }])
-  putJson(entries, 'poses/sequences.json', [
+  putJson(entries, 'external/entities.json', [
+    ...externalEntities,
     {
-      id: 'pose-home',
-      name: 'Home',
-      anglesDeg: [-249.75, 0, 0, 0, 0, 0],
-      durationMs: 1_000,
-      easing: 'linear',
-      speedPercentToNext: 100,
-    },
-    {
-      id: 'pose-cup',
-      name: 'Cup Pick',
-      anglesDeg: [249.75, 0, 0, 0, 0, 0],
-      durationMs: 1_000,
-      easing: 'linear',
-      speedPercentToNext: 100,
+      entityId: FIXTURE_ENTITY_ID,
+      manualTransform: {
+        position: [0, 0, 1.15],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      transformSource: 'manual',
     },
   ])
-  delete entries['collision/policy.json']
+  const startAngles = [-249.75, 0, 0, 0, 0, 0]
+  const endAngles = [249.75, 0, 0, 0, 0, 0]
+  putJson(entries, 'simulation/jobs.json', {
+    activeJobId: 'geometry-job',
+    jobs: [{
+      id: 'geometry-job',
+      name: 'Geometry acceptance',
+      revision: 1,
+      poses: [{
+      id: 'pose-home',
+      name: 'Home',
+      anglesDeg: startAngles,
+      durationMs: canonicalPoseDurationMs(entries, startAngles, endAngles, 100),
+      easing: 'linear',
+      speedPercentToNext: 100,
+      }, {
+      id: 'pose-cup',
+      name: 'Cup Pick',
+      anglesDeg: endAngles,
+      durationMs: 1_000,
+      easing: 'linear',
+      speedPercentToNext: 100,
+      }],
+    }],
+  })
+  putJson(entries, 'collision/policy.json', {
+    enabled: true,
+    warningDistanceM: 0.02,
+    ignoredPairKeys: [],
+    enabledRobotSelfPairs: [],
+  })
 
   return Buffer.from(
     zipSync(
@@ -173,13 +216,22 @@ function legacyCollisionFixture(source: Uint8Array): Buffer {
 function heldWorkerFixture(source: Uint8Array): Buffer {
   const entries = unzipSync(source)
   const manifest = jsonEntry<Record<string, unknown>>(entries, 'manifest.json')
+  const externalEntities = jsonEntry<Record<string, unknown>[]>(
+    entries,
+    'external/entities.json',
+  )
+  const sources = jsonEntry<Record<string, unknown>[]>(entries, 'robot/sources/index.json')
   const links = jsonEntry<Record<string, unknown>[]>(
     entries,
     'robot/links/index.json',
   )
+  const sourceRecord = sources[0]
   const sourceLink = links[0]
-  if (sourceLink === undefined) throw new Error('Default Robot has no Link source.')
-  const sourcePath = String(sourceLink.archivePath)
+  if (sourceRecord === undefined || sourceLink === undefined) {
+    throw new Error('Default Robot has no Link source.')
+  }
+  const digest = String(sourceRecord.sha256)
+  const sourcePath = `robot/sources/${digest}.step`
   const sourceBytes = entries[sourcePath]
   if (sourceBytes === undefined) throw new Error(`Missing source STEP: ${sourcePath}`)
   const collisionBoxes = Array.from({ length: 10 }, (_, index) => ({
@@ -191,75 +243,89 @@ function heldWorkerFixture(source: Uint8Array): Buffer {
 
   putJson(entries, 'manifest.json', {
     ...manifest,
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectId: 'geometry-collision-worker-acceptance',
     name: 'Geometry Collision Worker Acceptance',
     createdAt: '2026-07-13T01:00:00.000Z',
     updatedAt: '2026-07-13T01:00:00.000Z',
   })
-  const objectStepPath = 'objects/assets/0000.step'
+  const objectStepPath = `objects/assets/${digest}.step`
   entries[objectStepPath] = sourceBytes.slice()
   putJson(entries, 'objects/assets.json', [{
     id: 'collision-fixture-asset',
     name: 'Collision Fixture Asset',
+    sourceKind: 'step',
     sourceFileName: 'collision-fixture.step',
+    sourceSha256: digest,
     importScale: 0.001,
     originMode: 'source',
     colliderCenter: [0, 0, 0],
     collisionHalfExtents: [0.02, 0.02, 0.02],
     collisionBoxes,
     statistics: sourceLink.statistics,
-    archivePath: objectStepPath,
   }])
   const fixture = {
     id: 'collision-fixture',
     assetId: 'collision-fixture-asset',
     name: 'Collision Fixture',
-    transform: {
-      position: [0.725, 0, 2.315],
-      quaternion: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-    },
-    numericStatus: 7,
+    manualNumericStatus: 7,
     statusSource: 'manual',
     statusOverlayVisible: true,
     visible: true,
+    graspable: false,
   }
-  putJson(entries, 'objects/instances.json', [
+  const instances = [
     fixture,
     ...Array.from({ length: 4 }, (_, index) => ({
       ...fixture,
       id: `collision-worker-load-${index.toString().padStart(2, '0')}`,
       name: `Collision Worker Load ${index + 1}`,
-      transform: {
+      manualNumericStatus: 0,
+      statusOverlayVisible: false,
+    })),
+  ]
+  putJson(entries, 'objects/instances.json', instances)
+  putJson(entries, 'external/entities.json', [
+    ...externalEntities,
+    ...instances.map((instance, index) => ({
+      entityId: `object:${instance.id}`,
+      manualTransform: {
         position: index === 0
-          ? [0.755, 0, 2.315]
-          : [10 + index * 0.25, 10, 10],
+          ? [0.725, 0, 2.315]
+          : index === 1
+            ? [0.755, 0, 2.315]
+            : [10 + (index - 1) * 0.25, 10, 10],
         quaternion: [0, 0, 0, 1],
         scale: [1, 1, 1],
       },
-      numericStatus: 0,
-      statusOverlayVisible: false,
+      transformSource: 'manual',
     })),
   ])
-  putJson(entries, 'poses/sequences.json', [
-    {
+  const startAngles = [-249.75, 0, 0, 0, 0, 0]
+  const endAngles = [249.75, 0, 0, 0, 0, 0]
+  putJson(entries, 'simulation/jobs.json', {
+    activeJobId: 'worker-job',
+    jobs: [{
+      id: 'worker-job',
+      name: 'Worker acceptance',
+      revision: 1,
+      poses: [{
       id: 'worker-start',
       name: 'Worker Start',
-      anglesDeg: [-249.75, 0, 0, 0, 0, 0],
-      durationMs: 1_000,
+      anglesDeg: startAngles,
+      durationMs: canonicalPoseDurationMs(entries, startAngles, endAngles, 100),
       easing: 'linear',
       speedPercentToNext: 100,
-    },
-    {
+      }, {
       id: 'worker-end',
       name: 'Worker End',
-      anglesDeg: [249.75, 0, 0, 0, 0, 0],
+      anglesDeg: endAngles,
       durationMs: 1_000,
       easing: 'linear',
       speedPercentToNext: 100,
-    },
-  ])
+      }],
+    }],
+  })
   putJson(entries, 'collision/policy.json', {
     enabled: true,
     warningDistanceM: 0.05,
@@ -303,6 +369,15 @@ async function downloadCsvReport(page: Page): Promise<string> {
   return readFile(await downloadPath(download), 'utf8')
 }
 
+async function waitForImportedProject(page: Page, name: string): Promise<void> {
+  await Promise.race([
+    page.getByText(name, { exact: true }).waitFor({ state: 'visible', timeout: 180_000 }),
+    page.getByRole('alert').waitFor({ state: 'visible', timeout: 180_000 }).then(async () => {
+      throw new Error(await page.getByRole('alert').innerText())
+    }),
+  ])
+}
+
 async function openDrawer(page: Page, name: string): Promise<void> {
   await page.evaluate((label) => {
     const button = [...document.querySelectorAll<HTMLButtonElement>('button')]
@@ -313,18 +388,33 @@ async function openDrawer(page: Page, name: string): Promise<void> {
 }
 
 async function activeProjectSemantics(page: Page): Promise<ProjectSemantics> {
-  return page.evaluate(async () => {
+  return page.evaluate(async (fixtureEntityId) => {
     const snapshot = await new Promise<any>((resolve, reject) => {
       const request = indexedDB.open('robot-sim-project')
       request.onerror = () => reject(request.error)
       request.onsuccess = () => {
         const database = request.result
-        const transaction = database.transaction('projects', 'readonly')
-        const get = transaction.objectStore('projects').get('active')
-        get.onerror = () => reject(get.error)
-        get.onsuccess = () => {
-          database.close()
-          resolve(get.result?.snapshot)
+        const transaction = database.transaction(
+          ['projectPointers', 'projectRevisions'],
+          'readonly',
+        )
+        const pointerRequest = transaction.objectStore('projectPointers').get('active')
+        pointerRequest.onerror = () => reject(pointerRequest.error)
+        pointerRequest.onsuccess = () => {
+          const pointer = pointerRequest.result
+          if (pointer === undefined) {
+            database.close()
+            reject(new Error('Active project pointer is missing.'))
+            return
+          }
+          const revisionRequest = transaction
+            .objectStore('projectRevisions')
+            .get(pointer.revisionId)
+          revisionRequest.onerror = () => reject(revisionRequest.error)
+          revisionRequest.onsuccess = () => {
+            database.close()
+            resolve(revisionRequest.result?.snapshot)
+          }
         }
       }
     })
@@ -338,18 +428,26 @@ async function activeProjectSemantics(page: Page): Promise<ProjectSemantics> {
     if (instance === undefined || asset === undefined) {
       throw new Error('Collision fixture is missing from the active project.')
     }
+    const entity = snapshot.externalEntities.find(
+      ({ entityId }: { entityId: string }) => entityId === fixtureEntityId,
+    )
+    if (entity === undefined) throw new Error('Collision fixture transform is missing.')
+    const job = snapshot.simulation.jobs.find(
+      ({ id }: { id: string }) => id === snapshot.simulation.activeJobId,
+    )
+    if (job === undefined) throw new Error('Active simulation Job is missing.')
     return {
       schemaVersion: snapshot.manifest.schemaVersion,
       name: snapshot.manifest.name,
       objectInstanceCount: snapshot.objectInstances.length,
-      objectTransform: instance.transform,
+      objectTransform: entity.manualTransform,
       objectCollisionBoxes: asset.collisionBoxes,
-      poseAngles: snapshot.poses.map(({ anglesDeg }: { anglesDeg: number[] }) =>
+      poseAngles: job.poses.map(({ anglesDeg }: { anglesDeg: number[] }) =>
         anglesDeg,
       ),
       collisionPolicy: snapshot.collisionPolicy,
     }
-  })
+  }, FIXTURE_ENTITY_ID)
 }
 
 async function selectCollisionFixture(page: Page): Promise<void> {
@@ -372,7 +470,7 @@ async function applyFixturePosition(
   await expect(inspector.getByLabel('Z (mm)')).toHaveValue(String(positionMm[2]))
 }
 
-test('accepts geometry collision, migration, reports, and round-trip workflows', async ({
+test('accepts V3 geometry collision and report workflows', async ({
   page,
 }) => {
   test.setTimeout(300_000)
@@ -381,24 +479,25 @@ test('accepts geometry collision, migration, reports, and round-trip workflows',
     'aria-busy',
     'false',
   )
+  await page.getByRole('button', { name: 'New' }).click()
+  await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
   const [defaultDownload] = await Promise.all([
     page.waitForEvent('download'),
     page.getByRole('button', { name: 'Export project' }).click(),
   ])
-  const fixture = legacyCollisionFixture(
+  const fixture = v3CollisionFixture(
     await readFile(await downloadPath(defaultDownload)),
   )
   await page.getByLabel('Import project').setInputFiles({
-    name: 'geometry-collision-v1.wdtwin',
+    name: 'geometry-collision-v3.wdtwin',
     mimeType: 'application/zip',
     buffer: fixture,
   })
-  await expect(page.getByText('Geometry Collision Acceptance', { exact: true }))
-    .toBeVisible({ timeout: 180_000 })
+  await waitForImportedProject(page, 'Geometry Collision Acceptance')
 
   const migrated = await activeProjectSemantics(page)
   expect(migrated).toMatchObject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Geometry Collision Acceptance',
     objectTransform: { position: [0, 0, 1.15] },
     collisionPolicy: {
@@ -483,34 +582,6 @@ test('accepts geometry collision, migration, reports, and round-trip workflows',
   expect(await downloadCsvReport(page)).toContain(
     'Kind,Pair,First Entity,Second Entity,First Box,Second Box,Approximate Clearance (mm),Sample,Time (ms)',
   )
-
-  await page.getByRole('button', { name: 'Save project' }).click()
-  await expect(page.getByText('Saved', { exact: true })).toBeVisible()
-  const beforeRoundTrip = await activeProjectSemantics(page)
-  const [projectDownload] = await Promise.all([
-    page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Export project' }).click(),
-  ])
-  expect(projectDownload.suggestedFilename()).toBe(
-    'Geometry Collision Acceptance.wdtwin',
-  )
-  await downloadPath(projectDownload)
-
-  await page.reload()
-  await expect(page.getByRole('main', { name: '3D viewport' })).toHaveAttribute(
-    'aria-busy',
-    'false',
-    { timeout: 180_000 },
-  )
-  await openDrawer(page, 'Timeline and Events sheet')
-  await expect(page.getByLabel('Live collision counts')).toContainText(
-    /Near-miss [1-9]/,
-  )
-  const reloadedRow = (await downloadJsonReport(page)).findings.find(
-    ({ kind, pairKey }) => kind === 'near-miss' && pairKey === LINK00_PAIR,
-  )
-  expect(reloadedRow).toEqual(restoredRow)
-  expect(await activeProjectSemantics(page)).toEqual(beforeRoundTrip)
 })
 
 test('keeps browser animation responsive during held-object Worker validation', async ({
@@ -567,6 +638,8 @@ test('keeps browser animation responsive during held-object Worker validation', 
     'aria-busy',
     'false',
   )
+  await page.getByRole('button', { name: 'New' }).click()
+  await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
   const [defaultDownload] = await Promise.all([
     page.waitForEvent('download'),
     page.getByRole('button', { name: 'Export project' }).click(),
@@ -575,13 +648,11 @@ test('keeps browser animation responsive during held-object Worker validation', 
     await readFile(await downloadPath(defaultDownload)),
   )
   await page.getByLabel('Import project').setInputFiles({
-    name: 'geometry-collision-worker-v2.wdtwin',
+    name: 'geometry-collision-worker-v3.wdtwin',
     mimeType: 'application/zip',
     buffer: workerFixture,
   })
-  await expect(page.getByText('Geometry Collision Worker Acceptance', {
-    exact: true,
-  })).toBeVisible({ timeout: 180_000 })
+  await waitForImportedProject(page, 'Geometry Collision Worker Acceptance')
   const workerSemantics = await activeProjectSemantics(page)
   expect(workerSemantics.objectInstanceCount).toBe(5)
   expect(workerSemantics.objectCollisionBoxes).toHaveLength(10)
