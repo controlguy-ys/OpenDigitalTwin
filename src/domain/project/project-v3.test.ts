@@ -735,6 +735,26 @@ describe('Workcell Project V3 contract', () => {
       ])
   })
 
+  it('orders non-ASCII and canonically equivalent source owner keys by raw code units', () => {
+    const ids = ['é', 'e\u0301', '한', 'Å']
+    const ownerKeys = (orderedIds: readonly string[]) => {
+      const snapshot = mutable(validV3Project())
+      snapshot.objectAssets = mutable([
+        primitiveBox('box-1'),
+        ...orderedIds.map((id) => stepAsset(id)),
+      ])
+      return collectProjectSourceDescriptorsV3(snapshot)
+        .filter(({ namespace }) => namespace === 'object')
+        .map(({ ownerKey }) => ownerKey)
+    }
+    const expected = [...ids]
+      .sort((first, second) => first < second ? -1 : first > second ? 1 : 0)
+      .map((id) => `object-asset:${id}`)
+
+    expect(ownerKeys(ids)).toEqual(expected)
+    expect(ownerKeys([...ids].reverse())).toEqual(expected)
+  })
+
   it('enforces exact Object and shared UTF-8 string boundaries without truncation', () => {
     const objectCounts = (assetCount: number, instanceCount: number) => {
       const snapshot = mutable(validV3Project())
@@ -897,6 +917,33 @@ describe('Workcell Project V3 contract', () => {
     expect(() => validateWorkcellProjectSnapshotV3(epsilonScale)).toThrow(/unit scale/i)
   })
 
+  it('overflow-safely normalizes a finite rigid quaternion to a unit quaternion', () => {
+    const snapshot = mutable(validV3Project())
+    snapshot.frames.mcp = {
+      position: [0, 0, 0],
+      quaternion: [Number.MAX_VALUE, Number.MAX_VALUE, 0, 0],
+      scale: [1, 1, 1],
+    }
+
+    const quaternion = validateWorkcellProjectSnapshotV3(snapshot).frames.mcp.quaternion
+    expect(quaternion.every(Number.isFinite)).toBe(true)
+    expect(Math.hypot(...quaternion)).toBeCloseTo(1, 12)
+  })
+
+  it('overflow-safely normalizes a finite Joint axis to a unit vector', () => {
+    const snapshot = mutable(validV3Project())
+    snapshot.robot.mechanics.joints[0]!.axis = [
+      Number.MAX_VALUE,
+      Number.MAX_VALUE,
+      0,
+    ]
+
+    const axis = validateWorkcellProjectSnapshotV3(snapshot)
+      .robot.mechanics.joints[0]!.axis
+    expect(axis.every(Number.isFinite)).toBe(true)
+    expect(Math.hypot(...axis)).toBeCloseTo(1, 12)
+  })
+
   it('canonicalizes duration tolerance and rejects a difference above 1e-9 ms', () => {
     const expectedDuration = 500
     const within = mutable(validV3Project())
@@ -1022,6 +1069,33 @@ describe('Workcell Project V3 contract', () => {
     const inherited = mutable(validV3Project())
     Object.setPrototypeOf(inherited.manifest, { transient: true })
     expect(() => validateWorkcellProjectSnapshotV3(inherited)).toThrow(/plain|prototype|unknown/i)
+  })
+
+  it.each([
+    ['a sparse numeric tuple', (tuple: number[]) => { delete tuple[1] }],
+    ['an extra string field', (tuple: number[]) => {
+      Object.defineProperty(tuple, 'transient', { value: true, enumerable: true })
+    }],
+    ['a symbol field', (tuple: number[]) => {
+      Object.defineProperty(tuple, Symbol('transient'), { value: true, enumerable: true })
+    }],
+    ['a non-enumerable field', (tuple: number[]) => {
+      Object.defineProperty(tuple, 'transient', { value: true, enumerable: false })
+    }],
+    ['an accessor element', (tuple: number[]) => {
+      Object.defineProperty(tuple, '1', { get: () => 0, enumerable: true })
+    }],
+    ['a modified prototype', (tuple: number[]) => {
+      Object.setPrototypeOf(tuple, Object.create(Array.prototype))
+    }],
+    ['cyclic extra state', (tuple: number[]) => {
+      Object.defineProperty(tuple, 'cycle', { value: tuple, enumerable: true })
+    }],
+  ])('rejects %s on a numeric tuple', (_label, mutateTuple) => {
+    const snapshot = mutable(validV3Project())
+    mutateTuple(snapshot.robot.basePosition)
+    expect(() => validateWorkcellProjectSnapshotV3(snapshot))
+      .toThrow(/Invalid workcell project V3:.*(?:array|sparse|unknown|enumerable|data|plain)/i)
   })
 
   it('exports the approved structural budgets', () => {

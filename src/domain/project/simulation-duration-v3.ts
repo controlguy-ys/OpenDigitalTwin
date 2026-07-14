@@ -30,6 +30,15 @@ export class ProjectJobPoseOutOfLimitsErrorV3 extends Error {
   }
 }
 
+export class ProjectPoseDurationDerivedNonFiniteErrorV3 extends Error {
+  readonly code = 'PROJECT_POSE_DURATION_DERIVED_NON_FINITE'
+
+  constructor() {
+    super('PROJECT_POSE_DURATION_DERIVED_NON_FINITE: canonical Pose duration must be finite.')
+    this.name = 'ProjectPoseDurationDerivedNonFiniteErrorV3'
+  }
+}
+
 export function deriveCanonicalPoseDurationMsV3(
   from: Readonly<Pick<ProjectPoseStepV3, 'anglesDeg' | 'speedPercentToNext'>>,
   to: Readonly<Pick<ProjectPoseStepV3, 'anglesDeg'>>,
@@ -55,10 +64,29 @@ export function deriveCanonicalPoseDurationMsV3(
         'Pose angles must be finite and maximum velocity must be positive.',
       )
     }
-    return Math.abs(toDeg - fromDeg) / maxVelocity * 1_000 * 100 /
-      from.speedPercentToNext
+    const directDelta = Math.abs(toDeg - fromDeg)
+    let velocityRatio: number
+    if (Number.isFinite(directDelta)) {
+      velocityRatio = directDelta / maxVelocity
+    } else {
+      const scale = Math.max(Math.abs(fromDeg), Math.abs(toDeg))
+      const scaledDelta = Math.abs(toDeg / scale - fromDeg / scale)
+      velocityRatio = scaledDelta / (maxVelocity / scale)
+    }
+    let durationMs = velocityRatio * 1_000 * 100 / from.speedPercentToNext
+    if (!Number.isFinite(durationMs)) {
+      durationMs = velocityRatio * (100_000 / from.speedPercentToNext)
+    }
+    if (!Number.isFinite(durationMs)) {
+      throw new ProjectPoseDurationDerivedNonFiniteErrorV3()
+    }
+    return durationMs
   })
-  return Math.max(16, ...jointDurationsMs)
+  const durationMs = Math.max(16, ...jointDurationsMs)
+  if (!Number.isFinite(durationMs)) {
+    throw new ProjectPoseDurationDerivedNonFiniteErrorV3()
+  }
+  return durationMs
 }
 
 export function validateSimulationPoseLimitsV3(

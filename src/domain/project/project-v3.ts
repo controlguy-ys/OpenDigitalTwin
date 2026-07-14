@@ -60,6 +60,7 @@ import {
   reconcileSimulationForMechanicsChange,
   validateSimulationPoseLimitsV3,
   ProjectJobPoseOutOfLimitsErrorV3,
+  ProjectPoseDurationDerivedNonFiniteErrorV3,
   type ProjectPoseLimitViolationV3,
 } from './simulation-duration-v3'
 import {
@@ -170,6 +171,7 @@ export {
   reconcileSimulationForMechanicsChange,
   validateSimulationPoseLimitsV3,
   ProjectJobPoseOutOfLimitsErrorV3,
+  ProjectPoseDurationDerivedNonFiniteErrorV3,
 }
 export type {
   BoxObjectAssetRecordV3,
@@ -366,10 +368,11 @@ function numericTuple(
   label: string,
   requirePositive = false,
 ): number[] {
-  if (!Array.isArray(value) || value.length !== length) {
+  const tuple = arrayValue(value, label)
+  if (tuple.length !== length) {
     fail(`${label} must contain exactly ${length} numbers.`)
   }
-  return value.map((entry, index) =>
+  return tuple.map((entry, index) =>
     requirePositive
       ? positive(entry, `${label}[${index}]`)
       : finite(entry, `${label}[${index}]`),
@@ -381,14 +384,35 @@ function sameNumbers(first: readonly number[], second: readonly number[]): boole
     first.every((value, index) => Object.is(value, second[index]))
 }
 
-function normalizedQuaternion(value: unknown, label: string): number[] {
-  const quaternion = numericTuple(value, 4, label)
-  const norm = Math.hypot(...quaternion)
-  if (norm <= 1e-9) fail(`${label} norm must be greater than 1e-9.`)
-  return quaternion.map((component) => {
-    const normalized = component / norm
+function normalizedUnitVector(components: readonly number[], label: string): number[] {
+  const scale = Math.max(...components.map((component) => Math.abs(component)))
+  if (scale === 0) fail(`${label} norm must be greater than 1e-9.`)
+  const scaled = components.map((component) => component / scale)
+  const scaledNorm = Math.hypot(...scaled)
+  if (
+    !Number.isFinite(scaledNorm) ||
+    scaledNorm <= 0 ||
+    scale <= 1e-9 / scaledNorm
+  ) {
+    fail(`${label} norm must be greater than 1e-9.`)
+  }
+  const result = scaled.map((component) => {
+    const normalized = component / scaledNorm
     return Object.is(normalized, -0) ? 0 : normalized
   })
+  const resultNorm = Math.hypot(...result)
+  if (
+    result.some((component) => !Number.isFinite(component)) ||
+    !Number.isFinite(resultNorm) ||
+    Math.abs(resultNorm - 1) > 1e-12
+  ) {
+    fail(`${label} must normalize to a finite unit vector.`)
+  }
+  return result
+}
+
+function normalizedQuaternion(value: unknown, label: string): number[] {
+  return normalizedUnitVector(numericTuple(value, 4, label), label)
 }
 
 function arrayBuffer(value: unknown, label: string): ArrayBuffer {
@@ -720,14 +744,12 @@ function validateMechanics(
       fail(`${label}.childLink must be ${ROBOT_LINK_IDS[index + 1]}.`)
     }
     numericTuple(joint.originM, 3, `${label}.originM`)
-    const axis = numericTuple(joint.axis, 3, `${label}.axis`)
-    const axisNorm = Math.hypot(...axis)
-    if (axisNorm <= 1e-9) fail(`${label}.axis norm must be greater than 1e-9.`)
+    const axis = normalizedUnitVector(
+      numericTuple(joint.axis, 3, `${label}.axis`),
+      `${label}.axis`,
+    )
     if (normalize) {
-      joint.axis = axis.map((component) => {
-        const normalized = component / axisNorm
-        return Object.is(normalized, -0) ? 0 : normalized
-      })
+      joint.axis = axis
     }
     const minDeg = finite(joint.minDeg, `${label}.minDeg`)
     const maxDeg = finite(joint.maxDeg, `${label}.maxDeg`)
@@ -1743,6 +1765,10 @@ export function collectProjectSourceDescriptorsV3(
       : first.namespace === 'robot'
         ? -1
         : 1) ||
-    first.ownerKey.localeCompare(second.ownerKey),
+    (first.ownerKey < second.ownerKey
+      ? -1
+      : first.ownerKey > second.ownerKey
+        ? 1
+        : 0),
   )
 }

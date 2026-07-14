@@ -128,6 +128,34 @@ describe('Project V3 canonical simulation duration', () => {
     },
   )
 
+  it.each([
+    [
+      'a subnormal maximum velocity',
+      pose('from', 0),
+      pose('to', 1),
+      mechanics(Number.MIN_VALUE),
+    ],
+    [
+      'an overflowing finite angle delta',
+      pose('from', -Number.MAX_VALUE),
+      pose('to', Number.MAX_VALUE),
+      mechanics(1),
+    ],
+  ])('rejects a non-finite duration derived from %s', (_label, from, to, robotMechanics) => {
+    expect(() => deriveCanonicalPoseDurationMsV3(from, to, robotMechanics))
+      .toThrow(/PROJECT_POSE_DURATION_DERIVED_NON_FINITE/)
+  })
+
+  it('derives a finite duration when only the finite angle subtraction overflows', () => {
+    expect(
+      deriveCanonicalPoseDurationMsV3(
+        pose('from', -Number.MAX_VALUE),
+        pose('to', Number.MAX_VALUE),
+        mechanics(Number.MAX_VALUE),
+      ),
+    ).toBe(2_000)
+  })
+
   it('canonicalizes accepted duration tolerance and requires terminal 1000 ms', () => {
     const state = simulation()
     const expected = deriveCanonicalPoseDurationMsV3(
@@ -191,6 +219,49 @@ describe('Project V3 canonical simulation duration', () => {
     expect(() => reconcileSimulationForMechanicsChange(exhausted, mechanics(50)))
       .toThrow(/revision/i)
     expect(exhausted).toEqual(before)
+  })
+
+  it('atomically rejects non-finite mechanics reconciliation durations', () => {
+    const source: ProjectSimulationStateV3 = {
+      activeJobId: 'first',
+      jobs: [
+        {
+          id: 'first',
+          name: 'First',
+          revision: 4,
+          poses: [pose('first-start', 0, 900), pose('first-end', 90)],
+        },
+        {
+          id: 'second',
+          name: 'Second',
+          revision: 7,
+          poses: [
+            {
+              ...pose('second-start', 0, 900),
+              anglesDeg: [0, 0, 0, 0, 0, 0],
+            },
+            {
+              ...pose('second-end'),
+              anglesDeg: [0, 90, 0, 0, 0, 0],
+            },
+          ],
+        },
+      ],
+    }
+    const previous = canonicalizeSimulationDurationsV3(source, mechanics())
+    const before = structuredClone(previous)
+    const revisionsBefore = previous.jobs.map(({ revision }) => revision)
+    const firstJobBefore = previous.jobs[0]
+    const proposed = mutable(mechanics())
+    proposed.joints[0]!.maxVelocityDegPerSec = 50
+    proposed.joints[1]!.maxVelocityDegPerSec = Number.MIN_VALUE
+
+    expect(() =>
+      reconcileSimulationForMechanicsChange(previous, proposed))
+      .toThrow(/PROJECT_POSE_DURATION_DERIVED_NON_FINITE/)
+    expect(previous).toEqual(before)
+    expect(previous.jobs.map(({ revision }) => revision)).toEqual(revisionsBefore)
+    expect(previous.jobs[0]).toBe(firstJobBefore)
   })
 
   it('atomically rejects proposed Mechanics limits around saved Poses', () => {
