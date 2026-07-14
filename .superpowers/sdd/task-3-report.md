@@ -105,6 +105,13 @@ metadata. Cap-plus-one cases reject before source staging or output mutation.
   frozen captured service, and then uses that same bundle exclusively. The regression
   proves one getter read, all eight digests on A, zero digests on B, and A-only token
   ownership in the returned result.
+- Final review of that fix found a test-only cleanup coverage gap: the regression
+  invoked result revocation but did not prove which service's tokens were revoked.
+  The strengthened test saves every returned token, asserts the first result revoke is
+  `true` and the second is `false`, then proves A reports
+  `PROJECT_SOURCE_TOKEN_REVOKED` while B reports `PROJECT_SOURCE_TOKEN_INVALID` for
+  every token. Manual service revocation is now restricted to an assertion-failure
+  fail-safe and cannot mask the success-path contract.
 - Playwright wiring RED reproduced `RobotSim` instead of the Worker harness title when
   a dev-only spec was discovered by the preview-server config. The default suite now
   excludes both Worker harnesses, while dedicated hash/archive scripts use their exact
@@ -138,6 +145,9 @@ application functional while Task 4 repository publication remains out of scope:
 - Full serial Vitest (`npx vitest run --no-file-parallelism --maxWorkers=1`): 83 files,
   717 tests passed in 140.98 seconds; no timing/order failure.
 - Strict TypeScript (`npx tsc -b --pretty false`): passed.
+- Final test-only cleanup strengthening: focused 6-file matrix, 227 tests passed, and
+  strict TypeScript passed. Production code is unchanged, so the immediately preceding
+  717-test parallel/serial evidence remains applicable.
 - Lint (`npm run lint`): passed with zero warnings.
 - Production build (`npm run build`): passed.
 - CAD asset validation: 7 link assets valid; 0 errors; 0 warnings.
@@ -165,6 +175,9 @@ application functional while Task 4 repository publication remains out of scope:
 - Independent review of follow-up commit `323578f` found one Important dependency
   capture TOCTOU and no other Critical, Important, or Minor issue. The current
   follow-up fixes that finding with the RED-to-GREEN coverage above.
+- Final independent review found no further production defect and one Important
+  cleanup-assertion coverage gap, fixed by the test-only strengthening above; it found
+  no other Critical, Important, or Minor issue.
 
 ## Scope boundary
 

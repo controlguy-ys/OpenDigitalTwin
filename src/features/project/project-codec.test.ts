@@ -515,27 +515,54 @@ describe('.wdtwin streaming legacy dispatch', () => {
       ...first.options,
       legacyMigration,
     })
+    const preparedSources = decoded.preparedSourceGroups.map(({ preparedSource }) => preparedSource)
+    const assertionError = (assertion: () => void): unknown => {
+      try {
+        assertion()
+        return undefined
+      } catch (error) {
+        return error
+      }
+    }
+    let cleanupVerified = false
 
     try {
       expect(sourceStagingReads).toBe(1)
       expect(first.digestSource).toHaveBeenCalledTimes(8)
       expect(second.digestSource).not.toHaveBeenCalled()
-      for (const { preparedSource } of decoded.preparedSourceGroups) {
+      for (const preparedSource of preparedSources) {
         expect(() => firstMigration.sourceStaging.assertPrepared(preparedSource)).not.toThrow()
-        expect(() => secondMigration.sourceStaging.assertPrepared(preparedSource)).toThrow()
+        expect(assertionError(() => secondMigration.sourceStaging.assertPrepared(preparedSource)))
+          .toMatchObject({ code: 'PROJECT_SOURCE_TOKEN_INVALID' })
       }
+
+      expect(revokeProjectDecodeResult(decoded)).toBe(true)
+      expect(revokeProjectDecodeResult(decoded)).toBe(false)
+      for (const preparedSource of preparedSources) {
+        expect(assertionError(() => firstMigration.sourceStaging.assertPrepared(preparedSource)))
+          .toMatchObject({ code: 'PROJECT_SOURCE_TOKEN_REVOKED' })
+        expect(assertionError(() => secondMigration.sourceStaging.assertPrepared(preparedSource)))
+          .toMatchObject({ code: 'PROJECT_SOURCE_TOKEN_INVALID' })
+      }
+      cleanupVerified = true
     } finally {
-      revokeProjectDecodeResult(decoded)
-      for (const { preparedSource } of decoded.preparedSourceGroups) {
+      if (!cleanupVerified) {
         try {
-          firstMigration.sourceStaging.revoke(preparedSource)
+          revokeProjectDecodeResult(decoded)
         } catch {
-          // The result owner already revoked this service's token.
+          // Fall through to the service-level fail-safe after an assertion failure.
         }
-        try {
-          secondMigration.sourceStaging.revoke(preparedSource)
-        } catch {
-          // Only one staging service can own each prepared token.
+        for (const preparedSource of preparedSources) {
+          try {
+            firstMigration.sourceStaging.revoke(preparedSource)
+          } catch {
+            // The token may belong to the foreign service in the failing implementation.
+          }
+          try {
+            secondMigration.sourceStaging.revoke(preparedSource)
+          } catch {
+            // Only one staging service can own a token; this branch is cleanup-only.
+          }
         }
       }
     }
