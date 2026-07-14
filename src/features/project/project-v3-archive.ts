@@ -673,18 +673,18 @@ export async function decodeWorkcellProjectV3(
     sourceStaging = options.sourceStaging
     revisionHasher = capturedRevisionHasher(options.projectRevisionIdentityHasher)
     const requestedLegacyMigration = options.legacyMigration
+    legacyMigration = requestedLegacyMigration === undefined
+      ? undefined
+      : captureLegacyMigrationDependencies(requestedLegacyMigration)
     if (
-      requestedLegacyMigration !== undefined &&
-      requestedLegacyMigration.sourceStaging !== sourceStaging
+      legacyMigration !== undefined &&
+      legacyMigration.sourceStaging !== sourceStaging
     ) {
       throw new ProjectArchiveError(
         'PROJECT_LEGACY_MIGRATION_DEPENDENCIES_INVALID',
         'Legacy migration staging must be the exact base staging service.',
       )
     }
-    legacyMigration = requestedLegacyMigration === undefined
-      ? undefined
-      : captureLegacyMigrationDependencies(requestedLegacyMigration)
     deadline.checkpoint()
     ownedSource = ownArchiveInput(source)
   } catch (error) {

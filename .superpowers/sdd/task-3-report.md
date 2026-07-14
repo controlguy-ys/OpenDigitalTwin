@@ -30,7 +30,8 @@
   registry-backed, exact-service/dependency/signal-bound one-shot capability carries
   the pre-staged assignments across `reader.finish()` into migration, so migration
   does not restage or rehash them. The complete frozen migration dependency bundle is
-  required and captured before the first await; unknown versions never downgrade.
+  required and captured exactly once before its captured staging identity is compared
+  with the base service and before the first await; unknown versions never downgrade.
 - Tightened the encode client after the final input acknowledgement: while final ZIP
   output is pending, every response must be `encode-output`; duplicate acknowledgements
   and every other response type fail immediately with `PROJECT_ARCHIVE_WORKER_FAILED`.
@@ -96,6 +97,14 @@ metadata. Cap-plus-one cases reject before source staging or output mutation.
 - A Worker-protocol RED resolved a Blob after a duplicate final input acknowledgement.
   The final-output drain now rejects that duplicate immediately; the complete Worker
   protocol matrix remains green.
+- Independent review of the first follow-up found that a stateful legacy-migration
+  `sourceStaging` getter could return base service A for the identity check and foreign
+  service B for the later dependency capture. The fresh RED observed two getter reads
+  where one was required, allowing B-owned prepared tokens to reach a decode result
+  bound to A. GREEN snapshots the complete migration bundle first, compares only its
+  frozen captured service, and then uses that same bundle exclusively. The regression
+  proves one getter read, all eight digests on A, zero digests on B, and A-only token
+  ownership in the returned result.
 - Playwright wiring RED reproduced `RobotSim` instead of the Worker harness title when
   a dev-only spec was discovered by the preview-server config. The default suite now
   excludes both Worker harnesses, while dedicated hash/archive scripts use their exact
@@ -120,14 +129,14 @@ application functional while Task 4 repository publication remains out of scope:
 
 ## Verification
 
-- Follow-up focused archive/staging/migration matrix: 6 files, 226 tests passed.
+- Follow-up focused archive/staging/migration matrix: 6 files, 227 tests passed.
 - Worker protocol/security matrix: 1 file, 55 tests passed.
 - V3 archive facade matrix: 1 file, 24 tests passed.
 - Archive staging matrix: 1 file, 24 tests passed.
 - Task 3 brief command: 7 files, 162 tests passed.
-- Full parallel Vitest: 83 files, 716 tests passed in 56.20 seconds.
+- Full parallel Vitest: 83 files, 717 tests passed in 45.08 seconds.
 - Full serial Vitest (`npx vitest run --no-file-parallelism --maxWorkers=1`): 83 files,
-  716 tests passed in 178.78 seconds; no timing/order failure.
+  717 tests passed in 140.98 seconds; no timing/order failure.
 - Strict TypeScript (`npx tsc -b --pretty false`): passed.
 - Lint (`npm run lint`): passed with zero warnings.
 - Production build (`npm run build`): passed.
@@ -152,8 +161,10 @@ application functional while Task 4 repository publication remains out of scope:
   harness routes, preview wiring, chunk sizes, or max-boundary algorithm; the default
   and dedicated Chromium evidence above is reused from base commit `47f34d4`. The
   changed client response state and legacy migration handoff are covered by the
-  226-test focused matrix and both fresh full-suite modes.
-- Independent follow-up review: pending against the exact follow-up commit.
+  227-test focused matrix and both fresh full-suite modes.
+- Independent review of follow-up commit `323578f` found one Important dependency
+  capture TOCTOU and no other Critical, Important, or Minor issue. The current
+  follow-up fixes that finding with the RED-to-GREEN coverage above.
 
 ## Scope boundary
 

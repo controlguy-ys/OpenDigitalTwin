@@ -25,6 +25,7 @@ import {
   decodeLegacyRuntimeProjectV2,
   decodeWorkcellProject,
   encodeLegacyRuntimeProjectV2,
+  revokeProjectDecodeResult,
 } from './project-codec'
 
 const LINKS = [
@@ -490,5 +491,53 @@ describe('.wdtwin streaming legacy dispatch', () => {
     })).rejects.toMatchObject({ code: 'PROJECT_LEGACY_MIGRATION_DEPENDENCIES_INVALID' })
     expect(first.digestSource).not.toHaveBeenCalled()
     expect(second.digestSource).not.toHaveBeenCalled()
+  })
+
+  it('captures a stateful legacy migration bundle once before validating its staging identity', async () => {
+    const first = migrationCodecDependencies()
+    const second = migrationCodecDependencies()
+    const firstMigration = first.options.legacyMigration
+    const secondMigration = second.options.legacyMigration
+    let sourceStagingReads = 0
+    const legacyMigration = {
+      get sourceStaging() {
+        sourceStagingReads += 1
+        return sourceStagingReads === 1
+          ? firstMigration.sourceStaging
+          : secondMigration.sourceStaging
+      },
+      projectRevisionIdentityHasher: firstMigration.projectRevisionIdentityHasher,
+      builtInEquipmentDefaults: firstMigration.builtInEquipmentDefaults,
+      builtInEquipmentTransformDefaults: firstMigration.builtInEquipmentTransformDefaults,
+    }
+
+    const decoded = await decodeWorkcellProject(legacyArchive(1), {
+      ...first.options,
+      legacyMigration,
+    })
+
+    try {
+      expect(sourceStagingReads).toBe(1)
+      expect(first.digestSource).toHaveBeenCalledTimes(8)
+      expect(second.digestSource).not.toHaveBeenCalled()
+      for (const { preparedSource } of decoded.preparedSourceGroups) {
+        expect(() => firstMigration.sourceStaging.assertPrepared(preparedSource)).not.toThrow()
+        expect(() => secondMigration.sourceStaging.assertPrepared(preparedSource)).toThrow()
+      }
+    } finally {
+      revokeProjectDecodeResult(decoded)
+      for (const { preparedSource } of decoded.preparedSourceGroups) {
+        try {
+          firstMigration.sourceStaging.revoke(preparedSource)
+        } catch {
+          // The result owner already revoked this service's token.
+        }
+        try {
+          secondMigration.sourceStaging.revoke(preparedSource)
+        } catch {
+          // Only one staging service can own each prepared token.
+        }
+      }
+    }
   })
 })
