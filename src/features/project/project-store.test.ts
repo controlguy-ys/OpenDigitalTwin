@@ -146,9 +146,10 @@ it('rejects invalid stored V2 data without activating or rewriting it', async ()
   expect(store.getState().status).toBe('error')
   expect(store.getState().activeSnapshot).toBeNull()
   expect(projectRuntime.stage).not.toHaveBeenCalled()
-  expect(
-    (await db.projects.get('active'))?.snapshot.robot.links[0]!.collisionBoxes,
-  ).toEqual([])
+  const persisted = (await db.projects.get('active'))?.snapshot as
+    | CurrentProjectSnapshot
+    | undefined
+  expect(persisted?.robot.links[0]!.collisionBoxes).toEqual([])
 })
 
 it('normalizes stored V2 collision data and persists the canonical snapshot', async () => {
@@ -209,7 +210,10 @@ it('migrates a stored V1 project and persists the V2 result', async () => {
     quaternion: [0, 0, 0, 1],
   }])
   expect(Array.from(new Uint8Array(active.robot.links[0]!.sourceBytes))).toEqual([1])
-  expect((await db.projects.get('active'))?.snapshot.manifest.schemaVersion).toBe(2)
+  const stored = (await db.projects.get('active'))?.snapshot as
+    | CurrentProjectSnapshot
+    | undefined
+  expect(stored?.manifest.schemaVersion).toBe(2)
 })
 
 it('rejects an invalid decoded snapshot before staging or mutating active state', async () => {
@@ -237,7 +241,10 @@ it('rejects an invalid decoded snapshot before staging or mutating active state'
   expect(runtime.stage).not.toHaveBeenCalled()
   expect(runtime.commit).not.toHaveBeenCalled()
   expect(store.getState().activeProjectId).toBe('current-project')
-  expect((await db.projects.get('active'))?.snapshot.manifest.projectId).toBe(
+  const stored = (await db.projects.get('active'))?.snapshot as
+    | CurrentProjectSnapshot
+    | undefined
+  expect(stored?.manifest.projectId).toBe(
     'current-project',
   )
 })
@@ -267,7 +274,10 @@ it('keeps the active project unchanged when imported geometry staging fails', as
 
   expect(store.getState().activeProjectId).toBe('current-project')
   expect(runtime.commit).not.toHaveBeenCalled()
-  expect((await db.projects.get('active'))?.snapshot.manifest.projectId).toBe(
+  const stored = (await db.projects.get('active'))?.snapshot as
+    | CurrentProjectSnapshot
+    | undefined
+  expect(stored?.manifest.projectId).toBe(
     'current-project',
   )
 })

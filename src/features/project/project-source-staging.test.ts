@@ -9,6 +9,7 @@ import {
   type StepObjectAssetRecordV3,
   type WorkcellProjectSnapshotV3,
 } from '../../domain/project/project-v3'
+import * as projectV3Module from '../../domain/project/project-v3'
 import { createProjectSourceStagingTestServiceV1 } from '../../domain/project/project-source-staging.test-support'
 import * as projectSourceStagingFacade from './project-source-staging'
 import {
@@ -647,6 +648,10 @@ describe('ProjectSourceStagingService', () => {
     expect('assertCanonicalProjectSourceMigrationStagingServiceInternalV1' in projectSourceStagingFacade).toBe(false)
     expect('ownedSourceStaging' in projectSourceStagingFacade).toBe(false)
     expect('stageOwnedLegacyProjectSourcesV2' in projectSourceStagingFacade).toBe(false)
+    expect('createProjectSourcePublicationRepositoryPortInternalV1' in
+      projectSourceStagingFacade).toBe(false)
+    expect('leaseForPublication' in foundation.sourceStaging).toBe(false)
+    expect('revokePublicationLease' in foundation.sourceStaging).toBe(false)
   })
 
   it('hashes a source once, leases and returns its bytes, and revokes it on discard', async () => {
@@ -912,6 +917,51 @@ describe('ProjectSourceStagingService', () => {
     expect(group!.preparedSource.sha256).toBe(expectedDigest)
   })
 
+  it('rejects equal-length Object sources with the same digest but different bytes', async () => {
+    const project = await validV3Project() as unknown as Mutable<WorkcellProjectSnapshotV3>
+    const asset = {
+      id: 'asset-a',
+      name: 'Asset A',
+      sourceKind: 'step' as const,
+      sourceFileName: 'asset.step',
+      sourceBytes: Uint8Array.from([1, 2, 3]).buffer,
+      importScale: 1,
+      originMode: 'source' as const,
+      colliderCenter: [0, 0, 0] as [number, number, number],
+      collisionHalfExtents: [0.1, 0.1, 0.1] as [number, number, number],
+      collisionBoxes: [{
+        id: 'default',
+        center: [0, 0, 0] as [number, number, number],
+        halfExtents: [0.1, 0.1, 0.1] as [number, number, number],
+        quaternion: [0, 0, 0, 1] as [number, number, number, number],
+      }],
+      statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
+    }
+    project.objectAssets = [
+      asset,
+      {
+        ...asset,
+        id: 'asset-b',
+        name: 'Asset B',
+        sourceBytes: Uint8Array.from([4, 5, 6]).buffer,
+      },
+    ]
+    let digestCalls = 0
+    const collisionDigest = 'f'.repeat(64)
+    const sourceDigest: ProjectSourceDigest = {
+      digestSource: vi.fn(async () => {
+        digestCalls += 1
+        return digestCalls === 1 ? DIGEST_ABC : collisionDigest
+      }),
+    }
+
+    await expect(stageProjectSourcesV3(
+      project,
+      createProjectSourceStagingService({ sourceDigest }),
+      nativeRevisionIdentityHasher(),
+    )).rejects.toMatchObject({ code: 'PROJECT_SOURCE_DIGEST_COLLISION' })
+  })
+
   it('deduplicates byte-identical Object sources behind one opaque group', async () => {
     const project = await validV3Project() as unknown as Mutable<WorkcellProjectSnapshotV3>
     const shared = Uint8Array.from([7, 8, 9]).buffer
@@ -1158,5 +1208,16 @@ describe('ProjectSourceStagingService', () => {
       result.projection,
       result.preparedSourceGroups,
     )).toThrow(/revoked/i)
+  })
+
+  it('does not runtime-export a caller-bindable raw publication sink factory', () => {
+    expect('createProjectSourcePublicationRepositoryPortInternalV1' in projectV3Module)
+      .toBe(false)
+    expect('ProjectSourcePublicationRepositoryPortInternalV1' in projectV3Module)
+      .toBe(false)
+    expect('ProjectSourcePublicationRepositorySinkInternalV1' in projectV3Module)
+      .toBe(false)
+    expect('publishPromotion' in projectV3Module).toBe(false)
+    expect('assertStableProof' in projectV3Module).toBe(false)
   })
 })

@@ -76,6 +76,18 @@ import type {
   ProjectRevisionIdentityHasher,
   ProjectSourceDigest,
 } from '../../lib/hash/sha256'
+import {
+  assertCanonicalProjectRepositorySourceBindingInternalV1,
+  assertCanonicalProjectSourcePreparedInternalV1,
+  assertCanonicalProjectStableProofInternalV1,
+  commitCanonicalProjectSourcesInternalV1,
+  discardCanonicalProjectSourcePromotionInternalV1,
+  installCanonicalProjectSourceOperationsInternalV1,
+  prepareCanonicalProjectSourcePromotionInternalV1,
+  publishCanonicalProjectSourcePromotionInternalV1,
+  type CanonicalProjectRepositorySourceBindingInternalV1,
+  type CanonicalProjectSourceOperationsInternalV1,
+} from '../../features/project/project-revision-repository'
 
 export const WORKCELL_PROJECT_SCHEMA_VERSION_V3 = 3
 export const MAX_IDENTIFIER_UTF8_BYTES = 128
@@ -1860,6 +1872,7 @@ export function validateWorkcellProjectSnapshotV3(
 declare const preparedProjectSourceBrand: unique symbol
 declare const stagedProjectOwnershipAttestationBrand: unique symbol
 declare const preparedLegacyArchiveProjectBrand: unique symbol
+declare const preparedProjectSourcePublicationLeaseBrand: unique symbol
 
 export type ProjectSourceNamespaceV1 = 'robot' | 'object'
 export type ProjectSourceOwnerKeyV1 = `robot-source:${string}` | `object-asset:${string}`
@@ -1875,6 +1888,15 @@ export interface PreparedProjectSourceV1 {
 export interface PreparedProjectSourceGroupV1 {
   readonly ownerKeys: readonly ProjectSourceOwnerKeyV1[]
   readonly preparedSource: PreparedProjectSourceV1
+}
+
+/** Opaque, exact-service lease over a complete set of staged source groups. */
+interface PreparedProjectSourcePublicationLeaseV1 {
+  readonly [preparedProjectSourcePublicationLeaseBrand]: true
+}
+
+interface PreparedProjectSourcePublicationAttestationV1 {
+  readonly publicationAttestation: true
 }
 
 export interface LegacyProjectSourceAnalysisV1 {
@@ -1909,7 +1931,7 @@ interface PreparedSourceStateV1 {
   readonly namespace: ProjectSourceNamespaceV1
   readonly sha256: string
   readonly byteLength: number
-  status: 'active' | 'leased' | 'revoked'
+  status: 'active' | 'leased' | 'publication-leased' | 'consumed' | 'revoked'
   sourceBytes: ArrayBuffer | undefined
   generation: number
 }
@@ -1957,10 +1979,37 @@ interface ProjectSourceOwnershipBoundaryV1 {
   ): Promise<LegacyProjectSourceAnalysisV1>
   activeBuffer(source: PreparedProjectSourceV1): ArrayBuffer
   attest(groups: readonly PreparedProjectSourceGroupV1[]): StagedProjectOwnershipAttestationV3
+  leaseForPublication(
+    groups: readonly PreparedProjectSourceGroupV1[],
+  ): PreparedProjectSourcePublicationLeaseV1
+  revokePublicationLease(lease: PreparedProjectSourcePublicationLeaseV1): void
 }
 
 const preparedSourceRegistryV1 = new WeakMap<object, PreparedSourceStateV1>()
 const ownershipAttestationRegistryV3 = new WeakMap<object, OwnershipAttestationStateV3>()
+
+interface PublicationLeaseClaimV1 {
+  readonly token: PreparedProjectSourceV1
+  readonly generation: number
+  readonly namespace: ProjectSourceNamespaceV1
+  readonly sha256: string
+  readonly byteLength: number
+  readonly ownerKeys: readonly ProjectSourceOwnerKeyV1[]
+  readonly sourceBytes: ArrayBuffer
+}
+
+interface PublicationLeaseStateV1 {
+  readonly boundary: ProjectSourceOwnershipBoundaryV1
+  status: 'active' | 'consumed' | 'revoked'
+  claims: readonly PublicationLeaseClaimV1[] | undefined
+}
+
+const publicationLeaseRegistryV1 = new WeakMap<object, PublicationLeaseStateV1>()
+const publicationAttestationRegistryV1 = new WeakMap<object, {
+  readonly boundary: ProjectSourceOwnershipBoundaryV1
+  readonly groups: readonly PreparedProjectSourceGroupV1[]
+  consumed: boolean
+}>()
 
 function sourceFailure(code: string, message: string, cause?: unknown): never {
   throw Object.assign(
@@ -2009,6 +2058,141 @@ function validateClosedLegacyAnalysis(value: unknown): LegacyProjectSourceAnalys
   }) as LegacyProjectSourceAnalysisV1
 }
 
+function capturePublicationOwnerKeysV1(
+  value: unknown,
+): readonly ProjectSourceOwnerKeyV1[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Publication source owner keys must be a closed data-only Array.',
+    )
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+  const length = lengthDescriptor !== undefined && 'value' in lengthDescriptor
+    ? lengthDescriptor.value
+    : undefined
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Publication source owner keys must have a canonical data length.',
+    )
+  }
+  const canonicalLength = length as number
+  const expectedKeys = new Set([
+    'length',
+    ...Array.from({ length: canonicalLength }, (_entry, index) => String(index)),
+  ])
+  if (
+    Reflect.ownKeys(descriptors).some((key) =>
+      typeof key !== 'string' || !expectedKeys.has(key)) ||
+    lengthDescriptor === undefined || !('value' in lengthDescriptor)
+  ) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Publication source owner keys must be a dense closed data-only Array.',
+    )
+  }
+  const captured: ProjectSourceOwnerKeyV1[] = []
+  for (let index = 0; index < canonicalLength; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (descriptor === undefined || !('value' in descriptor)) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Publication source owner keys cannot contain accessors or sparse entries.',
+      )
+    }
+    if (
+      typeof descriptor.value !== 'string' ||
+      (!descriptor.value.startsWith('robot-source:') &&
+        !descriptor.value.startsWith('object-asset:'))
+    ) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Publication source owner key is invalid.',
+      )
+    }
+    captured.push(descriptor.value as ProjectSourceOwnerKeyV1)
+  }
+  return Object.freeze(captured)
+}
+
+function capturePublicationSourceGroupsV1(
+  groups: readonly PreparedProjectSourceGroupV1[],
+): readonly PreparedProjectSourceGroupV1[] {
+  if (!Array.isArray(groups) || Object.getPrototypeOf(groups) !== Array.prototype) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Publication source groups must be a closed data-only Array.',
+    )
+  }
+  const groupDescriptors = Object.getOwnPropertyDescriptors(groups)
+  const groupLengthDescriptor = Object.getOwnPropertyDescriptor(groups, 'length')
+  const groupLength = groupLengthDescriptor !== undefined && 'value' in groupLengthDescriptor
+    ? groupLengthDescriptor.value
+    : undefined
+  if (
+    typeof groupLength !== 'number' ||
+    !Number.isSafeInteger(groupLength) ||
+    groupLength < 0
+  ) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Publication source groups must have a canonical data length.',
+    )
+  }
+  const canonicalGroupLength = groupLength as number
+  const expectedGroupKeys = new Set([
+    'length',
+    ...Array.from({ length: canonicalGroupLength }, (_entry, index) => String(index)),
+  ])
+  if (Reflect.ownKeys(groupDescriptors).some((key) =>
+    typeof key !== 'string' || !expectedGroupKeys.has(key))) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Publication source groups must be a dense closed data-only Array.',
+    )
+  }
+  const captured: PreparedProjectSourceGroupV1[] = []
+  for (let index = 0; index < canonicalGroupLength; index += 1) {
+    const groupDescriptor = groupDescriptors[String(index)]
+    if (groupDescriptor === undefined || !('value' in groupDescriptor)) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Publication source groups cannot contain accessors or sparse entries.',
+      )
+    }
+    const group = groupDescriptor.value
+    if (
+      typeof group !== 'object' || group === null || Array.isArray(group) ||
+      Object.getPrototypeOf(group) !== Object.prototype
+    ) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Publication source group must be a closed data-only Object.',
+      )
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(group)
+    const keys = Reflect.ownKeys(descriptors)
+    if (
+      keys.length !== 2 ||
+      keys.some((key) => key !== 'ownerKeys' && key !== 'preparedSource') ||
+      !('value' in descriptors.ownerKeys!) ||
+      !('value' in descriptors.preparedSource!)
+    ) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'Publication source group must contain only data ownerKeys and preparedSource.',
+      )
+    }
+    captured.push(Object.freeze({
+      ownerKeys: capturePublicationOwnerKeysV1(descriptors.ownerKeys.value),
+      preparedSource: descriptors.preparedSource.value as PreparedProjectSourceV1,
+    }))
+  }
+  return Object.freeze(captured)
+}
+
 function createProjectSourceOwnershipBoundaryV1(
   options: ProjectSourceOwnershipBoundaryOptionsV1,
 ): ProjectSourceOwnershipBoundaryV1 {
@@ -2034,12 +2218,33 @@ function createProjectSourceOwnershipBoundaryV1(
       )
     }
     if (expectedStatus !== undefined && state.status !== expectedStatus) {
+      const code = state.status === 'revoked'
+        ? 'PROJECT_SOURCE_TOKEN_REVOKED'
+        : state.status === 'consumed'
+          ? 'PROJECT_SOURCE_TOKEN_CONSUMED'
+          : state.status === 'publication-leased'
+            ? 'PROJECT_SOURCE_TOKEN_PUBLICATION_LEASED'
+            : 'PROJECT_SOURCE_TOKEN_LEASED'
       return sourceFailure(
-        state.status === 'revoked' ? 'PROJECT_SOURCE_TOKEN_REVOKED' : 'PROJECT_SOURCE_TOKEN_LEASED',
+        code,
         `Prepared Project source token is ${state.status}.`,
       )
     }
     return state
+  }
+
+  const revokeState = (state: PreparedSourceStateV1): void => {
+    if (state.status === 'revoked') return
+    state.status = 'revoked'
+    if (state.sourceBytes !== undefined && tryArrayBufferByteLength(state.sourceBytes) !== 0) {
+      try {
+        structuredClone(state.sourceBytes, { transfer: [state.sourceBytes] })
+      } catch {
+        // A concurrent cancellation may already have detached the buffer.
+      }
+    }
+    state.sourceBytes = undefined
+    state.generation += 1
   }
 
   const stageOwned = async (
@@ -2152,17 +2357,19 @@ function createProjectSourceOwnershipBoundaryV1(
     },
     revoke(source) {
       const state = stateFor(source)
-      if (state.status === 'revoked') return
-      state.status = 'revoked'
-      if (state.sourceBytes !== undefined && tryArrayBufferByteLength(state.sourceBytes) !== 0) {
-        try {
-          structuredClone(state.sourceBytes, { transfer: [state.sourceBytes] })
-        } catch {
-          // A leased or concurrently cancelled buffer may already be detached.
-        }
+      if (state.status === 'publication-leased') {
+        return sourceFailure(
+          'PROJECT_SOURCE_TOKEN_PUBLICATION_LEASED',
+          'Prepared Project source token is publication-leased.',
+        )
       }
-      state.sourceBytes = undefined
-      state.generation += 1
+      if (state.status === 'consumed') {
+        return sourceFailure(
+          'PROJECT_SOURCE_TOKEN_CONSUMED',
+          'Prepared Project source token ownership was already consumed.',
+        )
+      }
+      revokeState(state)
     },
     async analyzeLegacyRobotSource(source, signal) {
       const state = stateFor(source, 'active')
@@ -2316,6 +2523,111 @@ function createProjectSourceOwnershipBoundaryV1(
         },
       })
       return attestation
+    },
+    leaseForPublication(groups) {
+      const capturedGroups = capturePublicationSourceGroupsV1(groups)
+      const tokens = new Set<PreparedProjectSourceV1>()
+      const owners = new Set<ProjectSourceOwnerKeyV1>()
+      const claims: PublicationLeaseClaimV1[] = []
+
+      // Complete validation is synchronous and precedes the first status change.
+      for (const group of capturedGroups) {
+        if (tokens.has(group.preparedSource)) {
+          return sourceFailure(
+            'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+            'A prepared Project source token must appear in exactly one owner group.',
+          )
+        }
+        tokens.add(group.preparedSource)
+        const state = stateFor(group.preparedSource, 'active')
+        if (!Array.isArray(group.ownerKeys) || group.ownerKeys.length === 0) {
+          return sourceFailure(
+            'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+            'Prepared source group must own at least one source.',
+          )
+        }
+        const ownerKeys: ProjectSourceOwnerKeyV1[] = [...group.ownerKeys]
+        for (const ownerKey of ownerKeys) {
+          if (typeof ownerKey !== 'string' || owners.has(ownerKey)) {
+            return sourceFailure(
+              'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+              `Duplicate or invalid prepared Project source owner ${String(ownerKey)}.`,
+            )
+          }
+          owners.add(ownerKey)
+          const namespace = ownerKey.startsWith('robot-source:') ? 'robot' :
+            ownerKey.startsWith('object-asset:') ? 'object' : undefined
+          if (
+            namespace === undefined ||
+            namespace !== state.namespace ||
+            (namespace === 'robot' && ownerKey !== `robot-source:${state.sha256}`)
+          ) {
+            return sourceFailure(
+              'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+              `Prepared source does not match ${ownerKey}.`,
+            )
+          }
+        }
+        ownerKeys.sort()
+        claims.push({
+          token: group.preparedSource,
+          generation: state.generation,
+          namespace: state.namespace,
+          sha256: state.sha256,
+          byteLength: state.byteLength,
+          ownerKeys: Object.freeze(ownerKeys),
+          sourceBytes: state.sourceBytes!,
+        })
+      }
+
+      claims.sort((left, right) =>
+        (left.namespace === right.namespace ? 0 : left.namespace === 'robot' ? -1 : 1) ||
+        (left.sha256 < right.sha256 ? -1 : left.sha256 > right.sha256 ? 1 : 0))
+      for (const claim of claims) {
+        const state = stateFor(claim.token, 'active')
+        state.status = 'publication-leased'
+        state.generation += 1
+      }
+      const lease = Object.freeze({}) as PreparedProjectSourcePublicationLeaseV1
+      publicationLeaseRegistryV1.set(lease, {
+        boundary,
+        status: 'active',
+        claims: Object.freeze(claims.map((claim) => Object.freeze({
+          ...claim,
+          generation: claim.generation + 1,
+        }))),
+      })
+      return lease
+    },
+    revokePublicationLease(lease) {
+      const leaseState = typeof lease === 'object' && lease !== null
+        ? publicationLeaseRegistryV1.get(lease)
+        : undefined
+      if (leaseState === undefined || leaseState.boundary !== boundary) {
+        return sourceFailure(
+          'PROJECT_SOURCE_PUBLICATION_LEASE_INVALID',
+          'Publication lease is invalid or belongs to another staging service.',
+        )
+      }
+      if (leaseState.status === 'revoked') return
+      if (leaseState.status === 'consumed') {
+        return sourceFailure(
+          'PROJECT_SOURCE_PUBLICATION_LEASE_CONSUMED',
+          'Publication lease was already consumed.',
+        )
+      }
+      leaseState.status = 'revoked'
+      for (const claim of leaseState.claims ?? []) {
+        const state = preparedSourceRegistryV1.get(claim.token)
+        if (
+          state?.authority === authority &&
+          state.status === 'publication-leased' &&
+          state.generation === claim.generation
+        ) {
+          revokeState(state)
+        }
+      }
+      leaseState.claims = undefined
     },
   }
   return Object.freeze(boundary)
@@ -2533,6 +2845,259 @@ const projectSourceServiceBoundariesV1 = new WeakMap<
 >()
 const projectSourceMigrationServicesV1 = new WeakSet<ProjectSourceMigrationStagingServiceV1>()
 const preparedLegacyArchiveProjectsV1 = new WeakMap<object, PreparedLegacyArchiveProjectStateV1>()
+
+interface ProjectSourcePublicationAssignmentInternalV1 {
+  readonly namespace: ProjectSourceNamespaceV1
+  readonly sha256: string
+  readonly byteLength: number
+  readonly ownerKeys: readonly ProjectSourceOwnerKeyV1[]
+  readonly sourceBytes: ArrayBuffer
+}
+
+const projectSourcePublicationBindingsV1 = new WeakMap<
+  ProjectSourceStagingService,
+  CanonicalProjectRepositorySourceBindingInternalV1
+>()
+
+function publicationLeaseStateForV1(
+  lease: PreparedProjectSourcePublicationLeaseV1,
+  boundary: ProjectSourceOwnershipBoundaryV1,
+): PublicationLeaseStateV1 {
+  const leaseState = typeof lease === 'object' && lease !== null
+    ? publicationLeaseRegistryV1.get(lease)
+    : undefined
+  if (leaseState === undefined || leaseState.boundary !== boundary) {
+    return sourceFailure(
+      'PROJECT_SOURCE_PUBLICATION_LEASE_INVALID',
+      'Publication lease is invalid or forged.',
+    )
+  }
+  if (leaseState.status === 'revoked') {
+    return sourceFailure(
+      'PROJECT_SOURCE_PUBLICATION_LEASE_REVOKED',
+      'Publication lease was revoked.',
+    )
+  }
+  if (leaseState.status === 'consumed') {
+    return sourceFailure(
+      'PROJECT_SOURCE_PUBLICATION_LEASE_CONSUMED',
+      'Publication lease was already consumed.',
+    )
+  }
+  return leaseState
+}
+
+function publicationAssignmentsForV1(
+  lease: PreparedProjectSourcePublicationLeaseV1,
+  boundary: ProjectSourceOwnershipBoundaryV1,
+): readonly ProjectSourcePublicationAssignmentInternalV1[] {
+  const leaseState = publicationLeaseStateForV1(lease, boundary)
+  const claims = leaseState.claims!
+  for (const claim of claims) {
+    const sourceState = preparedSourceRegistryV1.get(claim.token)
+    if (
+      sourceState === undefined ||
+      sourceState.status !== 'publication-leased' ||
+      sourceState.generation !== claim.generation ||
+      sourceState.sourceBytes !== claim.sourceBytes ||
+      tryArrayBufferByteLength(sourceState.sourceBytes) !== claim.byteLength
+    ) {
+      return sourceFailure(
+        'PROJECT_SOURCE_PUBLICATION_LEASE_INVALID',
+        'Publication-leased source changed before repository access.',
+      )
+    }
+  }
+  return Object.freeze(claims.map((claim) => Object.freeze({
+      namespace: claim.namespace,
+      sha256: claim.sha256,
+      byteLength: claim.byteLength,
+      ownerKeys: claim.ownerKeys,
+      sourceBytes: claim.sourceBytes,
+    })))
+}
+
+function consumePrevalidatedPublicationLeaseV1(
+  leaseState: PublicationLeaseStateV1,
+): void {
+  const claims = leaseState.claims!
+  for (const claim of claims) {
+    const sourceState = preparedSourceRegistryV1.get(claim.token)!
+    sourceState.status = 'consumed'
+    sourceState.sourceBytes = undefined
+    sourceState.generation += 1
+  }
+  leaseState.status = 'consumed'
+  leaseState.claims = undefined
+}
+
+/**
+ * Authenticates and connects one canonical repository to one exact staging
+ * service. The installed operations never escape either module, so callers
+ * cannot supply a raw-byte sink or override the stable publication step.
+ */
+export function installProjectSourcePublicationRepositoryBindingInternalV1(
+  service: ProjectSourceStagingService,
+  binding: CanonicalProjectRepositorySourceBindingInternalV1,
+): void {
+  // Authentication must happen before consulting or claiming the service. A
+  // forged direct-import call therefore cannot deny the legitimate repository.
+  assertCanonicalProjectRepositorySourceBindingInternalV1(binding)
+  const boundary = projectSourceServiceBoundariesV1.get(service)
+  if (boundary === undefined || projectSourcePublicationBindingsV1.has(service)) {
+    return sourceFailure(
+      'PROJECT_SOURCE_REPOSITORY_BINDING_INVALID',
+      'Source repository binding requires one unbound canonical staging service.',
+    )
+  }
+
+  const leases = new WeakMap<object, PreparedProjectSourcePublicationLeaseV1>()
+  const phases = new WeakMap<object, 'leased' | 'promoting' | 'promoted' | 'revoked'>()
+  const assertActiveBinding = (): void => {
+    if (projectSourcePublicationBindingsV1.get(service) !== binding) {
+      return sourceFailure(
+        'PROJECT_SOURCE_REPOSITORY_BINDING_INVALID',
+        'Source repository binding identity is not active.',
+      )
+    }
+  }
+  const leaseFor = (prepared: object): PreparedProjectSourcePublicationLeaseV1 => {
+    assertActiveBinding()
+    assertCanonicalProjectSourcePreparedInternalV1(binding, prepared)
+    const lease = leases.get(prepared)
+    if (lease === undefined) {
+      return sourceFailure(
+        'PROJECT_SOURCE_PUBLICATION_LEASE_INVALID',
+        'Prepared revision has no repository-bound publication lease.',
+      )
+    }
+    publicationLeaseStateForV1(lease, boundary)
+    return lease
+  }
+
+  const operations: CanonicalProjectSourceOperationsInternalV1 = Object.freeze({
+    attest(groups: readonly PreparedProjectSourceGroupV1[]): object {
+      assertActiveBinding()
+      // Attestation is side-effect-free and descriptor-based. lease() performs
+      // exact-service token validation before its first ownership mutation.
+      const attestation = Object.freeze({}) as PreparedProjectSourcePublicationAttestationV1
+      publicationAttestationRegistryV1.set(attestation, {
+        boundary,
+        groups: capturePublicationSourceGroupsV1(groups),
+        consumed: false,
+      })
+      return attestation
+    },
+    lease(prepared: object, attestation: object): void {
+      assertActiveBinding()
+      assertCanonicalProjectSourcePreparedInternalV1(binding, prepared)
+      if (leases.has(prepared)) {
+        return sourceFailure(
+          'PROJECT_SOURCE_PUBLICATION_LEASE_INVALID',
+          'Prepared revision was already publication-leased.',
+        )
+      }
+      const attestationState = typeof attestation === 'object' && attestation !== null
+        ? publicationAttestationRegistryV1.get(attestation)
+        : undefined
+      if (
+        attestationState === undefined ||
+        attestationState.boundary !== boundary ||
+        attestationState.consumed
+      ) {
+        return sourceFailure(
+          'PROJECT_SOURCE_PUBLICATION_ATTESTATION_INVALID',
+          'Publication source attestation is forged, foreign, or already consumed.',
+        )
+      }
+      const lease = boundary.leaseForPublication(attestationState.groups)
+      attestationState.consumed = true
+      leases.set(prepared, lease)
+      phases.set(prepared, 'leased')
+    },
+    additionalUniqueBlobBytes(prepared: object): number {
+      const lease = leaseFor(prepared)
+      return publicationAssignmentsForV1(lease, boundary).reduce(
+        (total, assignment) => total + assignment.byteLength,
+        0,
+      )
+    },
+    async commit(prepared: object): Promise<void> {
+      const lease = leaseFor(prepared)
+      await commitCanonicalProjectSourcesInternalV1(
+        binding,
+        prepared,
+        publicationAssignmentsForV1(lease, boundary),
+      )
+    },
+    promote(prepared: object, proof: object): void {
+      const lease = leaseFor(prepared)
+      if (phases.get(prepared) !== 'leased') {
+        return sourceFailure(
+          'PROJECT_SOURCE_PUBLICATION_LEASE_INVALID',
+          'Prepared revision source promotion is already active or complete.',
+        )
+      }
+      const leaseState = publicationLeaseStateForV1(lease, boundary)
+      const assignments = publicationAssignmentsForV1(lease, boundary)
+      phases.set(prepared, 'promoting')
+      try {
+        // This proof check is a fixed synchronous WeakMap lookup. There is no
+        // caller callback whose Promise could be mistaken for successful proof.
+        assertCanonicalProjectStableProofInternalV1(binding, prepared, proof)
+        prepareCanonicalProjectSourcePromotionInternalV1(
+          binding,
+          prepared,
+          assignments,
+          proof,
+        )
+        publicationAssignmentsForV1(lease, boundary)
+      } catch (error) {
+        discardCanonicalProjectSourcePromotionInternalV1(binding, prepared)
+        phases.set(prepared, 'leased')
+        throw error
+      }
+      try {
+        // Fixed repository-local publication performs one registry pointer
+        // assignment and cannot invoke user code after that assignment.
+        publishCanonicalProjectSourcePromotionInternalV1(binding, prepared, proof)
+      } catch (error) {
+        discardCanonicalProjectSourcePromotionInternalV1(binding, prepared)
+        phases.set(prepared, 'leased')
+        throw error
+      }
+      consumePrevalidatedPublicationLeaseV1(leaseState)
+      phases.set(prepared, 'promoted')
+    },
+    rollback(prepared: object): void {
+      assertActiveBinding()
+      const lease = leases.get(prepared)
+      if (lease === undefined) return
+      const phase = phases.get(prepared)
+      if (phase === 'revoked') return
+      assertCanonicalProjectSourcePreparedInternalV1(binding, prepared)
+      if (phase === 'promoting') {
+        return sourceFailure(
+          'PROJECT_SOURCE_PUBLICATION_IN_PROGRESS',
+          'Publication source promotion is in progress.',
+        )
+      }
+      if (phase === 'promoted') {
+        return sourceFailure(
+          'PROJECT_SOURCE_PUBLICATION_LEASE_CONSUMED',
+          'Publication source ownership was already promoted.',
+        )
+      }
+      const state = publicationLeaseRegistryV1.get(lease)
+      if (state?.status === 'revoked') return
+      boundary.revokePublicationLease(lease)
+      phases.set(prepared, 'revoked')
+    },
+  })
+
+  installCanonicalProjectSourceOperationsInternalV1(binding, operations)
+  projectSourcePublicationBindingsV1.set(service, binding)
+}
 
 /** Internal registry assertion used by the migration entrypoint before any staging. */
 export function assertCanonicalProjectSourceMigrationStagingServiceInternalV1(
@@ -3713,6 +4278,14 @@ export async function stageProjectSourcesV3(
       } else {
         if (existing.preparedSource.byteLength !== prepared.byteLength) {
           return sourceFailure('PROJECT_SOURCE_DIGEST_COLLISION', 'Equal source digests have different byte lengths.')
+        }
+        if (existing.preparedSource !== prepared) {
+          const existingBytes = new Uint8Array(boundary.activeBuffer(existing.preparedSource))
+          const preparedBytes = new Uint8Array(boundary.activeBuffer(prepared))
+          if (existingBytes.some((byte, index) => byte !== preparedBytes[index])) {
+            return sourceFailure('PROJECT_SOURCE_DIGEST_COLLISION', 'Equal source digests have different bytes.')
+          }
+          bufferTokens.set(descriptor.sourceBytes, existing.preparedSource)
         }
         existing.ownerKeys.push(descriptor.ownerKey)
         if (existing.preparedSource !== prepared) boundary.revoke(prepared)
