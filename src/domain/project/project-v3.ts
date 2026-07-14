@@ -204,6 +204,10 @@ export type {
 }
 
 const encoder = new TextEncoder()
+const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength',
+)?.get
 const HEX_SHA256 = /^[0-9a-f]{64}$/
 const UPPERCASE_COLOR = /^#[0-9A-F]{6}$/
 const ROBOT_LINK_IDS = [
@@ -415,16 +419,25 @@ function normalizedQuaternion(value: unknown, label: string): number[] {
   return normalizedUnitVector(numericTuple(value, 4, label), label)
 }
 
-function arrayBuffer(value: unknown, label: string): ArrayBuffer {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    ArrayBuffer.isView(value) ||
-    Object.prototype.toString.call(value) !== '[object ArrayBuffer]'
-  ) {
+function tryArrayBufferByteLength(value: object): number | undefined {
+  if (ARRAY_BUFFER_BYTE_LENGTH_GETTER === undefined) return undefined
+  try {
+    return ARRAY_BUFFER_BYTE_LENGTH_GETTER.call(value) as number
+  } catch {
+    return undefined
+  }
+}
+
+function arrayBufferByteLength(value: unknown, label: string): number {
+  if (typeof value !== 'object' || value === null) {
     fail(`${label} must be an ArrayBuffer.`)
   }
-  return value as ArrayBuffer
+  const byteLength = tryArrayBufferByteLength(value)
+  if (byteLength === undefined) fail(`${label} must be an ArrayBuffer.`)
+  if (Reflect.ownKeys(value).length !== 0) {
+    fail(`${label} contains unknown configuration fields.`)
+  }
+  return byteLength
 }
 
 function sha256(value: unknown, label: string): string {
@@ -560,7 +573,7 @@ function validateRobotSource(
   if (!/\.(?:step|stp)$/i.test(source.sourceFileName as string)) {
     fail(`${label}.sourceFileName must end in .step or .stp.`)
   }
-  const bytes = arrayBuffer(source.sourceBytes, `${label}.sourceBytes`).byteLength
+  const bytes = arrayBufferByteLength(source.sourceBytes, `${label}.sourceBytes`)
   if (bytes === 0) fail(`${label}.sourceBytes must not be empty.`)
   if (bytes > MAX_ROBOT_LINK_BYTES) fail(`${label} exceeds the Robot STEP byte budget.`)
   const detectedUnits = ['meter', 'millimeter', 'inch', 'unknown']
@@ -610,7 +623,10 @@ function validateRobotPartRef(
   coordinateMode: unknown,
   sourceIds: ReadonlySet<string>,
   sourceStatistics: ReadonlyMap<string, GeometryStatistics>,
-): readonly string[] {
+): {
+  readonly sourceAssetId: string
+  readonly occurrenceKeys: readonly string[]
+} {
   const reference = closedRecord(
     value,
     label,
@@ -662,13 +678,34 @@ function validateRobotPartRef(
     fail(`${label}.nodePath must contain non-negative child ordinals.`)
   }
 
-  return meshIndices.map(
-    (meshIndex) => `${sourceAssetId}|${nodePath.join(',')}|${meshIndex}`,
-  )
+  return {
+    sourceAssetId,
+    occurrenceKeys: meshIndices.map(
+      (meshIndex) => `${sourceAssetId}|${nodePath.join(',')}|${meshIndex}`,
+    ),
+  }
 }
 
 function validateMechanicsProvenance(value: unknown): void {
-  const base = isRecord(value) ? value : fail('robot.mechanicsProvenance must be an object.')
+  const base = closedRecord(
+    value,
+    'robot.mechanicsProvenance',
+    [
+      'kind',
+      'configurationId',
+      'configurationRevision',
+      'sourceFileName',
+      'sourceSha256',
+      'canonicalSha256',
+    ],
+    [
+      'configurationId',
+      'configurationRevision',
+      'sourceFileName',
+      'sourceSha256',
+      'canonicalSha256',
+    ],
+  )
   if (base.kind === 'datasheet') {
     const record = closedRecord(
       value,
@@ -863,10 +900,7 @@ function validateRobot(
     }
     let selectedMeshOccurrences = 0
     references.forEach((reference, referenceIndex) => {
-      const referenceRecord = reference as Record<string, unknown>
-      const sourceAssetId = referenceRecord.sourceAssetId
-      if (typeof sourceAssetId === 'string') referencedSources.add(sourceAssetId)
-      const occurrenceKeys = validateRobotPartRef(
+      const validatedReference = validateRobotPartRef(
         reference,
         `${label}.sourceRefs[${referenceIndex}]`,
         linkId,
@@ -874,6 +908,8 @@ function validateRobot(
         sourceIds,
         sourceStatistics,
       )
+      referencedSources.add(validatedReference.sourceAssetId)
+      const occurrenceKeys = validatedReference.occurrenceKeys
       selectedMeshOccurrences += occurrenceKeys.length
       occurrenceKeys.forEach((key) => {
         const owner = occurrenceOwners.get(key)
@@ -973,9 +1009,11 @@ function requireExactPrimitiveGeometry(
   }
   const boxes = arrayValue(asset.collisionBoxes, `${label}.collisionBoxes`)
   if (boxes.length !== 1) fail(`${label} primitive proxy requires exactly one collision Box.`)
-  const box = isRecord(boxes[0])
-    ? boxes[0]
-    : fail(`${label} primitive collision Box must be an object.`)
+  const box = closedRecord(
+    boxes[0],
+    `${label}.collisionBoxes[0]`,
+    ['id', 'center', 'halfExtents', 'quaternion'],
+  )
   if (
     box.id !== 'primitive-body' ||
     !sameNumbers(numericTuple(box.center, 3, `${label}.collisionBoxes[0].center`), [0, 0, 0]) ||
@@ -990,9 +1028,11 @@ function requireExactPrimitiveGeometry(
   ) {
     fail(`${label} primitive collision proxy is inconsistent.`)
   }
-  const actualStatistics = isRecord(asset.statistics)
-    ? asset.statistics
-    : fail(`${label}.statistics must be an object.`)
+  const actualStatistics = closedRecord(
+    asset.statistics,
+    `${label}.statistics`,
+    ['vertices', 'triangles', 'meshes', 'materials'],
+  )
   if (
     actualStatistics.vertices !== statistics.vertices ||
     actualStatistics.triangles !== statistics.triangles ||
@@ -1017,8 +1057,48 @@ function validateAssets(
   let collisionBoxes = 0
   assets.forEach((value, index) => {
     const label = `objectAssets[${index}]`
-    if (!isRecord(value)) fail(`${label} must be an object.`)
-    const sourceKind = value.sourceKind
+    const base = closedRecord(
+      value,
+      label,
+      [
+        'id',
+        'name',
+        'sourceKind',
+        'sourceFileName',
+        'sourceBytes',
+        'importScale',
+        'originMode',
+        'dimensionsM',
+        'radiusM',
+        'heightM',
+        'axis',
+        'radialSegments',
+        'color',
+        'colliderCenter',
+        'collisionHalfExtents',
+        'collisionBoxes',
+        'statistics',
+      ],
+      [
+        'id',
+        'name',
+        'sourceFileName',
+        'sourceBytes',
+        'importScale',
+        'originMode',
+        'dimensionsM',
+        'radiusM',
+        'heightM',
+        'axis',
+        'radialSegments',
+        'color',
+        'colliderCenter',
+        'collisionHalfExtents',
+        'collisionBoxes',
+        'statistics',
+      ],
+    )
+    const sourceKind = base.sourceKind
     if (sourceKind === 'step') {
       const asset = closedRecord(value, label, [
         'id',
@@ -1041,7 +1121,7 @@ function validateAssets(
       if (!/\.(?:step|stp)$/i.test(asset.sourceFileName as string)) {
         fail(`${label}.sourceFileName must end in .step or .stp.`)
       }
-      const bytes = arrayBuffer(asset.sourceBytes, `${label}.sourceBytes`).byteLength
+      const bytes = arrayBufferByteLength(asset.sourceBytes, `${label}.sourceBytes`)
       if (bytes === 0) fail(`${label}.sourceBytes must not be empty.`)
       if (bytes > MAX_OBJECT_ASSET_BYTES) fail(`${label} exceeds the Object STEP byte budget.`)
       sourceBytes += bytes
@@ -1114,7 +1194,7 @@ function validateAssets(
       fail(`${label}.sourceKind is unsupported.`)
     }
 
-    const asset = value
+    const asset = base
     const id = identifier(asset.id, `${label}.id`)
     if (assetIds.has(id)) fail(`objectAssets contains duplicate id ${id}.`)
     assetIds.add(id)
@@ -1517,11 +1597,13 @@ function validateOpcUa(
       if (binding.referenceFrameId !== 'world' && binding.referenceFrameId !== 'mcp') {
         fail(`${label}.referenceFrameId must be world or mcp.`)
       }
-      if (
-        !isRecord(binding.smoothing) ||
-        binding.smoothing.mode !== 'two-cycle' ||
-        binding.smoothing.cycles !== 2
-      ) {
+      const smoothing = closedRecord(
+        binding.smoothing,
+        `${label}.smoothing`,
+        ['mode', 'cycles', 'milliseconds'],
+        ['cycles', 'milliseconds'],
+      )
+      if (smoothing.mode !== 'two-cycle' || smoothing.cycles !== 2) {
         fail(`${label}.smoothing must use the fixed two-cycle policy.`)
       }
       closedRecord(
@@ -1609,7 +1691,7 @@ function deepFreezeConfiguration(value: unknown): void {
   if (
     typeof value !== 'object' ||
     value === null ||
-    Object.prototype.toString.call(value) === '[object ArrayBuffer]'
+    tryArrayBufferByteLength(value) !== undefined
   ) {
     return
   }
@@ -1730,7 +1812,10 @@ export function validateStagedWorkcellProjectSnapshotV3(
       descriptor.namespace !== assignment.namespace ||
       descriptor.ownerKey !== assignment.ownerKey ||
       descriptor.sourceBytes !== assignment.sourceBytes ||
-      descriptor.sourceBytes.byteLength !== assignment.sourceByteLength ||
+      arrayBufferByteLength(
+        descriptor.sourceBytes,
+        `Staged source assignment ${descriptor.ownerKey} sourceBytes`,
+      ) !== assignment.sourceByteLength ||
       descriptor.declaredSha256 !== assignment.declaredSha256
     ) {
       fail(`Staged source assignment ${descriptor.ownerKey} is not capability-owned.`)

@@ -58,6 +58,83 @@ function mutable<T>(value: T): DeepMutable<T> {
   return structuredClone(value) as DeepMutable<T>
 }
 
+function expectSelfReplacingAccessorRejected(
+  snapshot: DeepMutable<WorkcellProjectSnapshotV3>,
+  target: object,
+  key: PropertyKey,
+  replacementValue: unknown,
+): void {
+  let calls = 0
+  const getter = () => {
+    calls += 1
+    Object.defineProperty(target, key, {
+      value: replacementValue,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
+    return replacementValue
+  }
+  Object.defineProperty(target, key, {
+    get: getter,
+    enumerable: true,
+    configurable: true,
+  })
+
+  let error: unknown
+  try {
+    validateWorkcellProjectSnapshotV3(snapshot)
+  } catch (caught) {
+    error = caught
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(target, key)
+  expect.soft(calls).toBe(0)
+  expect.soft(descriptor?.get).toBe(getter)
+  expect.soft(descriptor !== undefined && 'value' in descriptor).toBe(false)
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toMatch(/data field/i)
+}
+
+function expectAccessorForgedArrayBufferRejected(
+  snapshot: DeepMutable<WorkcellProjectSnapshotV3>,
+  sourceOwner: object,
+): void {
+  const owner = sourceOwner as Record<string, unknown>
+  const forgedBuffer = {}
+  const replacementBuffer = Uint8Array.from([1, 2, 3]).buffer
+  let tagCalls = 0
+  let lengthCalls = 0
+  Object.defineProperty(forgedBuffer, Symbol.toStringTag, {
+    get: () => {
+      tagCalls += 1
+      owner.sourceBytes = replacementBuffer
+      return 'ArrayBuffer'
+    },
+    configurable: true,
+  })
+  Object.defineProperty(forgedBuffer, 'byteLength', {
+    get: () => {
+      lengthCalls += 1
+      return replacementBuffer.byteLength
+    },
+    enumerable: true,
+    configurable: true,
+  })
+  owner.sourceBytes = forgedBuffer
+
+  let error: unknown
+  try {
+    validateWorkcellProjectSnapshotV3(snapshot)
+  } catch (caught) {
+    error = caught
+  }
+  expect.soft(tagCalls).toBe(0)
+  expect.soft(lengthCalls).toBe(0)
+  expect.soft(owner.sourceBytes).toBe(forgedBuffer)
+  expect(error).toBeInstanceOf(Error)
+  expect((error as Error).message).toMatch(/ArrayBuffer/i)
+}
+
 function digest(index: number): string {
   return index.toString(16).padStart(64, '0')
 }
@@ -466,6 +543,14 @@ describe('Workcell Project V3 contract', () => {
       { mode: 'duration', milliseconds: 100 } as unknown as ProjectOpcUaEquipmentTransformBindingV3['smoothing'],
     )]
     expect(() => validateWorkcellProjectSnapshotV3(smoothing)).toThrow(/two-cycle/i)
+  })
+
+  it('reports an unsupported Object sourceKind before branch-required fields', () => {
+    const snapshot = mutable(validV3Project())
+    snapshot.objectAssets = [{
+      sourceKind: 'sphere',
+    } as unknown as DeepMutable<WorkcellProjectSnapshotV3['objectAssets'][number]>]
+    expect(() => validateWorkcellProjectSnapshotV3(snapshot)).toThrow(/sourceKind is unsupported/i)
   })
 
   it('accepts primitive dimension boundaries and rejects a fixed epsilon outside', () => {
@@ -1096,6 +1181,140 @@ describe('Workcell Project V3 contract', () => {
     mutateTuple(snapshot.robot.basePosition)
     expect(() => validateWorkcellProjectSnapshotV3(snapshot))
       .toThrow(/Invalid workcell project V3:.*(?:array|sparse|unknown|enumerable|data|plain)/i)
+  })
+
+  it.each([
+    ['STEP', () => stepAsset('box-1'), 'step'],
+    ['Box', () => primitiveBox('box-1'), 'box'],
+    ['Cylinder', () => cylinderAsset('box-1'), 'cylinder'],
+  ])('rejects a self-replacing %s Asset sourceKind accessor without invoking it', (
+    _label,
+    createAsset,
+    sourceKind,
+  ) => {
+    const snapshot = mutable(validV3Project())
+    const asset = mutable(createAsset()) as unknown as DeepMutable<
+      WorkcellProjectSnapshotV3['objectAssets'][number]
+    >
+    snapshot.objectAssets = [asset]
+    expectSelfReplacingAccessorRejected(snapshot, asset, 'sourceKind', sourceKind)
+  })
+
+  it.each([
+    ['datasheet', {
+      kind: 'datasheet',
+      configurationId: 'robot-configuration',
+      configurationRevision: 'revision-1',
+    }],
+    ['manifest', {
+      kind: 'manifest',
+      sourceFileName: 'mechanics.json',
+      sourceSha256: DIGEST_B,
+    }],
+    ['manual', {
+      kind: 'manual',
+      canonicalSha256: DIGEST_B,
+    }],
+  ])('rejects a self-replacing %s Mechanics provenance kind accessor', (
+    kind,
+    provenance,
+  ) => {
+    const snapshot = mutable(validV3Project())
+    const record = mutable(provenance) as unknown as DeepMutable<
+      WorkcellProjectSnapshotV3['robot']['mechanicsProvenance']
+    >
+    snapshot.robot.mechanicsProvenance = record
+    expectSelfReplacingAccessorRejected(snapshot, record, 'kind', kind)
+  })
+
+  it('rejects a self-replacing Link sourceAssetId accessor before ownership tracking', () => {
+    const snapshot = mutable(validV3Project())
+    const reference = snapshot.robot.links[0]!.sourceRefs[0]!
+    expectSelfReplacingAccessorRejected(
+      snapshot,
+      reference,
+      'sourceAssetId',
+      DIGEST_A,
+    )
+  })
+
+  it.each([
+    ['id', 'primitive-body'],
+    ['center', [0, 0, 0]],
+    ['halfExtents', [0.5, 0.5, 0.5]],
+    ['quaternion', [0, 0, 0, 1]],
+  ])('rejects a self-replacing primitive collision Box %s accessor', (
+    field,
+    replacementValue,
+  ) => {
+    const snapshot = mutable(validV3Project())
+    const box = snapshot.objectAssets[0]!.collisionBoxes[0]!
+    expectSelfReplacingAccessorRejected(snapshot, box, field, replacementValue)
+  })
+
+  it.each([
+    ['vertices', 24],
+    ['triangles', 12],
+    ['meshes', 1],
+    ['materials', 1],
+  ])('rejects a self-replacing primitive statistics %s accessor', (
+    field,
+    replacementValue,
+  ) => {
+    const snapshot = mutable(validV3Project())
+    const statistics = snapshot.objectAssets[0]!.statistics
+    expectSelfReplacingAccessorRejected(snapshot, statistics, field, replacementValue)
+  })
+
+  it.each([
+    ['mode', 'two-cycle'],
+    ['cycles', 2],
+  ])('rejects a self-replacing smoothing %s accessor', (field, replacementValue) => {
+    const snapshot = mutable(validV3Project())
+    snapshot.opcUa.equipmentTransforms = mutable([
+      transformBinding('object:instance-1'),
+    ])
+    const smoothing = snapshot.opcUa.equipmentTransforms[0]!.smoothing
+    expectSelfReplacingAccessorRejected(snapshot, smoothing, field, replacementValue)
+  })
+
+  it.each(['Robot source', 'STEP Object asset'])(
+    'rejects an accessor-forged %s ArrayBuffer without invoking it',
+    (sourceKind) => {
+      const snapshot = mutable(validV3Project())
+      let sourceOwner: object = snapshot.robot.sources[0]!
+      if (sourceKind === 'STEP Object asset') {
+        const asset = mutable(stepAsset('box-1'))
+        snapshot.objectAssets = [asset]
+        sourceOwner = asset
+      }
+      expectAccessorForgedArrayBufferRejected(snapshot, sourceOwner)
+    },
+  )
+
+  it('rejects own configuration accessors on an ArrayBuffer without invoking them', () => {
+    const snapshot = mutable(validV3Project())
+    const buffer = Uint8Array.from([1, 2, 3]).buffer
+    let calls = 0
+    Object.defineProperty(buffer, 'transient', {
+      get: () => {
+        calls += 1
+        return true
+      },
+      enumerable: true,
+      configurable: true,
+    })
+    snapshot.robot.sources[0]!.sourceBytes = buffer
+
+    let error: unknown
+    try {
+      validateWorkcellProjectSnapshotV3(snapshot)
+    } catch (caught) {
+      error = caught
+    }
+    expect.soft(calls).toBe(0)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toMatch(/configuration|unknown/i)
   })
 
   it('exports the approved structural budgets', () => {
