@@ -2603,6 +2603,52 @@ export function createProjectSourceMigrationFoundationInternalV1(
   })
 }
 
+/**
+ * Assigns one independent owned buffer to Object staging when the same source
+ * identity also belongs to Robot staging. The complete split plan is built
+ * synchronously so the Robot transfer cannot detach bytes still needed by the
+ * Object namespace. Repeated owners inside one namespace retain one identity.
+ */
+function splitCrossNamespaceObjectSourceBuffersV1(
+  robotSourceBuffers: readonly ArrayBuffer[],
+  objectSourceBuffers: readonly ArrayBuffer[],
+): ReadonlyMap<ArrayBuffer, ArrayBuffer> {
+  const robotIdentities = new Set(robotSourceBuffers)
+  const objectOwnedBuffers = new Map<ArrayBuffer, ArrayBuffer>()
+  for (const sourceBytes of objectSourceBuffers) {
+    if (objectOwnedBuffers.has(sourceBytes)) continue
+    if (!robotIdentities.has(sourceBytes)) {
+      objectOwnedBuffers.set(sourceBytes, sourceBytes)
+      continue
+    }
+    const sourceByteLength = tryArrayBufferByteLength(sourceBytes)
+    if (sourceByteLength === undefined) {
+      return sourceFailure('PROJECT_SOURCE_BYTES_INVALID', 'Project source must be an ArrayBuffer.')
+    }
+    let namespaceOwnedBytes: ArrayBuffer
+    try {
+      namespaceOwnedBytes = structuredClone(sourceBytes)
+    } catch (error) {
+      return sourceFailure(
+        'PROJECT_SOURCE_COPY_FAILED',
+        'Cross-namespace Project source ownership copy failed.',
+        error,
+      )
+    }
+    if (
+      namespaceOwnedBytes === sourceBytes ||
+      tryArrayBufferByteLength(namespaceOwnedBytes) !== sourceByteLength
+    ) {
+      return sourceFailure(
+        'PROJECT_SOURCE_COPY_FAILED',
+        'Cross-namespace Project source ownership copy must be independent and byte-identical in length.',
+      )
+    }
+    objectOwnedBuffers.set(sourceBytes, namespaceOwnedBytes)
+  }
+  return objectOwnedBuffers
+}
+
 export async function stageProjectSourcesV3(
   snapshot: WorkcellProjectSnapshotV3,
   stagingService: ProjectSourceStagingService,
@@ -2612,6 +2658,10 @@ export async function stageProjectSourcesV3(
   preflightWorkcellProjectShapeV3(snapshot)
   const owned = structuredClone(snapshot)
   const descriptors = collectProjectSourceDescriptorsV3(owned)
+  const objectOwnedBuffers = splitCrossNamespaceObjectSourceBuffersV1(
+    descriptors.filter(({ namespace }) => namespace === 'robot').map(({ sourceBytes }) => sourceBytes),
+    descriptors.filter(({ namespace }) => namespace === 'object').map(({ sourceBytes }) => sourceBytes),
+  )
   const boundary = projectSourceBoundaryFor(stagingService)
   const groupsByDigest = new Map<string, {
     readonly ownerKeys: ProjectSourceOwnerKeyV1[]
@@ -2627,7 +2677,10 @@ export async function stageProjectSourcesV3(
       const bufferTokens = descriptor.namespace === 'robot' ? robotBufferTokens : objectBufferTokens
       let prepared = bufferTokens.get(descriptor.sourceBytes)
       if (prepared === undefined) {
-        prepared = await boundary.stageOwned(descriptor.namespace, descriptor.sourceBytes, signal)
+        const namespaceOwnedBytes = descriptor.namespace === 'robot'
+          ? descriptor.sourceBytes
+          : objectOwnedBuffers.get(descriptor.sourceBytes)!
+        prepared = await boundary.stageOwned(descriptor.namespace, namespaceOwnedBytes, signal)
         bufferTokens.set(descriptor.sourceBytes, prepared)
         staged.push(prepared)
       }
@@ -2675,6 +2728,10 @@ async function stageOwnedLegacyProjectSourcesV2Internal(
   const results: StagedLegacyProjectSourceV1[] = []
   const robotBufferTokens = new Map<ArrayBuffer, PreparedProjectSourceV1>()
   const objectBufferTokens = new Map<ArrayBuffer, PreparedProjectSourceV1>()
+  const objectOwnedBuffers = splitCrossNamespaceObjectSourceBuffersV1(
+    snapshot.robot.links.map(({ sourceBytes }) => sourceBytes),
+    snapshot.objectAssets.map(({ sourceBytes }) => sourceBytes),
+  )
   try {
     for (const link of snapshot.robot.links) {
       let prepared = robotBufferTokens.get(link.sourceBytes)
@@ -2688,7 +2745,11 @@ async function stageOwnedLegacyProjectSourcesV2Internal(
     for (const asset of snapshot.objectAssets) {
       let prepared = objectBufferTokens.get(asset.sourceBytes)
       if (prepared === undefined) {
-        prepared = await boundary.stageOwned('object', asset.sourceBytes, signal)
+        prepared = await boundary.stageOwned(
+          'object',
+          objectOwnedBuffers.get(asset.sourceBytes)!,
+          signal,
+        )
         objectBufferTokens.set(asset.sourceBytes, prepared)
         staged.push(prepared)
       }

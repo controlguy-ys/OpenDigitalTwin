@@ -544,6 +544,121 @@ describe('ProjectSourceStagingService', () => {
     expect(digestSource).toHaveBeenCalledTimes(2)
   })
 
+  it('splits one caller-owned Robot/Object alias synchronously into namespace-local groups', async () => {
+    const project = await validV3Project() as unknown as Mutable<WorkcellProjectSnapshotV3>
+    const shared = project.robot.sources[0]!.sourceBytes
+    const asset = {
+      id: 'asset-a',
+      name: 'Asset A',
+      sourceKind: 'step' as const,
+      sourceFileName: 'asset.step',
+      sourceBytes: shared,
+      importScale: 1,
+      originMode: 'source' as const,
+      colliderCenter: [0, 0, 0] as [number, number, number],
+      collisionHalfExtents: [0.1, 0.1, 0.1] as [number, number, number],
+      collisionBoxes: [{
+        id: 'default',
+        center: [0, 0, 0] as [number, number, number],
+        halfExtents: [0.1, 0.1, 0.1] as [number, number, number],
+        quaternion: [0, 0, 0, 1] as [number, number, number, number],
+      }],
+      statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
+    }
+    project.objectAssets = [asset, { ...asset, id: 'asset-b', name: 'Asset B' }]
+    const before = structuredClone(project)
+    const sharedBefore = [...new Uint8Array(shared)]
+    const native = nativeDigest()
+    let firstDigestStarted!: () => void
+    const firstDigest = new Promise<void>((resolve) => { firstDigestStarted = resolve })
+    let releaseFirstDigest!: () => void
+    const firstDigestGate = new Promise<void>((resolve) => { releaseFirstDigest = resolve })
+    let digestCalls = 0
+    const digestSource = vi.fn(async (bytes: ArrayBuffer | ArrayBufferView, signal?: AbortSignal) => {
+      digestCalls += 1
+      if (digestCalls === 1) {
+        firstDigestStarted()
+        await firstDigestGate
+      }
+      return native.digestSource(bytes, signal)
+    })
+    const staging = createProjectSourceStagingService({ sourceDigest: { digestSource } })
+    const originalStructuredClone = globalThis.structuredClone
+    let sourceBearingCopyCalls = 0
+    let sourceTransferCalls = 0
+    const cloneSpy = vi.spyOn(globalThis, 'structuredClone').mockImplementation(
+      ((value: unknown, options?: StructuredSerializeOptions) => {
+        if (containsArrayBuffer(value)) {
+          if ((options?.transfer?.length ?? 0) > 0) sourceTransferCalls += 1
+          else sourceBearingCopyCalls += 1
+        }
+        return originalStructuredClone(value, options)
+      }) as typeof structuredClone,
+    )
+
+    try {
+      const pending = stageProjectSourcesV3(
+        project,
+        staging,
+        nativeRevisionIdentityHasher(),
+      )
+      const sourceCopiesBeforeFirstAwait = sourceBearingCopyCalls
+      const sourceTransfersBeforeFirstAwait = sourceTransferCalls
+      await Promise.race([
+        firstDigest,
+        pending.then(() => { throw new Error('Staging completed before source hashing began.') }),
+      ])
+      const sharedByteLengthDuringFirstDigest = shared.byteLength
+      const sharedBytesDuringFirstDigest = [...new Uint8Array(shared)]
+      const aliasesDuringFirstDigest = [
+        project.robot.sources[0]!.sourceBytes,
+        (project.objectAssets[0] as Mutable<StepObjectAssetRecordV3>).sourceBytes,
+        (project.objectAssets[1] as Mutable<StepObjectAssetRecordV3>).sourceBytes,
+      ]
+      releaseFirstDigest()
+      const result = await pending
+      const matchingGroups = result.preparedSourceGroups.filter(({ preparedSource }) =>
+        preparedSource.sha256 === DIGEST_ABC)
+      const robotGroup = matchingGroups.find(({ preparedSource }) =>
+        preparedSource.namespace === 'robot')
+      const objectGroup = matchingGroups.find(({ preparedSource }) =>
+        preparedSource.namespace === 'object')
+
+      expect(sourceCopiesBeforeFirstAwait).toBe(2)
+      expect(sourceTransfersBeforeFirstAwait).toBe(0)
+      expect(sharedByteLengthDuringFirstDigest).toBe(sharedBefore.length)
+      expect(sharedBytesDuringFirstDigest).toEqual(sharedBefore)
+      expect(aliasesDuringFirstDigest).toEqual([shared, shared, shared])
+      expect(sourceBearingCopyCalls).toBe(2)
+      expect(sourceTransferCalls).toBe(2)
+      expect(digestSource).toHaveBeenCalledTimes(2)
+      expect(result.preparedSourceGroups).toHaveLength(2)
+      expect(matchingGroups).toHaveLength(2)
+      expect(robotGroup?.ownerKeys).toEqual([`robot-source:${DIGEST_ABC}`])
+      expect(objectGroup?.ownerKeys).toEqual([
+        'object-asset:asset-a',
+        'object-asset:asset-b',
+      ])
+      expect(robotGroup?.preparedSource).not.toBe(objectGroup?.preparedSource)
+      expect(robotGroup?.preparedSource).not.toHaveProperty('sourceBytes')
+      expect(objectGroup?.preparedSource).not.toHaveProperty('sourceBytes')
+      expect(result.projection.objectAssets.map((candidate) =>
+        candidate.sourceKind === 'step' ? candidate.sourceSha256 : undefined)).toEqual([
+        DIGEST_ABC,
+        DIGEST_ABC,
+      ])
+      expect(project).toEqual(before)
+      expect(project.robot.sources[0]!.sourceBytes).toBe(shared)
+      expect((project.objectAssets[0] as Mutable<StepObjectAssetRecordV3>).sourceBytes).toBe(shared)
+      expect((project.objectAssets[1] as Mutable<StepObjectAssetRecordV3>).sourceBytes).toBe(shared)
+      expect(shared.byteLength).toBe(sharedBefore.length)
+      expect([...new Uint8Array(shared)]).toEqual(sharedBefore)
+    } finally {
+      releaseFirstDigest()
+      cloneSpy.mockRestore()
+    }
+  })
+
   it('rejects splitting one opaque token across multiple owner groups', async () => {
     const project = await validV3Project() as unknown as Mutable<WorkcellProjectSnapshotV3>
     const shared = Uint8Array.from([7, 8, 9]).buffer

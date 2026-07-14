@@ -235,6 +235,7 @@ function pose(id: string, speedPercentToNext?: number) {
 interface DependenciesResult {
   readonly dependencies: ProjectV3MigrationDependencies
   readonly hashService: ProjectHashService
+  readonly digestSource: ProjectHashService['sha256']
   readonly analyzeLegacyRobotSource: ReturnType<typeof vi.fn>
 }
 
@@ -244,6 +245,8 @@ function migrationDependencies(
 ): DependenciesResult {
   const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
   const projectRevisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+  const nativeSourceDigest = createProjectSourceDigest(hashService)
+  const digestSource = vi.fn(nativeSourceDigest.digestSource.bind(nativeSourceDigest))
   const analyzeLegacyRobotSource = vi.fn(lockedLegacyAnalyzer ?? (async ({
     tokenId,
     generation,
@@ -255,12 +258,13 @@ function migrationDependencies(
     analysis: { detectedUnit, meshIndices: [0] },
   })))
   const foundation = createProjectSourceMigrationFoundationInternalV1({
-    sourceDigest: createProjectSourceDigest(hashService),
+    sourceDigest: { digestSource },
     lockedLegacyAnalyzer: analyzeLegacyRobotSource,
   })
   const sourceStaging = foundation.sourceStaging
   return {
     hashService,
+    digestSource,
     analyzeLegacyRobotSource,
     dependencies: {
       sourceStaging,
@@ -269,6 +273,23 @@ function migrationDependencies(
       builtInEquipmentTransformDefaults: BUILT_IN_TRANSFORM_DEFAULTS,
     },
   }
+}
+
+function containsArrayBuffer(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (typeof value !== 'object' || value === null || seen.has(value)) return false
+  try {
+    if (Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')?.get?.call(value) !== undefined) {
+      return true
+    }
+  } catch {
+    // The value is not an ArrayBuffer in this realm.
+  }
+  seen.add(value)
+  return Reflect.ownKeys(value).some((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    return descriptor !== undefined && 'value' in descriptor &&
+      containsArrayBuffer(descriptor.value, seen)
+  })
 }
 
 describe('V2 to V3 project migration', () => {
@@ -328,6 +349,89 @@ describe('V2 to V3 project migration', () => {
     expect(retainedAlias.byteLength).toBe(0)
     expect(() => new Uint8Array(retainedAlias)).toThrow()
     expect(() => foundation.sourceStaging.assertPrepared(staged[0]!.preparedSource)).not.toThrow()
+  })
+
+  it('preserves a caller-owned cross-namespace alias as one independent source per namespace', async () => {
+    const source = validV2Project()
+    const shared = Uint8Array.from([101, 102, 103]).buffer
+    source.robot.links[0]!.sourceBytes = shared
+    source.robot.links[1]!.sourceBytes = shared
+    source.objectAssets[0]!.sourceBytes = shared
+    source.objectAssets.push({
+      ...source.objectAssets[0]!,
+      id: 'asset-02',
+      name: 'Machine Copy',
+      sourceBytes: shared,
+    })
+    const before = structuredClone(source)
+    const sharedBefore = [...new Uint8Array(shared)]
+    const {
+      dependencies,
+      hashService,
+      digestSource,
+      analyzeLegacyRobotSource,
+    } = migrationDependencies()
+    const expectedDigest = await hashService.sha256(shared)
+    const originalStructuredClone = globalThis.structuredClone
+    let sourceBearingCopyCalls = 0
+    let sourceTransferCalls = 0
+    const cloneSpy = vi.spyOn(globalThis, 'structuredClone').mockImplementation(
+      ((value: unknown, options?: StructuredSerializeOptions) => {
+        if (containsArrayBuffer(value)) {
+          if ((options?.transfer?.length ?? 0) > 0) sourceTransferCalls += 1
+          else sourceBearingCopyCalls += 1
+        }
+        return originalStructuredClone(value, options)
+      }) as typeof structuredClone,
+    )
+
+    try {
+      const pending = migrateProjectToV3(source, dependencies)
+      const sourceCopiesBeforeFirstAwait = sourceBearingCopyCalls
+      const migrated = await pending
+      const matchingGroups = migrated.preparedSourceGroups.filter(({ preparedSource }) =>
+        preparedSource.sha256 === expectedDigest)
+      const robotGroup = matchingGroups.find(({ preparedSource }) =>
+        preparedSource.namespace === 'robot')
+      const objectGroup = matchingGroups.find(({ preparedSource }) =>
+        preparedSource.namespace === 'object')
+
+      expect(sourceCopiesBeforeFirstAwait).toBe(2)
+      expect(sourceBearingCopyCalls).toBe(2)
+      // Seven ownership transfers plus one outbound and one reclaimed parser
+      // lease for each of the six unique Robot sources.
+      expect(sourceTransferCalls).toBe(7 + (6 * 2))
+      expect(digestSource).toHaveBeenCalledTimes(7)
+      expect(analyzeLegacyRobotSource).toHaveBeenCalledTimes(6)
+      expect(migrated.preparedSourceGroups).toHaveLength(7)
+      expect(matchingGroups).toHaveLength(2)
+      expect(robotGroup?.ownerKeys).toEqual([`robot-source:${expectedDigest}`])
+      expect(objectGroup?.ownerKeys).toEqual([
+        'object-asset:asset-01',
+        'object-asset:asset-02',
+      ])
+      expect(robotGroup?.preparedSource).not.toBe(objectGroup?.preparedSource)
+      expect(robotGroup?.preparedSource).not.toHaveProperty('sourceBytes')
+      expect(objectGroup?.preparedSource).not.toHaveProperty('sourceBytes')
+      expect(migrated.projection.robot.sources.filter(({ id }) =>
+        id === expectedDigest)).toHaveLength(1)
+      expect(migrated.projection.robot.links.slice(0, 2).map((link) =>
+        link.sourceRefs[0]!.sourceAssetId)).toEqual([expectedDigest, expectedDigest])
+      expect(migrated.projection.objectAssets.map((asset) =>
+        asset.sourceKind === 'step' ? asset.sourceSha256 : undefined)).toEqual([
+        expectedDigest,
+        expectedDigest,
+      ])
+      expect(source).toEqual(before)
+      expect(source.robot.links[0]!.sourceBytes).toBe(shared)
+      expect(source.robot.links[1]!.sourceBytes).toBe(shared)
+      expect(source.objectAssets[0]!.sourceBytes).toBe(shared)
+      expect(source.objectAssets[1]!.sourceBytes).toBe(shared)
+      expect(shared.byteLength).toBe(sharedBefore.length)
+      expect([...new Uint8Array(shared)]).toEqual(sharedBefore)
+    } finally {
+      cloneSpy.mockRestore()
+    }
   })
 
   it('moves a non-empty flat Pose list into exactly one active Default Job', async () => {
