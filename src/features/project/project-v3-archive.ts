@@ -8,6 +8,8 @@ import {
   type CylinderObjectAssetRecordV3,
   type PreparedProjectSourceGroupV1,
   type ProjectArchiveSourcePlanV1,
+  type LegacyProjectArchiveSourcePlanV1,
+  type LegacyProjectSourceOwnerKeyV1,
   type ProjectSourceOwnerKeyV1,
   type ProjectSourceStagingService,
   type StepObjectAssetRecordV3,
@@ -19,7 +21,8 @@ import {
   type MigratableProjectSnapshot,
 } from '../../domain/project/project'
 import {
-  migrateProjectToV3,
+  migratePreparedLegacyArchiveProjectToV3InternalV1,
+  prepareLegacyArchiveProjectForMigrationInternalV1,
   type ProjectMigrationResultV3,
   type ProjectV3MigrationDependencies,
 } from '../../domain/project/project-v2-migration'
@@ -562,21 +565,57 @@ async function decodeLegacyProject(
     sourcePaths.add(legacySourcePath(asset.archivePath, 'objects/assets/'))
   }
   assertExactEntrySet(reader, [...fixedPaths, ...sourcePaths])
-
-  const bytesByPath = new Map<string, ArrayBuffer>()
-  for (const path of [...sourcePaths].sort(codeUnitCompare)) {
-    bytesByPath.set(path, await deadline.wait(reader.readEntry(path)))
+  const entriesByPath = new Map(reader.entries.map((entry) => [entry.path, entry] as const))
+  const plansByPath = new Map<string, {
+    readonly namespace: 'robot' | 'object'
+    readonly entryPath: string
+    readonly ownerKeys: LegacyProjectSourceOwnerKeyV1[]
+    readonly byteLength: number
+    readonly placeholder: ArrayBuffer
+  }>()
+  const placeholderFor = (
+    namespace: 'robot' | 'object',
+    entryPath: string,
+    ownerKey: LegacyProjectSourceOwnerKeyV1,
+  ): ArrayBuffer => {
+    const key = `${namespace}:${entryPath}`
+    const existing = plansByPath.get(key)
+    if (existing !== undefined) {
+      existing.ownerKeys.push(ownerKey)
+      return existing.placeholder
+    }
+    const entry = entriesByPath.get(entryPath)
+    if (entry === undefined) {
+      throw new ProjectArchiveError(
+        'PROJECT_ARCHIVE_INVALID',
+        `Legacy Archive source ${entryPath} has no validated central-directory entry.`,
+      )
+    }
+    const placeholder = new ArrayBuffer(1)
+    plansByPath.set(key, {
+      namespace,
+      entryPath,
+      ownerKeys: [ownerKey],
+      byteLength: entry.uncompressedSize,
+      placeholder,
+    })
+    return placeholder
   }
-  reader.finish()
   const robotLinks = archivedLinks.map((link) => {
     const archivePath = legacySourcePath(link.archivePath, 'robot/links/')
     const { archivePath: _archivePath, ...metadata } = link
-    return { ...metadata, sourceBytes: bytesByPath.get(archivePath)! }
+    return {
+      ...metadata,
+      sourceBytes: placeholderFor('robot', archivePath, `robot-link:${String(link.linkId)}`),
+    }
   })
   const objectAssets = archivedAssets.map((asset) => {
     const archivePath = legacySourcePath(asset.archivePath, 'objects/assets/')
     const { archivePath: _archivePath, ...metadata } = asset
-    return { ...metadata, sourceBytes: bytesByPath.get(archivePath)! }
+    return {
+      ...metadata,
+      sourceBytes: placeholderFor('object', archivePath, `object-asset:${String(asset.id)}`),
+    }
   })
   const candidate = {
     manifest,
@@ -588,7 +627,33 @@ async function decodeLegacyProject(
     opcUa,
     ...(version === 2 ? { collisionPolicy } : {}),
   } as unknown as MigratableProjectSnapshot
-  return deadline.wait(migrateProjectToV3(candidate, dependencies, deadline.signal))
+  const sourcePlans: readonly LegacyProjectArchiveSourcePlanV1[] = Object.freeze(
+    [...plansByPath.values()]
+      .map(({ namespace, entryPath, ownerKeys, byteLength }) => Object.freeze({
+        namespace,
+        entryPath,
+        ownerKeys: Object.freeze([...ownerKeys].sort(codeUnitCompare)),
+        byteLength,
+      }))
+      .sort((left, right) => codeUnitCompare(left.entryPath, right.entryPath)),
+  )
+  const archiveReader = Object.freeze({
+    readSource: (plan: LegacyProjectArchiveSourcePlanV1): Promise<ArrayBuffer> =>
+      reader.readEntry(plan.entryPath),
+    finish: (): void => reader.finish(),
+  })
+  const prepared = await deadline.wait(prepareLegacyArchiveProjectForMigrationInternalV1(
+    candidate,
+    sourcePlans,
+    archiveReader,
+    dependencies,
+    deadline.signal,
+  ))
+  return deadline.wait(migratePreparedLegacyArchiveProjectToV3InternalV1(
+    prepared,
+    dependencies,
+    deadline.signal,
+  ))
 }
 
 export async function decodeWorkcellProjectV3(

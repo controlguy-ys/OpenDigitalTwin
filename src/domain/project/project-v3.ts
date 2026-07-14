@@ -15,6 +15,7 @@ import {
   MAX_ROBOT_TRIANGLES,
   MAX_SCENE_TRIANGLES,
   WORKCELL_PROJECT_FORMAT,
+  validateWorkcellProjectSnapshotV2,
   type GeometryStatistics,
   type WorkcellProjectManifestV2,
   type WorkcellProjectSnapshotV2,
@@ -1858,6 +1859,7 @@ export function validateWorkcellProjectSnapshotV3(
 
 declare const preparedProjectSourceBrand: unique symbol
 declare const stagedProjectOwnershipAttestationBrand: unique symbol
+declare const preparedLegacyArchiveProjectBrand: unique symbol
 
 export type ProjectSourceNamespaceV1 = 'robot' | 'object'
 export type ProjectSourceOwnerKeyV1 = `robot-source:${string}` | `object-asset:${string}`
@@ -2190,6 +2192,7 @@ function createProjectSourceOwnershipBoundaryV1(
         signal.addEventListener('abort', onAbort, { once: true })
         removeAbort = () => signal.removeEventListener('abort', onAbort)
       })
+      let returnedLease: ArrayBuffer | undefined
       try {
         const pending = lockedAnalyzer({
           tokenId: source.tokenId,
@@ -2197,9 +2200,23 @@ function createProjectSourceOwnershipBoundaryV1(
           sourceBytes: transferred,
           ...(signal === undefined ? {} : { signal }),
         })
+        void pending.then((returned) => {
+          if (
+            signal?.aborted === true ||
+            state.status !== 'leased' ||
+            state.generation !== generation
+          ) {
+            detachArchiveBufferV1(
+              typeof returned === 'object' && returned !== null
+                ? (returned as { readonly sourceBytes?: unknown }).sourceBytes
+                : undefined,
+            )
+          }
+        }, () => undefined)
         const returned = signal === undefined
           ? await pending
           : await Promise.race([pending, aborted])
+        returnedLease = returned.sourceBytes
         if (
           state.status !== 'leased' ||
           state.generation !== generation ||
@@ -2214,11 +2231,13 @@ function createProjectSourceOwnershipBoundaryV1(
         }
         const analysis = validateClosedLegacyAnalysis(returned.analysis)
         const reclaimed = structuredClone(returned.sourceBytes, { transfer: [returned.sourceBytes] })
+        returnedLease = undefined
         state.sourceBytes = reclaimed
         state.status = 'active'
         state.generation += 1
         return analysis
       } catch (error) {
+        if (returnedLease !== undefined) detachArchiveBufferV1(returnedLease)
         if (state.status === 'leased' && state.generation === generation) {
           state.status = 'revoked'
           state.sourceBytes = undefined
@@ -2434,6 +2453,30 @@ export type ProjectArchiveSourceReaderV1 = (
   signal?: AbortSignal,
 ) => Promise<ArrayBuffer>
 
+export type LegacyProjectSourceOwnerKeyV1 =
+  | `robot-link:${string}`
+  | `object-asset:${string}`
+
+export interface LegacyProjectArchiveSourcePlanV1 {
+  readonly namespace: ProjectSourceNamespaceV1
+  readonly entryPath: string
+  readonly ownerKeys: readonly LegacyProjectSourceOwnerKeyV1[]
+  readonly byteLength: number
+}
+
+export interface LegacyProjectArchiveReaderV1 {
+  readonly readSource: (
+    source: LegacyProjectArchiveSourcePlanV1,
+    signal?: AbortSignal,
+  ) => Promise<ArrayBuffer>
+  readonly finish: () => void
+}
+
+/** Opaque, one-shot authority for a completely staged legacy archive. */
+export interface PreparedLegacyArchiveProjectV1 {
+  readonly [preparedLegacyArchiveProjectBrand]: true
+}
+
 /**
  * Canonical migration-only staging surface. The analyzer is installed once at
  * the composition root and frozen onto the same registry-backed service that
@@ -2445,6 +2488,12 @@ export interface ProjectSourceMigrationStagingServiceV1
     snapshot: WorkcellProjectSnapshotV2,
     signal?: AbortSignal,
   ): Promise<readonly StagedLegacyProjectSourceV1[]>
+  prepareLegacyArchiveProject(
+    snapshot: WorkcellProjectSnapshotV2,
+    sources: readonly LegacyProjectArchiveSourcePlanV1[],
+    reader: LegacyProjectArchiveReaderV1,
+    signal?: AbortSignal,
+  ): Promise<PreparedLegacyArchiveProjectV1>
   analyzeLegacyRobotSource(
     source: PreparedProjectSourceV1,
     signal?: AbortSignal,
@@ -2466,8 +2515,16 @@ export interface StagedProjectSourcesV3 {
 }
 
 interface StagedLegacyProjectSourceV1 {
-  readonly legacyOwnerKey: `robot-link:${string}` | `object-asset:${string}`
+  readonly legacyOwnerKey: LegacyProjectSourceOwnerKeyV1
   readonly preparedSource: PreparedProjectSourceV1
+}
+
+interface PreparedLegacyArchiveProjectStateV1 {
+  readonly service: ProjectSourceMigrationStagingServiceV1
+  readonly snapshot: WorkcellProjectSnapshotV2
+  readonly stagedSources: readonly StagedLegacyProjectSourceV1[]
+  status: 'active' | 'consumed' | 'revoked'
+  removeAbortListener: () => void
 }
 
 const projectSourceServiceBoundariesV1 = new WeakMap<
@@ -2475,6 +2532,7 @@ const projectSourceServiceBoundariesV1 = new WeakMap<
   ProjectSourceOwnershipBoundaryV1
 >()
 const projectSourceMigrationServicesV1 = new WeakSet<ProjectSourceMigrationStagingServiceV1>()
+const preparedLegacyArchiveProjectsV1 = new WeakMap<object, PreparedLegacyArchiveProjectStateV1>()
 
 /** Internal registry assertion used by the migration entrypoint before any staging. */
 export function assertCanonicalProjectSourceMigrationStagingServiceInternalV1(
@@ -2489,6 +2547,46 @@ export function assertCanonicalProjectSourceMigrationStagingServiceInternalV1(
       'Project migration requires the exact registry-backed staging service.',
     )
   }
+}
+
+/** Internal one-shot capability consumer used only by the canonical migration path. */
+export function consumePreparedLegacyArchiveProjectInternalV1(
+  prepared: PreparedLegacyArchiveProjectV1,
+  service: ProjectSourceMigrationStagingServiceV1,
+): {
+  readonly snapshot: WorkcellProjectSnapshotV2
+  readonly stagedSources: readonly StagedLegacyProjectSourceV1[]
+} {
+  const state = typeof prepared === 'object' && prepared !== null
+    ? preparedLegacyArchiveProjectsV1.get(prepared)
+    : undefined
+  if (state === undefined) {
+    return sourceFailure(
+      'PROJECT_SOURCE_STAGING_SERVICE_INVALID',
+      'Prepared legacy Archive Project capability is invalid.',
+    )
+  }
+  if (state.service !== service) {
+    return sourceFailure(
+      'PROJECT_SOURCE_STAGING_SERVICE_INVALID',
+      'Prepared legacy Archive Project belongs to another staging service.',
+    )
+  }
+  if (state.status === 'revoked') {
+    return sourceFailure(
+      'PROJECT_SOURCE_CAPABILITY_REVOKED',
+      'Prepared legacy Archive Project capability was revoked.',
+    )
+  }
+  if (state.status === 'consumed') {
+    return sourceFailure(
+      'PROJECT_SOURCE_CAPABILITY_CONSUMED',
+      'Prepared legacy Archive Project capability was already consumed.',
+    )
+  }
+  state.status = 'consumed'
+  state.removeAbortListener()
+  return Object.freeze({ snapshot: state.snapshot, stagedSources: state.stagedSources })
 }
 
 function projectSourceBoundaryFor(
@@ -2688,8 +2786,9 @@ function preflightArchiveProjectionWithSourcesV1(
   preflightWorkcellProjectShapeV3(candidate)
 }
 
-function assertByteFreeArchiveProjectionGraphV1(
+function assertClosedArchiveDataGraphV1(
   value: unknown,
+  allowLegacyPlaceholder: boolean,
   seen = new WeakSet<object>(),
   active = new WeakSet<object>(),
 ): void {
@@ -2707,10 +2806,14 @@ function assertByteFreeArchiveProjectionGraphV1(
       'Archive Project projection contains a non-data value.',
     )
   }
-  if (tryArrayBufferByteLength(value) !== undefined || ArrayBuffer.isView(value)) {
+  const bufferLength = tryArrayBufferByteLength(value)
+  if (bufferLength !== undefined || ArrayBuffer.isView(value)) {
+    if (allowLegacyPlaceholder && bufferLength === 1 && !ArrayBuffer.isView(value)) return
     return sourceFailure(
       'PROJECT_SOURCE_ASSIGNMENT_INVALID',
-      'Archive Project projection must be byte-free.',
+      allowLegacyPlaceholder
+        ? 'Legacy Archive Project may contain only one-byte source placeholders.'
+        : 'Archive Project projection must be byte-free.',
     )
   }
   if (active.has(value)) {
@@ -2750,7 +2853,7 @@ function assertByteFreeArchiveProjectionGraphV1(
           'Archive Project projection array elements must be enumerable data fields.',
         )
       }
-      assertByteFreeArchiveProjectionGraphV1(descriptor.value, seen, active)
+      assertClosedArchiveDataGraphV1(descriptor.value, allowLegacyPlaceholder, seen, active)
     }
     const expectedKeyCount = value.length + 1
     if (Reflect.ownKeys(descriptors).length !== expectedKeyCount) {
@@ -2783,9 +2886,18 @@ function assertByteFreeArchiveProjectionGraphV1(
         'Archive Project projection fields must be enumerable data fields.',
       )
     }
-    assertByteFreeArchiveProjectionGraphV1(descriptor.value, seen, active)
+    assertClosedArchiveDataGraphV1(descriptor.value, allowLegacyPlaceholder, seen, active)
   }
   active.delete(value)
+}
+
+function assertByteFreeArchiveProjectionGraphV1(value: unknown): void {
+  assertClosedArchiveDataGraphV1(value, false)
+}
+
+/** Rejects accessors, exotic prototypes, cycles, and non-placeholder binary data. */
+export function assertLegacyArchivePlaceholderProjectClosedInternalV1(value: unknown): void {
+  assertClosedArchiveDataGraphV1(value, true)
 }
 
 function waitForArchiveSourceOperationV1<Result>(
@@ -2823,7 +2935,7 @@ async function stageArchiveSourceForOperationV1(
   boundary: ProjectSourceOwnershipBoundaryV1,
   source: {
     readonly namespace: ProjectSourceNamespaceV1
-    readonly sha256: string
+    readonly sha256?: string
     readonly bytes: ArrayBuffer
   },
   operationClosed: () => boolean,
@@ -3092,6 +3204,304 @@ async function prepareArchiveProjectFromReaderV1(
   }
 }
 
+function legacyArchivePathV1(path: unknown, namespace: ProjectSourceNamespaceV1): string {
+  const prefix = namespace === 'robot' ? 'robot/links/' : 'objects/assets/'
+  if (
+    typeof path !== 'string' ||
+    !path.startsWith(prefix) ||
+    !path.endsWith('.step') ||
+    path.includes('\\') ||
+    path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')
+  ) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Legacy Archive source path is unsafe or belongs to the wrong namespace.',
+    )
+  }
+  return path
+}
+
+function countLegacyPlaceholderOccurrencesV1(value: unknown): number {
+  if (typeof value !== 'object' || value === null) return 0
+  if (tryArrayBufferByteLength(value) !== undefined) return 1
+  let count = 0
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    if ('value' in descriptor) count += countLegacyPlaceholderOccurrencesV1(descriptor.value)
+  }
+  return count
+}
+
+function preflightLegacyArchiveSourcePlansV1(
+  snapshot: WorkcellProjectSnapshotV2,
+  sources: readonly LegacyProjectArchiveSourcePlanV1[],
+): {
+  readonly snapshot: WorkcellProjectSnapshotV2
+  readonly sources: readonly LegacyProjectArchiveSourcePlanV1[]
+} {
+  let ownedSnapshot: WorkcellProjectSnapshotV2
+  let ownedSources: readonly LegacyProjectArchiveSourcePlanV1[]
+  try {
+    assertLegacyArchivePlaceholderProjectClosedInternalV1(snapshot)
+    assertByteFreeArchiveProjectionGraphV1(sources)
+    ownedSnapshot = validateWorkcellProjectSnapshotV2(structuredClone(snapshot))
+    ownedSources = structuredClone(sources)
+  } catch (error) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Legacy Archive metadata and source plan must be closed valid data graphs.',
+      error,
+    )
+  }
+  if (!Array.isArray(ownedSources)) {
+    return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Legacy Archive source plan must be an array.')
+  }
+  const expectedOwners = new Map<LegacyProjectSourceOwnerKeyV1, {
+    readonly namespace: ProjectSourceNamespaceV1
+    readonly placeholder: ArrayBuffer
+  }>()
+  for (const link of ownedSnapshot.robot.links) {
+    expectedOwners.set(`robot-link:${link.linkId}`, {
+      namespace: 'robot',
+      placeholder: link.sourceBytes,
+    })
+  }
+  for (const asset of ownedSnapshot.objectAssets) {
+    expectedOwners.set(`object-asset:${asset.id}`, {
+      namespace: 'object',
+      placeholder: asset.sourceBytes,
+    })
+  }
+  if (countLegacyPlaceholderOccurrencesV1(ownedSnapshot) !== expectedOwners.size) {
+    return sourceFailure(
+      'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+      'Legacy Archive placeholders may appear only in required sourceBytes slots.',
+    )
+  }
+  const assignedOwners = new Set<LegacyProjectSourceOwnerKeyV1>()
+  const assignedPaths = new Set<string>()
+  const assignedPlaceholders = new Set<ArrayBuffer>()
+  let uniqueExpandedBytes = 0
+  let ownerWeightedRobotBytes = 0
+  let ownerWeightedProjectBytes = 0
+  const planned = ownedSources.map((input, index) => {
+    const record = closedRecord(input, `Legacy Archive source plan[${index}]`, [
+      'namespace', 'entryPath', 'ownerKeys', 'byteLength',
+    ])
+    const namespace = record.namespace
+    if (namespace !== 'robot' && namespace !== 'object') {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Legacy Archive source namespace is invalid.')
+    }
+    const entryPath = legacyArchivePathV1(record.entryPath, namespace)
+    const pathKey = `${namespace}:${entryPath}`
+    if (assignedPaths.has(pathKey)) {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Duplicate Legacy Archive source ${pathKey}.`)
+    }
+    assignedPaths.add(pathKey)
+    const byteLength = nonNegativeInteger(record.byteLength, `Legacy Archive source plan[${index}].byteLength`)
+    const entryLimit = namespace === 'robot' ? MAX_ROBOT_LINK_BYTES : MAX_OBJECT_ASSET_BYTES
+    if (byteLength === 0 || byteLength > entryLimit) {
+      return sourceFailure('PROJECT_SOURCE_BYTES_INVALID', `Legacy Archive source ${pathKey} exceeds its byte limit.`)
+    }
+    uniqueExpandedBytes += byteLength
+    if (!Number.isSafeInteger(uniqueExpandedBytes) || uniqueExpandedBytes > MAX_PROJECT_SOURCE_BYTES) {
+      return sourceFailure('PROJECT_SOURCE_BYTES_INVALID', 'Legacy Archive sources exceed the expanded byte limit.')
+    }
+    const ownerKeys = arrayValue(record.ownerKeys, `Legacy Archive source plan[${index}].ownerKeys`)
+      .map((ownerKey) => {
+        if (typeof ownerKey !== 'string') {
+          return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Legacy Archive source owner is invalid.')
+        }
+        const expected = expectedOwners.get(ownerKey as LegacyProjectSourceOwnerKeyV1)
+        if (expected === undefined || expected.namespace !== namespace || assignedOwners.has(ownerKey as LegacyProjectSourceOwnerKeyV1)) {
+          return sourceFailure(
+            'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+            `Legacy Archive source owner ${ownerKey} is missing, duplicated, or in the wrong namespace.`,
+          )
+        }
+        assignedOwners.add(ownerKey as LegacyProjectSourceOwnerKeyV1)
+        return ownerKey as LegacyProjectSourceOwnerKeyV1
+      })
+      .sort()
+    if (ownerKeys.length === 0) {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Legacy Archive source ${pathKey} has no owners.`)
+    }
+    const placeholder = expectedOwners.get(ownerKeys[0]!)!.placeholder
+    if (
+      placeholder.byteLength !== 1 ||
+      ownerKeys.some((ownerKey) => expectedOwners.get(ownerKey)!.placeholder !== placeholder) ||
+      assignedPlaceholders.has(placeholder)
+    ) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        `Legacy Archive source ${pathKey} has an invalid shared-path placeholder alias.`,
+      )
+    }
+    assignedPlaceholders.add(placeholder)
+    const weightedBytes = byteLength * ownerKeys.length
+    if (!Number.isSafeInteger(weightedBytes)) {
+      return sourceFailure('PROJECT_SOURCE_BYTES_INVALID', 'Legacy Archive owner-weighted byte size is invalid.')
+    }
+    ownerWeightedProjectBytes += weightedBytes
+    if (namespace === 'robot') ownerWeightedRobotBytes += weightedBytes
+    if (
+      ownerWeightedRobotBytes > MAX_ROBOT_BYTES ||
+      ownerWeightedProjectBytes > MAX_PROJECT_SOURCE_BYTES
+    ) {
+      return sourceFailure('PROJECT_SOURCE_BYTES_INVALID', 'Legacy Archive owner-weighted sources exceed Project limits.')
+    }
+    return Object.freeze({
+      namespace,
+      entryPath,
+      ownerKeys: Object.freeze(ownerKeys),
+      byteLength,
+    }) satisfies LegacyProjectArchiveSourcePlanV1
+  })
+  if (assignedOwners.size !== expectedOwners.size) {
+    return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Legacy Archive source plan is missing Project owners.')
+  }
+  return Object.freeze({
+    snapshot: ownedSnapshot,
+    sources: Object.freeze(planned.sort((left, right) =>
+      left.entryPath < right.entryPath ? -1 : left.entryPath > right.entryPath ? 1 : 0)),
+  })
+}
+
+function captureLegacyArchiveReaderV1(reader: LegacyProjectArchiveReaderV1): LegacyProjectArchiveReaderV1 {
+  if (typeof reader !== 'object' || reader === null) {
+    return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Legacy Archive reader is invalid.')
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(reader)
+  if (
+    Reflect.ownKeys(descriptors).length !== 2 ||
+    !('value' in (descriptors.readSource ?? {})) ||
+    !('value' in (descriptors.finish ?? {})) ||
+    typeof descriptors.readSource!.value !== 'function' ||
+    typeof descriptors.finish!.value !== 'function'
+  ) {
+    return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Legacy Archive reader must expose closed data methods.')
+  }
+  return Object.freeze({
+    readSource: descriptors.readSource.value.bind(reader),
+    finish: descriptors.finish.value.bind(reader),
+  })
+}
+
+function detachArchiveBufferV1(value: unknown): void {
+  if (typeof value !== 'object' || value === null) return
+  if (tryArrayBufferByteLength(value) === undefined || (value as ArrayBuffer).byteLength === 0) return
+  try {
+    structuredClone(value, { transfer: [value as ArrayBuffer] })
+  } catch {
+    // A concurrent abort or ownership transfer may already have detached it.
+  }
+}
+
+async function readLegacyArchiveSourceForOperationV1(
+  source: LegacyProjectArchiveSourcePlanV1,
+  readSource: LegacyProjectArchiveReaderV1['readSource'],
+  operationClosed: () => boolean,
+  signal?: AbortSignal,
+): Promise<ArrayBuffer> {
+  const pending = Promise.resolve().then(() => readSource(source, signal))
+  let accepted = false
+  void pending.then((bytes) => {
+    if (!accepted && (operationClosed() || signal?.aborted === true)) detachArchiveBufferV1(bytes)
+  }, () => undefined)
+  const returned = await waitForArchiveSourceOperationV1(pending, signal)
+  if (operationClosed() || signal?.aborted === true) {
+    detachArchiveBufferV1(returned)
+    throw sourceCancelled()
+  }
+  if (tryArrayBufferByteLength(returned) !== source.byteLength) {
+    detachArchiveBufferV1(returned)
+    return sourceFailure(
+      'PROJECT_SOURCE_BYTES_INVALID',
+      `Legacy Archive source ${source.entryPath} does not match its central-directory size.`,
+    )
+  }
+  let owned: ArrayBuffer
+  try {
+    owned = structuredClone(returned, { transfer: [returned] })
+  } catch (error) {
+    detachArchiveBufferV1(returned)
+    return sourceFailure('PROJECT_SOURCE_TRANSFER_FAILED', 'Legacy Archive source transfer failed.', error)
+  }
+  accepted = true
+  return owned
+}
+
+async function prepareLegacyArchiveProjectFromReaderV1(
+  snapshot: WorkcellProjectSnapshotV2,
+  sources: readonly LegacyProjectArchiveSourcePlanV1[],
+  reader: LegacyProjectArchiveReaderV1,
+  service: ProjectSourceMigrationStagingServiceV1,
+  boundary: ProjectSourceOwnershipBoundaryV1,
+  signal?: AbortSignal,
+): Promise<PreparedLegacyArchiveProjectV1> {
+  const capturedReader = captureLegacyArchiveReaderV1(reader)
+  const planned = preflightLegacyArchiveSourcePlansV1(snapshot, sources)
+  if (signal?.aborted === true) throw sourceCancelled()
+  const stagedTokens: PreparedProjectSourceV1[] = []
+  const stagedSources: StagedLegacyProjectSourceV1[] = []
+  let operationClosed = false
+  try {
+    for (const source of planned.sources) {
+      const ownedBytes = await readLegacyArchiveSourceForOperationV1(
+        source,
+        capturedReader.readSource,
+        () => operationClosed,
+        signal,
+      )
+      const preparedSource = await stageArchiveSourceForOperationV1(
+        boundary,
+        { namespace: source.namespace, bytes: ownedBytes },
+        () => operationClosed,
+        signal,
+      )
+      stagedTokens.push(preparedSource)
+      for (const legacyOwnerKey of source.ownerKeys) {
+        stagedSources.push(Object.freeze({ legacyOwnerKey, preparedSource }))
+      }
+    }
+    if (sourceSignalAborted(signal)) throw sourceCancelled()
+    capturedReader.finish()
+    const capability = Object.freeze({}) as PreparedLegacyArchiveProjectV1
+    const frozenSources = Object.freeze(stagedSources)
+    let removeAbortListener = (): void => {}
+    const state: PreparedLegacyArchiveProjectStateV1 = {
+      service,
+      snapshot: planned.snapshot,
+      stagedSources: frozenSources,
+      status: 'active',
+      removeAbortListener: () => removeAbortListener(),
+    }
+    if (signal !== undefined) {
+      const onAbort = (): void => {
+        if (state.status !== 'active') return
+        state.status = 'revoked'
+        for (const token of stagedTokens) {
+          try { boundary.revoke(token) } catch { /* best-effort concurrent revocation */ }
+        }
+        removeAbortListener()
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+      if (signal.aborted) onAbort()
+    }
+    preparedLegacyArchiveProjectsV1.set(capability, state)
+    if (state.status === 'revoked') throw sourceCancelled()
+    return capability
+  } catch (error) {
+    operationClosed = true
+    for (const token of stagedTokens) {
+      try { boundary.revoke(token) } catch { /* best-effort concurrent revocation */ }
+    }
+    throw error
+  } finally {
+    operationClosed = true
+  }
+}
+
 function projectSourceStagingMethodsV1(
   boundary: ProjectSourceOwnershipBoundaryV1,
 ): ProjectSourceStagingService {
@@ -3176,6 +3586,22 @@ export function createProjectSourceMigrationFoundationInternalV1(
         ))
       }
       return stageOwnedLegacyProjectSourcesV2Internal(snapshot, boundary, signal)
+    },
+    prepareLegacyArchiveProject(snapshot, sources, reader, signal) {
+      if (this !== sourceStaging) {
+        return Promise.reject(Object.assign(
+          new Error('PROJECT_SOURCE_STAGING_SERVICE_INVALID: Migration staging service identity is invalid.'),
+          { code: 'PROJECT_SOURCE_STAGING_SERVICE_INVALID' },
+        ))
+      }
+      return prepareLegacyArchiveProjectFromReaderV1(
+        snapshot,
+        sources,
+        reader,
+        sourceStaging,
+        boundary,
+        signal,
+      )
     },
     analyzeLegacyRobotSource(source, signal) {
       if (this !== sourceStaging) {

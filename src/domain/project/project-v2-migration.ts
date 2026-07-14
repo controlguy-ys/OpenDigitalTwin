@@ -15,7 +15,9 @@ import {
   ROBOT_LINK_IDS_V3,
   WORKCELL_PROJECT_SCHEMA_VERSION_V3,
   assertCanonicalProjectSourceMigrationStagingServiceInternalV1,
+  assertLegacyArchivePlaceholderProjectClosedInternalV1,
   canonicalMechanicsBytesV3,
+  consumePreparedLegacyArchiveProjectInternalV1,
   deriveCanonicalPoseDurationMsV3,
   normalizeFixedSixAxisRobotMechanicsV3,
   verifyProjectCryptographicProvenanceV3,
@@ -28,6 +30,9 @@ import {
   type ProjectRigidTransformV3,
   type ProjectRobotJointV3,
   type ProjectSourceMigrationStagingServiceV1,
+  type LegacyProjectArchiveReaderV1,
+  type LegacyProjectArchiveSourcePlanV1,
+  type PreparedLegacyArchiveProjectV1,
 } from './project-v3'
 import type { ProjectRevisionIdentityHasher } from '../../lib/hash/sha256'
 import {
@@ -62,6 +67,12 @@ export interface ProjectMigrationResultV3 {
   readonly preparedSourceGroups: readonly PreparedProjectSourceGroupV1[]
   readonly warnings: readonly string[]
 }
+
+const preparedLegacyArchiveMigrationDependenciesV1 = new WeakMap<object, {
+  readonly requested: ProjectV3MigrationDependencies
+  readonly captured: ProjectV3MigrationDependencies
+  readonly signal: AbortSignal | undefined
+}>()
 
 export interface LegacyPoseLimitViolationV3 {
   readonly jobId: 'job-default'
@@ -318,29 +329,34 @@ async function migrateOwnedV2ToV3(
   source: WorkcellProjectSnapshotV2,
   dependencies: ProjectV3MigrationDependencies,
   sourceStaging: ProjectSourceMigrationStagingServiceV1,
+  preparedLegacySources?: readonly {
+    readonly legacyOwnerKey: `robot-link:${string}` | `object-asset:${string}`
+    readonly preparedSource: PreparedProjectSourceV1
+  }[],
   signal?: AbortSignal,
 ): Promise<ProjectMigrationResultV3> {
-  let defaults
+  const stagedTokens = new Set<PreparedProjectSourceV1>(
+    preparedLegacySources?.map(({ preparedSource }) => preparedSource) ?? [],
+  )
   try {
-    defaults = validateBuiltInEquipmentDefaultPairsV3(
-      dependencies.builtInEquipmentDefaults,
-      dependencies.builtInEquipmentTransformDefaults,
-    )
-  } catch (error) {
-    return fail(
-      'PROJECT_BUILT_IN_DEFAULTS_INVALID',
-      'Built-in Equipment defaults are not paired immutable catalog entries.',
-      {},
-      error,
-    )
-  }
-  const mechanics = normalizedMechanics(source)
-  const { simulation, durationChanged } = migrateSimulation(source, mechanics)
-  const stagedTokens = new Set<PreparedProjectSourceV1>()
-  try {
-    const stagedLegacy = await sourceStaging.stageOwnedLegacyProjectSources(
-      source,
-      signal,
+    let defaults
+    try {
+      defaults = validateBuiltInEquipmentDefaultPairsV3(
+        dependencies.builtInEquipmentDefaults,
+        dependencies.builtInEquipmentTransformDefaults,
+      )
+    } catch (error) {
+      return fail(
+        'PROJECT_BUILT_IN_DEFAULTS_INVALID',
+        'Built-in Equipment defaults are not paired immutable catalog entries.',
+        {},
+        error,
+      )
+    }
+    const mechanics = normalizedMechanics(source)
+    const { simulation, durationChanged } = migrateSimulation(source, mechanics)
+    const stagedLegacy = preparedLegacySources ?? await sourceStaging.stageOwnedLegacyProjectSources(
+      source, signal,
     )
     for (const staged of stagedLegacy) stagedTokens.add(staged.preparedSource)
     const stagedByOwner = new Map(
@@ -609,11 +625,9 @@ async function migrateOwnedV2ToV3(
 
 export { canonicalMechanicsBytesV3, verifyProjectCryptographicProvenanceV3 }
 
-export async function migrateProjectToV3(
-  candidate: MigratableProjectSnapshot,
+function captureMigrationDependenciesV3(
   dependencies: ProjectV3MigrationDependencies,
-  signal?: AbortSignal,
-): Promise<ProjectMigrationResultV3> {
+): ProjectV3MigrationDependencies {
   const sourceStaging = dependencies.sourceStaging
   const revisionIdentityHasher = dependencies.projectRevisionIdentityHasher
   const resolvedDependencies: ProjectV3MigrationDependencies = Object.freeze({
@@ -622,21 +636,125 @@ export async function migrateProjectToV3(
       hashRevisionIdentity:
         revisionIdentityHasher.hashRevisionIdentity.bind(revisionIdentityHasher),
     }),
-    builtInEquipmentDefaults: dependencies.builtInEquipmentDefaults,
-    builtInEquipmentTransformDefaults: dependencies.builtInEquipmentTransformDefaults,
+    builtInEquipmentDefaults: Object.freeze(structuredClone(dependencies.builtInEquipmentDefaults)),
+    builtInEquipmentTransformDefaults: Object.freeze(
+      structuredClone(dependencies.builtInEquipmentTransformDefaults),
+    ),
   })
   assertCanonicalProjectSourceMigrationStagingServiceInternalV1(
     sourceStaging,
   )
+  return resolvedDependencies
+}
+
+function normalizeMigratableProjectV2(
+  candidate: MigratableProjectSnapshot,
+): WorkcellProjectSnapshotV2 {
   rejectNonRigidLegacyFrames(candidate)
   const schemaVersion = schemaVersionOf(candidate)
-  let source: WorkcellProjectSnapshotV2
   if (schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V1) {
-    source = migrateV1ToV2(candidate as WorkcellProjectSnapshotV1)
-  } else if (schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V2) {
-    source = validateWorkcellProjectSnapshotV2(candidate)
-  } else {
-    return fail('PROJECT_LEGACY_SCHEMA_UNSUPPORTED', 'Migration accepts only V1 or V2 Projects.')
+    return migrateV1ToV2(candidate as WorkcellProjectSnapshotV1)
   }
-  return migrateOwnedV2ToV3(source, resolvedDependencies, sourceStaging, signal)
+  if (schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V2) {
+    return validateWorkcellProjectSnapshotV2(candidate)
+  }
+  return fail('PROJECT_LEGACY_SCHEMA_UNSUPPORTED', 'Migration accepts only V1 or V2 Projects.')
+}
+
+function preflightMigrationMetadataV3(
+  source: WorkcellProjectSnapshotV2,
+  dependencies: ProjectV3MigrationDependencies,
+): void {
+  try {
+    validateBuiltInEquipmentDefaultPairsV3(
+      dependencies.builtInEquipmentDefaults,
+      dependencies.builtInEquipmentTransformDefaults,
+    )
+  } catch (error) {
+    return fail(
+      'PROJECT_BUILT_IN_DEFAULTS_INVALID',
+      'Built-in Equipment defaults are not paired immutable catalog entries.',
+      {},
+      error,
+    )
+  }
+  const mechanics = normalizedMechanics(source)
+  migrateSimulation(source, mechanics)
+}
+
+/** Synchronous-preflight first phase for streaming legacy Archive migration. */
+export function prepareLegacyArchiveProjectForMigrationInternalV1(
+  candidate: MigratableProjectSnapshot,
+  sources: readonly LegacyProjectArchiveSourcePlanV1[],
+  reader: LegacyProjectArchiveReaderV1,
+  dependencies: ProjectV3MigrationDependencies,
+  signal?: AbortSignal,
+): Promise<PreparedLegacyArchiveProjectV1> {
+  const resolvedDependencies = captureMigrationDependenciesV3(dependencies)
+  assertLegacyArchivePlaceholderProjectClosedInternalV1(candidate)
+  const source = normalizeMigratableProjectV2(candidate)
+  preflightMigrationMetadataV3(source, resolvedDependencies)
+  const pending = resolvedDependencies.sourceStaging.prepareLegacyArchiveProject(
+    source,
+    sources,
+    reader,
+    signal,
+  )
+  return pending.then((prepared) => {
+    preparedLegacyArchiveMigrationDependenciesV1.set(prepared, {
+      requested: dependencies,
+      captured: resolvedDependencies,
+      signal,
+    })
+    return prepared
+  })
+}
+
+/** One-shot second phase; consumes only a capability minted by the exact staging service. */
+export async function migratePreparedLegacyArchiveProjectToV3InternalV1(
+  prepared: PreparedLegacyArchiveProjectV1,
+  dependencies: ProjectV3MigrationDependencies,
+  signal?: AbortSignal,
+): Promise<ProjectMigrationResultV3> {
+  const preparation = typeof prepared === 'object' && prepared !== null
+    ? preparedLegacyArchiveMigrationDependenciesV1.get(prepared)
+    : undefined
+  if (
+    preparation === undefined ||
+    preparation.requested !== dependencies ||
+    preparation.signal !== signal
+  ) {
+    return fail(
+      'PROJECT_SOURCE_STAGING_SERVICE_INVALID',
+      'Prepared legacy Archive Project migration dependencies are invalid or substituted.',
+    )
+  }
+  const resolvedDependencies = preparation.captured
+  const staged = consumePreparedLegacyArchiveProjectInternalV1(
+    prepared,
+    resolvedDependencies.sourceStaging,
+  )
+  return migrateOwnedV2ToV3(
+    staged.snapshot,
+    resolvedDependencies,
+    resolvedDependencies.sourceStaging,
+    staged.stagedSources,
+    signal,
+  )
+}
+
+export async function migrateProjectToV3(
+  candidate: MigratableProjectSnapshot,
+  dependencies: ProjectV3MigrationDependencies,
+  signal?: AbortSignal,
+): Promise<ProjectMigrationResultV3> {
+  const resolvedDependencies = captureMigrationDependenciesV3(dependencies)
+  const source = normalizeMigratableProjectV2(candidate)
+  return migrateOwnedV2ToV3(
+    source,
+    resolvedDependencies,
+    resolvedDependencies.sourceStaging,
+    undefined,
+    signal,
+  )
 }

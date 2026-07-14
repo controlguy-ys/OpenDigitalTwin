@@ -1601,7 +1601,15 @@ export class ProjectArchiveCodecWorker {
           sequence += 1
         }
       }
-      while (!outputFinal) consumeOutput(await channel.next())
+      while (!outputFinal) {
+        const response = await channel.next()
+        if (!consumeOutput(response)) {
+          throw new ProjectArchiveError(
+            'PROJECT_ARCHIVE_WORKER_FAILED',
+            `Archive Worker returned ${response.type} while encode-output was required.`,
+          )
+        }
+      }
       channel.assertNoQueuedResponses()
       return new Blob(parts, { type: 'application/vnd.web-digital-twin' })
     } catch (error) {

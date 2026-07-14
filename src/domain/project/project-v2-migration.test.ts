@@ -21,6 +21,9 @@ import {
 import {
   createProjectSourceMigrationFoundationInternalV1,
   deriveCanonicalPoseDurationMsV3,
+  type LegacyProjectArchiveReaderV1,
+  type LegacyProjectArchiveSourcePlanV1,
+  type PreparedLegacyArchiveProjectV1,
   type ProjectBuiltInEquipmentRecordV3,
   type ProjectExternalEntityTransformStateV3,
 } from './project-v3'
@@ -28,6 +31,8 @@ import {
   PROJECT_V2_BUILT_IN_EQUIPMENT_RESTORED_WARNING,
   canonicalMechanicsBytesV3,
   migrateProjectToV3,
+  migratePreparedLegacyArchiveProjectToV3InternalV1,
+  prepareLegacyArchiveProjectForMigrationInternalV1,
   verifyProjectCryptographicProvenanceV3,
   type ProjectV3MigrationDependencies,
 } from './project-v2-migration'
@@ -272,6 +277,55 @@ function migrationDependencies(
       builtInEquipmentDefaults: BUILT_IN_DEFAULTS,
       builtInEquipmentTransformDefaults: BUILT_IN_TRANSFORM_DEFAULTS,
     },
+  }
+}
+
+function legacyArchivePreparation(source = validV2Project()): {
+  readonly candidate: WorkcellProjectSnapshotV2
+  readonly sources: readonly LegacyProjectArchiveSourcePlanV1[]
+  readonly bytesByPath: ReadonlyMap<string, ArrayBuffer>
+  readonly reader: LegacyProjectArchiveReaderV1
+  readonly readSource: ReturnType<typeof vi.fn>
+  readonly finish: ReturnType<typeof vi.fn>
+} {
+  const candidate = structuredClone(source)
+  const bytesByPath = new Map<string, ArrayBuffer>()
+  const sources: LegacyProjectArchiveSourcePlanV1[] = []
+  for (const [index, link] of candidate.robot.links.entries()) {
+    const entryPath = `robot/links/${link.linkId}.step`
+    const bytes = source.robot.links[index]!.sourceBytes.slice(0)
+    bytesByPath.set(entryPath, bytes)
+    link.sourceBytes = new ArrayBuffer(1)
+    sources.push({
+      namespace: 'robot',
+      entryPath,
+      ownerKeys: [`robot-link:${link.linkId}`],
+      byteLength: bytes.byteLength,
+    })
+  }
+  for (const [index, asset] of candidate.objectAssets.entries()) {
+    const entryPath = `objects/assets/${index.toString().padStart(4, '0')}.step`
+    const bytes = source.objectAssets[index]!.sourceBytes.slice(0)
+    bytesByPath.set(entryPath, bytes)
+    asset.sourceBytes = new ArrayBuffer(1)
+    sources.push({
+      namespace: 'object',
+      entryPath,
+      ownerKeys: [`object-asset:${asset.id}`],
+      byteLength: bytes.byteLength,
+    })
+  }
+  sources.sort((left, right) => left.entryPath < right.entryPath ? -1 : 1)
+  const readSource = vi.fn(async (plan: LegacyProjectArchiveSourcePlanV1) =>
+    bytesByPath.get(plan.entryPath)!.slice(0))
+  const finish = vi.fn()
+  return {
+    candidate,
+    sources: Object.freeze(sources),
+    bytesByPath,
+    reader: Object.freeze({ readSource, finish }),
+    readSource,
+    finish,
   }
 }
 
@@ -977,5 +1031,330 @@ describe('V2 to V3 project migration', () => {
     ])).rejects.toMatchObject({ code: 'PROJECT_MIGRATION_CANCELLED' })
     expect(performance.now() - abortedAt).toBeLessThan(250)
     expect(lockedAnalyzer).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects owner-weighted legacy Archive bytes before reading or hashing', async () => {
+    const prepared = legacyArchivePreparation()
+    const sharedPlaceholder = new ArrayBuffer(1)
+    for (const link of prepared.candidate.robot.links) link.sourceBytes = sharedPlaceholder
+    const robotOwners = prepared.candidate.robot.links.map(({ linkId }) =>
+      `robot-link:${linkId}` as const)
+    const objectPlan = prepared.sources.find(({ namespace }) => namespace === 'object')!
+    const sources: LegacyProjectArchiveSourcePlanV1[] = [{
+      namespace: 'robot',
+      entryPath: 'robot/links/shared.step',
+      ownerKeys: robotOwners,
+      byteLength: 20 * 1024 * 1024,
+    }, objectPlan]
+    const { dependencies, digestSource } = migrationDependencies()
+
+    await expect(prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate,
+      sources,
+      prepared.reader,
+      dependencies,
+    )).rejects.toMatchObject({ code: 'PROJECT_SOURCE_BYTES_INVALID' })
+    expect(prepared.readSource).not.toHaveBeenCalled()
+    expect(digestSource).not.toHaveBeenCalled()
+    expect(prepared.finish).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a one-byte buffer outside sourceBytes', new ArrayBuffer(1)],
+    ['a typed view outside sourceBytes', new Uint8Array([1])],
+  ])('rejects %s before any legacy Archive read', async (_label, unexpected) => {
+    const prepared = legacyArchivePreparation()
+    ;(prepared.candidate as unknown as Record<string, unknown>).unexpected = unexpected
+    const { dependencies, digestSource } = migrationDependencies()
+
+    await expect(Promise.resolve().then(() => prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate, prepared.sources, prepared.reader, dependencies,
+    ))).rejects.toMatchObject({ code: 'PROJECT_SOURCE_ASSIGNMENT_INVALID' })
+    expect(prepared.readSource).not.toHaveBeenCalled()
+    expect(digestSource).not.toHaveBeenCalled()
+  })
+
+  it('rejects candidate and plan accessors without invoking them or reading', async () => {
+    const first = legacyArchivePreparation()
+    const candidateGetter = vi.fn(() => 'trap')
+    Object.defineProperty(first.candidate.manifest, 'trap', {
+      enumerable: true,
+      get: candidateGetter,
+    })
+    const firstDependencies = migrationDependencies()
+    await expect(Promise.resolve().then(() => prepareLegacyArchiveProjectForMigrationInternalV1(
+      first.candidate, first.sources, first.reader, firstDependencies.dependencies,
+    ))).rejects.toMatchObject({ code: 'PROJECT_SOURCE_ASSIGNMENT_INVALID' })
+    expect(candidateGetter).not.toHaveBeenCalled()
+    expect(first.readSource).not.toHaveBeenCalled()
+
+    const second = legacyArchivePreparation()
+    const planGetter = vi.fn(() => second.sources[0]!.entryPath)
+    const maliciousPlan: LegacyProjectArchiveSourcePlanV1 = { ...second.sources[0]! }
+    Object.defineProperty(maliciousPlan, 'entryPath', {
+      enumerable: true,
+      get: planGetter,
+    })
+    const secondDependencies = migrationDependencies()
+    await expect(Promise.resolve().then(() => prepareLegacyArchiveProjectForMigrationInternalV1(
+      second.candidate,
+      [maliciousPlan, ...second.sources.slice(1)],
+      second.reader,
+      secondDependencies.dependencies,
+    ))).rejects.toMatchObject({ code: 'PROJECT_SOURCE_ASSIGNMENT_INVALID' })
+    expect(planGetter).not.toHaveBeenCalled()
+    expect(second.readSource).not.toHaveBeenCalled()
+  })
+
+  it('revokes a prepared capability when cancellation wins before consumption', async () => {
+    const prepared = legacyArchivePreparation()
+    const controller = new AbortController()
+    const digestBuffers: ArrayBuffer[] = []
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const nativeDigest = createProjectSourceDigest(hashService)
+    const foundation = createProjectSourceMigrationFoundationInternalV1({
+      sourceDigest: {
+        async digestSource(bytes, signal) {
+          digestBuffers.push(bytes as ArrayBuffer)
+          return nativeDigest.digestSource(bytes, signal)
+        },
+      },
+      lockedLegacyAnalyzer: async ({ tokenId, generation, sourceBytes }) => ({
+        tokenId, generation, sourceBytes,
+        analysis: { detectedUnit: 'meter', meshIndices: [0] },
+      }),
+    })
+    const dependencies: ProjectV3MigrationDependencies = {
+      sourceStaging: foundation.sourceStaging,
+      projectRevisionIdentityHasher: createProjectRevisionIdentityHasher(hashService),
+      builtInEquipmentDefaults: BUILT_IN_DEFAULTS,
+      builtInEquipmentTransformDefaults: BUILT_IN_TRANSFORM_DEFAULTS,
+    }
+    const capability = await prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate, prepared.sources, prepared.reader, dependencies, controller.signal,
+    )
+
+    controller.abort()
+
+    expect(digestBuffers.every(({ byteLength }) => byteLength === 0)).toBe(true)
+    await expect(migratePreparedLegacyArchiveProjectToV3InternalV1(
+      capability, dependencies, controller.signal,
+    )).rejects.toMatchObject({ code: 'PROJECT_SOURCE_CAPABILITY_REVOKED' })
+  })
+
+  it('rejects forged, foreign, and replayed legacy Archive capabilities', async () => {
+    const prepared = legacyArchivePreparation()
+    const first = migrationDependencies()
+    const second = migrationDependencies()
+    await expect(migratePreparedLegacyArchiveProjectToV3InternalV1(
+      Object.freeze({}) as PreparedLegacyArchiveProjectV1,
+      first.dependencies,
+    )).rejects.toMatchObject({ code: 'PROJECT_SOURCE_STAGING_SERVICE_INVALID' })
+    const capability = await prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate, prepared.sources, prepared.reader, first.dependencies,
+    )
+
+    await expect(migratePreparedLegacyArchiveProjectToV3InternalV1(
+      capability, second.dependencies,
+    )).rejects.toMatchObject({ code: 'PROJECT_SOURCE_STAGING_SERVICE_INVALID' })
+    const migrated = await migratePreparedLegacyArchiveProjectToV3InternalV1(
+      capability, first.dependencies,
+    )
+    await expect(migratePreparedLegacyArchiveProjectToV3InternalV1(
+      capability, first.dependencies,
+    )).rejects.toMatchObject({ code: 'PROJECT_SOURCE_CAPABILITY_CONSUMED' })
+    for (const group of migrated.preparedSourceGroups) {
+      first.dependencies.sourceStaging.revoke(group.preparedSource)
+    }
+  })
+
+  it('rejects a substituted migration signal without consuming the capability', async () => {
+    const prepared = legacyArchivePreparation()
+    const preparationController = new AbortController()
+    const substitutedController = new AbortController()
+    const { dependencies } = migrationDependencies()
+    const capability = await prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate,
+      prepared.sources,
+      prepared.reader,
+      dependencies,
+      preparationController.signal,
+    )
+
+    await expect(migratePreparedLegacyArchiveProjectToV3InternalV1(
+      capability,
+      dependencies,
+      substitutedController.signal,
+    )).rejects.toMatchObject({ code: 'PROJECT_SOURCE_STAGING_SERVICE_INVALID' })
+    const migrated = await migratePreparedLegacyArchiveProjectToV3InternalV1(
+      capability,
+      dependencies,
+      preparationController.signal,
+    )
+    for (const group of migrated.preparedSourceGroups) {
+      dependencies.sourceStaging.revoke(group.preparedSource)
+    }
+  })
+
+  it('revokes every staged Archive token when reader finish throws', async () => {
+    const prepared = legacyArchivePreparation()
+    const digestBuffers: ArrayBuffer[] = []
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const nativeDigest = createProjectSourceDigest(hashService)
+    const foundation = createProjectSourceMigrationFoundationInternalV1({
+      sourceDigest: {
+        async digestSource(bytes, signal) {
+          digestBuffers.push(bytes as ArrayBuffer)
+          return nativeDigest.digestSource(bytes, signal)
+        },
+      },
+      lockedLegacyAnalyzer: async () => { throw new Error('must not analyze') },
+    })
+    const dependencies: ProjectV3MigrationDependencies = {
+      sourceStaging: foundation.sourceStaging,
+      projectRevisionIdentityHasher: createProjectRevisionIdentityHasher(hashService),
+      builtInEquipmentDefaults: BUILT_IN_DEFAULTS,
+      builtInEquipmentTransformDefaults: BUILT_IN_TRANSFORM_DEFAULTS,
+    }
+    const finish = vi.fn(() => { throw new Error('finish failed') })
+
+    await expect(prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate,
+      prepared.sources,
+      Object.freeze({
+        readSource: prepared.readSource as LegacyProjectArchiveReaderV1['readSource'],
+        finish,
+      }),
+      dependencies,
+    )).rejects.toThrow(/finish failed/)
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(digestBuffers).toHaveLength(prepared.sources.length)
+    expect(digestBuffers.every(({ byteLength }) => byteLength === 0)).toBe(true)
+  })
+
+  it('detaches a signal-ignoring late Archive read and revokes earlier tokens', async () => {
+    const prepared = legacyArchivePreparation()
+    const controller = new AbortController()
+    const digestBuffers: ArrayBuffer[] = []
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const nativeDigest = createProjectSourceDigest(hashService)
+    const foundation = createProjectSourceMigrationFoundationInternalV1({
+      sourceDigest: {
+        async digestSource(bytes, signal) {
+          digestBuffers.push(bytes as ArrayBuffer)
+          return nativeDigest.digestSource(bytes, signal)
+        },
+      },
+      lockedLegacyAnalyzer: async () => { throw new Error('must not analyze') },
+    })
+    const dependencies: ProjectV3MigrationDependencies = {
+      sourceStaging: foundation.sourceStaging,
+      projectRevisionIdentityHasher: createProjectRevisionIdentityHasher(hashService),
+      builtInEquipmentDefaults: BUILT_IN_DEFAULTS,
+      builtInEquipmentTransformDefaults: BUILT_IN_TRANSFORM_DEFAULTS,
+    }
+    let secondReadStarted!: () => void
+    const readStarted = new Promise<void>((resolve) => { secondReadStarted = resolve })
+    let resolveSecondRead!: (bytes: ArrayBuffer) => void
+    const lateRead = new Promise<ArrayBuffer>((resolve) => { resolveSecondRead = resolve })
+    let reads = 0
+    const readSource = vi.fn(async (plan: LegacyProjectArchiveSourcePlanV1) => {
+      reads += 1
+      if (reads === 2) {
+        secondReadStarted()
+        return lateRead
+      }
+      return prepared.bytesByPath.get(plan.entryPath)!.slice(0)
+    })
+    const pending = prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate,
+      prepared.sources,
+      Object.freeze({
+        readSource,
+        finish: prepared.finish as LegacyProjectArchiveReaderV1['finish'],
+      }),
+      dependencies,
+      controller.signal,
+    )
+
+    await readStarted
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'PROJECT_SOURCE_LEASE_CANCELLED' })
+    const lateBytes = new Uint8Array([91, 92, 93]).buffer
+    resolveSecondRead(lateBytes)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(readSource).toHaveBeenCalledTimes(2)
+    expect(lateBytes.byteLength).toBe(0)
+    expect(digestBuffers).toHaveLength(1)
+    expect(digestBuffers[0]!.byteLength).toBe(0)
+    expect(prepared.finish).not.toHaveBeenCalled()
+  })
+
+  it('revokes all pre-staged Archive tokens when migration fails', async () => {
+    const prepared = legacyArchivePreparation()
+    const digestBuffers: ArrayBuffer[] = []
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const nativeDigest = createProjectSourceDigest(hashService)
+    const foundation = createProjectSourceMigrationFoundationInternalV1({
+      sourceDigest: {
+        async digestSource(bytes, signal) {
+          digestBuffers.push(bytes as ArrayBuffer)
+          return nativeDigest.digestSource(bytes, signal)
+        },
+      },
+      lockedLegacyAnalyzer: async () => { throw new Error('parser failed after staging') },
+    })
+    const dependencies: ProjectV3MigrationDependencies = {
+      sourceStaging: foundation.sourceStaging,
+      projectRevisionIdentityHasher: createProjectRevisionIdentityHasher(hashService),
+      builtInEquipmentDefaults: BUILT_IN_DEFAULTS,
+      builtInEquipmentTransformDefaults: BUILT_IN_TRANSFORM_DEFAULTS,
+    }
+    const capability = await prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate, prepared.sources, prepared.reader, dependencies,
+    )
+
+    await expect(migratePreparedLegacyArchiveProjectToV3InternalV1(
+      capability, dependencies,
+    )).rejects.toThrow(/parser failed after staging/)
+    expect(digestBuffers.every(({ byteLength }) => byteLength === 0)).toBe(true)
+  })
+
+  it('detaches a signal-ignoring late analyzer return after Archive migration cancellation', async () => {
+    const prepared = legacyArchivePreparation()
+    const controller = new AbortController()
+    let analyzerStarted!: () => void
+    const started = new Promise<void>((resolve) => { analyzerStarted = resolve })
+    let releaseAnalyzer!: () => void
+    const gate = new Promise<void>((resolve) => { releaseAnalyzer = resolve })
+    let leasedBytes: ArrayBuffer | undefined
+    const lockedAnalyzer = vi.fn<ProjectSourceLockedLeaseWorkerV1>(async (input) => {
+      leasedBytes = input.sourceBytes
+      analyzerStarted()
+      await gate
+      return {
+        tokenId: input.tokenId,
+        generation: input.generation,
+        sourceBytes: input.sourceBytes,
+        analysis: { detectedUnit: 'meter', meshIndices: [0] },
+      }
+    })
+    const { dependencies } = migrationDependencies('meter', lockedAnalyzer)
+    const capability = await prepareLegacyArchiveProjectForMigrationInternalV1(
+      prepared.candidate, prepared.sources, prepared.reader, dependencies, controller.signal,
+    )
+    const pending = migratePreparedLegacyArchiveProjectToV3InternalV1(
+      capability, dependencies, controller.signal,
+    )
+
+    await started
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'PROJECT_MIGRATION_CANCELLED' })
+    releaseAnalyzer()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(lockedAnalyzer).toHaveBeenCalledTimes(1)
+    expect(leasedBytes?.byteLength).toBe(0)
   })
 })

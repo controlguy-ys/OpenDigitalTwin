@@ -24,8 +24,16 @@
   with authentic, idempotent result revocation. No result field exposes `sourceBytes`,
   `ArrayBuffer`, or a typed-array view.
 - Preserved V1/V2 import through streamed legacy layout extraction followed by the
-  existing Task 2 migration. The complete frozen migration dependency bundle is
+  existing Task 2 migration. Legacy decode now builds only one-byte, path-aliased
+  semantic placeholders plus central-directory size plans, then reads, transfers,
+  hashes, and stages one unique namespace/path before requesting the next. A
+  registry-backed, exact-service/dependency/signal-bound one-shot capability carries
+  the pre-staged assignments across `reader.finish()` into migration, so migration
+  does not restage or rehash them. The complete frozen migration dependency bundle is
   required and captured before the first await; unknown versions never downgrade.
+- Tightened the encode client after the final input acknowledgement: while final ZIP
+  output is pending, every response must be `encode-output`; duplicate acknowledgements
+  and every other response type fail immediately with `PROJECT_ARCHIVE_WORKER_FAILED`.
 
 ## Fixed security and memory limits
 
@@ -72,6 +80,22 @@ metadata. Cap-plus-one cases reject before source staging or output mutation.
   opaque token, rejects abort within 250 ms, revokes/detaches the issued source, and
   transfer-detaches the still-pending digest buffer. Late digest completion mints no
   token. The same two-source cancellation is covered through the public decode facade.
+- The follow-up legacy Archive REDs observed eight expanded STEP entries before the
+  first and second staging digests, where the required maxima were one and two. GREEN
+  covers both V1 and V2 through the public facade and proves one-entry read -> transfer
+  -> digest -> token sequencing, one digest per unique namespace/path, shared-path
+  aliasing, separate staging followed by digest de-duplication for equal bytes at
+  different paths, and cross-namespace isolation for equal Robot/Object bytes.
+- Legacy preflight now rejects owner-weighted Robot/Project byte overflow (including
+  seven owners of one 20 MiB path), off-slot one-byte buffers, typed views, accessors,
+  unsafe/duplicate/missing paths, invalid placeholder aliases, and substituted
+  services/dependencies/signals before any read or hash. Capability tests cover forged,
+  foreign, replayed, revoked, and prepare-to-consume abort states. Finish failure,
+  migration failure, and explicit signal-ignoring late read/digest/analyzer settlement
+  all detach bytes and revoke every prior/current/late token.
+- A Worker-protocol RED resolved a Blob after a duplicate final input acknowledgement.
+  The final-output drain now rejects that duplicate immediately; the complete Worker
+  protocol matrix remains green.
 - Playwright wiring RED reproduced `RobotSim` instead of the Worker harness title when
   a dev-only spec was discovered by the preview-server config. The default suite now
   excludes both Worker harnesses, while dedicated hash/archive scripts use their exact
@@ -96,15 +120,14 @@ application functional while Task 4 repository publication remains out of scope:
 
 ## Verification
 
-- Post-fix focused archive/staging/store/menu matrix: 6 files, 114 tests passed.
-- Worker protocol/security matrix: 1 file, 54 tests passed.
+- Follow-up focused archive/staging/migration matrix: 6 files, 226 tests passed.
+- Worker protocol/security matrix: 1 file, 55 tests passed.
 - V3 archive facade matrix: 1 file, 24 tests passed.
 - Archive staging matrix: 1 file, 24 tests passed.
 - Task 3 brief command: 7 files, 162 tests passed.
-- Full parallel Vitest: 83 files, 698 tests passed in 72.52 seconds.
-- Full serial Vitest (`npx vitest run --maxWorkers=1`): 83 files, 698 tests passed in
-  194.32 seconds; no OOM recurrence after duplicate browser/test processes were
-  removed.
+- Full parallel Vitest: 83 files, 716 tests passed in 56.20 seconds.
+- Full serial Vitest (`npx vitest run --no-file-parallelism --maxWorkers=1`): 83 files,
+  716 tests passed in 178.78 seconds; no timing/order failure.
 - Strict TypeScript (`npx tsc -b --pretty false`): passed.
 - Lint (`npm run lint`): passed with zero warnings.
 - Production build (`npm run build`): passed.
@@ -113,6 +136,9 @@ application functional while Task 4 repository publication remains out of scope:
   `File.arrayBuffer()`, or menu-side Blob materialization. The only production
   `.arrayBuffer()` is the bounded `Blob.slice(offset, end).arrayBuffer()` range read in
   the archive Worker client.
+- Internal-surface scan: no legacy Archive capability, plan, raw adopter, batch buffer,
+  or prepared-token session is exported by the public project codec/menu/application
+  facade. The prepare/consume authority remains a deep internal migration boundary.
 - Working-tree diff check: passed before staging.
 - Default preview-server E2E: 3/3 passed in 5.9 minutes.
 - Dedicated SHA-256 Worker Chromium: 1/1 passed (5.7-second test).
@@ -122,7 +148,12 @@ application functional while Task 4 repository publication remains out of scope:
   expansion was one, the RAF heartbeat advanced 484 frames, maximum Worker auxiliary
   payload was 56,626,176 bytes, central workspace was 16,777,216 bytes, and both raw
   source/compressed cap-plus-one cases rejected before mutation.
-- Independent post-fix review: no Critical, Important, or Minor findings; ready.
+- The follow-up does not change the browser Worker session/streaming algorithm,
+  harness routes, preview wiring, chunk sizes, or max-boundary algorithm; the default
+  and dedicated Chromium evidence above is reused from base commit `47f34d4`. The
+  changed client response state and legacy migration handoff are covered by the
+  226-test focused matrix and both fresh full-suite modes.
+- Independent follow-up review: pending against the exact follow-up commit.
 
 ## Scope boundary
 

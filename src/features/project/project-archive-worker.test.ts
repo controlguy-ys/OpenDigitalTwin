@@ -898,4 +898,32 @@ describe('Project archive Worker boundary', () => {
       path: 'manifest.json', bytes: new Uint8Array([1]).buffer, compression: 'store',
     }])).rejects.toMatchObject({ code: 'PROJECT_ARCHIVE_WORKER_FAILED' })
   })
+
+  it('rejects a duplicate acknowledgement while awaiting final output', async () => {
+    const worker = new ControlledWorker()
+    worker.onPost = (message) => {
+      if (message.type === 'encode-start') {
+        worker.emit({ type: 'encode-ready', generation: message.generation, entryCount: 1 })
+      } else if (message.type === 'encode-entry-start') {
+        worker.emit({ type: 'encode-entry-ready', generation: message.generation, index: 0 })
+      } else if (message.type === 'encode-chunk') {
+        const ack = {
+          type: 'encode-ack' as const, generation: message.generation, index: 0,
+          sequence: 0, receivedBytes: 1,
+        }
+        worker.emit(ack)
+        worker.emit(ack)
+        worker.emit({
+          type: 'encode-output', generation: message.generation, sequence: 0,
+          bytes: new ArrayBuffer(1), final: true,
+        })
+      }
+    }
+    const codec = new ProjectArchiveCodecWorker({ workerFactory: () => worker })
+
+    await expect(codec.encode([{
+      path: 'manifest.json', bytes: new Uint8Array([1]).buffer, compression: 'store',
+    }])).rejects.toMatchObject({ code: 'PROJECT_ARCHIVE_WORKER_FAILED' })
+    expect(worker.terminated).toBe(true)
+  })
 })
