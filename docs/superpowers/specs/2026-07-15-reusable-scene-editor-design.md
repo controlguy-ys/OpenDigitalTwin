@@ -20,6 +20,8 @@ Robot mounting contact.
   Axis whose direction is X, Y, or Z.
 - Expose Robot Job creation in the permanently visible left Sidebar.
 - Remove page-level scrolling and provide equivalent Light and Dark themes.
+- Add a minimal TCP Marker and Viewport camera/coordinate overlay without
+  changing Robot or Simulation state.
 - Provide useful, target-specific right-click commands.
 - Bound imported STEP Assets and Object Instances independently of existing
   byte, mesh, material, and triangle budgets.
@@ -38,6 +40,10 @@ Robot mounting contact.
 - Automatic Robot base-link or mount-surface inference.
 - Automatic STEP assembly splitting or AI-assisted mapping.
 - A plug-in framework for Context Menu commands.
+- Follow TCP, Tool-orientation camera follow, or saved project camera presets.
+- Commanded TCP, Target TCP, TCP Trail, planned Path, or Reach Envelope display.
+- WorkObject editing, Cartesian Jog, Measure, Align, or position/angle Snap.
+- Perspective/Orthographic projection switching in this stage.
 - Compatibility or adoption paths for superseded project formats.
 
 ## 1. Common Scene Entity model
@@ -240,7 +246,80 @@ remembered in browser storage. Theme choice, divider position, open tabs, and
 drawer state are user preferences and are not project content. Both themes use
 the same semantic design tokens and layout.
 
-## 7. Context-aware right-click menu
+## 7. Viewport spatial controls
+
+The Viewport provides a small transparent overlay for spatial awareness. It is
+separate from Robot motion controls and never changes Joint values, Jobs,
+Simulation time, Target data, or Scene Entity transforms.
+
+### Actual TCP Marker
+
+The active TCP displays a position-and-orientation triad:
+
+- X is red, Y is green, and Z is blue.
+- Every axis also has an arrow and visible `X`, `Y`, or `Z` label, so color is
+  not the only distinction.
+- The TCP origin uses a small center marker and the active TCP name.
+- Marker screen size stays readable across normal camera zoom.
+- The default rendering is depth-aware. Geometry may occlude the Marker; no
+  always-on-top or X-Ray mode is added in this stage.
+- Only the Actual TCP is displayed. Commanded and Target TCP states are not
+  synthesized from Joint-Pose Jobs.
+
+The TCP World matrix continues to be derived from Robot Base, Joint FK, Flange,
+and Tool/TCP transforms. Rendering uses the existing Scene coordinate adapter;
+the domain remains right-handed and Z-up, with Quaternion/matrix math as the
+authoritative rotation representation.
+
+### Camera overlay
+
+The Viewport upper-right overlay contains:
+
+- **Home View**: restores the fixed application camera position, orientation,
+  Orbit pivot, projection, and zoom.
+- **Fit All**: frames the currently visible Robot, Objects, Groups, and Axis
+  geometry from their combined bounds.
+- **Focus Selection**: frames the selected visible Entity and updates the Orbit
+  pivot. It is disabled when there is no eligible selection.
+- A World-referenced View Cube whose faces select Front, Back, Left, Right, Top,
+  and Bottom; corners select the fixed isometric view.
+
+The action is named **Home View**, never `Reset World`. Home View and all other
+camera commands retain Robot Pose, Axis position, Job, Timeline, Collision
+policy, Entity transforms, visibility layers, and Simulation state. The current
+stage does not save a project-specific Home camera or support View Cube drag.
+
+### Coordinate display overlay
+
+The Viewport lower-left layer strip toggles:
+
+- Grid.
+- World Frame.
+- Robot Base Frame.
+- Actual TCP Frame.
+
+World, Base, and TCP use the same labelled triad convention. The World Frame is
+the fixed absolute reference and the View Cube never changes to Tool or Object
+orientation.
+
+A compact status strip distinguishes two concepts:
+
+- **Pose Frame** controls the reference used for read-only TCP XYZ/RPY values
+  and offers World, MCP, and Robot Base.
+- **Gizmo Frame** controls transform-handle orientation and offers World and
+  Parent in this stage.
+
+The status strip also displays the active TCP name, `mm/deg`, and the ZYX RPY
+convention. `Tool/TCP` is not offered as its own TCP Pose Frame because the TCP
+expressed in itself would be the identity pose. No `Jog Frame` or Active
+WorkObject selector is shown until those editing modes exist.
+
+Overlay buttons are normally translucent, become opaque on hover/focus, retain
+a visible active state, have an approximately 40 by 40 pixel hit area, provide
+tooltips, and preserve keyboard focus indication in both themes. Camera and
+layer preferences are browser-local and are not project content.
+
+## 8. Context-aware right-click menu
 
 Commands not valid for the selected Entity are not displayed.
 
@@ -282,7 +361,7 @@ are limited to existing or obvious editor actions: F for Focus, H for Hide, F2
 for Rename, Ctrl+D for Duplicate, Escape to clear selection, and Delete for an
 eligible selected Entity.
 
-## 8. Collision Mount Contact
+## 9. Collision Mount Contact
 
 The current collision core special-cases only
 `robot-link:LINK00|workcell:workbench`. That assumption is not reusable for a
@@ -317,7 +396,7 @@ remain a separate project policy for intentional non-mount overlap. If the Base
 Link or mount surface is missing, no implicit Pair is ignored; the Inspector
 reports incomplete mount setup and normal Collision reporting continues.
 
-## 9. Import and runtime limits
+## 10. Import and runtime limits
 
 The current geometry budgets remain authoritative:
 
@@ -337,7 +416,7 @@ source bytes or Instance count. Import and Duplicate surfaces show a warning at
 80 percent of any applicable hard budget. A rejected operation displays current
 usage and the exact limit and makes no persistent change.
 
-## 10. Persistence and transactions
+## 11. Persistence and transactions
 
 Project content includes:
 
@@ -348,15 +427,15 @@ Project content includes:
 - Existing Object Asset, status, OPC UA, Robot Mechanics, Geometry, Frame, and
   Collision policy data.
 
-Theme, Isolate, panel split, open tabs, selection, and Transform previews are
-not project content.
+Theme, Isolate, panel split, open tabs, selection, Transform previews, camera
+state, and coordinate-layer preferences are not project content.
 
 Save validates all references, parent rules, attachment rules, limits, and
 mount-contact eligibility before publishing a new Project V3 revision. Load
 hydrates and validates the complete candidate before replacing the active
 project. Failure retains the previous active project and its Scene runtime.
 
-## 11. Error handling
+## 12. Error handling
 
 - Invalid parent, nested Group, cycle, or duplicate attachment: reject before
   mutation.
@@ -370,8 +449,10 @@ project. Failure retains the previous active project and its Scene runtime.
   Pose.
 - Incomplete Mount Contact: report a setup diagnostic and apply no implicit
   collision exemption.
+- Focus Selection with no eligible selection: keep the camera unchanged and
+  leave the command disabled.
 
-## 12. Verification and success criteria
+## 13. Verification and success criteria
 
 ### Domain and Store
 
@@ -407,6 +488,14 @@ project. Failure retains the previous active project and its Scene runtime.
   read-only World Pose.
 - Light/Dark choice and Sidebar split persist locally but are absent from the
   project archive.
+- Actual TCP Marker position and orientation match the FK TCP World matrix and
+  include labelled X/Y/Z axes.
+- Home View, Fit All, Focus Selection, and View Cube operations change only the
+  camera and Orbit pivot.
+- Grid, World, Base, and TCP layer toggles do not modify project or Simulation
+  state.
+- Pose Frame and Gizmo Frame are displayed independently with only the approved
+  options.
 
 ### Limits
 
