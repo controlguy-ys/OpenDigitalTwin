@@ -178,6 +178,8 @@ application functional while Task 4 repository publication remains out of scope:
 - Final independent review found no further production defect and one Important
   cleanup-assertion coverage gap, fixed by the test-only strengthening above; it found
   no other Critical, Important, or Minor issue.
+- Final independent review of the test-only follow-up found no Critical, Important,
+  or Minor issue and returned `Spec compliance: ✅` and `Task quality: Approved`.
 
 ## Scope boundary
 
