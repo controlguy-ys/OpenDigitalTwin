@@ -54,8 +54,8 @@
 - Modify: `docs/superpowers/plans/2026-07-13-project-v3-foundation.md`
 
 **Interfaces:**
-- Consumes: `ProjectRevisionRepository`, `ProjectSourceStagingService`, `WorkcellProjectSnapshotV3`, and the prepared V3 archive/migration results already present.
-- Produces: the only durable mutation boundary, a published runtime bundle, V3 New/Save/Import/Export, recovery-required locking, and an accurate completion ledger for V3 Foundation Tasks 4–6.
+- Consumes: `ProjectRevisionRepository`, `ProjectSourceStagingService`, `WorkcellProjectSnapshotV3`, and prepared Project V3 archive decode results.
+- Produces: the only durable mutation boundary, a published runtime bundle, V3 New/Save/Import/Export, recovery-required locking, and an accurate completion ledger for V3 Foundation Tasks 4 through 6.
 
 - [ ] **Step 1: Write publication and mutation RED tests**
 
@@ -143,7 +143,7 @@ Expected: PASS; New, Save, Export, Import, reload, stale commit, and fake-crash 
 
 - [ ] **Step 6: Update the V3 plan ledger and commit**
 
-Mark only evidence-backed V3 Foundation steps complete. Record exact test commands and results beside the completed Task 4–6 entries.
+Mark only evidence-backed V3 Foundation steps complete. Record exact test commands and results beside the completed Task 4 through 6 entries.
 
 ```powershell
 git add -A src/features/project src/domain/project docs/superpowers/plans/2026-07-13-project-v3-foundation.md
