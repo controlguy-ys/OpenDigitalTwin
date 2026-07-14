@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../../domain/robot/crb15000'
 import {
   WORKCELL_PROJECT_FORMAT,
-  WORKCELL_PROJECT_SCHEMA_VERSION,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V2 as WORKCELL_PROJECT_SCHEMA_VERSION,
   WORKCELL_PROJECT_SCHEMA_VERSION_V1,
-  type CurrentProjectSnapshot,
+  type LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
 } from '../../domain/project/project'
 import { decodeWorkcellProject, encodeWorkcellProject } from './project-codec'
 

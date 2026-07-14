@@ -1,7 +1,7 @@
 import {
-  validateWorkcellProjectSnapshot,
+  validateWorkcellProjectSnapshotV2,
   validateWorkcellProjectSnapshotV1,
-  WORKCELL_PROJECT_SCHEMA_VERSION,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V2,
   type ProjectCollisionBoxV2,
   type WorkcellProjectSnapshotV1,
   type WorkcellProjectSnapshotV2,
@@ -23,11 +23,11 @@ export function migrateV1ToV2(
   candidate: WorkcellProjectSnapshotV1,
 ): WorkcellProjectSnapshotV2 {
   const source = structuredClone(validateWorkcellProjectSnapshotV1(candidate))
-  return validateWorkcellProjectSnapshot({
+  return validateWorkcellProjectSnapshotV2({
     ...source,
     manifest: {
       ...source.manifest,
-      schemaVersion: WORKCELL_PROJECT_SCHEMA_VERSION,
+      schemaVersion: WORKCELL_PROJECT_SCHEMA_VERSION_V2,
     },
     robot: {
       ...source.robot,

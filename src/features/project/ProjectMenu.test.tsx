@@ -2,7 +2,9 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createStore } from 'zustand/vanilla'
 import { expect, it, vi } from 'vitest'
-import type { CurrentProjectSnapshot } from '../../domain/project/project'
+import type {
+  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
+} from '../../domain/project/project'
 import type { ProjectStoreState } from './project-store'
 import { ProjectMenu } from './ProjectMenu'
 

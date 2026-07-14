@@ -1,6 +1,6 @@
 import { unzipSync, zipSync } from 'fflate'
 import type {
-  CurrentProjectSnapshot,
+  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
   ObjectAssetRecordV1,
   ObjectAssetRecordV2,
   RobotLinkGeometryRecordV1,
@@ -12,9 +12,9 @@ import {
   MAX_OBJECT_ASSET_BYTES,
   MAX_PROJECT_SOURCE_BYTES,
   MAX_ROBOT_LINK_BYTES,
-  validateWorkcellProjectSnapshot,
+  validateWorkcellProjectSnapshotV2 as validateWorkcellProjectSnapshot,
   validateWorkcellProjectSnapshotV1,
-  WORKCELL_PROJECT_SCHEMA_VERSION,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V2 as WORKCELL_PROJECT_SCHEMA_VERSION,
   WORKCELL_PROJECT_SCHEMA_VERSION_V1,
 } from '../../domain/project/project'
 import { migrateV1ToV2 } from '../../domain/project/project-v1-migration'

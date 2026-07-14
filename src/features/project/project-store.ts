@@ -1,10 +1,10 @@
 import { createStore } from 'zustand/vanilla'
 import type {
-  CurrentProjectSnapshot,
+  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
   WorkcellProjectSnapshotV1,
 } from '../../domain/project/project'
 import {
-  validateWorkcellProjectSnapshot,
+  validateWorkcellProjectSnapshotV2 as validateWorkcellProjectSnapshot,
   WORKCELL_PROJECT_SCHEMA_VERSION_V1,
 } from '../../domain/project/project'
 import { migrateV1ToV2 } from '../../domain/project/project-v1-migration'

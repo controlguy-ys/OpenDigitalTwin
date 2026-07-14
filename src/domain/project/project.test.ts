@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../robot/crb15000'
 import {
   MAX_OBJECT_ASSET_TRIANGLES,
@@ -9,12 +9,15 @@ import {
   type RobotLinkGeometryRecordV1,
   type WorkcellProjectSnapshotV1,
   type WorkcellProjectSnapshotV2,
-  validateWorkcellProjectSnapshot,
+  type CurrentProjectSnapshot,
+  validateWorkcellProjectSnapshotV2,
   validateWorkcellProjectSnapshotV1,
   WORKCELL_PROJECT_FORMAT,
   WORKCELL_PROJECT_SCHEMA_VERSION,
   WORKCELL_PROJECT_SCHEMA_VERSION_V1,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V2,
 } from './project'
+import type { WorkcellProjectSnapshotV3 } from './project-v3'
 
 const LINK_IDS = [
   'LINK00',
@@ -244,7 +247,10 @@ describe('portable workcell project contract', () => {
 describe('portable workcell project V2 collision contract', () => {
   it('keeps the V1 literal independent from the current schema version', () => {
     expect(WORKCELL_PROJECT_SCHEMA_VERSION_V1).toBe(1)
-    expect(WORKCELL_PROJECT_SCHEMA_VERSION).toBe(2)
+    expect(WORKCELL_PROJECT_SCHEMA_VERSION_V2).toBe(2)
+    expect(WORKCELL_PROJECT_SCHEMA_VERSION).toBe(3)
+    expectTypeOf<CurrentProjectSnapshot>()
+      .toEqualTypeOf<WorkcellProjectSnapshotV3>()
   })
 
   it('normalizes and owns Compound Boxes and policy pair-key arrays', () => {
@@ -263,7 +269,7 @@ describe('portable workcell project V2 collision contract', () => {
       'object:machine-02|robot-link:LINK01',
     ]
 
-    const normalized = validateWorkcellProjectSnapshot(snapshot)
+    const normalized = validateWorkcellProjectSnapshotV2(snapshot)
 
     expect(normalized).not.toBe(snapshot)
     expect(normalized.robot.links[0]!.collisionBoxes).not.toBe(boxes)
@@ -320,7 +326,7 @@ describe('portable workcell project V2 collision contract', () => {
     const snapshot = validV2ProjectSnapshot()
     snapshot.robot.links[0]!.collisionBoxes = boxes() as ProjectCollisionBoxV2[]
 
-    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(/Box|collision/i)
+    expect(() => validateWorkcellProjectSnapshotV2(snapshot)).toThrow(/Box|collision/i)
   })
 
   it('rejects projects above the total Compound Box budget', () => {
@@ -339,13 +345,13 @@ describe('portable workcell project V2 collision contract', () => {
     }))
     snapshot.objectInstances = []
 
-    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(/1,024|project.*Box/i)
+    expect(() => validateWorkcellProjectSnapshotV2(snapshot)).toThrow(/1,024|project.*Box/i)
   })
 
   it('rejects a negative collision warning distance', () => {
     const snapshot = validV2ProjectSnapshot()
     snapshot.collisionPolicy.warningDistanceM = -0.01
 
-    expect(() => validateWorkcellProjectSnapshot(snapshot)).toThrow(/warning distance/i)
+    expect(() => validateWorkcellProjectSnapshotV2(snapshot)).toThrow(/warning distance/i)
   })
 })

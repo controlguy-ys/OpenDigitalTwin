@@ -1,5 +1,7 @@
 import Dexie, { type Table } from 'dexie'
-import type { CurrentProjectSnapshot } from '../../domain/project/project'
+import type {
+  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
+} from '../../domain/project/project'
 
 export interface StoredActiveProject {
   key: 'active'

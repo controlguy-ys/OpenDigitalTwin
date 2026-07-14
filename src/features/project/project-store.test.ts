@@ -1,7 +1,7 @@
 import Dexie from 'dexie'
 import { afterEach, expect, it, vi } from 'vitest'
 import type {
-  CurrentProjectSnapshot,
+  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
   WorkcellProjectSnapshotV1,
 } from '../../domain/project/project'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../../domain/robot/crb15000'

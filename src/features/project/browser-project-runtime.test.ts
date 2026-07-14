@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
-  CurrentProjectSnapshot,
+  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
   RobotLinkGeometryRecordV2,
 } from '../../domain/project/project'
 import type { RobotLinkId } from '../../domain/robot/crb15000'

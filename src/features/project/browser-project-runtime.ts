@@ -1,5 +1,10 @@
-import type { CurrentProjectSnapshot } from '../../domain/project/project'
-import { WORKCELL_PROJECT_FORMAT, WORKCELL_PROJECT_SCHEMA_VERSION } from '../../domain/project/project'
+import type {
+  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
+} from '../../domain/project/project'
+import {
+  WORKCELL_PROJECT_FORMAT,
+  WORKCELL_PROJECT_SCHEMA_VERSION_V2 as WORKCELL_PROJECT_SCHEMA_VERSION,
+} from '../../domain/project/project'
 import { DEFAULT_COLLISION_POLICY } from '../../domain/collision/collision'
 import { useRobotStore } from '../joints/robot-store'
 import { stepImportClient } from '../import/StepImportClient'

@@ -6,7 +6,9 @@ import {
   pose3DToSerializableTransform,
   serializableTransformToPose3D,
 } from '../../domain/frames/pose3d'
-import type { CurrentProjectSnapshot } from '../../domain/project/project'
+import type {
+  LegacyProjectSnapshotV2 as CurrentProjectSnapshot,
+} from '../../domain/project/project'
 
 export const COORDINATE_FRAME_STORAGE_KEY = 'robot-sim.coordinate-frames.v1'
 export type CoordinateFrameId = 'mcp' | 'tcp'

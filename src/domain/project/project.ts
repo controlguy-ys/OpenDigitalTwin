@@ -10,10 +10,12 @@ import {
   type CollisionBox,
   type CollisionPolicy,
 } from '../collision/collision'
+import type { WorkcellProjectSnapshotV3 } from './project-v3'
 
 export const WORKCELL_PROJECT_FORMAT = 'WebDigitalTwinProject'
 export const WORKCELL_PROJECT_SCHEMA_VERSION_V1 = 1
-export const WORKCELL_PROJECT_SCHEMA_VERSION = 2
+export const WORKCELL_PROJECT_SCHEMA_VERSION_V2 = 2
+export const WORKCELL_PROJECT_SCHEMA_VERSION = 3
 
 export const MAX_ROBOT_LINKS = 7
 export const MAX_ROBOT_LINK_BYTES = 25 * 1024 * 1024
@@ -59,7 +61,7 @@ export interface WorkcellProjectManifestV1 {
 
 export interface WorkcellProjectManifestV2
   extends Omit<WorkcellProjectManifestV1, 'schemaVersion'> {
-  schemaVersion: typeof WORKCELL_PROJECT_SCHEMA_VERSION
+  schemaVersion: typeof WORKCELL_PROJECT_SCHEMA_VERSION_V2
 }
 
 export interface ProjectCollisionBoxV2 {
@@ -189,7 +191,8 @@ export interface WorkcellProjectSnapshotV2
   collisionPolicy: ProjectCollisionPolicyV2
 }
 
-export type CurrentProjectSnapshot = WorkcellProjectSnapshotV2
+export type LegacyProjectSnapshotV2 = WorkcellProjectSnapshotV2
+export type CurrentProjectSnapshot = WorkcellProjectSnapshotV3
 
 function fail(message: string): never {
   throw new Error(`Invalid workcell project: ${message}`)
@@ -318,7 +321,7 @@ function validateManifest(
   value: unknown,
   schemaVersion:
     | typeof WORKCELL_PROJECT_SCHEMA_VERSION_V1
-    | typeof WORKCELL_PROJECT_SCHEMA_VERSION,
+    | typeof WORKCELL_PROJECT_SCHEMA_VERSION_V2,
 ): void {
   const manifest = requireRecord(value, 'manifest')
   if (manifest.format !== WORKCELL_PROJECT_FORMAT) fail('Unsupported project format.')
@@ -593,10 +596,10 @@ function validateSnapshotStructure(
   value: unknown,
   schemaVersion:
     | typeof WORKCELL_PROJECT_SCHEMA_VERSION_V1
-    | typeof WORKCELL_PROJECT_SCHEMA_VERSION,
+    | typeof WORKCELL_PROJECT_SCHEMA_VERSION_V2,
 ): Record<string, unknown> {
   const snapshot = requireRecord(value, 'project')
-  const v2 = schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION
+  const v2 = schemaVersion === WORKCELL_PROJECT_SCHEMA_VERSION_V2
   validateManifest(snapshot.manifest, schemaVersion)
   const robot = validateRobot(snapshot.robot, v2)
 
@@ -671,10 +674,10 @@ export function validateWorkcellProjectSnapshotV1(
   return value as WorkcellProjectSnapshotV1
 }
 
-export function validateWorkcellProjectSnapshot(
+export function validateWorkcellProjectSnapshotV2(
   value: unknown,
-): CurrentProjectSnapshot {
-  validateSnapshotStructure(value, WORKCELL_PROJECT_SCHEMA_VERSION)
+): WorkcellProjectSnapshotV2 {
+  validateSnapshotStructure(value, WORKCELL_PROJECT_SCHEMA_VERSION_V2)
   const snapshot = structuredClone(value as WorkcellProjectSnapshotV2)
   snapshot.robot.links = snapshot.robot.links.map((link) => {
     const collisionBoxes = normalizedCollisionBoxes(link.collisionBoxes)
