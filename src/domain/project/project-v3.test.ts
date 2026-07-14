@@ -743,6 +743,11 @@ describe('Workcell Project V3 contract', () => {
     const snapshot = mutable(validV3Project())
     expect('registerStagedProjectSourceBuffersV3' in projectV3Module).toBe(false)
     expect('issueStagedProjectOwnershipCapabilityV3' in projectV3Module).toBe(false)
+    expect('createProjectSourceOwnershipBoundaryV1' in projectV3Module).toBe(false)
+    expect('consumeStagedProjectOwnershipAttestationV3' in projectV3Module).toBe(false)
+    expect('stageOwned' in projectV3Module).toBe(false)
+    expect('activeBuffer' in projectV3Module).toBe(false)
+    expect('attest' in projectV3Module).toBe(false)
     const validateWithCapability = validateStagedWorkcellProjectSnapshotV3 as unknown as (
       value: unknown,
       capability: unknown,

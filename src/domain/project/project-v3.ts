@@ -71,6 +71,10 @@ import {
   type ProjectSimulationStateV3,
   type SimulationJobV1,
 } from './simulation-job-v1'
+import type {
+  ProjectRevisionIdentityHasher,
+  ProjectSourceDigest,
+} from '../../lib/hash/sha256'
 
 export const WORKCELL_PROJECT_SCHEMA_VERSION_V3 = 3
 export const MAX_IDENTIFIER_UTF8_BYTES = 128
@@ -210,7 +214,7 @@ const ARRAY_BUFFER_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
 )?.get
 const HEX_SHA256 = /^[0-9a-f]{64}$/
 const UPPERCASE_COLOR = /^#[0-9A-F]{6}$/
-const ROBOT_LINK_IDS = [
+export const ROBOT_LINK_IDS_V3 = [
   'LINK00',
   'LINK01',
   'LINK02',
@@ -219,6 +223,7 @@ const ROBOT_LINK_IDS = [
   'LINK05',
   'LINK06',
 ] as const satisfies readonly RobotLinkId[]
+const ROBOT_LINK_IDS = ROBOT_LINK_IDS_V3
 const JOINT_IDS = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6'] as const
 const STATUS_VALUES = new Set<EquipmentStatus>([
   'OFF',
@@ -399,6 +404,13 @@ function normalizedUnitVector(components: readonly number[], label: string): num
     scale <= 1e-9 / scaledNorm
   ) {
     fail(`${label} norm must be greater than 1e-9.`)
+  }
+  const originalNorm = scale * scaledNorm
+  if (
+    Number.isFinite(originalNorm) &&
+    Math.abs(originalNorm - 1) <= Number.EPSILON
+  ) {
+    return components.map((component) => Object.is(component, -0) ? 0 : component)
   }
   const result = scaled.map((component) => {
     const normalized = component / scaledNorm
@@ -804,6 +816,63 @@ function validateMechanics(
   validateTransform(mechanics.flange, 'robot.mechanics.flange', normalize, true)
   validateTransform(mechanics.tool0, 'robot.mechanics.tool0', normalize, true)
   return mechanics as unknown as FixedSixAxisRobotMechanicsV3
+}
+
+export function normalizeFixedSixAxisRobotMechanicsV3(
+  value: FixedSixAxisRobotMechanicsV3,
+): FixedSixAxisRobotMechanicsV3 {
+  const normalized = validateMechanics(structuredClone(value), true)
+  deepFreezeConfiguration(normalized)
+  return normalized
+}
+
+function canonicalMechanicsTransformV3(value: ProjectRigidTransformV3): Record<string, unknown> {
+  return {
+    position: [...value.position],
+    quaternion: [...value.quaternion],
+    scale: [...value.scale],
+  }
+}
+
+export function canonicalMechanicsBytesV3(
+  mechanics: FixedSixAxisRobotMechanicsV3,
+): Uint8Array {
+  const normalizedMechanics = normalizeFixedSixAxisRobotMechanicsV3(mechanics)
+  return new TextEncoder().encode(JSON.stringify({
+    joints: normalizedMechanics.joints.map((joint) => ({
+      id: joint.id,
+      parentLink: joint.parentLink,
+      childLink: joint.childLink,
+      originM: [...joint.originM],
+      axis: [...joint.axis],
+      minDeg: joint.minDeg,
+      maxDeg: joint.maxDeg,
+      homeDeg: joint.homeDeg,
+      zeroOffsetDeg: joint.zeroOffsetDeg,
+      direction: joint.direction,
+      maxVelocityDegPerSec: joint.maxVelocityDegPerSec,
+    })),
+    flange: canonicalMechanicsTransformV3(normalizedMechanics.flange),
+    tool0: canonicalMechanicsTransformV3(normalizedMechanics.tool0),
+  }))
+}
+
+export async function verifyProjectCryptographicProvenanceV3(
+  projection: Pick<ByteFreeWorkcellProjectProjectionV3, 'robot'>,
+  revisionIdentityHasher: ProjectRevisionIdentityHasher,
+  signal?: AbortSignal,
+): Promise<void> {
+  const provenance = projection.robot.mechanicsProvenance
+  if (provenance.kind !== 'manual') return
+  const digest = await revisionIdentityHasher.hashRevisionIdentity(
+    canonicalMechanicsBytesV3(projection.robot.mechanics),
+    signal,
+  )
+  if (digest !== provenance.canonicalSha256) {
+    throw Object.assign(new Error(
+      'PROJECT_MANUAL_MECHANICS_DIGEST_MISMATCH: Manual Robot Mechanics provenance does not match the normalized Mechanics block.',
+    ), { code: 'PROJECT_MANUAL_MECHANICS_DIGEST_MISMATCH' })
+  }
 }
 
 function validateRobot(
@@ -1397,6 +1466,36 @@ function validateExternalEntities(
   return sources
 }
 
+export function validateBuiltInEquipmentDefaultPairsV3(
+  configurationDefaults: readonly ProjectBuiltInEquipmentRecordV3[],
+  transformDefaults: readonly ProjectExternalEntityTransformStateV3[],
+): Readonly<{
+  readonly configurations: readonly ProjectBuiltInEquipmentRecordV3[]
+  readonly transforms: readonly ProjectExternalEntityTransformStateV3[]
+}> {
+  const configurations = structuredClone(configurationDefaults)
+  const transforms = structuredClone(transformDefaults)
+  if (configurations.length !== transforms.length) {
+    fail('Built-in Equipment defaults must contain one configuration/transform pair per id.')
+  }
+  const { builtInIds } = validateBuiltIns(configurations)
+  const expectedIds = new Set<string>(
+    Array.from(builtInIds, (id) => `equipment:${id}`),
+  )
+  transforms.forEach((transform, index) => {
+    if (
+      transform.transformSource !== 'manual' ||
+      !transform.entityId.startsWith('equipment:')
+    ) {
+      fail(`Built-in Equipment transform default ${index} must be MCP-local Manual state.`)
+    }
+  })
+  validateExternalEntities(transforms, expectedIds, true)
+  deepFreezeConfiguration(configurations)
+  deepFreezeConfiguration(transforms)
+  return Object.freeze({ configurations, transforms })
+}
+
 function validateEntities(
   snapshot: Record<string, unknown>,
   assets: AssetValidationResultV3,
@@ -1757,56 +1856,422 @@ export function validateWorkcellProjectSnapshotV3(
   return validateSnapshotCore(owned, true, true)
 }
 
-const STAGED_PROJECT_OWNERSHIP_CAPABILITY_V3: unique symbol = Symbol(
-  'StagedProjectOwnershipCapabilityV3',
-)
+declare const preparedProjectSourceBrand: unique symbol
+declare const stagedProjectOwnershipAttestationBrand: unique symbol
 
-interface StagedProjectOwnershipCapabilityV3 {
-  readonly [STAGED_PROJECT_OWNERSHIP_CAPABILITY_V3]: true
+export type ProjectSourceNamespaceV1 = 'robot' | 'object'
+export type ProjectSourceOwnerKeyV1 = `robot-source:${string}` | `object-asset:${string}`
+
+export interface PreparedProjectSourceV1 {
+  readonly [preparedProjectSourceBrand]: true
+  readonly tokenId: string
+  readonly namespace: ProjectSourceNamespaceV1
+  readonly sha256: string
+  readonly byteLength: number
+}
+
+export interface PreparedProjectSourceGroupV1 {
+  readonly ownerKeys: readonly ProjectSourceOwnerKeyV1[]
+  readonly preparedSource: PreparedProjectSourceV1
+}
+
+export interface LegacyProjectSourceAnalysisV1 {
+  readonly detectedUnit: 'meter' | 'millimeter' | 'inch' | 'unknown'
+  readonly meshIndices: readonly number[]
+}
+
+export interface ProjectSourceLockedLeaseInputV1 {
+  readonly tokenId: string
+  readonly generation: number
+  readonly sourceBytes: ArrayBuffer
+  readonly signal?: AbortSignal
+}
+
+export interface ProjectSourceLockedLeaseResultV1 {
+  readonly tokenId: string
+  readonly generation: number
+  readonly sourceBytes: ArrayBuffer
+  readonly analysis: LegacyProjectSourceAnalysisV1
+}
+
+export type ProjectSourceLockedLeaseWorkerV1 = (
+  input: ProjectSourceLockedLeaseInputV1,
+) => Promise<ProjectSourceLockedLeaseResultV1>
+
+interface StagedProjectOwnershipAttestationV3 {
+  readonly [stagedProjectOwnershipAttestationBrand]: true
+}
+
+interface PreparedSourceStateV1 {
+  readonly authority: symbol
+  readonly namespace: ProjectSourceNamespaceV1
+  readonly sha256: string
+  readonly byteLength: number
+  status: 'active' | 'leased' | 'revoked'
+  sourceBytes: ArrayBuffer | undefined
+  generation: number
+}
+
+interface PermitClaimV3 {
+  readonly token: PreparedProjectSourceV1
+  readonly capturedGeneration: number
+  readonly capturedBuffer: ArrayBuffer
+  readonly ownerKeys: readonly ProjectSourceOwnerKeyV1[]
 }
 
 interface StagedProjectSourceAssignmentV3 {
-  readonly namespace: ProjectSourceDescriptorV3['namespace']
-  readonly ownerKey: ProjectSourceDescriptorV3['ownerKey']
+  readonly namespace: ProjectSourceNamespaceV1
+  readonly ownerKey: ProjectSourceOwnerKeyV1
   readonly sourceBytes: ArrayBuffer
   readonly sourceByteLength: number
   readonly declaredSha256: string | undefined
 }
 
-interface StagedProjectOwnershipStateV3 {
-  readonly assignments: readonly StagedProjectSourceAssignmentV3[]
+interface OwnershipAttestationStateV3 {
   consumed: boolean
+  readonly resolve: () => readonly StagedProjectSourceAssignmentV3[]
 }
 
-// Task 2 issues opaque, single-use capabilities from this module after it owns
-// the staged source copy. No raw buffer-registration API crosses this boundary.
-const stagedProjectOwnershipRegistryV3 = new WeakMap<
-  StagedProjectOwnershipCapabilityV3,
-  StagedProjectOwnershipStateV3
->()
+interface ProjectSourceOwnershipBoundaryOptionsV1 {
+  readonly sourceDigest: ProjectSourceDigest
+  readonly copySource?: ((bytes: ArrayBuffer) => ArrayBuffer) | undefined
+  readonly tokenIdFactory?: (() => string) | undefined
+  readonly lockedLegacyAnalyzer?: ProjectSourceLockedLeaseWorkerV1 | undefined
+}
+
+interface ProjectSourceOwnershipBoundaryV1 {
+  stage(namespace: ProjectSourceNamespaceV1, bytes: ArrayBuffer, signal?: AbortSignal): Promise<PreparedProjectSourceV1>
+  stageOwned(namespace: ProjectSourceNamespaceV1, bytes: ArrayBuffer, signal?: AbortSignal): Promise<PreparedProjectSourceV1>
+  assertPrepared(source: PreparedProjectSourceV1): void
+  revoke(source: PreparedProjectSourceV1): void
+  analyzeLegacyRobotSource(
+    source: PreparedProjectSourceV1,
+    signal?: AbortSignal,
+  ): Promise<LegacyProjectSourceAnalysisV1>
+  activeBuffer(source: PreparedProjectSourceV1): ArrayBuffer
+  attest(groups: readonly PreparedProjectSourceGroupV1[]): StagedProjectOwnershipAttestationV3
+}
+
+const preparedSourceRegistryV1 = new WeakMap<object, PreparedSourceStateV1>()
+const ownershipAttestationRegistryV3 = new WeakMap<object, OwnershipAttestationStateV3>()
+
+function sourceFailure(code: string, message: string, cause?: unknown): never {
+  throw Object.assign(
+    new Error(`${code}: ${message}`, cause === undefined ? undefined : { cause }),
+    { code },
+  )
+}
+
+function sourceCancelled(): Error & { readonly code: 'PROJECT_SOURCE_LEASE_CANCELLED' } {
+  return Object.assign(
+    new Error('PROJECT_SOURCE_LEASE_CANCELLED: Project source lease was cancelled.'),
+    { code: 'PROJECT_SOURCE_LEASE_CANCELLED' as const },
+  )
+}
+
+function validateClosedLegacyAnalysis(value: unknown): LegacyProjectSourceAnalysisV1 {
+  const record = closedRecord(
+    value,
+    'Legacy Project source analysis',
+    ['detectedUnit', 'meshIndices'],
+  )
+  if (
+    record.detectedUnit !== 'meter' &&
+    record.detectedUnit !== 'millimeter' &&
+    record.detectedUnit !== 'inch' &&
+    record.detectedUnit !== 'unknown'
+  ) {
+    sourceFailure('PROJECT_SOURCE_LEASE_RETURN_INVALID', 'Locked parser returned an invalid source unit.')
+  }
+  const meshIndices = arrayValue(record.meshIndices, 'Legacy Project source analysis.meshIndices')
+    .map((entry, index) => nonNegativeInteger(
+      entry,
+      `Legacy Project source analysis.meshIndices[${index}]`,
+    ))
+  if (new Set(meshIndices).size !== meshIndices.length) {
+    sourceFailure('PROJECT_SOURCE_LEASE_RETURN_INVALID', 'Locked parser returned duplicate mesh indices.')
+  }
+  meshIndices.sort((first, second) => first - second)
+  return Object.freeze({
+    detectedUnit: record.detectedUnit,
+    meshIndices: Object.freeze(meshIndices),
+  }) as LegacyProjectSourceAnalysisV1
+}
+
+function createProjectSourceOwnershipBoundaryV1(
+  options: ProjectSourceOwnershipBoundaryOptionsV1,
+): ProjectSourceOwnershipBoundaryV1 {
+  const authority = Symbol('ProjectSourceOwnershipAuthorityV1')
+  const digestSource = options.sourceDigest.digestSource.bind(options.sourceDigest)
+  const copySource = options.copySource
+  const tokenIdFactory = options.tokenIdFactory
+  const lockedLegacyAnalyzer = options.lockedLegacyAnalyzer
+  let nextTokenId = 1
+
+  const stateFor = (
+    source: PreparedProjectSourceV1,
+    expectedStatus?: PreparedSourceStateV1['status'],
+  ): PreparedSourceStateV1 => {
+    if (typeof source !== 'object' || source === null) {
+      return sourceFailure('PROJECT_SOURCE_TOKEN_INVALID', 'Prepared Project source token is invalid.')
+    }
+    const state = preparedSourceRegistryV1.get(source)
+    if (state === undefined || state.authority !== authority) {
+      return sourceFailure(
+        'PROJECT_SOURCE_TOKEN_INVALID',
+        'Prepared Project source token is forged or belongs to another service.',
+      )
+    }
+    if (expectedStatus !== undefined && state.status !== expectedStatus) {
+      return sourceFailure(
+        state.status === 'revoked' ? 'PROJECT_SOURCE_TOKEN_REVOKED' : 'PROJECT_SOURCE_TOKEN_LEASED',
+        `Prepared Project source token is ${state.status}.`,
+      )
+    }
+    return state
+  }
+
+  const stageOwned = async (
+    namespace: ProjectSourceNamespaceV1,
+    bytes: ArrayBuffer,
+    signal?: AbortSignal,
+  ): Promise<PreparedProjectSourceV1> => {
+    const ownedByteLength = typeof bytes === 'object' && bytes !== null
+      ? tryArrayBufferByteLength(bytes)
+      : undefined
+    if (ownedByteLength === undefined) {
+      return sourceFailure('PROJECT_SOURCE_BYTES_INVALID', 'Project source must be an ArrayBuffer.')
+    }
+    const digest = await digestSource(bytes, signal)
+    if (!HEX_SHA256.test(digest)) {
+      return sourceFailure('PROJECT_SOURCE_DIGEST_INVALID', 'Project source digest must be lowercase 64-hex.')
+    }
+    if (signal?.aborted === true) throw sourceCancelled()
+    const tokenId = tokenIdFactory?.() ?? `prepared-source-${nextTokenId++}`
+    if (typeof tokenId !== 'string' || tokenId.length === 0) {
+      return sourceFailure('PROJECT_SOURCE_TOKEN_INVALID', 'Prepared Project source token ID is invalid.')
+    }
+    const token = Object.freeze({ tokenId, namespace, sha256: digest, byteLength: ownedByteLength }) as PreparedProjectSourceV1
+    preparedSourceRegistryV1.set(token, {
+      authority,
+      namespace,
+      sha256: digest,
+      byteLength: ownedByteLength,
+      status: 'active',
+      sourceBytes: bytes,
+      generation: 0,
+    })
+    return token
+  }
+
+  const boundary: ProjectSourceOwnershipBoundaryV1 = {
+    stage(namespace, bytes, signal) {
+      const sourceLength = typeof bytes === 'object' && bytes !== null
+        ? tryArrayBufferByteLength(bytes)
+        : undefined
+      if (sourceLength === undefined) {
+        return Promise.reject(Object.assign(
+          new Error('PROJECT_SOURCE_BYTES_INVALID: Project source must be an ArrayBuffer.'),
+          { code: 'PROJECT_SOURCE_BYTES_INVALID' },
+        ))
+      }
+      const owned = copySource?.(bytes) ?? bytes.slice(0)
+      if (tryArrayBufferByteLength(owned) !== sourceLength || owned === bytes) {
+        return Promise.reject(Object.assign(
+          new Error('PROJECT_SOURCE_COPY_FAILED: Project source copy must be independent and byte-identical in length.'),
+          { code: 'PROJECT_SOURCE_COPY_FAILED' },
+        ))
+      }
+      return stageOwned(namespace, owned, signal)
+    },
+    stageOwned,
+    assertPrepared(source) {
+      stateFor(source, 'active')
+    },
+    revoke(source) {
+      const state = stateFor(source)
+      if (state.status === 'revoked') return
+      state.status = 'revoked'
+      state.sourceBytes = undefined
+      state.generation += 1
+    },
+    async analyzeLegacyRobotSource(source, signal) {
+      const state = stateFor(source, 'active')
+      if (state.namespace !== 'robot') {
+        boundary.revoke(source)
+        return sourceFailure('PROJECT_SOURCE_LEASE_NAMESPACE_INVALID', 'Legacy analysis accepts only Robot sources.')
+      }
+      const lockedAnalyzer = lockedLegacyAnalyzer
+      if (lockedAnalyzer === undefined) {
+        boundary.revoke(source)
+        return sourceFailure('PROJECT_SOURCE_PARSER_UNAVAILABLE', 'No locked legacy source analyzer is configured.')
+      }
+      if (signal?.aborted === true) {
+        boundary.revoke(source)
+        throw sourceCancelled()
+      }
+      const generation = state.generation + 1
+      state.generation = generation
+      state.status = 'leased'
+      const retained = state.sourceBytes!
+      const transferred = structuredClone(retained, { transfer: [retained] })
+      state.sourceBytes = undefined
+      let removeAbort = (): void => {}
+      const aborted = new Promise<never>((_resolve, reject) => {
+        if (signal === undefined) return
+        const onAbort = (): void => reject(sourceCancelled())
+        signal.addEventListener('abort', onAbort, { once: true })
+        removeAbort = () => signal.removeEventListener('abort', onAbort)
+      })
+      try {
+        const pending = lockedAnalyzer({
+          tokenId: source.tokenId,
+          generation,
+          sourceBytes: transferred,
+          ...(signal === undefined ? {} : { signal }),
+        })
+        const returned = signal === undefined
+          ? await pending
+          : await Promise.race([pending, aborted])
+        if (
+          state.status !== 'leased' ||
+          state.generation !== generation ||
+          returned.tokenId !== source.tokenId ||
+          returned.generation !== generation ||
+          tryArrayBufferByteLength(returned.sourceBytes) !== state.byteLength
+        ) {
+          return sourceFailure(
+            'PROJECT_SOURCE_LEASE_RETURN_INVALID',
+            'Locked parser returned an invalid or late buffer lease.',
+          )
+        }
+        const analysis = validateClosedLegacyAnalysis(returned.analysis)
+        const reclaimed = structuredClone(returned.sourceBytes, { transfer: [returned.sourceBytes] })
+        state.sourceBytes = reclaimed
+        state.status = 'active'
+        state.generation += 1
+        return analysis
+      } catch (error) {
+        if (state.status === 'leased' && state.generation === generation) {
+          state.status = 'revoked'
+          state.sourceBytes = undefined
+          state.generation += 1
+        }
+        throw error
+      } finally {
+        removeAbort()
+      }
+    },
+    activeBuffer(source) {
+      return stateFor(source, 'active').sourceBytes!
+    },
+    attest(groups) {
+      const tokens = new Set<PreparedProjectSourceV1>()
+      const claims: PermitClaimV3[] = groups.map((group) => {
+        if (tokens.has(group.preparedSource)) {
+          return sourceFailure(
+            'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+            'A prepared Project source token must appear in exactly one owner group.',
+          )
+        }
+        tokens.add(group.preparedSource)
+        const state = stateFor(group.preparedSource, 'active')
+        return {
+          token: group.preparedSource,
+          capturedGeneration: state.generation,
+          capturedBuffer: state.sourceBytes!,
+          ownerKeys: Object.freeze([...group.ownerKeys]),
+        }
+      })
+      const attestation = Object.freeze({}) as StagedProjectOwnershipAttestationV3
+      ownershipAttestationRegistryV3.set(attestation, {
+        consumed: false,
+        resolve: () => {
+          const assignments: StagedProjectSourceAssignmentV3[] = []
+          const owners = new Set<ProjectSourceOwnerKeyV1>()
+          for (const claim of claims) {
+            const state = stateFor(claim.token, 'active')
+            if (
+              state.generation !== claim.capturedGeneration ||
+              state.sourceBytes !== claim.capturedBuffer
+            ) {
+              return sourceFailure(
+                'PROJECT_SOURCE_OWNERSHIP_CAPABILITY_INVALID',
+                'Prepared source changed after ownership attestation.',
+              )
+            }
+            if (claim.ownerKeys.length === 0) {
+              return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Prepared source group must own at least one source.')
+            }
+            for (const ownerKey of claim.ownerKeys) {
+              if (owners.has(ownerKey)) {
+                return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Duplicate prepared Project source owner ${ownerKey}.`)
+              }
+              owners.add(ownerKey)
+              const namespace = ownerKey.startsWith('robot-source:') ? 'robot' : 'object'
+              if (
+                namespace !== state.namespace ||
+                (namespace === 'robot' && ownerKey !== `robot-source:${state.sha256}`)
+              ) {
+                return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Prepared source does not match ${ownerKey}.`)
+              }
+              assignments.push({
+                namespace,
+                ownerKey,
+                sourceBytes: state.sourceBytes!,
+                sourceByteLength: state.byteLength,
+                declaredSha256: namespace === 'robot' ? state.sha256 : undefined,
+              })
+            }
+          }
+          return Object.freeze(assignments.sort((first, second) =>
+            (first.namespace === second.namespace ? 0 : first.namespace === 'robot' ? -1 : 1) ||
+            (first.ownerKey < second.ownerKey ? -1 : first.ownerKey > second.ownerKey ? 1 : 0)))
+        },
+      })
+      return attestation
+    },
+  }
+  return Object.freeze(boundary)
+}
+
+function consumeStagedProjectOwnershipAttestationV3(
+  attestation: StagedProjectOwnershipAttestationV3,
+): readonly StagedProjectSourceAssignmentV3[] {
+  if (typeof attestation !== 'object' || attestation === null) {
+    return sourceFailure('PROJECT_SOURCE_OWNERSHIP_CAPABILITY_INVALID', 'Staged ownership capability is invalid.')
+  }
+  const state = ownershipAttestationRegistryV3.get(attestation)
+  if (state === undefined || state.consumed) {
+    return sourceFailure(
+      'PROJECT_SOURCE_OWNERSHIP_CAPABILITY_INVALID',
+      'Staged ownership capability is forged or already consumed.',
+    )
+  }
+  state.consumed = true
+  return state.resolve()
+}
 
 /** Internal no-copy validation path for source buffers already owned by staging. */
 export function validateStagedWorkcellProjectSnapshotV3(
   value: unknown,
-  ownershipCapability: StagedProjectOwnershipCapabilityV3,
+  ownershipCapability: StagedProjectOwnershipAttestationV3,
 ): WorkcellProjectSnapshotV3 {
-  if (typeof ownershipCapability !== 'object' || ownershipCapability === null) {
-    fail('Staged validation requires an opaque ownership capability.')
-  }
-  const ownership = stagedProjectOwnershipRegistryV3.get(ownershipCapability)
-  if (ownership === undefined || ownership.consumed) {
+  let assignments
+  try {
+    assignments = consumeStagedProjectOwnershipAttestationV3(ownershipCapability)
+  } catch {
     fail('Staged validation requires a fresh registry-owned capability.')
   }
-  ownership.consumed = true
   preflightWorkcellProjectShapeV3(value)
   const descriptors = collectProjectSourceDescriptorsV3(
     value as WorkcellProjectSnapshotV3,
   )
-  if (descriptors.length !== ownership.assignments.length) {
+  if (descriptors.length !== assignments.length) {
     fail('Staged source assignments do not match the ownership capability.')
   }
   descriptors.forEach((descriptor, index) => {
-    const assignment = ownership.assignments[index]
+    const assignment = assignments[index]
     if (
       assignment === undefined ||
       descriptor.namespace !== assignment.namespace ||
@@ -1856,4 +2321,385 @@ export function collectProjectSourceDescriptorsV3(
         ? 1
         : 0),
   )
+}
+
+export interface ProjectSourceStagingServiceOptionsV1 {
+  readonly sourceDigest: ProjectSourceDigest
+  readonly copySource?: ((bytes: ArrayBuffer) => ArrayBuffer) | undefined
+  readonly tokenIdFactory?: (() => string) | undefined
+}
+
+export interface ProjectSourceStagingService {
+  stage(
+    namespace: ProjectSourceNamespaceV1,
+    bytes: ArrayBuffer,
+    signal?: AbortSignal,
+  ): Promise<PreparedProjectSourceV1>
+  assertPrepared(source: PreparedProjectSourceV1): void
+  revoke(source: PreparedProjectSourceV1): void
+  validateProjection(
+    projection: ByteFreeWorkcellProjectProjectionV3,
+    groups: readonly PreparedProjectSourceGroupV1[],
+  ): ByteFreeWorkcellProjectProjectionV3
+}
+
+/**
+ * Canonical migration-only staging surface. The analyzer is installed once at
+ * the composition root and frozen onto the same registry-backed service that
+ * minted its prepared-source capabilities.
+ */
+export interface ProjectSourceMigrationStagingServiceV1
+  extends ProjectSourceStagingService {
+  stageOwnedLegacyProjectSources(
+    snapshot: WorkcellProjectSnapshotV2,
+    signal?: AbortSignal,
+  ): Promise<readonly StagedLegacyProjectSourceV1[]>
+  analyzeLegacyRobotSource(
+    source: PreparedProjectSourceV1,
+    signal?: AbortSignal,
+  ): Promise<LegacyProjectSourceAnalysisV1>
+}
+
+export interface ProjectSourceMigrationFoundationOptionsInternalV1
+  extends ProjectSourceStagingServiceOptionsV1 {
+  readonly lockedLegacyAnalyzer: ProjectSourceLockedLeaseWorkerV1
+}
+
+export interface ProjectOwnedSourceStagingInternalV1 {
+  /** Adopts a buffer that is already outside caller ownership without copying it. */
+  adoptOwnedSource(
+    namespace: ProjectSourceNamespaceV1,
+    sourceBytes: ArrayBuffer,
+    signal?: AbortSignal,
+  ): Promise<PreparedProjectSourceV1>
+}
+
+export interface ProjectSourceMigrationFoundationInternalV1 {
+  readonly sourceStaging: ProjectSourceMigrationStagingServiceV1
+  readonly ownedSourceStaging: ProjectOwnedSourceStagingInternalV1
+}
+
+export interface StagedProjectSourcesV3 {
+  readonly projection: ByteFreeWorkcellProjectProjectionV3
+  readonly preparedSourceGroups: readonly PreparedProjectSourceGroupV1[]
+}
+
+interface StagedLegacyProjectSourceV1 {
+  readonly legacyOwnerKey: `robot-link:${string}` | `object-asset:${string}`
+  readonly preparedSource: PreparedProjectSourceV1
+}
+
+const projectSourceServiceBoundariesV1 = new WeakMap<
+  ProjectSourceStagingService,
+  ProjectSourceOwnershipBoundaryV1
+>()
+const projectSourceMigrationServicesV1 = new WeakSet<ProjectSourceMigrationStagingServiceV1>()
+
+/** Internal registry assertion used by the migration entrypoint before any staging. */
+export function assertCanonicalProjectSourceMigrationStagingServiceInternalV1(
+  service: ProjectSourceMigrationStagingServiceV1,
+): void {
+  if (
+    !projectSourceMigrationServicesV1.has(service) ||
+    !projectSourceServiceBoundariesV1.has(service)
+  ) {
+    return sourceFailure(
+      'PROJECT_SOURCE_STAGING_SERVICE_INVALID',
+      'Project migration requires the exact registry-backed staging service.',
+    )
+  }
+}
+
+function projectSourceBoundaryFor(
+  service: ProjectSourceStagingService,
+): ProjectSourceOwnershipBoundaryV1 {
+  const boundary = projectSourceServiceBoundariesV1.get(service)
+  if (boundary === undefined) {
+    return sourceFailure(
+      'PROJECT_SOURCE_STAGING_SERVICE_INVALID',
+      'Project source staging requires a registry-backed canonical service.',
+    )
+  }
+  return boundary
+}
+
+function preparedGroupsByOwner(
+  groups: readonly PreparedProjectSourceGroupV1[],
+): ReadonlyMap<ProjectSourceOwnerKeyV1, PreparedProjectSourceGroupV1> {
+  const owners = new Map<ProjectSourceOwnerKeyV1, PreparedProjectSourceGroupV1>()
+  const tokens = new Set<PreparedProjectSourceV1>()
+  for (const group of groups) {
+    if (tokens.has(group.preparedSource)) {
+      return sourceFailure(
+        'PROJECT_SOURCE_ASSIGNMENT_INVALID',
+        'A prepared Project source token must appear in exactly one owner group.',
+      )
+    }
+    tokens.add(group.preparedSource)
+    for (const ownerKey of group.ownerKeys) {
+      if (owners.has(ownerKey)) {
+        return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Duplicate Project source owner ${ownerKey}.`)
+      }
+      owners.set(ownerKey, group)
+    }
+  }
+  return owners
+}
+
+function hydratePreparedProjectionV3(
+  projection: ByteFreeWorkcellProjectProjectionV3,
+  groups: readonly PreparedProjectSourceGroupV1[],
+  boundary: ProjectSourceOwnershipBoundaryV1,
+): WorkcellProjectSnapshotV3 {
+  const candidate = structuredClone(projection) as unknown as Record<string, unknown>
+  const robot = candidate.robot as Record<string, unknown>
+  const sources = robot.sources as Record<string, unknown>[]
+  const assets = candidate.objectAssets as Record<string, unknown>[]
+  const owners = preparedGroupsByOwner(groups)
+  for (const source of sources) {
+    const ownerKey = `robot-source:${String(source.id)}` as const
+    const group = owners.get(ownerKey)
+    if (
+      group === undefined ||
+      group.preparedSource.namespace !== 'robot' ||
+      group.preparedSource.sha256 !== source.id ||
+      group.preparedSource.sha256 !== source.sha256
+    ) {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Missing or mismatched prepared source for ${ownerKey}.`)
+    }
+    source.sourceBytes = boundary.activeBuffer(group.preparedSource)
+  }
+  for (const asset of assets) {
+    if (asset.sourceKind !== 'step') continue
+    const ownerKey = `object-asset:${String(asset.id)}` as const
+    const group = owners.get(ownerKey)
+    if (
+      group === undefined ||
+      group.preparedSource.namespace !== 'object' ||
+      group.preparedSource.sha256 !== asset.sourceSha256
+    ) {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Missing or mismatched prepared source for ${ownerKey}.`)
+    }
+    delete asset.sourceSha256
+    asset.sourceBytes = boundary.activeBuffer(group.preparedSource)
+  }
+  const expectedOwners = sources.length + assets.filter(({ sourceKind }) => sourceKind === 'step').length
+  if (owners.size !== expectedOwners) {
+    return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', 'Prepared source groups contain orphan owners.')
+  }
+  return validateStagedWorkcellProjectSnapshotV3(candidate, boundary.attest(groups))
+}
+
+function byteFreePreparedProjectionV3(
+  snapshot: WorkcellProjectSnapshotV3,
+  digestByObjectOwner: ReadonlyMap<string, string>,
+): ByteFreeWorkcellProjectProjectionV3 {
+  const snapshotRecord = snapshot as unknown as Record<string, unknown>
+  const snapshotRobot = snapshotRecord.robot as Record<string, unknown>
+  const snapshotSources = snapshotRobot.sources as Record<string, unknown>[]
+  const snapshotAssets = snapshotRecord.objectAssets as Record<string, unknown>[]
+  const { robot: _robot, objectAssets: _objectAssets, ...projectMetadata } = snapshotRecord
+  const { sources: _sources, ...robotMetadata } = snapshotRobot
+  const sources = snapshotSources.map((source) => {
+    const { sourceBytes: _sourceBytes, ...metadata } = source
+    return metadata
+  })
+  const objectAssets = snapshotAssets.map((asset) => {
+    if (asset.sourceKind !== 'step') return asset
+    const ownerKey = `object-asset:${String(asset.id)}`
+    const sourceSha256 = digestByObjectOwner.get(ownerKey)
+    if (sourceSha256 === undefined) {
+      return sourceFailure('PROJECT_SOURCE_ASSIGNMENT_INVALID', `Missing Object source digest for ${ownerKey}.`)
+    }
+    const { sourceBytes: _sourceBytes, ...metadata } = asset
+    return { ...metadata, sourceSha256 }
+  })
+  const projection = structuredClone({
+    ...projectMetadata,
+    robot: { ...robotMetadata, sources },
+    objectAssets,
+  }) as unknown as ByteFreeWorkcellProjectProjectionV3
+  deepFreezeConfiguration(projection)
+  return projection
+}
+
+function projectSourceStagingMethodsV1(
+  boundary: ProjectSourceOwnershipBoundaryV1,
+): ProjectSourceStagingService {
+  return {
+    stage: boundary.stage,
+    assertPrepared: boundary.assertPrepared,
+    revoke: boundary.revoke,
+    validateProjection(projection, groups) {
+      const hydrated = hydratePreparedProjectionV3(projection, groups, boundary)
+      const objectDigests = new Map<string, string>()
+      for (const group of groups) {
+        for (const ownerKey of group.ownerKeys) {
+          if (ownerKey.startsWith('object-asset:')) {
+            objectDigests.set(ownerKey, group.preparedSource.sha256)
+          }
+        }
+      }
+      return byteFreePreparedProjectionV3(hydrated, objectDigests)
+    },
+  }
+}
+
+function registerCanonicalProjectSourceStagingServiceV1<
+  Service extends ProjectSourceStagingService,
+>(
+  service: Service,
+  boundary: ProjectSourceOwnershipBoundaryV1,
+): Service {
+  projectSourceServiceBoundariesV1.set(service, boundary)
+  return Object.freeze(service)
+}
+
+export function createProjectSourceStagingService(
+  options: ProjectSourceStagingServiceOptionsV1,
+): ProjectSourceStagingService {
+  const boundary = createProjectSourceOwnershipBoundaryV1(options)
+  return registerCanonicalProjectSourceStagingServiceV1(
+    projectSourceStagingMethodsV1(boundary),
+    boundary,
+  )
+}
+
+/**
+ * Internal composition boundary for the future bundled legacy parser runtime.
+ * It is intentionally absent from the feature facade/public barrel: the
+ * construction root supplies one locked adapter and receives the only bound
+ * analyzer that can lease this canonical service's tokens.
+ */
+export function createProjectSourceMigrationFoundationInternalV1(
+  options: ProjectSourceMigrationFoundationOptionsInternalV1,
+): ProjectSourceMigrationFoundationInternalV1 {
+  const boundary = createProjectSourceOwnershipBoundaryV1(options)
+  let sourceStaging!: ProjectSourceMigrationStagingServiceV1
+  sourceStaging = registerCanonicalProjectSourceStagingServiceV1({
+    ...projectSourceStagingMethodsV1(boundary),
+    stageOwnedLegacyProjectSources(snapshot, signal) {
+      if (this !== sourceStaging) {
+        return Promise.reject(Object.assign(
+          new Error('PROJECT_SOURCE_STAGING_SERVICE_INVALID: Migration staging service identity is invalid.'),
+          { code: 'PROJECT_SOURCE_STAGING_SERVICE_INVALID' },
+        ))
+      }
+      return stageOwnedLegacyProjectSourcesV2Internal(snapshot, boundary, signal)
+    },
+    analyzeLegacyRobotSource(source, signal) {
+      if (this !== sourceStaging) {
+        return Promise.reject(Object.assign(
+          new Error('PROJECT_SOURCE_STAGING_SERVICE_INVALID: Migration staging service identity is invalid.'),
+          { code: 'PROJECT_SOURCE_STAGING_SERVICE_INVALID' },
+        ))
+      }
+      return boundary.analyzeLegacyRobotSource(source, signal)
+    },
+  }, boundary)
+  projectSourceMigrationServicesV1.add(sourceStaging)
+  return Object.freeze({
+    sourceStaging,
+    ownedSourceStaging: Object.freeze({
+      adoptOwnedSource: boundary.stageOwned,
+    }),
+  })
+}
+
+export async function stageProjectSourcesV3(
+  snapshot: WorkcellProjectSnapshotV3,
+  stagingService: ProjectSourceStagingService,
+  revisionIdentityHasher: ProjectRevisionIdentityHasher,
+  signal?: AbortSignal,
+): Promise<StagedProjectSourcesV3> {
+  preflightWorkcellProjectShapeV3(snapshot)
+  const owned = structuredClone(snapshot)
+  const descriptors = collectProjectSourceDescriptorsV3(owned)
+  const boundary = projectSourceBoundaryFor(stagingService)
+  const groupsByDigest = new Map<string, {
+    readonly ownerKeys: ProjectSourceOwnerKeyV1[]
+    readonly preparedSource: PreparedProjectSourceV1
+  }>()
+  const staged: PreparedProjectSourceV1[] = []
+  const robotBufferTokens = new Map<ArrayBuffer, PreparedProjectSourceV1>()
+  const objectBufferTokens = new Map<ArrayBuffer, PreparedProjectSourceV1>()
+  const objectDigests = new Map<string, string>()
+  try {
+    await verifyProjectCryptographicProvenanceV3(owned, revisionIdentityHasher, signal)
+    for (const descriptor of descriptors) {
+      const bufferTokens = descriptor.namespace === 'robot' ? robotBufferTokens : objectBufferTokens
+      let prepared = bufferTokens.get(descriptor.sourceBytes)
+      if (prepared === undefined) {
+        prepared = await boundary.stageOwned(descriptor.namespace, descriptor.sourceBytes, signal)
+        bufferTokens.set(descriptor.sourceBytes, prepared)
+        staged.push(prepared)
+      }
+      if (descriptor.namespace === 'robot' && descriptor.declaredSha256 !== prepared.sha256) {
+        return sourceFailure(
+          'PROJECT_SOURCE_DIGEST_MISMATCH',
+          `Robot source ${descriptor.ownerKey} does not match its declared digest.`,
+        )
+      }
+      const digestKey = `${descriptor.namespace}:${prepared.sha256}`
+      const existing = groupsByDigest.get(digestKey)
+      if (existing === undefined) {
+        groupsByDigest.set(digestKey, { ownerKeys: [descriptor.ownerKey], preparedSource: prepared })
+      } else {
+        if (existing.preparedSource.byteLength !== prepared.byteLength) {
+          return sourceFailure('PROJECT_SOURCE_DIGEST_COLLISION', 'Equal source digests have different byte lengths.')
+        }
+        existing.ownerKeys.push(descriptor.ownerKey)
+        if (existing.preparedSource !== prepared) boundary.revoke(prepared)
+      }
+      if (descriptor.namespace === 'object') objectDigests.set(descriptor.ownerKey, prepared.sha256)
+    }
+    const groups = Array.from(groupsByDigest.values(), (group) => Object.freeze({
+      ownerKeys: Object.freeze([...group.ownerKeys].sort()),
+      preparedSource: group.preparedSource,
+    })).sort((first, second) =>
+      first.ownerKeys[0]! < second.ownerKeys[0]! ? -1 : first.ownerKeys[0]! > second.ownerKeys[0]! ? 1 : 0)
+    const projection = byteFreePreparedProjectionV3(owned, objectDigests)
+    return Object.freeze({
+      projection: stagingService.validateProjection(projection, groups),
+      preparedSourceGroups: Object.freeze(groups),
+    })
+  } catch (error) {
+    for (const source of staged) boundary.revoke(source)
+    throw error
+  }
+}
+
+async function stageOwnedLegacyProjectSourcesV2Internal(
+  snapshot: WorkcellProjectSnapshotV2,
+  boundary: ProjectSourceOwnershipBoundaryV1,
+  signal?: AbortSignal,
+): Promise<readonly StagedLegacyProjectSourceV1[]> {
+  const staged: PreparedProjectSourceV1[] = []
+  const results: StagedLegacyProjectSourceV1[] = []
+  const robotBufferTokens = new Map<ArrayBuffer, PreparedProjectSourceV1>()
+  const objectBufferTokens = new Map<ArrayBuffer, PreparedProjectSourceV1>()
+  try {
+    for (const link of snapshot.robot.links) {
+      let prepared = robotBufferTokens.get(link.sourceBytes)
+      if (prepared === undefined) {
+        prepared = await boundary.stageOwned('robot', link.sourceBytes, signal)
+        robotBufferTokens.set(link.sourceBytes, prepared)
+        staged.push(prepared)
+      }
+      results.push({ legacyOwnerKey: `robot-link:${link.linkId}`, preparedSource: prepared })
+    }
+    for (const asset of snapshot.objectAssets) {
+      let prepared = objectBufferTokens.get(asset.sourceBytes)
+      if (prepared === undefined) {
+        prepared = await boundary.stageOwned('object', asset.sourceBytes, signal)
+        objectBufferTokens.set(asset.sourceBytes, prepared)
+        staged.push(prepared)
+      }
+      results.push({ legacyOwnerKey: `object-asset:${asset.id}`, preparedSource: prepared })
+    }
+    return Object.freeze(results.map((result) => Object.freeze(result)))
+  } catch (error) {
+    for (const source of staged) boundary.revoke(source)
+    throw error
+  }
 }

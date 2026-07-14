@@ -192,6 +192,7 @@ export interface WorkcellProjectSnapshotV2
 }
 
 export type LegacyProjectSnapshotV2 = WorkcellProjectSnapshotV2
+export type MigratableProjectSnapshot = WorkcellProjectSnapshotV1 | WorkcellProjectSnapshotV2
 export type CurrentProjectSnapshot = WorkcellProjectSnapshotV3
 
 function fail(message: string): never {

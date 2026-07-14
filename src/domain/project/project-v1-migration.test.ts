@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../robot/crb15000'
 import {
   WORKCELL_PROJECT_FORMAT,
@@ -6,6 +6,13 @@ import {
   type WorkcellProjectSnapshotV1,
 } from './project'
 import { migrateV1ToV2 } from './project-v1-migration'
+import { migrateProjectToV3 } from './project-v2-migration'
+import { createProjectSourceMigrationFoundationInternalV1 } from './project-v3'
+import {
+  createProjectHashService,
+  createProjectRevisionIdentityHasher,
+  createProjectSourceDigest,
+} from '../../lib/hash/sha256'
 
 const LINK_IDS = [
   'LINK00', 'LINK01', 'LINK02', 'LINK03', 'LINK04', 'LINK05', 'LINK06',
@@ -142,5 +149,38 @@ describe('V1 to V2 project migration', () => {
     expect(new Uint8Array(migrated.robot.links[0]!.sourceBytes)[0]).toBe(1)
     expect(migrated.frames.mcp.position[0]).toBe(0.4)
     expect(migrated.objectInstances[0]!.transform.position[0]).toBe(1)
+  })
+
+  it('dispatches through the owned V1 to V2 path before one V2 to V3 migration', async () => {
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const analyzeLegacyRobotSource = vi.fn(async ({ tokenId, generation, sourceBytes }) => ({
+      tokenId,
+      generation,
+      sourceBytes,
+      analysis: { detectedUnit: 'meter' as const, meshIndices: [0] },
+    }))
+    const foundation = createProjectSourceMigrationFoundationInternalV1({
+      sourceDigest: createProjectSourceDigest(hashService),
+      lockedLegacyAnalyzer: analyzeLegacyRobotSource,
+    })
+    const sourceStaging = foundation.sourceStaging
+    const source = v1Snapshot()
+    const before = structuredClone(source)
+    const migrated = await migrateProjectToV3(source, {
+      sourceStaging,
+      projectRevisionIdentityHasher: createProjectRevisionIdentityHasher(hashService),
+      builtInEquipmentDefaults: [],
+      builtInEquipmentTransformDefaults: [],
+    })
+
+    expect(migrated.projection.manifest.schemaVersion).toBe(3)
+    expect(migrated.projection.robot.links[0]!.collisionBoxes).toEqual([{
+      id: 'default',
+      center: [0, 0, 0],
+      halfExtents: [0.1, 0.2, 0.3],
+      quaternion: [0, 0, 0, 1],
+    }])
+    expect(analyzeLegacyRobotSource).toHaveBeenCalledTimes(7)
+    expect(source).toEqual(before)
   })
 })
