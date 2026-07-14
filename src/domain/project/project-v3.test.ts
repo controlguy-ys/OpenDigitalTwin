@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { RobotLinkId } from '../robot/crb15000'
 import * as projectV3Module from './project-v3'
+import projectV3Source from './project-v3.ts?raw'
 import {
   MAX_OBJECT_ASSETS,
   MAX_OBJECT_INSTANCES,
@@ -748,6 +749,9 @@ describe('Workcell Project V3 contract', () => {
     expect('stageOwned' in projectV3Module).toBe(false)
     expect('activeBuffer' in projectV3Module).toBe(false)
     expect('attest' in projectV3Module).toBe(false)
+    expect('adoptOwnedSource' in projectV3Module).toBe(false)
+    expect('ownedSourceStaging' in projectV3Module).toBe(false)
+    expect(projectV3Source).not.toMatch(/\b(?:adoptOwnedSource|ownedSourceStaging)\b/)
     const validateWithCapability = validateStagedWorkcellProjectSnapshotV3 as unknown as (
       value: unknown,
       capability: unknown,

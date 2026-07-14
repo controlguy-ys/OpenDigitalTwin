@@ -2042,7 +2042,17 @@ function createProjectSourceOwnershipBoundaryV1(
     if (ownedByteLength === undefined) {
       return sourceFailure('PROJECT_SOURCE_BYTES_INVALID', 'Project source must be an ArrayBuffer.')
     }
-    const digest = await digestSource(bytes, signal)
+    let adoptedBytes: ArrayBuffer
+    try {
+      adoptedBytes = structuredClone(bytes, { transfer: [bytes] })
+    } catch (error) {
+      return sourceFailure(
+        'PROJECT_SOURCE_TRANSFER_FAILED',
+        'Project source ownership transfer failed.',
+        error,
+      )
+    }
+    const digest = await digestSource(adoptedBytes, signal)
     if (!HEX_SHA256.test(digest)) {
       return sourceFailure('PROJECT_SOURCE_DIGEST_INVALID', 'Project source digest must be lowercase 64-hex.')
     }
@@ -2058,7 +2068,7 @@ function createProjectSourceOwnershipBoundaryV1(
       sha256: digest,
       byteLength: ownedByteLength,
       status: 'active',
-      sourceBytes: bytes,
+      sourceBytes: adoptedBytes,
       generation: 0,
     })
     return token
@@ -2365,18 +2375,8 @@ export interface ProjectSourceMigrationFoundationOptionsInternalV1
   readonly lockedLegacyAnalyzer: ProjectSourceLockedLeaseWorkerV1
 }
 
-export interface ProjectOwnedSourceStagingInternalV1 {
-  /** Adopts a buffer that is already outside caller ownership without copying it. */
-  adoptOwnedSource(
-    namespace: ProjectSourceNamespaceV1,
-    sourceBytes: ArrayBuffer,
-    signal?: AbortSignal,
-  ): Promise<PreparedProjectSourceV1>
-}
-
 export interface ProjectSourceMigrationFoundationInternalV1 {
   readonly sourceStaging: ProjectSourceMigrationStagingServiceV1
-  readonly ownedSourceStaging: ProjectOwnedSourceStagingInternalV1
 }
 
 export interface StagedProjectSourcesV3 {
@@ -2600,9 +2600,6 @@ export function createProjectSourceMigrationFoundationInternalV1(
   projectSourceMigrationServicesV1.add(sourceStaging)
   return Object.freeze({
     sourceStaging,
-    ownedSourceStaging: Object.freeze({
-      adoptOwnedSource: boundary.stageOwned,
-    }),
   })
 }
 

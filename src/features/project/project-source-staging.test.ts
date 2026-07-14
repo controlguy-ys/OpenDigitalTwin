@@ -173,7 +173,7 @@ function nativeDigest(): ProjectSourceDigest {
 }
 
 describe('ProjectSourceStagingService', () => {
-  it('locks construction adapters and adopts private owned bytes without copying', async () => {
+  it('locks construction adapters against later mutation', async () => {
     const digestSource = vi.fn(nativeDigest().digestSource)
     const copySource = vi.fn((bytes: ArrayBuffer) => bytes.slice(0))
     const sourceDigest = { digestSource }
@@ -214,29 +214,23 @@ describe('ProjectSourceStagingService', () => {
     options.tokenIdFactory = replacementTokenId
     options.lockedLegacyAnalyzer = replacementAnalyzer
 
-    const copied = await foundation.sourceStaging.stage(
-      'object',
-      Uint8Array.from([6, 5, 4]).buffer,
-    )
     const owned = Uint8Array.from([9, 8, 7]).buffer
-    const prepared = await foundation.ownedSourceStaging.adoptOwnedSource('robot', owned)
+    const prepared = await foundation.sourceStaging.stage('robot', owned)
     await expect(foundation.sourceStaging.analyzeLegacyRobotSource(prepared)).resolves.toEqual({
       detectedUnit: 'meter',
       meshIndices: [0],
     })
 
-    expect(digestSource).toHaveBeenCalledTimes(2)
+    expect(digestSource).toHaveBeenCalledTimes(1)
     expect(replacementDigest).not.toHaveBeenCalled()
     expect(copySource).toHaveBeenCalledTimes(1)
     expect(replacementCopy).not.toHaveBeenCalled()
-    expect(tokenIdFactory).toHaveBeenCalledTimes(2)
+    expect(tokenIdFactory).toHaveBeenCalledTimes(1)
     expect(replacementTokenId).not.toHaveBeenCalled()
     expect(lockedLegacyAnalyzer).toHaveBeenCalledTimes(1)
     expect(replacementAnalyzer).not.toHaveBeenCalled()
-    expect(copied.tokenId).toBe('locked-1')
-    expect(prepared.tokenId).toBe('locked-2')
+    expect(prepared.tokenId).toBe('locked-1')
     expect(() => foundation.sourceStaging.assertPrepared(prepared)).not.toThrow()
-    foundation.sourceStaging.revoke(copied)
     foundation.sourceStaging.revoke(prepared)
     expect(() => foundation.sourceStaging.assertPrepared(prepared)).toThrow(/revoked/i)
     expect('createProjectSourceMigrationFoundationInternalV1' in projectSourceStagingFacade).toBe(false)
@@ -590,13 +584,17 @@ describe('ProjectSourceStagingService', () => {
     )
   })
 
-  it('makes only the ownership clone source-bearing and deeply freezes byte-free output', async () => {
+  it('makes only the ownership copy source-bearing and transfer-detaches each staged group', async () => {
     const project = await validV3Project()
     const originalStructuredClone = globalThis.structuredClone
-    let sourceBearingCloneCalls = 0
+    let sourceBearingCopyCalls = 0
+    let sourceTransferCalls = 0
     const cloneSpy = vi.spyOn(globalThis, 'structuredClone').mockImplementation(
       ((value: unknown, options?: StructuredSerializeOptions) => {
-        if (containsArrayBuffer(value)) sourceBearingCloneCalls += 1
+        if (containsArrayBuffer(value)) {
+          if ((options?.transfer?.length ?? 0) > 0) sourceTransferCalls += 1
+          else sourceBearingCopyCalls += 1
+        }
         return originalStructuredClone(value, options)
       }) as typeof structuredClone,
     )
@@ -607,7 +605,8 @@ describe('ProjectSourceStagingService', () => {
         nativeRevisionIdentityHasher(),
       )
 
-      expect(sourceBearingCloneCalls).toBe(1)
+      expect(sourceBearingCopyCalls).toBe(1)
+      expect(sourceTransferCalls).toBe(result.preparedSourceGroups.length)
       expect(Object.isFrozen(result.projection)).toBe(true)
       expect(Object.isFrozen(result.projection.robot.sources[0])).toBe(true)
       expect(Object.isFrozen(result.preparedSourceGroups)).toBe(true)

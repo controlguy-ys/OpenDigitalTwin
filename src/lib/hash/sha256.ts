@@ -117,7 +117,7 @@ function cancelledError(): ProjectHashError {
 }
 
 function hashWithNative(
-  subtle: SubtleCrypto,
+  digest: SubtleCrypto['digest'],
   bytes: Uint8Array<ArrayBuffer>,
   signal: AbortSignal | undefined,
 ): Promise<string> {
@@ -142,7 +142,7 @@ function hashWithNative(
     }
     let pending: Promise<ArrayBuffer>
     try {
-      pending = subtle.digest('SHA-256', bytes)
+      pending = digest('SHA-256', bytes)
     } catch (error) {
       finish(() => reject(new ProjectHashError(
         'PROJECT_HASH_FAILED',
@@ -320,6 +320,8 @@ function hashWithWorker(
 export function createProjectHashService(
   options: ProjectHashServiceOptions = {},
 ): ProjectHashService {
+  const nativeDigest = options.subtle?.digest.bind(options.subtle)
+  const workerFactory = options.workerFactory
   return Object.freeze({
     sha256(bytes: ArrayBuffer | ArrayBufferView, signal?: AbortSignal): Promise<string> {
       let view: Uint8Array<ArrayBuffer>
@@ -328,9 +330,9 @@ export function createProjectHashService(
       } catch (error) {
         return Promise.reject(error)
       }
-      return options.subtle === undefined
-        ? hashWithWorker(options.workerFactory, view, signal)
-        : hashWithNative(options.subtle, view, signal)
+      return nativeDigest === undefined
+        ? hashWithWorker(workerFactory, view, signal)
+        : hashWithNative(nativeDigest, view, signal)
     },
   })
 }
@@ -338,9 +340,10 @@ export function createProjectHashService(
 export function createProjectSourceDigest(
   hashService: ProjectHashService,
 ): ProjectSourceDigest {
+  const sha256 = hashService.sha256.bind(hashService)
   return Object.freeze({
     digestSource(bytes: ArrayBuffer | ArrayBufferView, signal?: AbortSignal): Promise<string> {
-      return hashService.sha256(bytes, signal)
+      return sha256(bytes, signal)
     },
   })
 }
@@ -348,9 +351,10 @@ export function createProjectSourceDigest(
 export function createProjectRevisionIdentityHasher(
   hashService: ProjectHashService,
 ): ProjectRevisionIdentityHasher {
+  const sha256 = hashService.sha256.bind(hashService)
   return Object.freeze({
     hashRevisionIdentity(bytes: ArrayBuffer | ArrayBufferView, signal?: AbortSignal): Promise<string> {
-      return hashService.sha256(bytes, signal)
+      return sha256(bytes, signal)
     },
   })
 }

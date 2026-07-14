@@ -68,6 +68,53 @@ afterEach(() => {
 })
 
 describe('ProjectHashService', () => {
+  it('captures the injected native digest implementation at construction', async () => {
+    const originalDigest = vi.fn(async () => Uint8Array.from({ length: 32 }, () => 0xaa).buffer)
+    const replacementDigest = vi.fn(async () => Uint8Array.from({ length: 32 }, () => 0xff).buffer)
+    const subtle = { digest: originalDigest }
+    const options = {
+      subtle: subtle as unknown as SubtleCrypto,
+    }
+    const service = createProjectHashService(options)
+    subtle.digest = replacementDigest
+    options.subtle = { digest: replacementDigest } as unknown as SubtleCrypto
+
+    await expect(service.sha256(encoder.encode('abc'))).resolves.toBe('aa'.repeat(32))
+    expect(originalDigest).toHaveBeenCalledTimes(1)
+    expect(replacementDigest).not.toHaveBeenCalled()
+  })
+
+  it('captures the fallback Worker factory at construction', async () => {
+    const originalFactory = vi.fn(() => new IncrementalFakeWorker())
+    const replacementFactory = vi.fn(() => new IncrementalFakeWorker())
+    const options = {
+      subtle: undefined,
+      workerFactory: originalFactory,
+    }
+    const service = createProjectHashService(options)
+    options.workerFactory = replacementFactory
+
+    await expect(service.sha256(encoder.encode('abc'))).resolves.toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    )
+    expect(originalFactory).toHaveBeenCalledTimes(1)
+    expect(replacementFactory).not.toHaveBeenCalled()
+  })
+
+  it('captures the injected hash method once for both call-site adapters', async () => {
+    const originalSha256 = vi.fn(async () => 'a'.repeat(64))
+    const replacementSha256 = vi.fn(async () => 'b'.repeat(64))
+    const hashService = { sha256: originalSha256 }
+    const sourceDigest = createProjectSourceDigest(hashService)
+    const revisionHasher = createProjectRevisionIdentityHasher(hashService)
+    hashService.sha256 = replacementSha256
+
+    await expect(sourceDigest.digestSource(encoder.encode('source'))).resolves.toBe('a'.repeat(64))
+    await expect(revisionHasher.hashRevisionIdentity(encoder.encode('revision'))).resolves.toBe('a'.repeat(64))
+    expect(originalSha256).toHaveBeenCalledTimes(2)
+    expect(replacementSha256).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'],
     ['abc', 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'],

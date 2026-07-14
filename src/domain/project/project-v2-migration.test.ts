@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../robot/crb15000'
+import type { SerializableTransform } from '../equipment/equipment'
+import {
+  computeRobotWorldMatrices,
+  type RobotGeometryTransforms,
+  type RobotKinematicDefinition,
+  type RobotToolFrameTransforms,
+} from '../robot/kinematics'
+import {
+  composePose3D,
+  pose3DToSerializableTransform,
+  rpyToQuaternion,
+  serializableTransformToPose3D,
+} from '../frames/pose3d'
 import {
   WORKCELL_PROJECT_FORMAT,
   WORKCELL_PROJECT_SCHEMA_VERSION_V2,
@@ -27,6 +40,7 @@ import {
 import {
   type ProjectSourceLockedLeaseWorkerV1,
 } from '../../features/project/project-source-staging'
+import { WORKBENCH_TOP_Z } from '../../features/scene/workcell-constants'
 
 const LINK_IDS = [
   'LINK00', 'LINK01', 'LINK02', 'LINK03', 'LINK04', 'LINK05', 'LINK06',
@@ -71,6 +85,49 @@ function transform(position: [number, number, number] = [0, 0, 0]) {
     quaternion: [0, 0, 0, 1] as [number, number, number, number],
     scale: [1, 1, 1] as [number, number, number],
   }
+}
+
+function mutableTransform(value: {
+  readonly position: readonly [number, number, number]
+  readonly quaternion: readonly [number, number, number, number]
+  readonly scale: readonly [number, number, number]
+}): SerializableTransform {
+  return {
+    position: [...value.position],
+    quaternion: [...value.quaternion],
+    scale: [...value.scale],
+  }
+}
+
+function robotRootPose(
+  mcp: Parameters<typeof mutableTransform>[0],
+  basePosition: readonly [number, number, number],
+  baseRotationDeg: readonly [number, number, number],
+) {
+  return pose3DToSerializableTransform(composePose3D(
+    composePose3D(
+      serializableTransformToPose3D(mutableTransform(mcp)),
+      { position: [0, 0, WORKBENCH_TOP_Z], quaternion: [0, 0, 0, 1] },
+    ),
+    {
+      position: basePosition,
+      quaternion: rpyToQuaternion(baseRotationDeg.map(
+        (value) => value * Math.PI / 180,
+      ) as [number, number, number]),
+    },
+  ))
+}
+
+function expectMatrixWithin(
+  actual: readonly number[],
+  expected: readonly number[],
+  tolerance = 1e-9,
+): void {
+  expect(actual).toHaveLength(16)
+  expect(expected).toHaveLength(16)
+  actual.forEach((value, index) => {
+    expect(Math.abs(value - expected[index]!)).toBeLessThanOrEqual(tolerance)
+  })
 }
 
 function validV2Project(
@@ -215,6 +272,64 @@ function migrationDependencies(
 }
 
 describe('V2 to V3 project migration', () => {
+  it('does not expose a raw owned-buffer adoption port from the runtime foundation', () => {
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const foundation = createProjectSourceMigrationFoundationInternalV1({
+      sourceDigest: createProjectSourceDigest(hashService),
+      lockedLegacyAnalyzer: async ({ tokenId, generation, sourceBytes }) => ({
+        tokenId,
+        generation,
+        sourceBytes,
+        analysis: { detectedUnit: 'meter', meshIndices: [0] },
+      }),
+    })
+
+    expect(Object.keys(foundation)).toEqual(['sourceStaging'])
+    expect(foundation).not.toHaveProperty('ownedSourceStaging')
+    expect(foundation).not.toHaveProperty('adoptOwnedSource')
+  })
+
+  it('transfer-detaches direct legacy staging input before its first hash await', async () => {
+    const source = validV2Project()
+    const retainedAlias = source.robot.links[0]!.sourceBytes
+    const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+    const nativeSourceDigest = createProjectSourceDigest(hashService)
+    let firstDigestStarted!: () => void
+    const digestStarted = new Promise<void>((resolve) => { firstDigestStarted = resolve })
+    let releaseFirstDigest!: () => void
+    const digestGate = new Promise<void>((resolve) => { releaseFirstDigest = resolve })
+    let calls = 0
+    const foundation = createProjectSourceMigrationFoundationInternalV1({
+      sourceDigest: {
+        async digestSource(bytes, signal) {
+          calls += 1
+          if (calls === 1) {
+            firstDigestStarted()
+            await digestGate
+          }
+          return nativeSourceDigest.digestSource(bytes, signal)
+        },
+      },
+      lockedLegacyAnalyzer: async ({ tokenId, generation, sourceBytes }) => ({
+        tokenId,
+        generation,
+        sourceBytes,
+        analysis: { detectedUnit: 'meter', meshIndices: [0] },
+      }),
+    })
+
+    const pending = foundation.sourceStaging.stageOwnedLegacyProjectSources(source)
+    await digestStarted
+    const byteLengthDuringHash = retainedAlias.byteLength
+    releaseFirstDigest()
+    const staged = await pending
+
+    expect(byteLengthDuringHash).toBe(0)
+    expect(retainedAlias.byteLength).toBe(0)
+    expect(() => new Uint8Array(retainedAlias)).toThrow()
+    expect(() => foundation.sourceStaging.assertPrepared(staged[0]!.preparedSource)).not.toThrow()
+  })
+
   it('moves a non-empty flat Pose list into exactly one active Default Job', async () => {
     const source = validV2Project({ poses: [pose('A', 40), pose('B', 100)] })
     const { dependencies } = migrationDependencies()
@@ -350,6 +465,93 @@ describe('V2 to V3 project migration', () => {
       kind: 'manual',
       canonicalSha256: expectedDigest,
     })
+  })
+
+  it('preserves zero-pose Link matrices and a commanded TCP world matrix', async () => {
+    const source = validV2Project()
+    const migrated = await migrateProjectToV3(
+      source,
+      migrationDependencies().dependencies,
+    )
+    const legacyGeometry = Object.fromEntries(source.robot.links.map((link) => [
+      link.linkId,
+      link.localTransform,
+    ])) as RobotGeometryTransforms
+    const migratedGeometry = Object.fromEntries(migrated.projection.robot.links.map((link) => [
+      link.linkId,
+      link.zeroPoseLocalization,
+    ])) as RobotGeometryTransforms
+    const migratedDefinition: RobotKinematicDefinition = {
+      id: migrated.projection.robot.name,
+      baseLink: 'LINK00',
+      joints: migrated.projection.robot.mechanics.joints.map((joint) => ({
+        id: joint.id,
+        parentLink: joint.parentLink,
+        childLink: joint.childLink,
+        origin: joint.originM,
+        axis: joint.axis,
+        minDeg: joint.minDeg,
+        maxDeg: joint.maxDeg,
+      })),
+      toolRotationYRad: 0,
+    }
+    const legacyToolFrames: RobotToolFrameTransforms = {
+      flange: IDENTITY,
+      tool: TOOL0,
+      tcp: source.frames.tcp,
+    }
+    const migratedToolFrames: RobotToolFrameTransforms = {
+      flange: mutableTransform(migrated.projection.robot.mechanics.flange),
+      tool: mutableTransform(migrated.projection.robot.mechanics.tool0),
+      tcp: mutableTransform(migrated.projection.frames.tcp),
+    }
+    const legacyRoot = robotRootPose(
+      source.frames.mcp,
+      source.robot.basePosition,
+      source.robot.baseRotationDeg,
+    )
+    const migratedRoot = robotRootPose(
+      migrated.projection.frames.mcp,
+      migrated.projection.robot.basePosition,
+      migrated.projection.robot.baseRotationDeg,
+    )
+    const zeroAngles = [0, 0, 0, 0, 0, 0] as const
+    const legacyZero = computeRobotWorldMatrices(
+      CRB15000_DEFINITION,
+      legacyGeometry,
+      legacyToolFrames,
+      zeroAngles,
+      legacyRoot,
+    )
+    const migratedZero = computeRobotWorldMatrices(
+      migratedDefinition,
+      migratedGeometry,
+      migratedToolFrames,
+      zeroAngles,
+      migratedRoot,
+    )
+
+    for (const linkId of LINK_IDS) {
+      expectMatrixWithin(migratedZero.linkSlots[linkId], legacyZero.linkSlots[linkId])
+      expectMatrixWithin(migratedZero.linkGeometry[linkId], legacyZero.linkGeometry[linkId])
+    }
+
+    const commandedAngles = [35, -42, 18, 71, -33, 109] as const
+    const legacyCommanded = computeRobotWorldMatrices(
+      CRB15000_DEFINITION,
+      legacyGeometry,
+      legacyToolFrames,
+      commandedAngles,
+      legacyRoot,
+    )
+    const migratedCommanded = computeRobotWorldMatrices(
+      migratedDefinition,
+      migratedGeometry,
+      migratedToolFrames,
+      commandedAngles,
+      migratedRoot,
+    )
+    expectMatrixWithin(migratedCommanded.tcp, legacyCommanded.tcp)
   })
 
   it('rejects inconsistent Manual Mechanics provenance asynchronously', async () => {
