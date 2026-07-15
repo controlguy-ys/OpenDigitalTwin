@@ -1,6 +1,8 @@
 import type { Object3D } from 'three'
 import type { StoreApi } from 'zustand/vanilla'
 import type { CollisionPolicy } from '../../domain/collision/collision'
+import { deriveMountContactPairKey } from '../../domain/collision/mount-contact'
+import type { RobotMountContactV1 } from '../../domain/project/scene-state-v1'
 import {
   queryGeometryCollisionsWithTelemetry,
 } from '../../domain/collision/query-collision'
@@ -20,6 +22,9 @@ export interface CurrentPoseCollisionResult {
   readonly telemetry: ReturnType<
     typeof queryGeometryCollisionsWithTelemetry
   >['telemetry']
+  readonly mountContact: ReturnType<
+    typeof queryGeometryCollisionsWithTelemetry
+  >['mountContact']
   readonly diagnostics: ReturnType<
     typeof snapshotGeometryEntities
   >['diagnostics']
@@ -74,11 +79,19 @@ export class CurrentPoseCollisionScheduler {
 export function queryCurrentPoseCollision(
   policy: CollisionPolicy,
   registry: GeometryEntityRegistry = geometryEntityRegistry,
+  robotMountContact: RobotMountContactV1 | null = null,
 ): CurrentPoseCollisionResult {
   const snapshot = snapshotGeometryEntities(registry)
-  const query = queryGeometryCollisionsWithTelemetry(snapshot.entities, policy)
+  const mountContactPairKey = deriveMountContactPairKey(
+    robotMountContact,
+    snapshot.entities,
+  )
+  const query = queryGeometryCollisionsWithTelemetry(snapshot.entities, policy, {
+    mountContactPairKey,
+  })
   return Object.freeze({
     findings: query.findings,
+    mountContact: query.mountContact,
     telemetry: query.telemetry,
     diagnostics: snapshot.diagnostics,
   })
@@ -87,12 +100,14 @@ export function queryCurrentPoseCollision(
 export function publishCurrentPoseCollision(
   collisionStore: Pick<StoreApi<CollisionStoreState>, 'getState'>,
   registry: GeometryEntityRegistry = geometryEntityRegistry,
+  robotMountContact: RobotMountContactV1 | null = null,
 ): CurrentPoseCollisionResult {
   const policy = collisionStore.getState().policy
-  const result = queryCurrentPoseCollision(policy, registry)
+  const result = queryCurrentPoseCollision(policy, registry, robotMountContact)
   collisionStore.getState().replaceCollisionState({
     policy,
     currentFindings: result.findings,
+    mountContact: result.mountContact,
     diagnostics: result.diagnostics,
   }, result.telemetry)
   return result
@@ -118,6 +133,7 @@ function appendObjectTransformRevision(
 export function currentPoseCollisionRevision(
   policy: CollisionPolicy,
   registry: GeometryEntityRegistry = geometryEntityRegistry,
+  robotMountContact: RobotMountContactV1 | null = null,
 ): string {
   const values = [
     policy.enabled ? 'enabled' : 'disabled',
@@ -125,6 +141,9 @@ export function currentPoseCollisionRevision(
     ...policy.ignoredPairKeys,
     '#self',
     ...policy.enabledRobotSelfPairs,
+    '#mount-contact',
+    robotMountContact?.baseLinkId ?? 'missing',
+    robotMountContact?.mountSurfaceCollisionEntityId ?? 'missing',
   ]
   const registrations = [...registry.values()].sort((first, second) =>
     first.id.localeCompare(second.id),

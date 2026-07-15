@@ -92,6 +92,7 @@ function request(): CollisionValidationRequest {
         ],
       },
     ],
+    mountContactPairKey: 'robot-link:LINK00|workcell:workbench',
     policy: {
       enabled: true,
       warningDistanceM: 0.05,
@@ -135,13 +136,18 @@ describe('collision validation protocol', () => {
         .collisionActive,
     ).toBe(true)
     expect(() => structuredClone(validated)).not.toThrow()
+    expect(validated.mountContactPairKey).toBe(
+      'robot-link:LINK00|workcell:workbench',
+    )
   })
 
   it('requires and defensively owns each Robot Link collision participation flag', () => {
     const candidate = request() as unknown as {
       robot: { linkEntities: Array<Record<string, unknown>> }
+      mountContactPairKey: string | null
     }
     candidate.robot.linkEntities[0]!.collisionActive = false
+    candidate.mountContactPairKey = null
 
     const validated = validateCollisionValidationRequest(candidate)
     candidate.robot.linkEntities[0]!.collisionActive = true
@@ -159,6 +165,7 @@ describe('collision validation protocol', () => {
             index === 0 ? { ...link, collisionActive: 'yes' } : link,
           ),
         },
+        mountContactPairKey: null,
       }),
     ).toThrow(/collision participation/i)
   })
@@ -185,6 +192,10 @@ describe('collision validation protocol', () => {
         },
       }),
     ).toThrow(/seven Robot Link/i)
+    expect(() => validateCollisionValidationRequest({
+      ...request(),
+      mountContactPairKey: 'robot-link:LINK00|missing',
+    })).toThrow(/mount contact/i)
   })
 
   it('validates bounded progress records', () => {
@@ -222,6 +233,10 @@ describe('collision validation protocol', () => {
         { length: MAX_COLLISION_VALIDATION_FINDINGS + 1 },
         () => FINDING,
       ),
+      mountContact: {
+        pairKey: 'robot-link:LINK00|workcell:workbench',
+        state: 'contact',
+      },
       truncated: false,
     })
 
@@ -243,6 +258,10 @@ describe('collision validation protocol', () => {
         ),
         { invalid: true },
       ],
+      mountContact: {
+        pairKey: 'robot-link:LINK00|workcell:workbench',
+        state: 'contact',
+      },
       truncated: false,
     })
 
@@ -259,6 +278,10 @@ describe('collision validation protocol', () => {
         sampleCount: 2,
         durationMs: 100,
         findings: [{ ...FINDING, sampleIndex: 2 }],
+        mountContact: {
+          pairKey: 'robot-link:LINK00|workcell:workbench',
+          state: 'contact',
+        },
         truncated: false,
       }),
     ).toThrow(/sample index/i)

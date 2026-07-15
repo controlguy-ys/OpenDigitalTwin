@@ -4,7 +4,10 @@ import {
   validateGeometryCollisionEntity,
   type GeometryCollisionEntity,
 } from '../../domain/collision/collision'
-import { queryGeometryCollisions } from '../../domain/collision/query-collision'
+import {
+  queryGeometryCollisionsWithTelemetry,
+  type MountContactState,
+} from '../../domain/collision/query-collision'
 import type { JointAnglesDeg } from '../../domain/robot/joint-frame'
 import {
   computeRobotWorldMatrices,
@@ -96,6 +99,9 @@ export async function runCollisionValidation(
   const sampled = sampleJointSequence(request.sequence, request.mode)
   const { samples } = sampled
   const findings = [] as CollisionValidationResult['findings'][number][]
+  let mountContact: MountContactState | null = request.mountContactPairKey === null
+    ? null
+    : Object.freeze({ pairKey: request.mountContactPairKey, state: 'clear' })
   let findingsTruncated = false
   const isCancelled = controls.isCancelled ?? (() => false)
   const yieldControl = controls.yieldControl ?? defaultYieldControl
@@ -106,12 +112,23 @@ export async function runCollisionValidation(
       ...dynamicEntities(request, sample.anglesDeg),
       ...request.staticEntities,
     ]
-    const sampleFindings = queryGeometryCollisions(
+    const sampleResult = queryGeometryCollisionsWithTelemetry(
       entities,
       request.policy,
-      { sampleIndex: sample.sampleIndex, timeMs: sample.timeMs },
+      {
+        mountContactPairKey: request.mountContactPairKey,
+        metadata: { sampleIndex: sample.sampleIndex, timeMs: sample.timeMs },
+      },
     )
-    for (const finding of sampleFindings) {
+    if (
+      sampleResult.mountContact !== null &&
+      (mountContact === null ||
+        sampleResult.mountContact.state === 'contact' ||
+        (sampleResult.mountContact.state === 'near' && mountContact.state === 'clear'))
+    ) {
+      mountContact = sampleResult.mountContact
+    }
+    for (const finding of sampleResult.findings) {
       if (findings.length < MAX_COLLISION_VALIDATION_FINDINGS) {
         findings.push(finding)
       } else {
@@ -147,6 +164,7 @@ export async function runCollisionValidation(
     sampleCount: samples.length,
     durationMs: sampled.totalDurationMs,
     findings: Object.freeze(findings),
+    mountContact,
     truncated: sampled.truncated || findingsTruncated,
   })
 }

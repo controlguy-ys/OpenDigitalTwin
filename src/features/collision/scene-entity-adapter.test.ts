@@ -4,7 +4,7 @@ import {
   DEFAULT_COLLISION_POLICY,
   pairKey,
 } from '../../domain/collision/collision'
-import { queryGeometryCollisions } from '../../domain/collision/query-collision'
+import { queryGeometryCollisionsWithTelemetry } from '../../domain/collision/query-collision'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type {
   ObjectAssetRecordV1,
@@ -18,6 +18,7 @@ import {
   snapshotGeometryEntities,
 } from './geometry-entity-registry'
 import {
+  deriveMountContactPairKeyFromRegistrations,
   equipmentRecordToGeometryEntity,
   objectInstanceToGeometryEntity,
   robotLinkToGeometryEntity,
@@ -96,6 +97,30 @@ function robotGeometry(
 }
 
 describe('scene collision Entity adapters', () => {
+  it('derives mount contact only from configured live collision registrations', () => {
+    const configuration = {
+      baseLinkId: 'LINK00' as const,
+      mountSurfaceCollisionEntityId: 'workcell:workbench',
+    }
+    const registrations = [
+      robotLinkToGeometryEntity(robotGeometry('LINK00'), new Group()),
+      workbenchToGeometryEntity(new Group()),
+    ]
+
+    expect(deriveMountContactPairKeyFromRegistrations(
+      configuration,
+      registrations,
+    )).toBe('robot-link:LINK00|workcell:workbench')
+    expect(deriveMountContactPairKeyFromRegistrations(
+      configuration,
+      registrations.slice(1),
+    )).toBeNull()
+    expect(deriveMountContactPairKeyFromRegistrations(
+      configuration,
+      [{ ...registrations[0]!, object: null }, registrations[1]!],
+    )).toBeNull()
+  })
+
   it('adapts legacy Equipment and imported Object Instances to equivalent Boxes', () => {
     const object = new Group()
     const legacy = equipmentRecordToGeometryEntity(equipment(), object)
@@ -208,10 +233,27 @@ describe('scene collision Entity adapters', () => {
         },
       ],
     })
-    expect(queryGeometryCollisions(snapshot.entities, DEFAULT_COLLISION_POLICY)).toEqual([
+    const result = queryGeometryCollisionsWithTelemetry(
+      snapshot.entities,
+      DEFAULT_COLLISION_POLICY,
+      {
+        mountContactPairKey: deriveMountContactPairKeyFromRegistrations(
+          {
+            baseLinkId: 'LINK00',
+            mountSurfaceCollisionEntityId: 'workcell:workbench',
+          },
+          [...geometryEntityRegistry.values()],
+        ),
+      },
+    )
+    expect(result.findings).toEqual([
       expect.objectContaining({
         pairKey: pairKey('robot-link:LINK01', 'workcell:workbench'),
       }),
     ])
+    expect(result.mountContact).toEqual({
+      pairKey: pairKey('robot-link:LINK00', 'workcell:workbench'),
+      state: 'contact',
+    })
   })
 })

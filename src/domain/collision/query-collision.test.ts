@@ -5,7 +5,10 @@ import {
   type CollisionPolicy,
   type GeometryCollisionEntity,
 } from './collision'
-import { queryGeometryCollisions } from './query-collision'
+import {
+  queryGeometryCollisions,
+  queryGeometryCollisionsWithTelemetry,
+} from './query-collision'
 
 const BOX: CollisionBox = {
   id: 'main',
@@ -42,6 +45,49 @@ function entity(
 }
 
 describe('geometry collision orchestration', () => {
+  it('does not exempt LINK00 and workbench without explicit mount contact', () => {
+    const findings = queryGeometryCollisions(
+      [
+        entity('robot-link:LINK00', 'robot-link', 0),
+        entity('workcell:workbench', 'environment', 0.75),
+      ],
+      POLICY,
+      { mountContactPairKey: null },
+    )
+
+    expect(findings).toContainEqual(expect.objectContaining({
+      kind: 'collision',
+      pairKey: pairKey('robot-link:LINK00', 'workcell:workbench'),
+    }))
+  })
+
+  it('classifies only the configured pair as mount contact without changing candidate telemetry', () => {
+    const mountPairKey = pairKey('robot-link:LINK00', 'workcell:workbench')
+    const result = queryGeometryCollisionsWithTelemetry(
+      [
+        entity('robot-link:LINK00', 'robot-link', 0),
+        entity('robot-link:LINK01', 'robot-link', 0),
+        entity('workcell:workbench', 'environment', 0.75),
+      ],
+      POLICY,
+      { mountContactPairKey: mountPairKey },
+    )
+
+    expect(result.findings).not.toContainEqual(
+      expect.objectContaining({ pairKey: mountPairKey }),
+    )
+    expect(result.findings).toContainEqual(expect.objectContaining({
+      pairKey: pairKey('robot-link:LINK01', 'workcell:workbench'),
+      kind: 'collision',
+    }))
+    expect(result.mountContact).toEqual({ pairKey: mountPairKey, state: 'contact' })
+    expect(result.telemetry).toMatchObject({
+      broadPhaseCandidateCount: 3,
+      narrowPhaseTestCount: 2,
+      findingCount: 1,
+    })
+  })
+
   it('returns current-pose collision and near-miss rows in stable order', () => {
     const findings = queryGeometryCollisions(
       [
@@ -125,7 +171,10 @@ describe('geometry collision orchestration', () => {
         entity('object:cup-01', 'object', 0.75),
       ],
       POLICY,
-      { sampleIndex: 4, timeMs: 125 },
+      {
+        mountContactPairKey: null,
+        metadata: { sampleIndex: 4, timeMs: 125 },
+      },
     )
 
     expect(findings).toHaveLength(1)

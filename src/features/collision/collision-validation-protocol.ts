@@ -12,6 +12,7 @@ import type { SerializableTransform } from '../../domain/equipment/equipment'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
 import type { RobotKinematicDefinition } from '../../domain/robot/kinematics'
 import type { RobotKeyframe } from '../joints/keyframes'
+import type { MountContactState } from '../../domain/collision/query-collision'
 import {
   MAX_COLLISION_VALIDATION_SAMPLES,
   type CollisionValidationMode,
@@ -71,6 +72,7 @@ export interface CollisionValidationRequest {
   readonly robot: CollisionValidationRobot
   readonly heldObject: CollisionValidationHeldObject | null
   readonly staticEntities: readonly GeometryCollisionEntity[]
+  readonly mountContactPairKey: string | null
   readonly policy: CollisionPolicy
 }
 
@@ -88,6 +90,7 @@ export interface CollisionValidationResult {
   readonly sampleCount: number
   readonly durationMs: number
   readonly findings: readonly CollisionFinding[]
+  readonly mountContact: MountContactState | null
   readonly truncated: boolean
 }
 
@@ -122,6 +125,44 @@ function nonEmptyString(candidate: unknown, label: string): string {
     throw new Error(`${label} must not be empty.`)
   }
   return candidate
+}
+
+function mountContactPairKey(
+  candidate: unknown,
+  linkEntities: readonly CollisionValidationLinkEntity[],
+  staticEntities: readonly GeometryCollisionEntity[],
+): string | null {
+  if (candidate === null) return null
+  const value = nonEmptyString(candidate, 'Collision validation mount contact pair')
+  const ids = value.split('|')
+  if (ids.length !== 2 || ids[0]! >= ids[1]!) {
+    throw new Error('Collision validation mount contact pair must be canonical.')
+  }
+  const activeLinks = new Set(
+    linkEntities.filter(({ collisionActive }) => collisionActive).map(({ id }) => id),
+  )
+  const staticIds = new Set(staticEntities.map(({ id }) => id))
+  const hasActiveLink = ids.some((id) => activeLinks.has(id as `robot-link:${RobotLinkId}`))
+  const hasStaticSurface = ids.some((id) => staticIds.has(id))
+  if (!hasActiveLink || !hasStaticSurface) {
+    throw new Error(
+      'Collision validation mount contact pair must reference an active Robot Link and surface.',
+    )
+  }
+  return value
+}
+
+function mountContactState(candidate: unknown): MountContactState | null {
+  if (candidate === null) return null
+  const value = record(candidate, 'Collision validation mount contact')
+  const pair = nonEmptyString(value.pairKey, 'Collision validation mount contact pair')
+  if (pair.split('|').length !== 2) {
+    throw new Error('Collision validation mount contact pair is invalid.')
+  }
+  if (value.state !== 'clear' && value.state !== 'near' && value.state !== 'contact') {
+    throw new Error('Collision validation mount contact state is invalid.')
+  }
+  return Object.freeze({ pairKey: pair, state: value.state })
 }
 
 function finiteNumber(candidate: unknown, label: string): number {
@@ -362,6 +403,12 @@ export function validateCollisionValidationRequest(
     throw new Error('Collision validation static Entities must be an array.')
   }
 
+  const validatedLinkEntities = linkEntities(robotCandidate.linkEntities)
+  const validatedStaticEntities = Object.freeze(
+    staticCandidates.map((entity) =>
+      validateGeometryCollisionEntity(entity as GeometryCollisionEntity),
+    ),
+  )
   return Object.freeze({
     requestId: nonEmptyString(value.requestId, 'Collision validation request id'),
     revision: nonEmptyString(value.revision, 'Collision validation revision'),
@@ -376,14 +423,15 @@ export function validateCollisionValidationRequest(
         tool: transform(toolFramesCandidate.tool, 'Collision validation Tool frame'),
         tcp: transform(toolFramesCandidate.tcp, 'Collision validation TCP frame'),
       }),
-      linkEntities: linkEntities(robotCandidate.linkEntities),
+      linkEntities: validatedLinkEntities,
       toolEntity: toolEntity(robotCandidate.toolEntity),
     }),
     heldObject: heldObject(value.heldObject),
-    staticEntities: Object.freeze(
-      staticCandidates.map((entity) =>
-        validateGeometryCollisionEntity(entity as GeometryCollisionEntity),
-      ),
+    staticEntities: validatedStaticEntities,
+    mountContactPairKey: mountContactPairKey(
+      value.mountContactPairKey,
+      validatedLinkEntities,
+      validatedStaticEntities,
     ),
     policy: validateCollisionPolicy(value.policy as CollisionPolicy),
   })
@@ -462,6 +510,7 @@ export function validateCollisionValidationResult(
     sampleCount,
     durationMs,
     findings: Object.freeze(validatedFindings),
+    mountContact: mountContactState(value.mountContact),
     truncated: value.truncated || findingsTruncated,
   })
 }

@@ -1,127 +1,130 @@
-# Task 6 Report: Deterministic Pose-Sequence Collision Worker
+# Task 6 Report: Explicit Robot Mount Contact
 
 ## Outcome
 
-Implemented deterministic, FPS-independent Pose-sequence collision validation:
+Implemented Robot mount contact as an explicit Project V3 collision-policy
+surface instead of an implicit `LINK00|workbench` exemption.
 
-- added Preview sampling with a maximum `2 deg` Joint step and Validate
-  sampling with a maximum `0.5 deg` Joint step;
-- preserved easing, segment duration, exact non-truncated endpoints, zero-motion
-  segment duration, deterministic sample indices/timestamps, and true truncation
-  at 20,000 samples;
-- added an owned, serializable Worker protocol and a resilient client with
-  monotonic progress, explicit cancellation, stale revision rejection, native
-  Worker error recreation, and a 10,000-finding cap;
-- added pure `computeRobotWorldMatrices()` composition for all seven Link slots,
-  per-Link geometry local transforms and non-uniform scale, Flange, Tool, and TCP;
-- inserted an explicit rendered Flange frame without changing the existing Tool
-  or TCP World hierarchy;
-- added a dedicated Worker that recomputes Link/Tool geometry and an optional
-  TCP-local held Object for every sample, retains static Workbench and external
-  Entities, attaches sample/time metadata, reports progress every 250 samples,
-  and observes cancellation at those yield boundaries;
-- connected `Preview Sequence`, `Validate Sequence`, progress, and cancellation
-  controls to `CollisionPanel`;
-- composed the Worker Robot root from MCP, the Workbench mount, and Robot Base,
-  and included mechanics, Link geometry, proxy Boxes, Tool/TCP, held attachment,
-  static Entity matrices, Poses, and collision policy in the runtime request;
-- marked completed reports stale and cancelled active work when a relevant
-  mechanics, frame, Pose, collider, external transform, held state, or policy
-  revision changes.
+- `deriveMountContactPairKey()` accepts only a complete Robot mount
+  configuration whose base Link and mount surface are both active canonical
+  collision participants. Invalid, incomplete, hidden, or stale configuration
+  exempts nothing.
+- The normal collision query evaluates the configured pair with the same OBB
+  and warning-distance rules as every other pair, then extracts only that pair
+  into `clear`, `near`, or `contact` mount state.
+- Mount extraction does not change broad-phase candidate counts or narrow-phase
+  test counts. The public finding count reflects only public findings after the
+  configured mount row is extracted.
+- Current-pose and sequence Worker paths derive and pass the same canonical
+  mount pair. The Worker aggregates the most severe observed state using
+  `contact > near > clear`.
+- The mount pair is never inserted into `ignoredPairKeys`, never appears in the
+  ignored-pair controls, and never receives Ignore/Restore actions.
+- JSON reports expose `mountContactPairKey`, `mountContactState`, and the
+  independently sorted user-managed `ignoredPairKeys`.
+- The Collision panel presents `Mount Contact: Configured <state>` or
+  `Mount Contact: Incomplete` separately from ordinary collision counts.
 
-No Three `Object3D`, render mesh, STEP bytes, or source geometry crosses the
-Worker boundary. The protocol reconstructs only known serializable fields and
-strips unknown runtime fields before `postMessage()`.
+The geometry acceptance fixture was migrated to the current Project V3 Scene
+archive surface (`scene/state.json`, Scene local poses, and Object Instance
+scale). The Worker-only archive prunes redundant Robot STEP sources while
+preserving the intended 5 Object Instances x 10 collision Boxes workload.
+
+## Production Composition Regression
+
+Production request instrumentation found that the held Object, canonical pair,
+and static target were all present, but the Robot root was composed at
+`[0, 0, 2.16]`. Project V3 already projects the absolute Robot Scene pose at
+Workbench height (`z = 1.08`) into the runtime Robot configuration. The
+Collision panel then added `WORKBENCH_TOP_Z` a second time.
+
+Captured evidence:
+
+- held Object: `object:collision-fixture`;
+- static target: `object:collision-worker-load-00` at matrix translation
+  `[0.725, 0, 2.315]`;
+- held TCP-local position: `[0, 0, 0.09]`;
+- incorrect Robot root: `[0, 0, 2.16]`;
+- sequence result: 1,000 samples, zero findings, not truncated.
+
+At the middle `J1 = 0` sample the duplicated mount offset put the held center at
+`z = 3.395`, exactly `1.08 m` above the static probe. Sequence composition now
+uses the Project V3 absolute Robot Scene pose once by composing MCP directly
+with the configured base pose.
 
 ## TDD Evidence
 
-### Sampling RED -> GREEN
+### Mount query RED -> GREEN
 
-Initial command:
+The initial query tests failed because the hard-coded mount exemption suppressed
+an unconfigured pair and no explicit mount state was returned. The new mount
+derivation test initially failed because the module did not exist.
 
-```text
-npm run test:run -- src/features/collision/validate-pose-sequence.test.ts
-```
+GREEN coverage proves:
 
-Observed RED: Vite could not resolve the missing
-`./validate-pose-sequence` module.
+- configured `contact`, `near`, and `clear` extraction;
+- incomplete or inactive configuration exempts nothing;
+- canonical active-participant validation;
+- unchanged query telemetry and ordinary pair ordering.
 
-GREEN result before Worker extensions: 1 file, 7 tests passed. The tests cover
-both angular limits, easing-derived angles, duration-derived timestamps, exact
-segment endpoints, repeatable counts, zero-motion segments, and true 20,000-row
-truncation without replacing the last retained sample.
+### Protocol, Worker, current pose, and panel RED -> GREEN
 
-### Protocol and Client RED -> GREEN
+Focused RED runs produced five protocol/current-pose/Worker failures and four
+panel/adapter failures before the new mount fields and composition existed.
+GREEN coverage verifies owned protocol validation, Worker severity aggregation,
+current-pose Project configuration usage, panel/report separation, and the
+absence of mount Ignore/Restore controls.
 
-Initial command:
+### Absolute Robot root RED -> GREEN
 
-```text
-npm run test:run -- src/features/collision/collision-validation-protocol.test.ts src/features/collision/collision-validation-client.test.ts
-```
-
-Observed RED: both suites failed because the protocol and client modules did
-not exist.
-
-GREEN result: 2 files, 10 tests passed. Coverage includes defensive request
-ownership, unknown render-field stripping, malformed transform/Link guards,
-bounded progress, 10,000-finding truncation, monotonic progress, cancellation,
-stale revision rejection, older-request rejection, and fresh Worker creation
-after a native Worker error.
-
-### FK Parity RED -> GREEN
-
-Initial command:
+Command:
 
 ```text
-npm run test:run -- src/domain/robot/kinematics.test.ts
+npx vitest run src/features/collision/CollisionPanel.test.tsx --maxWorkers=1
 ```
 
-Observed RED: 3 expected failures because the rendered Flange and pure matrix
-API were absent.
+Observed RED: 1 failed, 18 passed. The production-composed root was
+`[0, 0, 2.16]` instead of `[0, 0, 1.08]`.
 
-GREEN result with Robot registration coverage: 2 files, 14 tests passed.
-Zero and non-zero Joint poses compare every element of:
+After removing the duplicated Workbench mount composition, the panel suite
+passed 19/19. An exact Worker reproduction additionally proves that the aligned
+root produces only middle-window held/static findings, while the double-mounted
+root produces no findings.
 
-- seven rendered Link-slot World matrices;
-- seven geometry World matrices after local position, quaternion, and
-  non-uniform scale;
-- Flange, Tool, and TCP World matrices.
+Focused reproduction result:
 
-The pure output matches Three `matrixWorld` to 11 decimal places without
-allocating an `Object3D` in the pure computation.
-
-### Worker and UI RED -> GREEN
-
-Worker RED first observed a missing Worker module. A second narrow RED observed
-the missing validate/cancel command handler at the 250-sample boundary.
-
-Worker GREEN result: the combined sampling/Worker suite passed 11 tests,
-including TCP-local held Object recomputation, static Workbench participation,
-sample/time metadata, 250-sample progress/cancel boundaries, and the 10,000
-finding cap.
-
-CollisionPanel RED result: 1 file ran with 3 expected failures because sequence
-start/cancel controls and revision stale handling were absent. A second narrow
-RED proved registry collider-revision and Entity-visibility changes were not
-yet part of the default revision. GREEN result: 1 file, 10 tests passed.
+```text
+Test Files  2 passed (2)
+Tests       33 passed (33)
+```
 
 ## Final Verification
 
-Focused Task 6 command:
+Focused collision/domain gate:
 
 ```text
-npm run test:run -- src/features/collision/collision-validation-protocol.test.ts src/features/collision/collision-validation-client.test.ts src/features/collision/validate-pose-sequence.test.ts src/features/collision/CollisionPanel.test.tsx src/domain/robot/kinematics.test.ts src/features/robot/RobotModel.test.ts
+npm run test:run -- src/domain/collision src/features/collision
 ```
 
-Result: 6 files, 45 tests passed, 0 failed.
+Result: 16 files, 133 tests passed, 0 failed.
 
-Full suite:
+Full serial Vitest gate:
 
 ```text
-npm run test:run
+npx vitest run --maxWorkers=1
 ```
 
-Result: 72 files, 420 tests passed, 0 failed.
+Result: 109 files, 925 tests passed, 0 failed in 317.05 seconds.
+
+Geometry browser acceptance gate, with existing timeouts unchanged:
+
+```text
+npm run test:e2e -- tests/geometry-collision.spec.ts
+```
+
+Result: 3 tests passed, 0 failed in 8.6 minutes. This covers mount status and
+report metadata, Ignore/Restore separation, Save/Export/reload preservation,
+and responsive held-Object Worker validation.
 
 Static and production gates:
 
@@ -135,242 +138,8 @@ Results:
 
 - oxlint passed without diagnostics;
 - TypeScript and Vite production build passed;
-- Vite emitted the dedicated `collision-validation.worker` chunk;
-- diff check passed.
-
-## Notes
-
-- Worker findings are proxy-based and remain explicitly outside physics,
-  RobotWare, SafeMove, and safety-rated validation.
-- Sample truncation and finding truncation share the result `truncated` flag.
-- Cancellation is observed on deterministic 250-sample yield boundaries, so
-  the Worker event loop can receive the `cancel` command.
-- Vite retains the pre-existing OCCT `path` / `crypto` browser-externalization
-  messages and large main-chunk warning. The dedicated collision Worker is
-  approximately 110 kB and the production build succeeds.
-
-## Review Follow-up: Link Participation and Client Hardening
-
-The review follow-up added an owned `collisionActive` boolean to every Robot
-Link protocol row. The default CollisionPanel request maps that flag from both
-the persisted Link geometry visibility and the live geometry-registry snapshot.
-The Worker still computes FK for all seven Links, but creates collision proxies
-only for active Link rows. This prevents hidden or unregistered Link fallback
-boxes from producing sequence-validation findings.
-
-The client now:
-
-- rejects cancellation locally and recreates the Worker when cancel transport
-  throws;
-- ignores `cancelled` and `error` events whose revision does not match the
-  active request;
-- rejects a result whose mode differs from the active request and recreates the
-  Worker;
-- suppresses progress updates that regress either processed samples or the
-  processed/total ratio.
-
-The result guard determines truncation from the original findings length and
-validates only the first 10,000 owned findings.
-
-### Follow-up TDD Evidence
-
-Production files were unchanged when this focused command first ran:
-
-```text
-npm run test:run -- src/features/collision/collision-validation-client.test.ts src/features/collision/collision-validation-protocol.test.ts src/features/collision/validate-pose-sequence.test.ts
-```
-
-Observed RED: 3 files failed with 8 expected failures and 20 passing tests. The
-failures covered regressing progress ratio, cancel transport failure, stale
-terminal events, result-mode mismatch, missing/invalid Link participation,
-overflow finding validation, and inactive-Link collider participation.
-
-The Link collision probe was corrected from the intentionally excluded
-Workbench/LINK00 policy pair to a general equipment/LINK00 pair. With the Worker
-filter temporarily removed, the corrected test failed because the inactive Link
-produced two collision findings. Restoring the filter made the regression green.
-
-Focused GREEN:
-
-```text
-npm run test:run -- src/features/collision/collision-validation-client.test.ts src/features/collision/collision-validation-protocol.test.ts src/features/collision/validate-pose-sequence.test.ts src/features/collision/CollisionPanel.test.tsx
-```
-
-Result: 4 files, 39 tests passed, 0 failed.
-
-### Follow-up Final Verification
-
-```text
-npm run lint
-npm run build
-npm run test:run
-git diff --check
-```
-
-Results:
-
-- oxlint passed without diagnostics;
-- TypeScript and Vite production build passed and emitted the collision Worker;
-- full Vitest suite passed: 72 files, 428 tests, 0 failures;
-- diff check passed.
-
-Per task scope, no CAD conversion or validation command was run. Vite retained
-the pre-existing OCCT browser-externalization messages and chunk-size warning.
-
-## Registry Reactivity Follow-up
-
-The geometry Entity registry now acts as a React-compatible external store. It
-exposes stable subscribe and revision-snapshot functions and increments a
-monotonic revision for meaningful registration, replacement, live Object
-ownership, deletion, and clearing changes. Stale lifecycle cleanup, missing
-deletion, empty clearing, same-registration assignment, missing Object updates,
-and same-Object updates do not increment the revision.
-
-The exported registry remains Map-compatible. Its observable Map implementation
-also captures direct `set`, `delete`, and `clear` calls, while custom registries
-used by current-pose queries retain their existing plain-Map behavior.
-
-`CollisionPanel` subscribes with `useSyncExternalStore` and includes the
-registry revision in its default validation revision. A registry-only change
-after render now cancels an active sequence validation and marks a completed
-report stale without requiring a parent rerender. The existing
-`currentPoseCollisionRevision()` transform and hierarchy semantics were not
-changed.
-
-### Registry Reactivity TDD Evidence
-
-Production files were unchanged when the first focused RED command ran:
-
-```text
-npm run test:run -- src/features/collision/geometry-entity-registry.test.ts src/features/collision/CollisionPanel.test.tsx
-```
-
-Observed RED: 2 files failed with 4 expected failures and 15 passing tests. The
-registry tests reported missing revision-snapshot and subscribe functions. The
-panel tests expected one cancellation after post-render registration and
-cleanup changes but observed zero.
-
-After the initial implementation, the same command passed 2 files and 19 tests.
-
-A second test-first pass covered direct public Map mutations:
-
-```text
-npm run test:run -- src/features/collision/geometry-entity-registry.test.ts
-```
-
-Observed RED: 1 file failed with 2 expected failures and 6 passing tests. Direct
-deletion of an existing registration and direct non-empty clearing both left
-the revision unchanged. The observable Map implementation made the registry
-suite pass 8 tests, including no-op deletion/clearing and subscription cleanup.
-
-### Registry Reactivity Final Verification
-
-Focused registry, panel, and current-pose regression command:
-
-```text
-npm run test:run -- src/features/collision/geometry-entity-registry.test.ts src/features/collision/CollisionPanel.test.tsx src/features/collision/current-pose-collision.test.ts
-```
-
-Result: 3 files, 25 tests passed, 0 failed.
-
-Full suite:
-
-```text
-npm run test:run
-```
-
-Result: exit 0, 72 files, 434 tests passed, 0 failed in 72.57 seconds.
-
-Static and production gates:
-
-```text
-npm run lint
-npm run build
-git diff --check
-```
-
-Results:
-
-- oxlint passed without diagnostics;
-- TypeScript and Vite production build passed and emitted the collision Worker;
-- diff check passed.
-
-Per task scope, no CAD conversion or validation command was run. Vite retained
-the pre-existing OCCT browser-externalization messages and chunk-size warning.
-
-## Final Follow-up: Robot Root Visibility and Cancel Restart Isolation
-
-Sequence validation now treats the Robot root as an explicit collision
-participation gate. When `hiddenEntityIds` contains `robot`, every Link request
-row has `collisionActive: false`. Re-showing the Robot restores the existing
-per-Link geometry visibility and live registry-participation conditions. Root
-visibility remains part of the default runtime revision, so changing it cancels
-an active run and marks a completed report stale without a manual rerender.
-
-Successful client cancellation now retires the current Worker after posting the
-cancel command and rejecting the active promise. Listener removal, termination,
-and Worker reset happen synchronously, so an immediate restart creates a fresh
-Worker and cannot overlap a still-running validation in the old Worker. The
-transport-failure path retains the same reset behavior, and late events from
-either retired Worker cannot settle the restarted request. The Worker's
-cooperative 250-sample cancellation-boundary behavior was not changed.
-
-### Final Follow-up TDD Evidence
-
-Production files were unchanged at commit `03b57c7` when the focused RED command
-ran:
-
-```text
-npm run test:run -- src/features/collision/CollisionPanel.test.tsx src/features/collision/collision-validation-client.test.ts
-```
-
-Observed RED: 2 files failed with 3 expected failures and 20 passing tests.
-
-- a successfully cancelled Worker remained unterminated;
-- the pure Robot-root-hidden mapping retained active Link rows;
-- the default runtime request after `setEntityVisible('robot', false)` retained
-  an active Link.
-
-The same command passed 2 files and 23 tests after the minimal production
-changes.
-
-Expanded Task 6 GREEN, including protocol ownership, Worker cancellation
-boundaries, registry reactivity, current-pose behavior, and Robot registration:
-
-```text
-npm run test:run -- src/features/collision/collision-validation-client.test.ts src/features/collision/collision-validation-protocol.test.ts src/features/collision/validate-pose-sequence.test.ts src/features/collision/CollisionPanel.test.tsx src/features/collision/geometry-entity-registry.test.ts src/features/collision/current-pose-collision.test.ts src/features/robot/RobotModel.test.ts
-```
-
-Result: 7 files, 61 tests passed, 0 failed.
-
-After strengthening the client lifecycle checks to require synchronous Worker
-termination and late-event isolation on both successful and failed cancel
-transport, the client/Worker-boundary/Panel command passed 3 files and 35 tests.
-
-### Final Follow-up Verification
-
-Full suite:
-
-```text
-npm run test:run
-```
-
-Result: 72 files, 435 tests passed, 0 failed.
-
-Static and production gates:
-
-```text
-npm run lint
-npm run build
-git diff --check
-```
-
-Results:
-
-- oxlint passed without diagnostics;
-- TypeScript and Vite production build passed and emitted the collision Worker;
-- diff check passed.
-
-Per task scope, no CAD conversion, plan, or specification command was run. Vite
-retained the pre-existing OCCT browser-externalization messages and chunk-size
-warning.
+- diff whitespace check passed;
+- Vite retained its existing OCCT `path` / `crypto` browser-externalization
+  messages and main-chunk size warning.
+
+No push, merge, deployment, or external runtime operation was performed.

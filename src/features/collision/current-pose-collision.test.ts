@@ -113,6 +113,40 @@ describe('current-pose collision scheduler', () => {
     expect(robot.scale.toArray()).toEqual(before.scale)
   })
 
+  it('derives and reports the configured active mount pair separately', () => {
+    const registry: GeometryEntityRegistry = new Map()
+    for (const [id, category] of [
+      ['robot-link:LINK00', 'robot-link'],
+      ['workcell:workbench', 'environment'],
+    ] as const) {
+      registerGeometryEntity({
+        id,
+        name: id,
+        category,
+        boxes: [{
+          id: 'main',
+          center: [0, 0, 0],
+          halfExtents: [0.5, 0.5, 0.5],
+          quaternion: [0, 0, 0, 1],
+        }],
+        object: new Group(),
+      }, registry)
+    }
+
+    const result = queryCurrentPoseCollision(
+      DEFAULT_COLLISION_POLICY,
+      registry,
+      { baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: 'workcell:workbench' },
+    )
+
+    expect(result.findings).toEqual([])
+    expect(result.mountContact).toEqual({
+      pairKey: 'robot-link:LINK00|workcell:workbench',
+      state: 'contact',
+    })
+    expect(result.telemetry.findingCount).toBe(0)
+  })
+
   it('publishes one atomic collision-store replacement per query', () => {
     const collisionStore = createCollisionStore()
     const replaceCollisionState = vi.spyOn(

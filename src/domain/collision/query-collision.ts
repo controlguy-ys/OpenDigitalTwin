@@ -24,7 +24,20 @@ export interface CollisionQueryTelemetry {
 
 export interface CollisionQueryResult {
   readonly findings: readonly CollisionFinding[]
+  readonly mountContact: Readonly<{
+    readonly pairKey: string
+    readonly state: 'clear' | 'near' | 'contact'
+  }> | null
   readonly telemetry: CollisionQueryTelemetry
+}
+
+export type MountContactState = NonNullable<
+  CollisionQueryResult['mountContact']
+>
+
+export interface GeometryCollisionQueryOptionsV1 {
+  readonly mountContactPairKey: string | null
+  readonly metadata?: CollisionQueryMetadata
 }
 
 function pairEnabledByCategory(
@@ -32,12 +45,6 @@ function pairEnabledByCategory(
   second: GeometryCollisionEntity,
   policy: CollisionPolicy,
 ): boolean {
-  if (
-    (first.id === 'workcell:workbench' && second.id === 'robot-link:LINK00') ||
-    (second.id === 'workcell:workbench' && first.id === 'robot-link:LINK00')
-  ) {
-    return false
-  }
   if (first.category === 'robot-link' && second.category === 'robot-link') {
     return policy.enabledRobotSelfPairs.includes(pairKey(first.id, second.id))
   }
@@ -110,22 +117,23 @@ function validateMetadata(metadata: CollisionQueryMetadata): void {
 export function queryGeometryCollisions(
   entityCandidates: readonly GeometryCollisionEntity[],
   policyCandidate: CollisionPolicy,
-  metadata: CollisionQueryMetadata = {},
+  options: GeometryCollisionQueryOptionsV1 = { mountContactPairKey: null },
 ): readonly CollisionFinding[] {
   return queryGeometryCollisionsWithTelemetry(
     entityCandidates,
     policyCandidate,
-    metadata,
+    options,
   ).findings
 }
 
 export function queryGeometryCollisionsWithTelemetry(
   entityCandidates: readonly GeometryCollisionEntity[],
   policyCandidate: CollisionPolicy,
-  metadata: CollisionQueryMetadata = {},
+  options: GeometryCollisionQueryOptionsV1 = { mountContactPairKey: null },
 ): CollisionQueryResult {
   const policy = validateCollisionPolicy(policyCandidate)
   const entities = entityCandidates.map(validateGeometryCollisionEntity)
+  const metadata = options.metadata ?? {}
   validateMetadata(metadata)
   const boxCount = entities.reduce(
     (total, entity) => total + entity.boxes.length,
@@ -134,6 +142,7 @@ export function queryGeometryCollisionsWithTelemetry(
   if (!policy.enabled) {
     return Object.freeze({
       findings: Object.freeze([]),
+      mountContact: null,
       telemetry: Object.freeze({
         entityCount: entities.length,
         boxCount,
@@ -181,11 +190,30 @@ export function queryGeometryCollisionsWithTelemetry(
       findingsByPair.set(key, finding)
     }
   }
+  const mountPairIds = options.mountContactPairKey?.split('|') ?? []
+  const mountPairIsActive = mountPairIds.length === 2 &&
+    mountPairIds.every((id) => entitiesById.has(id))
+  const mountFinding = mountPairIsActive
+    ? findingsByPair.get(options.mountContactPairKey!)
+    : undefined
   const findings = Object.freeze(
-    [...findingsByPair.values()].sort(compareFindings),
+    [...findingsByPair.values()]
+      .filter(({ pairKey: key }) =>
+        !mountPairIsActive || key !== options.mountContactPairKey)
+      .sort(compareFindings),
   )
   return Object.freeze({
     findings,
+    mountContact: !mountPairIsActive
+      ? null
+      : Object.freeze({
+          pairKey: options.mountContactPairKey!,
+          state: mountFinding === undefined
+            ? 'clear' as const
+            : mountFinding.kind === 'collision'
+              ? 'contact' as const
+              : 'near' as const,
+        }),
     telemetry: Object.freeze({
       entityCount: entities.length,
       boxCount,

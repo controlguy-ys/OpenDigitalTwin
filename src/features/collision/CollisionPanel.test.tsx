@@ -5,6 +5,8 @@ import { Group } from 'three'
 import type { CollisionFinding } from '../../domain/collision/collision'
 import { useInteractionStore } from '../interaction/interaction-store'
 import { useRobotStore } from '../joints/robot-store'
+import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
+import { WORKBENCH_TOP_Z } from '../scene/workcell-constants'
 import { CollisionValidationClient } from './collision-validation-client'
 import type {
   CollisionValidationRequest,
@@ -90,6 +92,7 @@ describe('CollisionPanel', () => {
   afterEach(() => {
     geometryEntityRegistry.clear()
     useRobotStore.setState({ keyframes: [] })
+    useRobotConfigurationStore.getState().resetToDatasheet()
     vi.restoreAllMocks()
   })
 
@@ -247,6 +250,86 @@ describe('CollisionPanel', () => {
     expect(screen.getByText(/not physics, RobotWare, SafeMove, or safety-rated/i)).toBeVisible()
   })
 
+  it('shows mount configuration and contact state separately from finding counts', () => {
+    render(
+      <CollisionPanel
+        mountContactConfiguration={{
+          baseLinkId: 'LINK00',
+          mountSurfaceCollisionEntityId: 'workcell:workbench',
+        }}
+        mountContact={{
+          pairKey: 'robot-link:LINK00|workcell:workbench',
+          state: 'contact',
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('status', { name: 'Mount contact status' }))
+      .toHaveTextContent('Mount Contact: Configured contact')
+    expect(screen.getByText('Collision 1')).toBeVisible()
+    expect(screen.getByText('Near-miss 1')).toBeVisible()
+    expect(screen.queryByRole('button', {
+      name: 'Restore robot-link:LINK00|workcell:workbench',
+    })).not.toBeInTheDocument()
+  })
+
+  it('passes the same derived mount pair to sequence validation composition', async () => {
+    const link = new Group()
+    const workbench = new Group()
+    registerGeometryEntity({
+      id: 'robot-link:LINK00',
+      name: 'LINK00',
+      category: 'robot-link',
+      boxes: [{
+        id: 'default', center: [0, 0, 0], halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object: link,
+    })
+    registerGeometryEntity({
+      id: 'workcell:workbench',
+      name: 'Workbench',
+      category: 'environment',
+      boxes: [{
+        id: 'default', center: [0, 0, 0], halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object: workbench,
+    })
+    const user = userEvent.setup()
+    const { validate } = startDefaultValidation()
+    render(
+      <CollisionPanel mountContactConfiguration={{
+        baseLinkId: 'LINK00',
+        mountSurfaceCollisionEntityId: 'workcell:workbench',
+      }} />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Validate Sequence' }))
+
+    expect(validate.mock.calls[0]?.[0].mountContactPairKey).toBe(
+      'robot-link:LINK00|workcell:workbench',
+    )
+  })
+
+  it('uses the absolute Project V3 Robot Scene pose once in sequence composition', async () => {
+    useRobotConfigurationStore.getState().setBasePose(
+      [0, 0, WORKBENCH_TOP_Z],
+      [0, 0, 0],
+    )
+    const user = userEvent.setup()
+    const { validate } = startDefaultValidation()
+    render(<CollisionPanel />)
+
+    await user.click(screen.getByRole('button', { name: 'Validate Sequence' }))
+
+    expect(validate.mock.calls[0]?.[0].robot.rootPose.position).toEqual([
+      0,
+      0,
+      WORKBENCH_TOP_Z,
+    ])
+  })
+
   it('announces the canonical held Entity used by sequence validation', () => {
     render(<CollisionPanel />)
 
@@ -389,6 +472,7 @@ describe('CollisionPanel', () => {
         sampleCount: 1_000,
         durationMs: 2_000,
         findings: [{ ...COLLISION, sampleIndex: 4, timeMs: 80 }],
+        mountContact: null,
         truncated: false,
       })
       await completion

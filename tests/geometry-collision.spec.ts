@@ -23,6 +23,9 @@ interface CollisionReportRow {
 
 interface CollisionReport {
   schemaVersion: number
+  mountContactPairKey: string | null
+  mountContactState: 'clear' | 'near' | 'contact' | null
+  ignoredPairKeys: string[]
   summary: {
     totalFindings: number
     collisions: number
@@ -103,12 +106,9 @@ function canonicalPoseDurationMs(
 function v3CollisionFixture(source: Uint8Array): Buffer {
   const entries = unzipSync(source)
   const manifest = jsonEntry<Record<string, unknown>>(entries, 'manifest.json')
-  const externalEntities = jsonEntry<Record<string, unknown>[]>(
-    entries,
-    'external/entities.json',
-  )
   const sources = jsonEntry<Record<string, unknown>[]>(entries, 'robot/sources/index.json')
   const links = jsonEntry<Record<string, unknown>[]>(entries, 'robot/links/index.json')
+  const scene = jsonEntry<Record<string, unknown>>(entries, 'scene/state.json')
   const sourceRecord = sources[0]
   const sourceLink = links[0]
   if (sourceRecord === undefined || sourceLink === undefined) {
@@ -165,21 +165,32 @@ function v3CollisionFixture(source: Uint8Array): Buffer {
     manualNumericStatus: 7,
     statusSource: 'manual',
     statusOverlayVisible: true,
-    visible: true,
+    scale: [1, 1, 1],
     graspable: false,
   }])
-  putJson(entries, 'external/entities.json', [
-    ...externalEntities,
-    {
-      entityId: FIXTURE_ENTITY_ID,
-      manualTransform: {
-        position: [0, 0, 1.15],
-        quaternion: [0, 0, 0, 1],
-        scale: [1, 1, 1],
+  putJson(entries, 'scene/state.json', {
+    ...scene,
+    entities: [
+      ...(scene.entities as Record<string, unknown>[]),
+      {
+        kind: 'object',
+        id: FIXTURE_ENTITY_ID,
+        name: 'Collision Fixture',
+        parentId: null,
+        localPose: {
+          positionM: [0, 0, 1.15],
+          quaternion: [0, 0, 0, 1],
+        },
+        visible: true,
+        target: { kind: 'object-instance', id: 'collision-fixture' },
+        transformSource: 'manual',
       },
-      transformSource: 'manual',
+    ],
+    robotMountContact: {
+      baseLinkId: 'LINK00',
+      mountSurfaceCollisionEntityId: 'workcell:workbench',
     },
-  ])
+  })
   const startAngles = [-249.75, 0, 0, 0, 0, 0]
   const endAngles = [249.75, 0, 0, 0, 0, 0]
   putJson(entries, 'simulation/jobs.json', {
@@ -227,10 +238,7 @@ function v3CollisionFixture(source: Uint8Array): Buffer {
 function heldWorkerFixture(source: Uint8Array): Buffer {
   const entries = unzipSync(source)
   const manifest = jsonEntry<Record<string, unknown>>(entries, 'manifest.json')
-  const externalEntities = jsonEntry<Record<string, unknown>[]>(
-    entries,
-    'external/entities.json',
-  )
+  const scene = jsonEntry<Record<string, unknown>>(entries, 'scene/state.json')
   const sources = jsonEntry<Record<string, unknown>[]>(entries, 'robot/sources/index.json')
   const links = jsonEntry<Record<string, unknown>[]>(
     entries,
@@ -245,6 +253,17 @@ function heldWorkerFixture(source: Uint8Array): Buffer {
   const sourcePath = `robot/sources/${digest}.step`
   const sourceBytes = entries[sourcePath]
   if (sourceBytes === undefined) throw new Error(`Missing source STEP: ${sourcePath}`)
+  for (const candidate of sources.slice(1)) {
+    delete entries[`robot/sources/${String(candidate.sha256)}.step`]
+  }
+  putJson(entries, 'robot/sources/index.json', [sourceRecord])
+  putJson(entries, 'robot/links/index.json', links.map((link) => ({
+    ...link,
+    sourceRefs: (link.sourceRefs as Record<string, unknown>[]).map((sourceRef) => ({
+      ...sourceRef,
+      sourceAssetId: digest,
+    })),
+  })))
   const collisionBoxes = Array.from({ length: 10 }, (_, index) => ({
     id: `worker-${index.toString().padStart(2, '0')}`,
     center: [0, 0, 0],
@@ -282,7 +301,7 @@ function heldWorkerFixture(source: Uint8Array): Buffer {
     manualNumericStatus: 7,
     statusSource: 'manual',
     statusOverlayVisible: true,
-    visible: true,
+    scale: [1, 1, 1],
     graspable: true,
   }
   const instances = [
@@ -297,22 +316,33 @@ function heldWorkerFixture(source: Uint8Array): Buffer {
     })),
   ]
   putJson(entries, 'objects/instances.json', instances)
-  putJson(entries, 'external/entities.json', [
-    ...externalEntities,
-    ...instances.map((instance, index) => ({
-      entityId: `object:${instance.id}`,
-      manualTransform: {
-        position: index === 0
-          ? [0.725, 0, 2.315]
-          : index === 1
-            ? [0.755, 0, 2.315]
-            : [10 + (index - 1) * 0.25, 10, 10],
-        quaternion: [0, 0, 0, 1],
-        scale: [1, 1, 1],
-      },
-      transformSource: 'manual',
-    })),
-  ])
+  putJson(entries, 'scene/state.json', {
+    ...scene,
+    entities: [
+      ...(scene.entities as Record<string, unknown>[]),
+      ...instances.map((instance, index) => ({
+        kind: 'object',
+        id: `object:${instance.id}`,
+        name: instance.name,
+        parentId: null,
+        localPose: {
+          positionM: index === 0
+            ? [0.725, 0, 2.315]
+            : index === 1
+              ? [0.755, 0, 2.315]
+              : [10 + (index - 1) * 0.25, 10, 10],
+          quaternion: [0, 0, 0, 1],
+        },
+        visible: true,
+        target: { kind: 'object-instance', id: instance.id },
+        transformSource: 'manual',
+      })),
+    ],
+    robotMountContact: {
+      baseLinkId: 'LINK00',
+      mountSurfaceCollisionEntityId: 'workcell:workbench',
+    },
+  })
   const startAngles = [-249.75, 0, 0, 0, 0, 0]
   const endAngles = [249.75, 0, 0, 0, 0, 0]
   putJson(entries, 'simulation/jobs.json', {
@@ -383,7 +413,9 @@ async function downloadCsvReport(page: Page): Promise<string> {
 
 async function waitForImportedProject(page: Page, name: string): Promise<void> {
   await Promise.race([
-    page.getByText(name, { exact: true }).waitFor({ state: 'visible', timeout: 180_000 }),
+    expect(page.getByLabel('Project controls')).toContainText(name, {
+      timeout: 180_000,
+    }),
     page.getByRole('alert').waitFor({ state: 'visible', timeout: 180_000 }).then(async () => {
       throw new Error(await page.getByRole('alert').innerText())
     }),
@@ -397,6 +429,15 @@ async function openDrawer(page: Page, name: string): Promise<void> {
     if (button === undefined) throw new Error(`Missing drawer control: ${label}`)
     if (button.getAttribute('aria-expanded') !== 'true') button.click()
   }, name)
+}
+
+async function openCollisionWorkspace(page: Page): Promise<void> {
+  await openDrawer(page, 'Timeline and Events sheet')
+  const collisionTab = page.getByRole('tab', { name: /^Collision/ })
+  if (await collisionTab.getAttribute('aria-selected') !== 'true') {
+    await collisionTab.click()
+  }
+  await expect(page.getByRole('tabpanel', { name: 'Collision' })).toBeVisible()
 }
 
 async function activeProjectSemantics(page: Page): Promise<ProjectSemantics> {
@@ -440,8 +481,8 @@ async function activeProjectSemantics(page: Page): Promise<ProjectSemantics> {
     if (instance === undefined || asset === undefined) {
       throw new Error('Collision fixture is missing from the active project.')
     }
-    const entity = snapshot.externalEntities.find(
-      ({ entityId }: { entityId: string }) => entityId === fixtureEntityId,
+    const entity = snapshot.scene.entities.find(
+      ({ id }: { id: string }) => id === fixtureEntityId,
     )
     if (entity === undefined) throw new Error('Collision fixture transform is missing.')
     const job = snapshot.simulation.jobs.find(
@@ -452,7 +493,11 @@ async function activeProjectSemantics(page: Page): Promise<ProjectSemantics> {
       schemaVersion: snapshot.manifest.schemaVersion,
       name: snapshot.manifest.name,
       objectInstanceCount: snapshot.objectInstances.length,
-      objectTransform: entity.manualTransform,
+      objectTransform: {
+        position: entity.localPose.positionM,
+        quaternion: entity.localPose.quaternion,
+        scale: instance.scale,
+      },
       objectCollisionBoxes: asset.collisionBoxes,
       poseAngles: job.poses.map(({ anglesDeg }: { anglesDeg: number[] }) =>
         anglesDeg,
@@ -473,13 +518,13 @@ async function applyFixturePosition(
   positionMm: readonly [number, number, number],
 ): Promise<void> {
   const inspector = page.getByRole('complementary', { name: 'Inspector' })
-  await inspector.getByLabel('X (mm)').fill(String(positionMm[0]))
-  await inspector.getByLabel('Y (mm)').fill(String(positionMm[1]))
-  await inspector.getByLabel('Z (mm)').fill(String(positionMm[2]))
+  await inspector.getByLabel('Local X (mm)').fill(String(positionMm[0]))
+  await inspector.getByLabel('Local Y (mm)').fill(String(positionMm[1]))
+  await inspector.getByLabel('Local Z (mm)').fill(String(positionMm[2]))
   await inspector.getByRole('button', { name: 'Apply transform' }).click()
-  await expect(inspector.getByLabel('X (mm)')).toHaveValue(String(positionMm[0]))
-  await expect(inspector.getByLabel('Y (mm)')).toHaveValue(String(positionMm[1]))
-  await expect(inspector.getByLabel('Z (mm)')).toHaveValue(String(positionMm[2]))
+  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue(String(positionMm[0]))
+  await expect(inspector.getByLabel('Local Y (mm)')).toHaveValue(String(positionMm[1]))
+  await expect(inspector.getByLabel('Local Z (mm)')).toHaveValue(String(positionMm[2]))
 }
 
 test('accepts V3 geometry collision and report workflows', async ({
@@ -491,7 +536,7 @@ test('accepts V3 geometry collision and report workflows', async ({
     'aria-busy',
     'false',
   )
-  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByRole('button', { name: 'New', exact: true }).click()
   await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
   const [defaultDownload] = await Promise.all([
     page.waitForEvent('download'),
@@ -521,11 +566,18 @@ test('accepts V3 geometry collision and report workflows', async ({
   expect(migrated.objectCollisionBoxes).toHaveLength(1)
   expect(migrated.poseAngles).toHaveLength(2)
 
-  await openDrawer(page, 'Timeline and Events sheet')
+  await openCollisionWorkspace(page)
   await expect(page.getByLabel('Live collision counts')).toContainText(
     /Collision [1-9]/,
   )
+  await expect(page.getByRole('status', { name: 'Mount contact status' }))
+    .toContainText('Mount Contact: Configured contact')
   const collisionReport = await downloadJsonReport(page)
+  expect(collisionReport).toMatchObject({
+    mountContactPairKey: 'robot-link:LINK00|workcell:workbench',
+    mountContactState: 'contact',
+    ignoredPairKeys: [],
+  })
   expect(collisionReport.findings).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ kind: 'collision', pairKey: LINK00_PAIR }),
@@ -541,24 +593,24 @@ test('accepts V3 geometry collision and report workflows', async ({
 
   await selectCollisionFixture(page)
   const inspector = page.getByRole('complementary', { name: 'Inspector' })
-  await expect(inspector.getByLabel('X (mm)')).toHaveValue('0')
-  await expect(inspector.getByLabel('Z (mm)')).toHaveValue('1150')
+  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue('0')
+  await expect(inspector.getByLabel('Local Z (mm)')).toHaveValue('1150')
 
   await page.getByLabel('Warning distance (mm)').fill('50')
   await applyFixturePosition(page, [135, 0, 1_150])
   await expect(page.getByLabel('Live collision counts')).toContainText(
-    /Near-miss [1-9]/,
+    /Collision [1-9]/,
   )
   const nearReport = await downloadJsonReport(page)
-  const nearIndex = nearReport.findings.findIndex(
-    ({ kind, pairKey }) => kind === 'near-miss' && pairKey === LINK00_PAIR,
+  const fixtureFindingIndex = nearReport.findings.findIndex(
+    ({ pairKey }) => pairKey === LINK00_PAIR,
   )
-  expect(nearIndex).toBeGreaterThanOrEqual(0)
+  expect(fixtureFindingIndex).toBeGreaterThanOrEqual(0)
   expect(nearReport.findings).not.toContainEqual(
     expect.objectContaining({ pairKey: 'robot-link:LINK00|workcell:workbench' }),
   )
-  await expect(inspector.getByLabel('X (mm)')).toHaveValue('135')
-  await expect(inspector.getByLabel('Z (mm)')).toHaveValue('1150')
+  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue('135')
+  await expect(inspector.getByLabel('Local Z (mm)')).toHaveValue('1150')
 
   const firstFinding = page.getByRole('button', { name: 'First finding' })
   if (await firstFinding.isEnabled()) await firstFinding.click()
@@ -568,7 +620,9 @@ test('accepts V3 geometry collision and report workflows', async ({
     await firstFinding.click()
     await expect(page.getByText(/^Finding 1 of /)).toBeVisible()
   }
-  for (let index = 0; index < nearIndex; index += 1) await nextFinding.click()
+  for (let index = 0; index < fixtureFindingIndex; index += 1) {
+    await nextFinding.click()
+  }
   await expect(page.locator('.collision-finding code')).toHaveText(LINK00_PAIR)
   await page.getByRole('button', {
     name: `Ignore ${FIXTURE_ENTITY_ID} and robot-link:LINK00`,
@@ -576,6 +630,13 @@ test('accepts V3 geometry collision and report workflows', async ({
   await expect(page.getByRole('list', { name: 'Ignored collision pairs' }))
     .toContainText(LINK00_PAIR)
   const ignoredReport = await downloadJsonReport(page)
+  expect(ignoredReport.mountContactPairKey).toBe(
+    'robot-link:LINK00|workcell:workbench',
+  )
+  expect(ignoredReport.ignoredPairKeys).toContain(LINK00_PAIR)
+  expect(ignoredReport.ignoredPairKeys).not.toContain(
+    ignoredReport.mountContactPairKey,
+  )
   expect(ignoredReport.findings.map(({ pairKey }) => pairKey)).not.toContain(
     LINK00_PAIR,
   )
@@ -584,11 +645,11 @@ test('accepts V3 geometry collision and report workflows', async ({
   await expect(page.getByRole('list', { name: 'Ignored collision pairs' }))
     .not.toBeVisible()
   await expect(page.getByLabel('Live collision counts')).toContainText(
-    /Near-miss [1-9]/,
+    /Collision [1-9]/,
   )
   const restoredReport = await downloadJsonReport(page)
   const restoredRow = restoredReport.findings.find(
-    ({ kind, pairKey }) => kind === 'near-miss' && pairKey === LINK00_PAIR,
+    ({ pairKey }) => pairKey === LINK00_PAIR,
   )
   expect(restoredRow).toBeDefined()
   expect(await downloadCsvReport(page)).toContain(
@@ -605,7 +666,7 @@ test('preserves V3 collision semantics and report rows through Save, Export, and
     'aria-busy',
     'false',
   )
-  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByRole('button', { name: 'New', exact: true }).click()
   await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
   const [defaultDownload] = await Promise.all([
     page.waitForEvent('download'),
@@ -620,7 +681,7 @@ test('preserves V3 collision semantics and report rows through Save, Export, and
     buffer: fixture,
   })
   await waitForImportedProject(page, 'Geometry Collision Acceptance')
-  await openDrawer(page, 'Timeline and Events sheet')
+  await openCollisionWorkspace(page)
   await expect(page.getByLabel('Live collision counts')).toContainText(
     /Collision [1-9]/,
   )
@@ -648,7 +709,7 @@ test('preserves V3 collision semantics and report rows through Save, Export, and
     'false',
     { timeout: 180_000 },
   )
-  await openDrawer(page, 'Timeline and Events sheet')
+  await openCollisionWorkspace(page)
   await expect(page.getByLabel('Live collision counts')).toContainText(
     /Collision [1-9]/,
   )
@@ -713,7 +774,7 @@ test('keeps browser animation responsive during held-object Worker validation', 
     'aria-busy',
     'false',
   )
-  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByRole('button', { name: 'New', exact: true }).click()
   await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
   const [defaultDownload] = await Promise.all([
     page.waitForEvent('download'),
@@ -735,15 +796,7 @@ test('keeps browser animation responsive during held-object Worker validation', 
     workerSemantics.objectInstanceCount *
       workerSemantics.objectCollisionBoxes.length,
   ).toBe(50)
-  await openDrawer(page, 'Scene Assets drawer')
-  for (const name of ['Cup 01', 'Cup 02', 'Machine 01']) {
-    const deleteEquipment = page.getByRole('button', {
-      name: `Delete ${name}`,
-    })
-    await deleteEquipment.click()
-    await expect(deleteEquipment).not.toBeVisible()
-  }
-  await openDrawer(page, 'Timeline and Events sheet')
+  await openCollisionWorkspace(page)
   await expect(page.getByRole('status', {
     name: 'Scene collision telemetry',
   })).toContainText('Boxes 59', { timeout: 180_000 })
@@ -751,7 +804,7 @@ test('keeps browser animation responsive during held-object Worker validation', 
   await openDrawer(page, 'Inspector drawer')
   await expect(page.getByRole('spinbutton', { name: 'J1' })).toHaveValue('0')
   await page.getByRole('button', { name: 'Close Gripper' }).click()
-  await openDrawer(page, 'Timeline and Events sheet')
+  await openCollisionWorkspace(page)
   await expect(page.getByRole('status', { name: 'Held collision entity' }))
     .toHaveText(`Held Object: ${FIXTURE_ENTITY_ID}`)
   await page.evaluate(() => {

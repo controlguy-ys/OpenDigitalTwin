@@ -245,6 +245,7 @@ function validationRequest(
         ],
       },
     ],
+    mountContactPairKey: 'robot-link:LINK00|workcell:workbench',
     policy: {
       enabled: true,
       warningDistanceM: 0,
@@ -255,6 +256,123 @@ function validationRequest(
 }
 
 describe('runCollisionValidation', () => {
+  it('keeps the Project V3 absolute Robot root aligned with a held/static probe', async () => {
+    const baseRequest = validationRequest([
+      pose('start', -249.75, 2_775),
+      pose('end', 249.75),
+    ], 'validate')
+    const request = {
+      ...baseRequest,
+      mountContactPairKey: null,
+      policy: { ...baseRequest.policy, warningDistanceM: 0.05 },
+      robot: {
+        ...baseRequest.robot,
+        rootPose: {
+          ...baseRequest.robot.rootPose,
+          position: [0, 0, 1.08] as [number, number, number],
+        },
+        linkEntities: baseRequest.robot.linkEntities.map((link) => ({
+          ...link,
+          collisionActive: false,
+        })),
+      },
+      heldObject: {
+        id: 'object:collision-fixture' as const,
+        name: 'Collision Fixture',
+        boxes: [{
+          id: 'worker-00',
+          center: [0, 0, 0] as [number, number, number],
+          halfExtents: [0.02, 0.02, 0.02] as [number, number, number],
+          quaternion: [0, 0, 0, 1] as [number, number, number, number],
+        }],
+        tcpLocalTransform: {
+          position: [0, 0, 0.09] as [number, number, number],
+          quaternion: [
+            0,
+            -Math.SQRT1_2,
+            0,
+            Math.SQRT1_2,
+          ] as [number, number, number, number],
+          scale: [1, 1, 1] as [number, number, number],
+        },
+      },
+      staticEntities: [{
+        id: 'object:collision-worker-load-00' as const,
+        name: 'Collision Worker Load 1',
+        category: 'object' as const,
+        boxes: [{
+          id: 'worker-00',
+          center: [0, 0, 0] as [number, number, number],
+          halfExtents: [0.02, 0.02, 0.02] as [number, number, number],
+          quaternion: [0, 0, 0, 1] as [number, number, number, number],
+        }],
+        worldMatrix: [
+          1, 0, 0, 0,
+          0, 1, 0, 0,
+          0, 0, 1, 0,
+          0.725, 0, 2.315, 1,
+        ],
+      }],
+    }
+
+    const aligned = await runCollisionValidation(request)
+    const doubleMounted = await runCollisionValidation({
+      ...request,
+      robot: {
+        ...request.robot,
+        rootPose: { ...request.robot.rootPose, position: [0, 0, 2.16] },
+      },
+    })
+    const alignedPair = aligned?.findings.filter(
+      ({ pairKey }) =>
+        pairKey ===
+        'object:collision-fixture|object:collision-worker-load-00',
+    ) ?? []
+
+    expect(alignedPair.length).toBeGreaterThan(0)
+    expect(alignedPair.every(({ sampleIndex, timeMs }) =>
+      sampleIndex !== null && sampleIndex > 400 && sampleIndex < 600 &&
+      timeMs !== null && timeMs > 1_200 && timeMs < 1_600,
+    )).toBe(true)
+    expect(doubleMounted?.findings).toEqual([])
+  })
+
+  it('reports the configured mount pair separately from sequence findings', async () => {
+    const baseRequest = validationRequest([pose('start', 0), pose('end', 0)])
+    const mountSurface = {
+      ...baseRequest.staticEntities[0]!,
+      id: 'equipment:mount-plate' as const,
+      category: 'equipment' as const,
+      boxes: [{
+        id: 'mount',
+        center: [0, 0, 0] as [number, number, number],
+        halfExtents: [0.05, 0.05, 0.05] as [number, number, number],
+        quaternion: [0, 0, 0, 1] as [number, number, number, number],
+      }],
+    }
+    const request = {
+      ...baseRequest,
+      heldObject: null,
+      mountContactPairKey: 'equipment:mount-plate|robot-link:LINK00',
+      staticEntities: [mountSurface],
+      robot: {
+        ...baseRequest.robot,
+        linkEntities: baseRequest.robot.linkEntities.map((link) => ({
+          ...link,
+          collisionActive: link.linkId === 'LINK00',
+        })),
+      },
+    }
+
+    const result = await runCollisionValidation(request)
+
+    expect(result?.findings).toEqual([])
+    expect(result?.mountContact).toEqual({
+      pairKey: 'equipment:mount-plate|robot-link:LINK00',
+      state: 'contact',
+    })
+  })
+
   it('keeps all seven FK links but excludes an inactive colliding Link proxy', async () => {
     const baseRequest = validationRequest([
       pose('start', 0),
@@ -279,6 +397,7 @@ describe('runCollisionValidation', () => {
     }
     const withLinkParticipation = (collisionActive: boolean) => ({
       ...baseRequest,
+      mountContactPairKey: null,
       heldObject: null,
       staticEntities: [staticEntity],
       robot: {

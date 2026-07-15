@@ -10,11 +10,15 @@ import {
   type CollisionFinding,
   type CollisionPolicy,
 } from '../../domain/collision/collision'
-import type { CollisionQueryTelemetry } from '../../domain/collision/query-collision'
+import type {
+  CollisionQueryTelemetry,
+  MountContactState,
+} from '../../domain/collision/query-collision'
 
 export interface CollisionStateSnapshot {
   readonly policy: CollisionPolicy
   readonly currentFindings: readonly CollisionFinding[]
+  readonly mountContact?: MountContactState | null
   readonly diagnostics: readonly CollisionDiagnostic[]
 }
 
@@ -26,6 +30,7 @@ export interface CollisionValidationReport {
 }
 
 export interface CollisionStoreState extends CollisionStateSnapshot {
+  readonly mountContact: MountContactState | null
   readonly latestTelemetry: CollisionQueryTelemetry | null
   readonly validationReport: CollisionValidationReport | null
   readonly validationReportStale: boolean
@@ -64,22 +69,32 @@ function ownedTelemetry(
   return Object.freeze({ ...telemetry })
 }
 
-function ownedSnapshot(snapshot: CollisionStateSnapshot): CollisionStateSnapshot {
+type OwnedCollisionStateSnapshot = CollisionStateSnapshot & {
+  readonly mountContact: MountContactState | null
+}
+
+function ownedSnapshot(
+  snapshot: CollisionStateSnapshot,
+): OwnedCollisionStateSnapshot {
   return {
     policy: validateCollisionPolicy(snapshot.policy),
     currentFindings: Object.freeze(
       snapshot.currentFindings.map(validateCollisionFinding),
     ),
+    mountContact: snapshot.mountContact === undefined || snapshot.mountContact === null
+      ? null
+      : Object.freeze({ ...snapshot.mountContact }),
     diagnostics: Object.freeze(
       snapshot.diagnostics.map(validateCollisionDiagnostic),
     ),
   }
 }
 
-function createInitialSnapshot(): CollisionStateSnapshot {
+function createInitialSnapshot(): OwnedCollisionStateSnapshot {
   return ownedSnapshot({
     policy: DEFAULT_COLLISION_POLICY,
     currentFindings: [],
+    mountContact: null,
     diagnostics: [],
   })
 }

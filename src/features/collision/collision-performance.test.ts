@@ -129,6 +129,7 @@ function thousandSampleRequest(): CollisionValidationRequest {
       boxes: [BOX],
       worldMatrix: IDENTITY_MATRIX,
     })),
+    mountContactPairKey: null,
     policy: {
       enabled: true,
       warningDistanceM: 0.02,

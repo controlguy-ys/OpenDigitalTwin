@@ -7,6 +7,9 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { CollisionPolicy } from '../../domain/collision/collision'
+import { deriveMountContactPairKey } from '../../domain/collision/mount-contact'
+import type { RobotMountContactV1 } from '../../domain/project/scene-state-v1'
+import type { MountContactState } from '../../domain/collision/query-collision'
 import {
   composePose3D,
   pose3DToSerializableTransform,
@@ -27,7 +30,7 @@ import {
   useRobotConfigurationStore,
 } from '../robot/robot-configuration-store'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
-import { WORKBENCH_TOP_Z } from '../scene/workcell-constants'
+import { useProjectStore } from '../project/project-store-browser'
 import {
   CollisionValidationCancelledError,
   CollisionValidationClient,
@@ -127,6 +130,8 @@ export interface CollisionPanelValidationRuntime {
 export interface CollisionPanelProps {
   readonly validationRuntime?: CollisionPanelValidationRuntime
   readonly focusRequest?: number
+  readonly mountContactConfiguration?: RobotMountContactV1 | null
+  readonly mountContact?: MountContactState | null
 }
 
 function rootPose(
@@ -134,10 +139,6 @@ function rootPose(
   basePosition: readonly [number, number, number],
   baseRotationDeg: readonly [number, number, number],
 ): SerializableTransform {
-  const mount: Pose3D = {
-    position: [0, 0, WORKBENCH_TOP_Z],
-    quaternion: [0, 0, 0, 1],
-  }
   const base: Pose3D = {
     position: basePosition,
     quaternion: rpyToQuaternion([
@@ -147,16 +148,14 @@ function rootPose(
     ]),
   }
   return pose3DToSerializableTransform(
-    composePose3D(
-      composePose3D(serializableTransformToPose3D(mcp), mount),
-      base,
-    ),
+    composePose3D(serializableTransformToPose3D(mcp), base),
   )
 }
 
 function serializableRevision(
   policy: CollisionPolicy,
   registryRevision: number,
+  mountContactConfiguration: RobotMountContactV1 | null,
   inputs: {
     readonly keyframes: ReturnType<typeof useRobotStore.getState>['keyframes']
     readonly configuration: ReturnType<typeof useRobotConfigurationStore.getState>['configuration']
@@ -173,6 +172,7 @@ function serializableRevision(
   return JSON.stringify({
     policy,
     registryRevision,
+    mountContactConfiguration,
     keyframes: inputs.keyframes,
     configuration: inputs.configuration,
     frames: inputs.frames,
@@ -206,6 +206,7 @@ function serializableRevision(
 
 function useDefaultValidationRuntime(
   policy: CollisionPolicy,
+  mountContactConfiguration: RobotMountContactV1 | null,
 ): CollisionPanelValidationRuntime {
   const keyframes = useRobotStore((state) => state.keyframes)
   const configuration = useRobotConfigurationStore((state) => state.configuration)
@@ -249,8 +250,13 @@ function useDefaultValidationRuntime(
     ],
   )
   const revision = useMemo(
-    () => serializableRevision(policy, registryRevision, revisionInputs),
-    [policy, registryRevision, revisionInputs],
+    () => serializableRevision(
+      policy,
+      registryRevision,
+      mountContactConfiguration,
+      revisionInputs,
+    ),
+    [mountContactConfiguration, policy, registryRevision, revisionInputs],
   )
   const createRequest = useCallback(
     (mode: CollisionValidationMode): CollisionValidationRequest => {
@@ -280,6 +286,15 @@ function useDefaultValidationRuntime(
         ? undefined
         : geometryEntityRegistry.get(heldEntityId)
       const halfToolRotation = definition.toolRotationYRad / 2
+      const mountContactPairKey = deriveMountContactPairKey(
+        mountContactConfiguration,
+        [
+          ...linkEntities
+            .filter(({ collisionActive }) => collisionActive)
+            .map(({ id }) => ({ id, category: 'robot-link' as const })),
+          ...staticEntities,
+        ],
+      )
 
       return {
         requestId: `collision-validation-${nextValidationRequestId++}`,
@@ -325,6 +340,7 @@ function useDefaultValidationRuntime(
                 tcpLocalTransform: gripOffset,
               },
         staticEntities,
+        mountContactPairKey,
         policy,
       }
     }, [
@@ -335,6 +351,7 @@ function useDefaultValidationRuntime(
       heldEntityId,
       hiddenEntityIds,
       keyframes,
+      mountContactConfiguration,
       policy,
       revision,
     ],
@@ -366,12 +383,21 @@ function clearanceText(separationM: number): string {
 export function CollisionPanel({
   validationRuntime,
   focusRequest = 0,
+  mountContactConfiguration,
+  mountContact,
 }: CollisionPanelProps = {}) {
+  const projectMountContact = useProjectStore(
+    (state) => state.activeSnapshot?.scene.robotMountContact ?? null,
+  )
+  const activeMountContactConfiguration = mountContactConfiguration === undefined
+    ? projectMountContact
+    : mountContactConfiguration
   const policy = useCollisionStore((state) => state.policy)
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const currentFindings = useCollisionStore((state) => state.currentFindings)
   const latestTelemetry = useCollisionStore((state) => state.latestTelemetry)
   const diagnostics = useCollisionStore((state) => state.diagnostics)
+  const currentMountContact = useCollisionStore((state) => state.mountContact)
   const navigationFindings = useCollisionStore(
     selectCollisionNavigationFindings,
   )
@@ -408,7 +434,13 @@ export function CollisionPanel({
   const markValidationReportStale = useCollisionStore(
     (state) => state.markValidationReportStale,
   )
-  const defaultValidationRuntime = useDefaultValidationRuntime(policy)
+  const displayedMountContact = mountContact === undefined
+    ? currentMountContact
+    : mountContact
+  const defaultValidationRuntime = useDefaultValidationRuntime(
+    policy,
+    activeMountContactConfiguration,
+  )
   const activeValidationRuntime = validationRuntime ?? defaultValidationRuntime
   const runtimeRef = useRef(activeValidationRuntime)
   runtimeRef.current = activeValidationRuntime
@@ -531,6 +563,11 @@ export function CollisionPanel({
           <span data-kind="collision">Collision {counts.collisions}</span>
           <span data-kind="near-miss">Near-miss {counts.nearMisses}</span>
         </div>
+        <output aria-label="Mount contact status" role="status">
+          Mount Contact: {displayedMountContact === null
+            ? 'Incomplete'
+            : `Configured ${displayedMountContact.state}`}
+        </output>
         {latestTelemetry === null ? null : (
           <output
             aria-label="Scene collision telemetry"
@@ -737,6 +774,8 @@ export function CollisionPanel({
                 encodeCollisionReportJson(navigationFindings, {
                   sourceTruncated: validationReport?.truncated ?? false,
                   sampleCount: validationReport?.sampleCount ?? null,
+                  mountContact: displayedMountContact,
+                  ignoredPairKeys: policy.ignoredPairKeys,
                 }),
               )
             }

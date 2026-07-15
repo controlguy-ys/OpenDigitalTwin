@@ -1,5 +1,7 @@
 import type { Object3D } from 'three'
 import { validateCollisionBox, type CollisionBox } from '../../domain/collision/collision'
+import { deriveMountContactPairKey } from '../../domain/collision/mount-contact'
+import type { RobotMountContactV1 } from '../../domain/project/scene-state-v1'
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type {
   RobotLinkGeometryRecordV1,
@@ -8,6 +10,16 @@ import type {
 import type { GeometryEntityRegistration } from './geometry-entity-registry'
 
 export { objectInstanceToGeometryEntity } from '../objects/object-equipment-adapter'
+
+export function deriveMountContactPairKeyFromRegistrations(
+  configuration: RobotMountContactV1 | null,
+  registrations: readonly GeometryEntityRegistration[],
+): string | null {
+  return deriveMountContactPairKey(
+    configuration,
+    registrations.filter(({ object }) => object !== null),
+  )
+}
 
 type RobotLinkCollisionRecord = Pick<
   RobotLinkGeometryRecordV1,

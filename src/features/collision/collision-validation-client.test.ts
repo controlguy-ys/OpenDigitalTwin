@@ -89,6 +89,7 @@ function request(revision = 'scene-7'): CollisionValidationRequest {
     },
     heldObject: null,
     staticEntities: [],
+    mountContactPairKey: null,
     policy: {
       enabled: true,
       warningDistanceM: 0.05,
@@ -109,6 +110,7 @@ function result(
     sampleCount: 2,
     durationMs: 100,
     findings,
+    mountContact: null,
     truncated: false,
   }
 }

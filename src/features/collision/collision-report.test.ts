@@ -54,6 +54,24 @@ describe('collision report encoders', () => {
     expect(decoded.findings[0]?.approximateClearanceMm).toBe(-4)
   })
 
+  it('keeps configured mount contact separate from user ignored pairs', () => {
+    const mountPair = 'robot-link:LINK00|workcell:workbench'
+    const ignoredPair = 'object:a|robot-link:LINK02'
+    const decoded = JSON.parse(encodeCollisionReportJson([], {
+      mountContact: { pairKey: mountPair, state: 'contact' },
+      ignoredPairKeys: [ignoredPair],
+    })) as {
+      mountContactPairKey: string | null
+      mountContactState: string | null
+      ignoredPairKeys: string[]
+    }
+
+    expect(decoded.mountContactPairKey).toBe(mountPair)
+    expect(decoded.mountContactState).toBe('contact')
+    expect(decoded.ignoredPairKeys).toEqual([ignoredPair])
+    expect(decoded.ignoredPairKeys).not.toContain(mountPair)
+  })
+
   it('uses stable CSV order and escapes commas, quotes, and newlines', () => {
     const csv = encodeCollisionReportCsv([
       finding('object:z|robot-link:LINK03', 'near-miss', 0.01),

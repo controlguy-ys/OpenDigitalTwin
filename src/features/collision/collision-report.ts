@@ -1,4 +1,5 @@
 import type { CollisionFinding } from '../../domain/collision/collision'
+import type { MountContactState } from '../../domain/collision/query-collision'
 
 export const COLLISION_REPORT_SCHEMA_VERSION = 1
 export const COLLISION_REPORT_MAX_FINDINGS = 10_000
@@ -6,6 +7,8 @@ export const COLLISION_REPORT_MAX_FINDINGS = 10_000
 export interface CollisionReportMetadata {
   readonly sourceTruncated?: boolean
   readonly sampleCount?: number | null
+  readonly mountContact?: MountContactState | null
+  readonly ignoredPairKeys?: readonly string[]
 }
 
 interface CollisionReportRow {
@@ -82,6 +85,9 @@ export function encodeCollisionReportJson(
       schemaVersion: COLLISION_REPORT_SCHEMA_VERSION,
       title: 'Geometry Proxy Collision',
       clearanceLabel: 'Approximate Clearance',
+      mountContactPairKey: metadata.mountContact?.pairKey ?? null,
+      mountContactState: metadata.mountContact?.state ?? null,
+      ignoredPairKeys: [...(metadata.ignoredPairKeys ?? [])].sort(),
       summary: {
         totalFindings: findings.length,
         exportedFindings: rows.length,
