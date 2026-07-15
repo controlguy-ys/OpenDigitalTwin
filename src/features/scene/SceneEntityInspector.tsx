@@ -9,6 +9,8 @@ import {
   EquipmentStatusEditor,
   type EquipmentStatusEditorValue,
 } from '../equipment/EquipmentStatusEditor'
+import { useEquipmentStore } from '../equipment/equipment-store'
+import { useObjectAssetStore } from '../objects/object-asset-store'
 import type { SceneCommandService } from './scene-command-service'
 import {
   usePublishedSceneRuntime,
@@ -121,14 +123,28 @@ export function SceneEntityInspector({
   const publishedRuntime = usePublishedSceneRuntime()
   const runtime = runtimeOverride ?? publishedRuntime
   const entity = runtime.byId.get(entityId)
+  const objectNumericStatus = useObjectAssetStore((state) => {
+    if (!entityId.startsWith('object:')) return undefined
+    const instanceId = entityId.slice('object:'.length)
+    return state.instances.find(({ id }) => id === instanceId)?.numericStatus
+  })
+  const equipmentNumericStatus = useEquipmentStore((state) => {
+    if (!entityId.startsWith('equipment:')) return undefined
+    const equipmentId = entityId.slice('equipment:'.length)
+    return state.records.find(({ id }) => id === equipmentId)?.numericStatus
+  })
   const snapshot = useSyncExternalStore(
     projectMutationService.subscribe,
     () => projectMutationService.readPublished()?.snapshot ?? null,
     () => projectMutationService.readPublished()?.snapshot ?? null,
   )
-  const status = statusOverride === undefined
+  const durableStatus = statusOverride === undefined
     ? statusFromProject(snapshot, entityId)
     : statusOverride
+  const effectiveNumericStatus = objectNumericStatus ?? equipmentNumericStatus
+  const status = durableStatus === null || effectiveNumericStatus === undefined
+    ? durableStatus
+    : { ...durableStatus, numericStatus: effectiveNumericStatus }
   const [draft, setDraft] = useState<TransformDraft>(() => draftFromPose(
     entity?.localPose ?? { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
   ))

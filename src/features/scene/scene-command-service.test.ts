@@ -532,6 +532,25 @@ describe('SceneCommandService', () => {
     })
   })
 
+  it('rejects manual local and world pose writes for an OPC UA-owned Object', async () => {
+    const entity: SceneEntityV1 = {
+      kind: 'object', id: 'object:live-part', name: 'Live Part', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'live-part' }, transformSource: 'opcua',
+    }
+    const harness = mutationHarness(projection([robot(), entity]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+    const pose = { positionM: [1, 2, 3], quaternion: [0, 0, 0, 1] } as const
+
+    await expect(commands.setLocalPose('object:live-part', pose)).rejects.toThrow(
+      'SCENE_TRANSFORM_OWNED_BY_OPCUA',
+    )
+    await expect(commands.setWorldPose('object:live-part', pose)).rejects.toThrow(
+      'SCENE_TRANSFORM_OWNED_BY_OPCUA',
+    )
+    expect(harness.active().scene.entities).toContainEqual(entity)
+  })
+
   it('updates and deletes built-in Equipment through Project V3 recipes and clears mount contact', async () => {
     const equipment: SceneEntityV1 = {
       kind: 'object', id: 'equipment:cup-01', name: 'Cup', parentId: null,

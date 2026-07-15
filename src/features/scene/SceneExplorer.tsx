@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { useStore } from 'zustand'
 import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
 import {
@@ -82,7 +82,11 @@ function SceneTreeItem({
           onFocus(entity.entityId)
         }
       }}
-      onKeyDown={(event) => onKeyDown(entity.entityId, event)}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onKeyDown(entity.entityId, event)
+        }
+      }}
       onContextMenu={(event) => {
         event.preventDefault()
         event.stopPropagation()
@@ -174,6 +178,25 @@ export function SceneExplorer({
       `[data-scene-entity-id="${entityId}"]`,
     )?.focus()
   }
+
+  useEffect(() => {
+    if (focusedEntityId !== null && runtime.byId.has(focusedEntityId)) return
+    const fallback = selectedEntityId !== null && runtime.byId.has(selectedEntityId)
+      ? selectedEntityId
+      : orderedEntities[0]?.entityId ?? null
+    if (fallback === null) {
+      setFocusedEntityId(null)
+      return
+    }
+    const shouldRestoreDomFocus = document.activeElement === document.body
+    setFocusedEntityId(fallback)
+    if (shouldRestoreDomFocus) {
+      document.querySelector<HTMLElement>(
+        `[data-scene-entity-id="${fallback}"]`,
+      )?.focus()
+    }
+  }, [focusedEntityId, orderedEntities, runtime.byId, selectedEntityId])
+
   const handleTreeKeyDown = (
     entityId: SceneEntityIdV1,
     event: KeyboardEvent<HTMLLIElement>,
@@ -181,7 +204,24 @@ export function SceneExplorer({
     const index = orderedEntities.findIndex((entity) => entity.entityId === entityId)
     const entity = runtime.byId.get(entityId)
     let target: SceneEntityIdV1 | undefined
-    if (event.key === 'ArrowDown') target = orderedEntities[index + 1]?.entityId
+    if (event.key.toLowerCase() === 'v') {
+      event.preventDefault()
+      if (entity !== undefined) {
+        void commands.setVisible(entityId, !entity.persistedVisible)
+          .catch((nextError) => setError(
+            nextError instanceof Error ? nextError.message : 'Visibility update failed.',
+          ))
+      }
+      return
+    } else if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+      event.preventDefault()
+      const bounds = event.currentTarget.getBoundingClientRect()
+      setContextRequest({
+        entityId,
+        position: { x: bounds.left, y: bounds.bottom },
+      })
+      return
+    } else if (event.key === 'ArrowDown') target = orderedEntities[index + 1]?.entityId
     else if (event.key === 'ArrowUp') target = orderedEntities[index - 1]?.entityId
     else if (event.key === 'Home') target = orderedEntities[0]?.entityId
     else if (event.key === 'End') target = orderedEntities.at(-1)?.entityId

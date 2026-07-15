@@ -1,11 +1,13 @@
 import { render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SceneCommandService } from './scene-command-service'
 import { SceneContextMenu } from './SceneContextMenu'
 import { testSceneRuntime } from './scene-ui-test-fixtures'
 import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
+
+afterEach(() => vi.restoreAllMocks())
 
 function commands() {
   return {
@@ -166,6 +168,35 @@ describe('SceneContextMenu', () => {
     )
   })
 
+  it('does not expose manual transform writes for an OPC UA-owned Object', async () => {
+    const user = userEvent.setup()
+    const service = commands()
+    const view = render(
+      <SceneContextMenu
+        commands={service}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+    await user.click(screen.getByRole('menuitem', { name: 'Copy Transform' }))
+
+    view.rerender(
+      <SceneContextMenu
+        commands={service}
+        entityId="object:live-part"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    expect(screen.queryByRole('menuitem', { name: 'Paste Transform' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Reset Transform' })).not.toBeInTheDocument()
+    expect(service.setLocalPose).not.toHaveBeenCalled()
+  })
+
   it('hides mutation commands rejected for the active Axis carriage', () => {
     const runtime = testSceneRuntime([
       {
@@ -265,6 +296,28 @@ describe('SceneContextMenu', () => {
     expect(trigger).toHaveFocus()
   })
 
+  it('clamps pointer placement inside the viewport', () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      bottom: 0, height: 100, left: 0, right: 0, top: 0, width: 200,
+      x: 0, y: 0, toJSON: () => ({}),
+    })
+    render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId={null}
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        position={{ x: window.innerWidth - 10, y: window.innerHeight - 10 }}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    expect(screen.getByRole('menu')).toHaveStyle({
+      left: `${window.innerWidth - 200}px`,
+      top: `${window.innerHeight - 100}px`,
+    })
+  })
+
   it('traps confirmation focus and returns it to the invoking menu item on Escape', async () => {
     const user = userEvent.setup()
     render(
@@ -319,6 +372,61 @@ describe('SceneContextMenu', () => {
     expect(screen.getByRole('button', { name: 'Move to Fixture' })).toHaveFocus()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'Choose group' })).not.toBeInTheDocument()
+    expect(moveItem).toHaveFocus()
+  })
+
+  it('returns focus after a failed confirmation action closes its dialog', async () => {
+    const user = userEvent.setup()
+    render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="object:cup-1"
+        onDelete={vi.fn(async () => {
+          throw new Error('delete failed')
+        })}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    const deleteItem = screen.getByRole('menuitem', { name: 'Delete' })
+    await user.click(deleteItem)
+    await user.click(screen.getByRole('button', { name: 'Delete Entity' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('delete failed')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(deleteItem).toHaveFocus()
+  })
+
+  it('returns focus after a failed group choice closes its dialog', async () => {
+    const user = userEvent.setup()
+    const service = commands()
+    service.reparent.mockRejectedValue(new Error('reparent failed'))
+    const runtime = testSceneRuntime([
+      {
+        kind: 'group', id: 'group:fixture', name: 'Fixture', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+      },
+      {
+        kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+        target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+      },
+    ] satisfies readonly SceneEntityV1[])
+    render(
+      <SceneContextMenu
+        commands={service}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={runtime}
+      />,
+    )
+
+    const moveItem = screen.getByRole('menuitem', { name: 'Move to group' })
+    await user.click(moveItem)
+    await user.click(screen.getByRole('button', { name: 'Move to Fixture' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('reparent failed')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(moveItem).toHaveFocus()
   })
 })

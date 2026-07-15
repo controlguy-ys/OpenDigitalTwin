@@ -303,3 +303,55 @@ application functional while Task 4 repository publication remains out of scope:
 - The follow-up is limited to the reviewed Scene hierarchy/status/interaction
   hardening. It does not add PLC transfer, deployment, live OPC UA writes, or broader
   scene-editor redesign.
+
+---
+
+## Second Review Follow-up: Ownership, Runtime Status, and Keyboard Hardening
+
+### Outcome
+
+- Hid Paste/Reset transform commands for OPC-UA transform-owned Objects while keeping
+  Copy read-only, and added Project command-boundary rejection for both local and world
+  pose writes until ownership is explicitly switched to Manual.
+- Kept durable status metadata and writes in Project V3 while deriving the displayed
+  Object/Equipment numeric status from the publication-only runtime stores. OPC-UA
+  effective values no longer fall back to stale `manualNumericStatus` in the common
+  Inspector.
+- Added focused-row `V` visibility toggling and Shift+F10/ContextMenu-key entry into
+  the canonical context menu. Roving focus now recovers to a valid selected or first
+  tree item when Project replacement/deletion removes the focused Entity.
+- Clamped measured context-menu bounds to the browser viewport and made async command
+  execution return an explicit success result. Failed confirmation and group-choice
+  actions close their dialogs and return focus to the invoking menu item.
+
+### RED-to-GREEN evidence
+
+- Transform ownership RED: 2 failures proved that OPC-UA Objects exposed Paste and
+  that `setLocalPose` resolved instead of rejecting. GREEN: Context menu and command
+  service, 2 files and 28 tests passed; local and world pose boundaries are covered.
+- Effective-status RED: Object 73.5 and Equipment 91.25 runtime values both rendered
+  the durable value 7. GREEN: Inspector suite, 7 tests passed.
+- Tree-keyboard RED: focused-row visibility invoked no command, and deletion left all
+  remaining tree items at `tabIndex=-1`. GREEN: Explorer suite, 7 tests passed,
+  including both keyboard context-menu keys and DOM focus restoration.
+- Menu/focus RED: pointer placement remained at 1014/758 instead of clamping to
+  824/668, and both failed confirmation and failed group choice left focus on the
+  document body. GREEN: Context menu suite, 13 tests passed.
+
+### Verification
+
+- Second-review focused matrix: 34 files, 187 tests passed in 42.27 seconds.
+- Full serial Vitest (`npx vitest run --maxWorkers=1`): 100 files, 832 tests passed in
+  266.00 seconds.
+- Lint (`npm run lint`): exit 0 with zero warnings.
+- Production build (`npm run build`): exit 0 (`tsc -b` and Vite production bundle).
+  Vite reported only the existing OCCT browser-externalization and large-chunk
+  advisories; there were no TypeScript or build errors.
+- Working-tree and staged whitespace checks (`git diff --check` and
+  `git diff --cached --check`): passed before commit.
+
+### Scope boundary
+
+- This follow-up preserves the existing safe-delete, held-target, Axis-carriage,
+  collision-focus, and OPC-UA gizmo/grasp protections. It adds no Legacy or Task 4+
+  behavior, PLC transfer, deployment, or live OPC-UA write surface.

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SceneEntityIdV1, ScenePoseV1 } from '../../domain/project/scene-state-v1'
 import { sceneCommandService } from '../project/project-store-browser'
 import type { SceneCommandService } from './scene-command-service'
@@ -57,18 +57,17 @@ function ConfirmationDialog({
   label: string
   confirmLabel: string
   onCancel: () => void
-  onConfirm: () => unknown | Promise<unknown>
+  onConfirm: () => Promise<boolean>
 }>) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   )
-  const restoreFocusRef = useRef(true)
 
   useEffect(() => {
     dialogRef.current?.querySelector<HTMLElement>('button')?.focus()
     return () => {
-      if (restoreFocusRef.current) returnFocusRef.current?.focus()
+      returnFocusRef.current?.focus()
     }
   }, [])
 
@@ -100,7 +99,6 @@ function ConfirmationDialog({
       <div>
         <button onClick={onCancel} type="button">Cancel</button>
         <button onClick={() => {
-          restoreFocusRef.current = false
           void onConfirm()
         }} type="button">{confirmLabel}</button>
       </div>
@@ -117,18 +115,17 @@ function GroupChoiceDialog({
   entityName: string
   groups: readonly Readonly<{ entityId: `group:${string}`; name: string }>[]
   onCancel: () => void
-  onChoose: (groupId: `group:${string}`) => unknown | Promise<unknown>
+  onChoose: (groupId: `group:${string}`) => Promise<boolean>
 }>) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   )
-  const restoreFocusRef = useRef(true)
 
   useEffect(() => {
     dialogRef.current?.querySelector<HTMLElement>('button')?.focus()
     return () => {
-      if (restoreFocusRef.current) returnFocusRef.current?.focus()
+      returnFocusRef.current?.focus()
     }
   }, [])
 
@@ -161,7 +158,6 @@ function GroupChoiceDialog({
         <button
           key={group.entityId}
           onClick={() => {
-            restoreFocusRef.current = false
             void onChoose(group.entityId)
           }}
           type="button"
@@ -191,6 +187,7 @@ export function SceneContextMenu({
   const entity = entityId === null ? undefined : runtime.byId.get(entityId)
   const [pending, setPending] = useState<PendingAction>(null)
   const [error, setError] = useState<string | null>(null)
+  const [menuPosition, setMenuPosition] = useState(position)
   const menuRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
@@ -204,6 +201,9 @@ export function SceneContextMenu({
   const activeAxisCarriage =
     runtime.linearAxis?.source.kind === 'linear-axis' &&
     runtime.linearAxis.source.carriageEntityId === entityId
+  const manualTransformWritable = !(
+    entity?.source.kind === 'object' && entity.source.transformSource === 'opcua'
+  )
 
   const focusMenuItem = (index: number) => {
     const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
@@ -219,18 +219,29 @@ export function SceneContextMenu({
     focusMenuItem(0)
   }, [entityId])
 
+  useLayoutEffect(() => {
+    const bounds = menuRef.current?.getBoundingClientRect()
+    if (bounds === undefined) return
+    setMenuPosition({
+      x: Math.max(0, Math.min(position.x, window.innerWidth - bounds.width)),
+      y: Math.max(0, Math.min(position.y, window.innerHeight - bounds.height)),
+    })
+  }, [entityId, position.x, position.y])
+
   const closeMenu = () => {
     onClose?.()
     returnFocusRef.current?.focus()
   }
 
-  const run = async (action: () => unknown | Promise<unknown>) => {
+  const run = async (action: () => unknown | Promise<unknown>): Promise<boolean> => {
     try {
       await action()
       setError(null)
       closeMenu()
+      return true
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Scene command failed.')
+      return false
     }
   }
 
@@ -258,14 +269,16 @@ export function SceneContextMenu({
       }}>
         {entity.kind === 'robot' ? 'Copy Base Transform' : 'Copy Transform'}
       </MenuItem>
-      {transformClipboard === null ? null : (
+      {transformClipboard === null || !manualTransformWritable ? null : (
         <MenuItem onClick={() => run(() => commands.setLocalPose(entity.entityId, transformClipboard!))}>
           {entity.kind === 'robot' ? 'Paste Base Transform' : 'Paste Transform'}
         </MenuItem>
       )}
-      <MenuItem onClick={() => run(() => commands.setLocalPose(entity.entityId, IDENTITY_POSE))}>
-        {entity.kind === 'robot' ? 'Reset Base Transform' : 'Reset Transform'}
-      </MenuItem>
+      {manualTransformWritable ? (
+        <MenuItem onClick={() => run(() => commands.setLocalPose(entity.entityId, IDENTITY_POSE))}>
+          {entity.kind === 'robot' ? 'Reset Base Transform' : 'Reset Transform'}
+        </MenuItem>
+      ) : null}
     </>
   )
 
@@ -296,7 +309,7 @@ export function SceneContextMenu({
         }}
         ref={menuRef}
         role="menu"
-        style={{ left: position.x, top: position.y }}
+        style={{ left: menuPosition.x, top: menuPosition.y }}
       >
         {entity === undefined ? (
           <>
@@ -367,8 +380,9 @@ export function SceneContextMenu({
           label="Delete Entity?"
           onCancel={() => setPending(null)}
           onConfirm={async () => {
-            await run(() => onDelete(entity.entityId))
+            const succeeded = await run(() => onDelete(entity.entityId))
             setPending(null)
+            return succeeded
           }}
         />
       ) : null}
@@ -378,8 +392,9 @@ export function SceneContextMenu({
           label="Delete Group and Contents?"
           onCancel={() => setPending(null)}
           onConfirm={async () => {
-            await run(() => onDelete(entity.entityId))
+            const succeeded = await run(() => onDelete(entity.entityId))
             setPending(null)
+            return succeeded
           }}
         />
       ) : null}
@@ -389,8 +404,9 @@ export function SceneContextMenu({
           label="Ungroup with children?"
           onCancel={() => setPending(null)}
           onConfirm={async () => {
-            await run(() => commands.ungroup(entity.source.id as `group:${string}`))
+            const succeeded = await run(() => commands.ungroup(entity.source.id as `group:${string}`))
             setPending(null)
+            return succeeded
           }}
         />
       ) : null}
@@ -407,9 +423,11 @@ export function SceneContextMenu({
               )
               setError(null)
               setPending('choose-group')
+              return true
             } catch (nextError) {
               setError(nextError instanceof Error ? nextError.message : 'Ownership update failed.')
               setPending(null)
+              return false
             }
           }}
         />
@@ -420,8 +438,9 @@ export function SceneContextMenu({
           groups={groups}
           onCancel={() => setPending(null)}
           onChoose={async (groupId) => {
-            await run(() => commands.reparent(entity.entityId, groupId))
+            const succeeded = await run(() => commands.reparent(entity.entityId, groupId))
             setPending(null)
+            return succeeded
           }}
         />
       ) : null}

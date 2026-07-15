@@ -1,9 +1,19 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SceneEntityInspector } from './SceneEntityInspector'
 import { quaternionFromIntrinsicZyxDeg } from './rpy-editor'
 import { testSceneRuntime } from './scene-ui-test-fixtures'
+import { useEquipmentStore } from '../equipment/equipment-store'
+import { useObjectAssetStore } from '../objects/object-asset-store'
+
+const originalEquipmentRecords = useEquipmentStore.getState().records
+const originalObjectInstances = useObjectAssetStore.getState().instances
+
+afterEach(() => {
+  useEquipmentStore.setState({ records: originalEquipmentRecords })
+  useObjectAssetStore.setState({ instances: originalObjectInstances })
+})
 
 describe('SceneEntityInspector', () => {
   it('edits Local XYZ/RPY through the project command and displays read-only World pose', async () => {
@@ -105,6 +115,39 @@ describe('SceneEntityInspector', () => {
       expect(owner).toHaveBeenCalledWith(entityId, { statusOverlayVisible: false })
       expect(updateObjectInstance.mock.calls.length + updateBuiltInEquipment.mock.calls.length)
         .toBe(3)
+    },
+  )
+
+  it.each([
+    ['object:cup-1', 'object', 73.5],
+    ['equipment:workbench', 'equipment', 91.25],
+  ] as const)(
+    'displays the publication-only effective numeric status for %s',
+    (entityId, kind, numericStatus) => {
+      if (kind === 'object') {
+        useObjectAssetStore.setState({
+          instances: [{ id: 'cup-1', numericStatus }] as never,
+        })
+      } else {
+        useEquipmentStore.setState({
+          records: [{ id: 'workbench', numericStatus }] as never,
+        })
+      }
+
+      render(
+        <SceneEntityInspector
+          commands={{ setLocalPose: vi.fn(async () => undefined) }}
+          entityId={entityId}
+          runtime={testSceneRuntime()}
+          status={{
+            numericStatus: 7,
+            statusOverlayVisible: true,
+            statusSource: 'opcua',
+          }}
+        />,
+      )
+
+      expect(screen.getByLabelText('Numeric status')).toHaveValue(numericStatus)
     },
   )
 })

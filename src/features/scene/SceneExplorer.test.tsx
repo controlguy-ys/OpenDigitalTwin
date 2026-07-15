@@ -1,8 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { SceneExplorer } from './SceneExplorer'
-import { testSceneRuntime } from './scene-ui-test-fixtures'
+import { TEST_SCENE_ENTITIES, testSceneRuntime } from './scene-ui-test-fixtures'
 
 describe('SceneExplorer', () => {
   it('shows the actual hierarchy and routes persisted visibility and selection', async () => {
@@ -111,6 +111,62 @@ describe('SceneExplorer', () => {
     expect(robot).toHaveFocus()
     fireEvent.keyDown(robot, { key: 'Enter' })
     expect(onSelect).toHaveBeenCalledWith('robot:active')
+  })
+
+  it('opens canonical context commands and toggles visibility from a focused tree row', async () => {
+    const setVisible = vi.fn(async () => undefined)
+    render(
+      <SceneExplorer
+        commands={{ setVisible }}
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        onSelect={vi.fn()}
+        onShowAll={vi.fn()}
+        runtime={testSceneRuntime()}
+        selectedEntityId={null}
+      />,
+    )
+
+    const cup = screen.getByRole('treeitem', { name: 'Cup' })
+    cup.focus()
+    fireEvent.keyDown(cup, { key: 'v' })
+    expect(setVisible).toHaveBeenCalledTimes(1)
+    expect(setVisible).toHaveBeenCalledWith('object:cup-1', false)
+
+    fireEvent.keyDown(cup, { key: 'F10', shiftKey: true })
+    expect(screen.getByRole('menu', { name: 'Cup commands' })).toBeVisible()
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    expect(cup).toHaveFocus()
+
+    fireEvent.keyDown(cup, { key: 'ContextMenu' })
+    expect(screen.getByRole('menu', { name: 'Cup commands' })).toBeVisible()
+  })
+
+  it('recovers roving focus when the focused Entity disappears after publication', async () => {
+    const props = {
+      commands: { setVisible: vi.fn(async () => undefined) },
+      onDelete: vi.fn(),
+      onIsolate: vi.fn(),
+      onSelect: vi.fn(),
+      onShowAll: vi.fn(),
+      selectedEntityId: null,
+    }
+    const view = render(<SceneExplorer {...props} runtime={testSceneRuntime()} />)
+    const cup = screen.getByRole('treeitem', { name: 'Cup' })
+    cup.focus()
+
+    view.rerender(
+      <SceneExplorer
+        {...props}
+        runtime={testSceneRuntime(
+          TEST_SCENE_ENTITIES.filter(({ id }) => id !== 'object:cup-1'),
+        )}
+      />,
+    )
+
+    const robot = screen.getByRole('treeitem', { name: 'Assembly Robot' })
+    await waitFor(() => expect(robot).toHaveAttribute('tabindex', '0'))
+    expect(robot).toHaveFocus()
   })
 
   it('positions the context menu at the pointer and reports visibility failures', async () => {

@@ -466,14 +466,25 @@ export function createSceneCommandService(
     },
 
     async setLocalPose(entityId, pose) {
-      await mutate((current) => replaceEntity(current, entityId, (entity) => ({ ...entity, localPose: pose })))
+      await mutate((current) => replaceEntity(current, entityId, (entity) => {
+        if (entity.kind === 'object' && entity.transformSource === 'opcua') {
+          throw new Error('SCENE_TRANSFORM_OWNED_BY_OPCUA: Switch transform source to Manual first.')
+        }
+        return { ...entity, localPose: pose }
+      }))
     },
 
     async setWorldPose(entityId, pose) {
-      await mutate((current) => ({
-        ...current,
-        scene: setSceneEntityWorldPose(current.scene, entityId, pose),
-      }))
+      await mutate((current) => {
+        const entity = entityIn(current, entityId)
+        if (entity.kind === 'object' && entity.transformSource === 'opcua') {
+          throw new Error('SCENE_TRANSFORM_OWNED_BY_OPCUA: Switch transform source to Manual first.')
+        }
+        return {
+          ...current,
+          scene: setSceneEntityWorldPose(current.scene, entityId, pose),
+        }
+      })
     },
 
     async reparent(entityId, parentId) {
