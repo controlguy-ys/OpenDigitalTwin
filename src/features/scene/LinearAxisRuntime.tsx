@@ -5,11 +5,29 @@ import type {
   SceneRuntimeEntityV1,
   SceneRuntimeProjectionV1,
 } from './scene-runtime-selector'
-import type { LinearAxisSourceV1 } from './linear-axis-source'
+import type {
+  CommittedLinearAxisSourceV1,
+  LinearAxisCommittedStateV1,
+} from './linear-axis-source'
 
 const UNIT_SCALE = new Vector3(1, 1, 1)
 const DECOMPOSED_SCALE = new Vector3()
 export const LINEAR_AXIS_RUNTIME_FRAME_PRIORITY = -1
+
+export function linearAxisConfigurationIdentity(
+  axis: SceneRuntimeEntityV1 | null | undefined,
+): string | null {
+  if (axis?.source.kind !== 'linear-axis') return null
+  return [
+    axis.entityId,
+    ...axis.worldMatrix,
+    axis.source.direction,
+    axis.source.minPositionM,
+    axis.source.maxPositionM,
+    axis.source.carriageEntityId,
+    axis.source.robotEntityId,
+  ].join('|')
+}
 
 function axisTravelVector(
   axis: Extract<SceneRuntimeEntityV1['source'], { kind: 'linear-axis' }>,
@@ -113,7 +131,8 @@ export interface LinearAxisRuntimeProps {
   readonly runtime: SceneRuntimeProjectionV1
   readonly objectRoots: ReadonlyMap<string, Object3D>
   readonly robotRoot: Object3D | null
-  readonly source: LinearAxisSourceV1 | null
+  readonly source: CommittedLinearAxisSourceV1 | null
+  readonly committedState: LinearAxisCommittedStateV1 | null
 }
 
 export function LinearAxisRuntime({
@@ -121,6 +140,7 @@ export function LinearAxisRuntime({
   objectRoots,
   robotRoot,
   source,
+  committedState,
 }: LinearAxisRuntimeProps) {
   const appliedRevision = useRef<string | null>(null)
   const movingFrameRef = useRef<Object3D>(null)
@@ -132,17 +152,26 @@ export function LinearAxisRuntime({
     ? axis.source.maxPositionM
     : 0
   const latestTimestampMs = useRef(Number.NEGATIVE_INFINITY)
+  const subscriptionGeneration = useRef(0)
   const lastGoodPositionM = useRef(
     axis?.source.kind === 'linear-axis' ? axis.source.currentPositionM : 0,
   )
 
   useLayoutEffect(() => {
+    const generation = subscriptionGeneration.current + 1
+    subscriptionGeneration.current = generation
     if (axis?.source.kind !== 'linear-axis') return
     latestTimestampMs.current = Number.NEGATIVE_INFINITY
     lastGoodPositionM.current = axis.source.currentPositionM
     appliedRevision.current = null
-    if (source === null) return
-    return source.subscribe((frame) => {
+    if (
+      source === null ||
+      committedState === null ||
+      committedState.axisEntityId !== axis.entityId ||
+      committedState.configurationIdentity !== linearAxisConfigurationIdentity(axis)
+    ) return
+    const unsubscribe = source.subscribe((frame) => {
+      if (subscriptionGeneration.current !== generation) return
       if (
         !Number.isFinite(frame.timestampMs) ||
         frame.timestampMs < latestTimestampMs.current
@@ -157,10 +186,24 @@ export function LinearAxisRuntime({
         lastGoodPositionM.current = frame.positionM
       }
     })
+    source.synchronizeCommittedState(
+      committedState.positionM,
+      committedState.homePositionM,
+    )
+    return () => {
+      if (subscriptionGeneration.current === generation) {
+        subscriptionGeneration.current = generation + 1
+      }
+      unsubscribe()
+    }
   }, [
-    axis?.entityId,
+    committedState?.axisEntityId,
+    committedState?.configurationIdentity,
+    committedState?.homePositionM,
+    committedState?.positionM,
     minPositionM,
     maxPositionM,
+    runtime,
     source,
   ])
 

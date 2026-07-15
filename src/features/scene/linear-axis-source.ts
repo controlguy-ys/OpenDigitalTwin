@@ -11,6 +11,17 @@ export interface LinearAxisSourceV1 {
   home(): Promise<void>
 }
 
+export interface LinearAxisCommittedStateV1 {
+  readonly axisEntityId: string
+  readonly configurationIdentity: string
+  readonly positionM: number
+  readonly homePositionM: number
+}
+
+export interface CommittedLinearAxisSourceV1 extends LinearAxisSourceV1 {
+  synchronizeCommittedState(positionM: number, homePositionM: number): void
+}
+
 export interface ManualLinearAxisSourceOptions {
   readonly initialPositionM: number
   readonly homePositionM: number
@@ -20,7 +31,7 @@ export interface ManualLinearAxisSourceOptions {
   readonly onSubscriberError?: (error: unknown) => void
 }
 
-export class ManualLinearAxisSource implements LinearAxisSourceV1 {
+export class ManualLinearAxisSource implements CommittedLinearAxisSourceV1 {
   readonly kind = 'manual' as const
   private positionM: number
   private homePositionM: number

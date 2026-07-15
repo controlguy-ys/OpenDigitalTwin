@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,6 +28,8 @@ import {
   type LinearAxisCommands,
 } from '../features/scene/LinearAxisInspector'
 import { ManualLinearAxisSource } from '../features/scene/linear-axis-source'
+import type { LinearAxisCommittedStateV1 } from '../features/scene/linear-axis-source'
+import { linearAxisConfigurationIdentity } from '../features/scene/LinearAxisRuntime'
 import { SceneExplorer } from '../features/scene/SceneExplorer'
 import { SceneContextMenu } from '../features/scene/SceneContextMenu'
 import { Timeline } from '../features/ui/Timeline'
@@ -206,12 +207,6 @@ export function App() {
   const axisEntityId = axisRuntime?.source.kind === 'linear-axis'
     ? axisRuntime.entityId
     : null
-  const committedAxisPositionM = axisRuntime?.source.kind === 'linear-axis'
-    ? axisRuntime.source.currentPositionM
-    : null
-  const committedAxisHomePositionM = axisRuntime?.source.kind === 'linear-axis'
-    ? axisRuntime.source.homePositionM
-    : null
   const linearAxisSource = useMemo(() => {
     if (
       axisRuntime?.source.kind !== 'linear-axis' ||
@@ -228,21 +223,16 @@ export function App() {
     sceneCommandService.moveLinearAxisHome,
     sceneCommandService.setLinearAxisPosition,
   ])
-  useLayoutEffect(() => {
-    if (
-      linearAxisSource === null ||
-      committedAxisPositionM === null ||
-      committedAxisHomePositionM === null
-    ) return
-    linearAxisSource.synchronizeCommittedState(
-      committedAxisPositionM,
-      committedAxisHomePositionM,
-    )
-  }, [
-    committedAxisHomePositionM,
-    committedAxisPositionM,
-    linearAxisSource,
-  ])
+  const axisConfigurationIdentity = linearAxisConfigurationIdentity(axisRuntime)
+  const linearAxisCommittedState: LinearAxisCommittedStateV1 | null =
+    axisRuntime?.source.kind === 'linear-axis' && axisConfigurationIdentity !== null
+      ? Object.freeze({
+        axisEntityId: axisRuntime.entityId,
+        configurationIdentity: axisConfigurationIdentity,
+        positionM: axisRuntime.source.currentPositionM,
+        homePositionM: axisRuntime.source.homePositionM,
+      })
+      : null
   const activeSnapshot = useProjectStore((state) => state.activeSnapshot)
   const activeJob = activeSnapshot?.simulation.jobs.find(
     ({ id }) => id === activeSnapshot.simulation.activeJobId,
@@ -474,6 +464,7 @@ export function App() {
         viewport={
           <>
             <SceneCanvas
+              linearAxisCommittedState={linearAxisCommittedState}
               linearAxisSource={linearAxisSource}
               onContextMenu={(entityId, position) => {
                 setViewportContextRequest({ entityId, position })

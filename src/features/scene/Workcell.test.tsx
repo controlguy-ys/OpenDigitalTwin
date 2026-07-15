@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { Group } from 'three'
 import type { SceneRuntimeProjectionV1 } from './scene-runtime-selector'
 import { workcellLinearAxisBindings, workcellRenderEntities } from './Workcell'
-import type { LinearAxisSourceV1 } from './linear-axis-source'
+import type { CommittedLinearAxisSourceV1 } from './linear-axis-source'
+import type { LinearAxisCommittedStateV1 } from './linear-axis-source'
 
 describe('Workcell published render authority', () => {
   it('uses only effective-visible entities from the published runtime projection', () => {
@@ -22,14 +23,26 @@ describe('Workcell published render authority', () => {
     const objectRoots = new Map([['object:carriage', objectRoot]])
     const source = {
       kind: 'manual', subscribe: () => () => undefined,
+      synchronizeCommittedState: () => undefined,
       setPositionM: async () => undefined, home: async () => undefined,
-    } satisfies LinearAxisSourceV1
+    } satisfies CommittedLinearAxisSourceV1
+    const committedState: LinearAxisCommittedStateV1 = {
+      axisEntityId: 'linear-axis:active', configurationIdentity: 'axis-config:A',
+      positionM: 0.5, homePositionM: 0,
+    }
 
-    expect(workcellLinearAxisBindings(runtime, objectRoots, robotRoot, source)).toEqual({
+    expect(workcellLinearAxisBindings(
       runtime,
       objectRoots,
       robotRoot,
       source,
+      committedState,
+    )).toEqual({
+      runtime,
+      objectRoots,
+      robotRoot,
+      source,
+      committedState,
     })
   })
 })

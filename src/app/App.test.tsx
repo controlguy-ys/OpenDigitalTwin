@@ -8,6 +8,7 @@ import { TEST_SCENE_ENTITIES, testSceneRuntime } from '../features/scene/scene-u
 import { App, LinearAxisTargetInspector } from './App'
 import { ManualLinearAxisSource } from '../features/scene/linear-axis-source'
 import type { LinearAxisSourceV1 } from '../features/scene/linear-axis-source'
+import type { LinearAxisCommittedStateV1 } from '../features/scene/linear-axis-source'
 
 const runtime = testSceneRuntime(TEST_SCENE_ENTITIES)
 let publishedRuntime = runtime
@@ -38,6 +39,7 @@ vi.mock('../features/scene/SceneCanvas', () => ({
     ) => void
     onStatusChange?: (status: 'ready') => void
     linearAxisSource?: LinearAxisSourceV1 | null
+    linearAxisCommittedState?: LinearAxisCommittedStateV1 | null
   }) => {
     observedCanvasProps.current = props
     useLayoutEffect(() => {
@@ -105,10 +107,14 @@ describe('App scene editor integration', () => {
     expect(home).toHaveBeenCalledOnce()
   })
 
-  it('publishes a replacement Project position after the renderer subscription commits', () => {
+  it('passes replacement state without publishing from the outer React root', () => {
     const view = render(<App />)
     const source = observedCanvasProps.current?.linearAxisSource as
       | LinearAxisSourceV1
+      | null
+      | undefined
+    const initialCommittedState = observedCanvasProps.current?.linearAxisCommittedState as
+      | LinearAxisCommittedStateV1
       | null
       | undefined
     canvasLifecycle.frames.length = 0
@@ -118,7 +124,13 @@ describe('App scene editor integration', () => {
     view.rerender(<App />)
 
     expect(observedCanvasProps.current?.linearAxisSource).toBe(source)
-    expect(canvasLifecycle.frames).toEqual([0, 0.75])
+    expect(observedCanvasProps.current?.linearAxisCommittedState).toMatchObject({
+      axisEntityId: 'linear-axis:active',
+      configurationIdentity: initialCommittedState?.configurationIdentity,
+      positionM: 0.75,
+      homePositionM: 0,
+    })
+    expect(canvasLifecycle.frames).toEqual([0])
   })
 
   it('does not publish committed state from an abandoned render', () => {

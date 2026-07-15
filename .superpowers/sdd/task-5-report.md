@@ -188,3 +188,46 @@
 - `npm run build`: PASS; only the existing browser-externalization notices and
   chunk-size advisory remain.
 - `git diff --check`: PASS with line-ending conversion notices only.
+
+## Nested R3F Lifecycle Follow-up
+
+### Outcome
+
+- Removed committed position/Home synchronization from the outer App React
+  root. App now passes an immutable committed Axis state containing Entity id,
+  configuration identity, position, and Home through `SceneCanvas` and
+  `Workcell` to the nested R3F root.
+- `LinearAxisRuntime` now owns one commit-phase handshake: validate the nested
+  runtime/configuration match, subscribe, then synchronize the durable state.
+  No ordering assumption remains between the App and R3F reconcilers.
+- Runtime projection replacement, source replacement, configuration changes,
+  and committed position/Home changes invalidate the previous subscription.
+  React cleanup runs before the replacement setup.
+- Added an explicit subscription generation. Even a stale listener retained by
+  a faulty or delayed source cannot apply a frame after cleanup or against the
+  replacement hierarchy.
+- A committed-state/runtime identity mismatch leaves the Runtime unsubscribed
+  until the nested hierarchy reaches the same durable configuration. Manual
+  commands continue to publish only after their queued V3 mutation succeeds.
+
+### RED Evidence
+
+- Nested-root RED: 4 files failed; 4 expected tests failed and 22 passed in
+  8.36s. App supplied no committed-state prop, SceneCanvas and Workcell dropped
+  it, and Runtime logged only `subscribe` without durable `synchronize` or
+  hierarchy-replacement cleanup.
+
+### Final Verification
+
+- Nested production composition slice: 4 files / 26 tests passed in 8.37s.
+  The Runtime test proves `subscribe -> synchronize`, followed by
+  `cleanup old -> subscribe new -> synchronize new`; a retained stale listener
+  cannot move the replacement carriage.
+- Focused source, App, Inspector, Runtime, SceneCanvas, and Workcell slice:
+  6 files / 39 tests passed in 9.34s.
+- Expanded Scene, Project, and App suite: 31 files / 326 tests passed in 33.48s.
+- Fresh full serial suite: 108 files / 904 tests passed in 289.62s.
+- `npm run lint`: PASS.
+- `npm run build`: PASS; only the existing browser-externalization notices and
+  chunk-size advisory remain.
+- `git diff --check`: PASS with line-ending conversion notices only.

@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useInteractionStore } from '../interaction/interaction-store'
 import { sceneEditorStore } from '../project/project-store-browser'
 import { SceneCanvas } from './SceneCanvas'
-import type { LinearAxisSourceV1 } from './linear-axis-source'
+import type { CommittedLinearAxisSourceV1 } from './linear-axis-source'
+import type { LinearAxisCommittedStateV1 } from './linear-axis-source'
 
 const observedWorkcellProps = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }))
 
@@ -31,6 +32,7 @@ vi.mock('./Workcell', () => ({
       position: { x: number; y: number },
     ) => void
     linearAxisSource?: unknown
+    linearAxisCommittedState?: unknown
   }) => {
     observedWorkcellProps.current = props
     return (
@@ -82,14 +84,25 @@ describe('SceneCanvas viewport context boundary', () => {
     expect(sceneEditorStore.getState().selectedEntityId).toBeNull()
   })
 
-  it('passes the App-owned Axis source through to the Workcell renderer', () => {
-    const source: LinearAxisSourceV1 = {
+  it('passes the App-owned Axis source and committed state through to the Workcell renderer', () => {
+    const source: CommittedLinearAxisSourceV1 = {
       kind: 'manual', subscribe: vi.fn(() => vi.fn()),
+      synchronizeCommittedState: vi.fn(),
       setPositionM: vi.fn(async () => undefined), home: vi.fn(async () => undefined),
     }
+    const committedState: LinearAxisCommittedStateV1 = {
+      axisEntityId: 'linear-axis:active', configurationIdentity: 'axis-config:A',
+      positionM: 0.5, homePositionM: 0,
+    }
 
-    render(<SceneCanvas linearAxisSource={source} />)
+    render(
+      <SceneCanvas
+        linearAxisCommittedState={committedState}
+        linearAxisSource={source}
+      />,
+    )
 
     expect(observedWorkcellProps.current?.linearAxisSource).toBe(source)
+    expect(observedWorkcellProps.current?.linearAxisCommittedState).toBe(committedState)
   })
 })

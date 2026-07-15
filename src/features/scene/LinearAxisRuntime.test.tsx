@@ -6,11 +6,16 @@ import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
 import { selectSceneRuntime } from './scene-runtime-selector'
 import {
   LINEAR_AXIS_RUNTIME_FRAME_PRIORITY,
+  linearAxisConfigurationIdentity as runtimeAxisConfigurationIdentity,
   linearAxisMovingFrameMatrix,
   synchronizeLinearAxisWorldMatrices,
 } from './LinearAxisRuntime'
 import { LinearAxisRuntime } from './LinearAxisRuntime'
-import type { LinearAxisFrameV1, LinearAxisSourceV1 } from './linear-axis-source'
+import type {
+  CommittedLinearAxisSourceV1,
+  LinearAxisCommittedStateV1,
+  LinearAxisFrameV1,
+} from './linear-axis-source'
 import {
   registerGeometryEntity,
   snapshotGeometryEntities,
@@ -31,6 +36,12 @@ function runtime(entities: readonly SceneEntityV1[]) {
     objectInstances: [],
     builtInEquipment: [],
   } as unknown as WorkcellProjectSnapshotV3, { isolatedEntityId: null })
+}
+
+function axisConfigurationIdentity(sceneRuntime: ReturnType<typeof runtime>): string {
+  const identity = runtimeAxisConfigurationIdentity(sceneRuntime.linearAxis)
+  if (identity === null) throw new Error('Expected Linear Axis')
+  return identity
 }
 
 describe('LinearAxisRuntime', () => {
@@ -178,15 +189,22 @@ describe('LinearAxisRuntime', () => {
     const carriageObject = new Group()
     let listener: ((frame: LinearAxisFrameV1) => void) | null = null
     const unsubscribe = vi.fn()
-    const source: LinearAxisSourceV1 = {
+    const source: CommittedLinearAxisSourceV1 = {
       kind: 'manual',
       subscribe: vi.fn((nextListener) => {
         listener = nextListener
         nextListener({ positionM: 0.5, timestampMs: 10, quality: 'GOOD' })
         return unsubscribe
       }),
+      synchronizeCommittedState: vi.fn(),
       setPositionM: vi.fn(async () => undefined),
       home: vi.fn(async () => undefined),
+    }
+    const committedState: LinearAxisCommittedStateV1 = {
+      axisEntityId: axis.id,
+      configurationIdentity: axisConfigurationIdentity(sceneRuntime),
+      positionM: axis.currentPositionM,
+      homePositionM: axis.homePositionM,
     }
 
     const view = render(
@@ -195,9 +213,11 @@ describe('LinearAxisRuntime', () => {
         robotRoot={null}
         runtime={sceneRuntime}
         source={source}
+        committedState={committedState}
       />,
     )
     const [frameUpdate, priority] = useFrameMock.mock.calls.at(-1)!
+    expect(source.subscribe).toHaveBeenCalledTimes(1)
     expect(priority).toBe(LINEAR_AXIS_RUNTIME_FRAME_PRIORITY)
     expect(priority).toBeLessThan(0)
 
@@ -223,5 +243,86 @@ describe('LinearAxisRuntime', () => {
 
     view.unmount()
     expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('replaces the nested-root subscription before synchronizing a new committed hierarchy', () => {
+    useFrameMock.mockClear()
+    const axisA: SceneEntityV1 = {
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: 0,
+      maxPositionM: 2, homePositionM: 0, currentPositionM: 0.5,
+      carriageEntityId: 'object:carriage', robotEntityId: null,
+    }
+    const carriageA: SceneEntityV1 = {
+      kind: 'object', id: 'object:carriage', name: 'Carriage', parentId: 'linear-axis:active',
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'carriage' }, transformSource: 'manual',
+    }
+    const runtimeA = runtime([axisA, carriageA])
+    const axisB: SceneEntityV1 = {
+      ...axisA, direction: 'y', homePositionM: 0.25, currentPositionM: 0.75,
+    }
+    const runtimeB = runtime([axisB, carriageA])
+    const listeners: Array<(frame: LinearAxisFrameV1) => void> = []
+    const events: string[] = []
+    let sourcePositionM = 0.5
+    let timestampMs = 1
+    const source = {
+      kind: 'manual' as const,
+      subscribe(listener: (frame: LinearAxisFrameV1) => void) {
+        const index = listeners.push(listener) - 1
+        events.push(`subscribe:${index}`)
+        listener({ positionM: sourcePositionM, timestampMs, quality: 'GOOD' })
+        return () => events.push(`cleanup:${index}`)
+      },
+      synchronizeCommittedState(positionM: number, homePositionM: number) {
+        events.push(`sync:${positionM}:${homePositionM}`)
+        sourcePositionM = positionM
+        timestampMs += 1
+        for (const listener of listeners) {
+          listener({ positionM, timestampMs, quality: 'GOOD' })
+        }
+      },
+      setPositionM: vi.fn(async () => undefined),
+      home: vi.fn(async () => undefined),
+    }
+    const carriageObject = new Group()
+    const view = render(
+      <LinearAxisRuntime
+        committedState={{
+          axisEntityId: axisA.id,
+          configurationIdentity: axisConfigurationIdentity(runtimeA),
+          positionM: axisA.currentPositionM,
+          homePositionM: axisA.homePositionM,
+        }}
+        objectRoots={new Map([['object:carriage', carriageObject]])}
+        robotRoot={null}
+        runtime={runtimeA}
+        source={source}
+      />,
+    )
+    expect(events).toEqual(['subscribe:0', 'sync:0.5:0'])
+    events.length = 0
+
+    view.rerender(
+      <LinearAxisRuntime
+        committedState={{
+          axisEntityId: axisB.id,
+          configurationIdentity: axisConfigurationIdentity(runtimeB),
+          positionM: axisB.currentPositionM,
+          homePositionM: axisB.homePositionM,
+        }}
+        objectRoots={new Map([['object:carriage', carriageObject]])}
+        robotRoot={null}
+        runtime={runtimeB}
+        source={source}
+      />,
+    )
+
+    expect(events).toEqual(['cleanup:0', 'subscribe:1', 'sync:0.75:0.25'])
+    const [frameUpdate] = useFrameMock.mock.calls.at(-1)!
+    act(() => listeners[0]?.({ positionM: 1.9, timestampMs: 99, quality: 'GOOD' }))
+    act(() => frameUpdate())
+    expect(carriageObject.position.toArray()).toEqual([0, 0.75, 0])
   })
 })
