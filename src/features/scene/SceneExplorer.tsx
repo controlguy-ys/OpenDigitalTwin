@@ -205,6 +205,7 @@ export function SceneExplorer({
     const entity = runtime.byId.get(entityId)
     let target: SceneEntityIdV1 | undefined
     if (event.key.toLowerCase() === 'v') {
+      if (event.ctrlKey || event.altKey || event.metaKey) return
       event.preventDefault()
       if (entity !== undefined) {
         void commands.setVisible(entityId, !entity.persistedVisible)

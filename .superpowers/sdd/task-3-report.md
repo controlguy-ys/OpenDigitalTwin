@@ -355,3 +355,53 @@ application functional while Task 4 repository publication remains out of scope:
 - This follow-up preserves the existing safe-delete, held-target, Axis-carriage,
   collision-focus, and OPC-UA gizmo/grasp protections. It adds no Legacy or Task 4+
   behavior, PLC transfer, deployment, or live OPC-UA write surface.
+
+---
+
+## Third Review Follow-up: Modal Isolation and Reactive Menu Bounds
+
+### Outcome
+
+- Placed both confirmation and group-choice dialogs inside a full-viewport modal
+  backdrop. While either dialog is open, the underlying context menu is inert,
+  ARIA-hidden, and guarded at the click-capture boundary, so pointer or synthetic
+  clicks cannot execute hidden menu commands.
+- Preserved initial dialog focus, Tab/Shift+Tab cycling, Escape dismissal, focus
+  return, and async failure behavior through the new interaction boundary.
+- Reworked context-menu measurement into a stable callback that runs after every
+  render and on viewport resize. Error-content expansion and ownership-driven command
+  changes are re-clamped, and the resize listener is removed on unmount.
+- Restricted the Scene tree visibility shortcut to unmodified `V` input with
+  Ctrl/Alt/Meta excluded. Shift+V remains accepted consistently as the uppercase form
+  of the same shortcut.
+
+### RED-to-GREEN evidence
+
+- Modal isolation RED: Confirmation and GroupChoice each allowed a hidden `Hide`
+  command to call `setVisible` once while the dialog was open. GREEN: Context menu
+  suite, 15 tests passed with both modal paths blocked.
+- Reactive-clamp RED: expanded error content remained at top 668 instead of 548,
+  ownership/command changes remained at 668 instead of 608, and no resize listener
+  was registered. GREEN also proves listener cleanup after unmount.
+- Modified-key RED: Ctrl+V, Alt+V, and Meta+V each executed the visibility command.
+  GREEN: Context menu plus Explorer, 2 files and 26 tests passed, including plain and
+  Shift+V behavior.
+
+### Verification
+
+- Third-review focused matrix: 34 files, 193 tests passed in 40.71 seconds.
+- Full serial Vitest (`npx vitest run --maxWorkers=1`): 100 files, 838 tests passed in
+  268.56 seconds.
+- Lint (`npm run lint`): exit 0 with zero warnings.
+- Production build (`npm run build`): exit 0 (`tsc -b` and Vite production bundle).
+  Vite reported only the existing OCCT browser-externalization and large-chunk
+  advisories; there were no TypeScript or build errors.
+- Working-tree and staged whitespace checks (`git diff --check` and
+  `git diff --cached --check`): passed before commit.
+
+### Scope boundary
+
+- This follow-up preserves every prior Task 3 closure, including safe deletion, held
+  context propagation, Axis-carriage filtering, Collision focus, OPC-UA UI/service
+  ownership, and publication-only runtime status. It adds no Legacy or Task 4+
+  capability, PLC transfer, deployment, or live OPC-UA write.

@@ -142,6 +142,34 @@ describe('SceneExplorer', () => {
     expect(screen.getByRole('menu', { name: 'Cup commands' })).toBeVisible()
   })
 
+  it('ignores command-modified V while allowing plain and Shift V visibility shortcuts', () => {
+    const setVisible = vi.fn(async () => undefined)
+    render(
+      <SceneExplorer
+        commands={{ setVisible }}
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        onSelect={vi.fn()}
+        onShowAll={vi.fn()}
+        runtime={testSceneRuntime()}
+        selectedEntityId={null}
+      />,
+    )
+
+    const cup = screen.getByRole('treeitem', { name: 'Cup' })
+    cup.focus()
+    fireEvent.keyDown(cup, { key: 'v', ctrlKey: true })
+    fireEvent.keyDown(cup, { key: 'v', altKey: true })
+    fireEvent.keyDown(cup, { key: 'v', metaKey: true })
+    expect(setVisible).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(cup, { key: 'V', shiftKey: true })
+    fireEvent.keyDown(cup, { key: 'v' })
+    expect(setVisible).toHaveBeenCalledTimes(2)
+    expect(setVisible).toHaveBeenNthCalledWith(1, 'object:cup-1', false)
+    expect(setVisible).toHaveBeenNthCalledWith(2, 'object:cup-1', false)
+  })
+
   it('recovers roving focus when the focused Entity disappears after publication', async () => {
     const props = {
       commands: { setVisible: vi.fn(async () => undefined) },

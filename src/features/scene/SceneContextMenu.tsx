@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SceneEntityIdV1, ScenePoseV1 } from '../../domain/project/scene-state-v1'
 import { sceneCommandService } from '../project/project-store-browser'
 import type { SceneCommandService } from './scene-command-service'
@@ -72,35 +72,37 @@ function ConfirmationDialog({
   }, [])
 
   return (
-    <div
-      aria-label={label}
-      aria-modal="true"
-      className="scene-confirmation"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
+    <div className="scene-modal-backdrop" data-testid="scene-modal-backdrop">
+      <div
+        aria-label={label}
+        aria-modal="true"
+        className="scene-confirmation"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            onCancel()
+            return
+          }
+          if (event.key !== 'Tab') return
+          const buttons = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button') ?? [])]
+          if (buttons.length === 0) return
+          const current = buttons.indexOf(document.activeElement as HTMLElement)
+          const next = event.shiftKey
+            ? (current <= 0 ? buttons.length - 1 : current - 1)
+            : (current >= buttons.length - 1 ? 0 : current + 1)
           event.preventDefault()
-          onCancel()
-          return
-        }
-        if (event.key !== 'Tab') return
-        const buttons = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button') ?? [])]
-        if (buttons.length === 0) return
-        const current = buttons.indexOf(document.activeElement as HTMLElement)
-        const next = event.shiftKey
-          ? (current <= 0 ? buttons.length - 1 : current - 1)
-          : (current >= buttons.length - 1 ? 0 : current + 1)
-        event.preventDefault()
-        buttons[next]?.focus()
-      }}
-      ref={dialogRef}
-      role="dialog"
-    >
-      <p>{label}</p>
-      <div>
-        <button onClick={onCancel} type="button">Cancel</button>
-        <button onClick={() => {
-          void onConfirm()
-        }} type="button">{confirmLabel}</button>
+          buttons[next]?.focus()
+        }}
+        ref={dialogRef}
+        role="dialog"
+      >
+        <p>{label}</p>
+        <div>
+          <button onClick={onCancel} type="button">Cancel</button>
+          <button onClick={() => {
+            void onConfirm()
+          }} type="button">{confirmLabel}</button>
+        </div>
       </div>
     </div>
   )
@@ -130,42 +132,44 @@ function GroupChoiceDialog({
   }, [])
 
   return (
-    <div
-      aria-label="Choose group"
-      aria-modal="true"
-      className="scene-confirmation"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
+    <div className="scene-modal-backdrop" data-testid="scene-modal-backdrop">
+      <div
+        aria-label="Choose group"
+        aria-modal="true"
+        className="scene-confirmation"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            onCancel()
+            return
+          }
+          if (event.key !== 'Tab') return
+          const buttons = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button') ?? [])]
+          if (buttons.length === 0) return
+          const current = buttons.indexOf(document.activeElement as HTMLElement)
+          const next = event.shiftKey
+            ? (current <= 0 ? buttons.length - 1 : current - 1)
+            : (current >= buttons.length - 1 ? 0 : current + 1)
           event.preventDefault()
-          onCancel()
-          return
-        }
-        if (event.key !== 'Tab') return
-        const buttons = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button') ?? [])]
-        if (buttons.length === 0) return
-        const current = buttons.indexOf(document.activeElement as HTMLElement)
-        const next = event.shiftKey
-          ? (current <= 0 ? buttons.length - 1 : current - 1)
-          : (current >= buttons.length - 1 ? 0 : current + 1)
-        event.preventDefault()
-        buttons[next]?.focus()
-      }}
-      ref={dialogRef}
-      role="dialog"
-    >
-      <p>Move {entityName} to:</p>
-      {groups.map((group) => (
-        <button
-          key={group.entityId}
-          onClick={() => {
-            void onChoose(group.entityId)
-          }}
-          type="button"
-        >
-          Move to {group.name}
-        </button>
-      ))}
-      <button onClick={onCancel} type="button">Cancel</button>
+          buttons[next]?.focus()
+        }}
+        ref={dialogRef}
+        role="dialog"
+      >
+        <p>Move {entityName} to:</p>
+        {groups.map((group) => (
+          <button
+            key={group.entityId}
+            onClick={() => {
+              void onChoose(group.entityId)
+            }}
+            type="button"
+          >
+            Move to {group.name}
+          </button>
+        ))}
+        <button onClick={onCancel} type="button">Cancel</button>
+      </div>
     </div>
   )
 }
@@ -204,6 +208,7 @@ export function SceneContextMenu({
   const manualTransformWritable = !(
     entity?.source.kind === 'object' && entity.source.transformSource === 'opcua'
   )
+  const modalOpen = pending !== null
 
   const focusMenuItem = (index: number) => {
     const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
@@ -219,14 +224,25 @@ export function SceneContextMenu({
     focusMenuItem(0)
   }, [entityId])
 
-  useLayoutEffect(() => {
+  const measureMenu = useCallback(() => {
     const bounds = menuRef.current?.getBoundingClientRect()
     if (bounds === undefined) return
-    setMenuPosition({
+    const next = {
       x: Math.max(0, Math.min(position.x, window.innerWidth - bounds.width)),
       y: Math.max(0, Math.min(position.y, window.innerHeight - bounds.height)),
+    }
+    setMenuPosition((current) => {
+      if (current.x === next.x && current.y === next.y) return current
+      return next
     })
-  }, [entityId, position.x, position.y])
+  }, [position.x, position.y])
+
+  useLayoutEffect(measureMenu)
+
+  useEffect(() => {
+    window.addEventListener('resize', measureMenu)
+    return () => window.removeEventListener('resize', measureMenu)
+  }, [measureMenu])
 
   const closeMenu = () => {
     onClose?.()
@@ -285,8 +301,15 @@ export function SceneContextMenu({
   return (
     <>
       <div
+        aria-hidden={modalOpen ? true : undefined}
         aria-label={entity === undefined ? 'Empty viewport commands' : `${entity.name} commands`}
         className="scene-context-menu"
+        inert={modalOpen ? true : undefined}
+        onClickCapture={(event) => {
+          if (!modalOpen) return
+          event.preventDefault()
+          event.stopPropagation()
+        }}
         onKeyDown={(event) => {
           const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
           const current = items.indexOf(document.activeElement as HTMLElement)

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -318,6 +318,100 @@ describe('SceneContextMenu', () => {
     })
   })
 
+  it('remeasures clamp bounds when error content expands the menu', async () => {
+    const user = userEvent.setup()
+    let height = 100
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({
+      bottom: 0, height, left: 0, right: 0, top: 0, width: 200,
+      x: 0, y: 0, toJSON: () => ({}),
+    }))
+    const service = commands()
+    service.setVisible.mockRejectedValue(new Error('visibility failed with expanded detail'))
+    render(
+      <SceneContextMenu
+        commands={service}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        position={{ x: 0, y: window.innerHeight - 10 }}
+        runtime={testSceneRuntime()}
+      />,
+    )
+    expect(screen.getByRole('menu')).toHaveStyle({ top: `${window.innerHeight - 100}px` })
+
+    height = 220
+    await user.click(screen.getByRole('menuitem', { name: 'Hide' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('expanded detail')
+    expect(screen.getByRole('menu')).toHaveStyle({ top: `${window.innerHeight - 220}px` })
+  })
+
+  it('remeasures clamp bounds when ownership changes available commands', () => {
+    let height = 100
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({
+      bottom: 0, height, left: 0, right: 0, top: 0, width: 200,
+      x: 0, y: 0, toJSON: () => ({}),
+    }))
+    const object = {
+      kind: 'object', id: 'object:part', name: 'Part', parentId: null,
+      localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+      target: { kind: 'object-instance', id: 'part' }, transformSource: 'manual',
+    } as const
+    const view = render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="object:part"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        position={{ x: 0, y: window.innerHeight - 10 }}
+        runtime={testSceneRuntime([object])}
+      />,
+    )
+    expect(screen.getByRole('menu')).toHaveStyle({ top: `${window.innerHeight - 100}px` })
+
+    height = 160
+    view.rerender(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="object:part"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        position={{ x: 0, y: window.innerHeight - 10 }}
+        runtime={testSceneRuntime([{ ...object, transformSource: 'opcua' }])}
+      />,
+    )
+    expect(screen.getByRole('menu')).toHaveStyle({ top: `${window.innerHeight - 160}px` })
+  })
+
+  it('remeasures on viewport resize and removes the listener on unmount', () => {
+    let viewportHeight = 768
+    vi.spyOn(window, 'innerHeight', 'get').mockImplementation(() => viewportHeight)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      bottom: 0, height: 100, left: 0, right: 0, top: 0, width: 200,
+      x: 0, y: 0, toJSON: () => ({}),
+    })
+    const addListener = vi.spyOn(window, 'addEventListener')
+    const removeListener = vi.spyOn(window, 'removeEventListener')
+    const view = render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId={null}
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        position={{ x: 0, y: 750 }}
+        runtime={testSceneRuntime()}
+      />,
+    )
+    const resizeRegistration = addListener.mock.calls.find(([type]) => String(type) === 'resize')
+    expect(resizeRegistration).toBeDefined()
+
+    viewportHeight = 600
+    fireEvent(window, new Event('resize'))
+    expect(screen.getByRole('menu')).toHaveStyle({ top: '500px' })
+
+    view.unmount()
+    expect(removeListener).toHaveBeenCalledWith('resize', resizeRegistration?.[1])
+  })
+
   it('traps confirmation focus and returns it to the invoking menu item on Escape', async () => {
     const user = userEvent.setup()
     render(
@@ -342,6 +436,27 @@ describe('SceneContextMenu', () => {
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(deleteItem).toHaveFocus()
+  })
+
+  it('blocks underlying menu commands while a confirmation dialog is modal', async () => {
+    const user = userEvent.setup()
+    const service = commands()
+    render(
+      <SceneContextMenu
+        commands={service}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    const hideItem = screen.getByRole('menuitem', { name: 'Hide' })
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    fireEvent.click(hideItem)
+
+    expect(service.setVisible).not.toHaveBeenCalled()
+    expect(screen.getByTestId('scene-modal-backdrop')).toBeVisible()
   })
 
   it('focuses and dismisses the group chooser as a modal dialog', async () => {
@@ -373,6 +488,38 @@ describe('SceneContextMenu', () => {
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'Choose group' })).not.toBeInTheDocument()
     expect(moveItem).toHaveFocus()
+  })
+
+  it('blocks underlying menu commands while the group chooser is modal', async () => {
+    const user = userEvent.setup()
+    const service = commands()
+    const runtime = testSceneRuntime([
+      {
+        kind: 'group', id: 'group:fixture', name: 'Fixture', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+      },
+      {
+        kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+        target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+      },
+    ] satisfies readonly SceneEntityV1[])
+    render(
+      <SceneContextMenu
+        commands={service}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={runtime}
+      />,
+    )
+
+    const hideItem = screen.getByRole('menuitem', { name: 'Hide' })
+    await user.click(screen.getByRole('menuitem', { name: 'Move to group' }))
+    fireEvent.click(hideItem)
+
+    expect(service.setVisible).not.toHaveBeenCalled()
+    expect(screen.getByTestId('scene-modal-backdrop')).toBeVisible()
   })
 
   it('returns focus after a failed confirmation action closes its dialog', async () => {

@@ -396,16 +396,22 @@ button {
   border-color: transparent;
 }
 
-.scene-confirmation {
+.scene-modal-backdrop {
   position: fixed;
-  inset: 50% auto auto 50%;
+  inset: 0;
   z-index: 120;
+  display: grid;
+  padding: 16px;
+  background: rgb(3 8 13 / 46%);
+  place-items: center;
+}
+
+.scene-confirmation {
   min-width: 280px;
   padding: 16px;
   background: var(--color-panel);
   border: 1px solid var(--color-border);
   box-shadow: 0 18px 52px rgb(0 0 0 / 50%);
-  transform: translate(-50%, -50%);
 }
 
 .scene-confirmation > div {
