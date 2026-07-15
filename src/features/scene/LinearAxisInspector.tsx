@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
 import { sceneCommandService } from '../project/project-store-browser'
 import {
@@ -54,16 +54,21 @@ export function LinearAxisInspector({
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
-  const manualSource = useMemo(() => new ManualLinearAxisSource({
-    initialPositionM: axis?.currentPositionM ?? 0,
-    homePositionM: axis?.homePositionM ?? 0,
-    commitPositionM: commands.setLinearAxisPosition,
-    commitHome: commands.moveLinearAxisHome,
-  }), [axisRuntime?.entityId, commands])
-  manualSource.synchronizeCommittedState(
-    axis?.currentPositionM ?? 0,
-    axis?.homePositionM ?? 0,
-  )
+  const manualSource = useMemo(() => sourceOverride === undefined
+    ? new ManualLinearAxisSource({
+      initialPositionM: axis?.currentPositionM ?? 0,
+      homePositionM: axis?.homePositionM ?? 0,
+      commitPositionM: commands.setLinearAxisPosition,
+      commitHome: commands.moveLinearAxisHome,
+    })
+    : null, [axisRuntime?.entityId, commands, sourceOverride])
+  useLayoutEffect(() => {
+    if (manualSource === null) return
+    manualSource.synchronizeCommittedState(
+      axis?.currentPositionM ?? 0,
+      axis?.homePositionM ?? 0,
+    )
+  }, [axis?.currentPositionM, axis?.homePositionM, manualSource])
   const source = sourceOverride ?? manualSource
 
   useEffect(() => {
@@ -75,6 +80,9 @@ export function LinearAxisInspector({
 
   if (axis === null) {
     return <section className="linear-axis-inspector"><h2>Linear Axis</h2><p>No Linear Axis exists.</p></section>
+  }
+  if (source === null) {
+    throw new Error('LINEAR_AXIS_MANUAL_SOURCE_MISSING: Manual source is unavailable.')
   }
 
   const minMm = axis.minPositionM * 1_000

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useStore } from 'zustand'
 import type { SceneEntityIdV1 } from '../domain/project/scene-state-v1'
 import { useEquipmentStore } from '../features/equipment/equipment-store'
@@ -195,31 +203,46 @@ export function App() {
   )
   const sceneRuntime = usePublishedSceneRuntime()
   const axisRuntime = sceneRuntime.linearAxis
-  const linearAxisSourceRef = useRef<Readonly<{
-    entityId: string
-    source: ManualLinearAxisSource
-  }> | null>(null)
-  if (axisRuntime?.source.kind !== 'linear-axis') {
-    linearAxisSourceRef.current = null
-  } else {
-    if (linearAxisSourceRef.current?.entityId !== axisRuntime.entityId) {
-      linearAxisSourceRef.current = Object.freeze({
-        entityId: axisRuntime.entityId,
-        source: new ManualLinearAxisSource({
-          initialPositionM: axisRuntime.source.currentPositionM,
-          homePositionM: axisRuntime.source.homePositionM,
-          commitPositionM: sceneCommandService.setLinearAxisPosition,
-          commitHome: sceneCommandService.moveLinearAxisHome,
-        }),
-      })
-    } else {
-      linearAxisSourceRef.current.source.synchronizeCommittedState(
-        axisRuntime.source.currentPositionM,
-        axisRuntime.source.homePositionM,
-      )
-    }
-  }
-  const linearAxisSource = linearAxisSourceRef.current?.source ?? null
+  const axisEntityId = axisRuntime?.source.kind === 'linear-axis'
+    ? axisRuntime.entityId
+    : null
+  const committedAxisPositionM = axisRuntime?.source.kind === 'linear-axis'
+    ? axisRuntime.source.currentPositionM
+    : null
+  const committedAxisHomePositionM = axisRuntime?.source.kind === 'linear-axis'
+    ? axisRuntime.source.homePositionM
+    : null
+  const linearAxisSource = useMemo(() => {
+    if (
+      axisRuntime?.source.kind !== 'linear-axis' ||
+      axisEntityId === null
+    ) return null
+    return new ManualLinearAxisSource({
+      initialPositionM: axisRuntime.source.currentPositionM,
+      homePositionM: axisRuntime.source.homePositionM,
+      commitPositionM: sceneCommandService.setLinearAxisPosition,
+      commitHome: sceneCommandService.moveLinearAxisHome,
+    })
+  }, [
+    axisEntityId,
+    sceneCommandService.moveLinearAxisHome,
+    sceneCommandService.setLinearAxisPosition,
+  ])
+  useLayoutEffect(() => {
+    if (
+      linearAxisSource === null ||
+      committedAxisPositionM === null ||
+      committedAxisHomePositionM === null
+    ) return
+    linearAxisSource.synchronizeCommittedState(
+      committedAxisPositionM,
+      committedAxisHomePositionM,
+    )
+  }, [
+    committedAxisHomePositionM,
+    committedAxisPositionM,
+    linearAxisSource,
+  ])
   const activeSnapshot = useProjectStore((state) => state.activeSnapshot)
   const activeJob = activeSnapshot?.simulation.jobs.find(
     ({ id }) => id === activeSnapshot.simulation.activeJobId,

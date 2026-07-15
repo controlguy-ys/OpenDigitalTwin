@@ -5,6 +5,26 @@ import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
 import { testSceneRuntime, TEST_IDENTITY_POSE } from './scene-ui-test-fixtures'
 import { LinearAxisInspector } from './LinearAxisInspector'
 import { useInteractionStore } from '../interaction/interaction-store'
+import type { LinearAxisSourceV1 } from './linear-axis-source'
+
+const manualSourceLifecycle = vi.hoisted(() => ({ constructions: 0, synchronizations: 0 }))
+vi.mock('./linear-axis-source', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./linear-axis-source')>()
+  return {
+    ...actual,
+    ManualLinearAxisSource: class extends actual.ManualLinearAxisSource {
+      constructor(options: ConstructorParameters<typeof actual.ManualLinearAxisSource>[0]) {
+        super(options)
+        manualSourceLifecycle.constructions += 1
+      }
+
+      override synchronizeCommittedState(positionM: number, homePositionM: number): void {
+        manualSourceLifecycle.synchronizations += 1
+        super.synchronizeCommittedState(positionM, homePositionM)
+      }
+    },
+  }
+})
 
 const IDENTITY_OFFSET = {
   position: [0, 0, 0] as [number, number, number],
@@ -53,7 +73,24 @@ function commands() {
 }
 
 describe('LinearAxisInspector', () => {
-  beforeEach(() => useInteractionStore.getState().resetInteraction())
+  beforeEach(() => {
+    manualSourceLifecycle.constructions = 0
+    manualSourceLifecycle.synchronizations = 0
+    useInteractionStore.getState().resetInteraction()
+  })
+
+  it('does not construct or synchronize a fallback source when an override owns Manual motion', () => {
+    const source: LinearAxisSourceV1 = {
+      kind: 'manual',
+      subscribe: vi.fn(() => vi.fn()),
+      setPositionM: vi.fn(async () => undefined),
+      home: vi.fn(async () => undefined),
+    }
+
+    render(<LinearAxisInspector commands={commands()} runtime={axisRuntime()} source={source} />)
+
+    expect(manualSourceLifecycle).toEqual({ constructions: 0, synchronizations: 0 })
+  })
 
   it('keeps out-of-range input uncommitted and identifies the allowed range', async () => {
     const user = userEvent.setup()

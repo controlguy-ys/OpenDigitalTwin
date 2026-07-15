@@ -1,20 +1,33 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useLayoutEffect } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useInteractionStore } from '../features/interaction/interaction-store'
 import { sceneEditorStore } from '../features/project/project-store-browser'
 import { TEST_SCENE_ENTITIES, testSceneRuntime } from '../features/scene/scene-ui-test-fixtures'
 import { App, LinearAxisTargetInspector } from './App'
 import { ManualLinearAxisSource } from '../features/scene/linear-axis-source'
+import type { LinearAxisSourceV1 } from '../features/scene/linear-axis-source'
 
 const runtime = testSceneRuntime(TEST_SCENE_ENTITIES)
+let publishedRuntime = runtime
 const observedCanvasProps = vi.hoisted(() => ({
   current: null as null | Record<string, unknown>,
 }))
+const canvasLifecycle = vi.hoisted(() => ({
+  frames: [] as number[],
+  subscriptionVersion: 0,
+  throwOnRender: false,
+}))
+
+function runtimeAtAxisPosition(positionM: number) {
+  return testSceneRuntime(TEST_SCENE_ENTITIES.map((entity) =>
+    entity.kind === 'linear-axis' ? { ...entity, currentPositionM: positionM } : entity))
+}
 
 vi.mock('../features/scene/scene-runtime-selector', async (importOriginal) => ({
   ...await importOriginal<typeof import('../features/scene/scene-runtime-selector')>(),
-  usePublishedSceneRuntime: () => runtime,
+  usePublishedSceneRuntime: () => publishedRuntime,
 }))
 
 vi.mock('../features/scene/SceneCanvas', () => ({
@@ -24,9 +37,16 @@ vi.mock('../features/scene/SceneCanvas', () => ({
       position: { x: number; y: number },
     ) => void
     onStatusChange?: (status: 'ready') => void
-    linearAxisSource?: unknown
+    linearAxisSource?: LinearAxisSourceV1 | null
   }) => {
     observedCanvasProps.current = props
+    useLayoutEffect(() => {
+      if (props.linearAxisSource == null) return
+      return props.linearAxisSource.subscribe((frame) => {
+        canvasLifecycle.frames.push(frame.positionM)
+      })
+    }, [props.linearAxisSource, canvasLifecycle.subscriptionVersion])
+    if (canvasLifecycle.throwOnRender) throw new Error('ABANDONED_SCENE_RENDER')
     return (
     <div>
       <button onClick={() => props.onStatusChange?.('ready')} type="button">Scene ready</button>
@@ -40,6 +60,10 @@ vi.mock('../features/scene/SceneCanvas', () => ({
 
 describe('App scene editor integration', () => {
   beforeEach(() => {
+    publishedRuntime = runtime
+    canvasLifecycle.frames.length = 0
+    canvasLifecycle.subscriptionVersion = 0
+    canvasLifecycle.throwOnRender = false
     useInteractionStore.getState().resetInteraction()
     sceneEditorStore.setState({ selectedEntityId: 'robot:active' })
   })
@@ -79,6 +103,40 @@ describe('App scene editor integration', () => {
     await user.click(screen.getByRole('button', { name: 'Move Home' }))
 
     expect(home).toHaveBeenCalledOnce()
+  })
+
+  it('publishes a replacement Project position after the renderer subscription commits', () => {
+    const view = render(<App />)
+    const source = observedCanvasProps.current?.linearAxisSource as
+      | LinearAxisSourceV1
+      | null
+      | undefined
+    canvasLifecycle.frames.length = 0
+    publishedRuntime = runtimeAtAxisPosition(0.75)
+    canvasLifecycle.subscriptionVersion += 1
+
+    view.rerender(<App />)
+
+    expect(observedCanvasProps.current?.linearAxisSource).toBe(source)
+    expect(canvasLifecycle.frames).toEqual([0, 0.75])
+  })
+
+  it('does not publish committed state from an abandoned render', () => {
+    const view = render(<App />)
+    const source = observedCanvasProps.current?.linearAxisSource as
+      | LinearAxisSourceV1
+      | null
+      | undefined
+    if (source == null) throw new Error('Expected the App-owned Axis source.')
+    const listener = vi.fn()
+    const unsubscribe = source.subscribe(listener)
+    listener.mockClear()
+    publishedRuntime = runtimeAtAxisPosition(0.5)
+    canvasLifecycle.throwOnRender = true
+
+    expect(() => view.rerender(<App />)).toThrow('ABANDONED_SCENE_RENDER')
+    expect(listener).not.toHaveBeenCalled()
+    unsubscribe()
   })
 
   it('clears stale Scene editor ownership after successful Axis deletion', async () => {

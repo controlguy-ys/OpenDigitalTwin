@@ -150,3 +150,41 @@
 - `npm run build`: PASS; only the existing browser-externalization notices and
   chunk-size advisory remain.
 - `git diff --check`: PASS with line-ending conversion notices only.
+
+## Final Lifecycle Follow-up
+
+### Outcome
+
+- Removed all `ManualLinearAxisSource` mutation and publication from App render.
+  The source is now created side-effect-free with identity keyed only by the
+  active Axis identity and stable command functions.
+- Committed position and Home synchronization now runs in the App parent's
+  layout effect. The renderer child establishes its layout-effect subscription
+  first, so replacement-state publication happens after subscription and still
+  before paint.
+- An abandoned same-identity render cannot mutate or publish through the live
+  committed source. An abandoned identity-changing render can create only an
+  unreachable, side-effect-free source instance.
+- `LinearAxisInspector` creates a fallback Manual source only when no override
+  is supplied. Standalone fallback synchronization now runs in a layout effect;
+  the production override path performs zero fallback constructions or syncs.
+
+### RED Evidence
+
+- Lifecycle RED: 2 files failed; 3 expected tests failed and 14 passed in
+  6.95s. Replacement publication occurred during render as `[0.75, 0.75]`
+  instead of subscription-before-publication `[0, 0.75]`; an abandoned render
+  leaked a `0.5` frame; and the override Inspector constructed and synchronized
+  one unused fallback source.
+
+### Final Verification
+
+- App and Inspector lifecycle slice: 2 files / 17 tests passed in 6.67s.
+- Focused source, App, Inspector, Runtime, SceneCanvas, and Workcell slice:
+  6 files / 38 tests passed in 9.92s.
+- Expanded Scene, Project, and App suite: 31 files / 325 tests passed in 36.54s.
+- Fresh full serial suite: 108 files / 903 tests passed in 287.73s.
+- `npm run lint`: PASS.
+- `npm run build`: PASS; only the existing browser-externalization notices and
+  chunk-size advisory remain.
+- `git diff --check`: PASS with line-ending conversion notices only.
