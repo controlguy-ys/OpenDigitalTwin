@@ -188,7 +188,7 @@ describe('JointInspector', () => {
       anglesDeg: [0, 0, 0, 0, 0, 0],
       playing: false,
       gripperOpen: true,
-      keyframes: [],
+      keyframes: [expect.any(Object)],
     })
     unsubscribe()
   })
@@ -239,7 +239,7 @@ describe('JointInspector', () => {
       expect(useInteractionStore.getState().heldEquipmentId).toBeNull()
       expect(useRobotStore.getState()).toMatchObject({
         gripperOpen: true,
-        keyframes: [],
+        keyframes: [expect.any(Object)],
       })
     })
     expect(useEventStore.getState().events).toHaveLength(1)

@@ -18,12 +18,16 @@ export interface JointInspectorProps {
   disabled?: boolean
   source?: SimulationJointSource
   onReset?: () => void | Promise<void>
+  canSavePose?: boolean
+  onSavePose?: () => void | Promise<void>
 }
 
 export function JointInspector({
   disabled = false,
   source = simulationJointSource,
   onReset,
+  canSavePose = true,
+  onSavePose,
 }: JointInspectorProps) {
   const j1 = useRobotStore(jointAngleSelectors[0])
   const j2 = useRobotStore(jointAngleSelectors[1])
@@ -32,7 +36,6 @@ export function JointInspector({
   const j5 = useRobotStore(jointAngleSelectors[4])
   const j6 = useRobotStore(jointAngleSelectors[5])
   const stopPlayback = useRobotStore((state) => state.stopPlayback)
-  const clearKeyframes = useRobotStore((state) => state.clearKeyframes)
   const savePose = useRobotStore((state) => state.savePose)
   const setGripperOpen = useRobotStore((state) => state.setGripperOpen)
   const anglesDeg = [j1, j2, j3, j4, j5, j6] as const
@@ -187,7 +190,6 @@ export function JointInspector({
           onClick={() => {
             stopPlayback()
             const finishReset = () => {
-              clearKeyframes()
               setGripperOpen(true)
               source.setAngles(ZERO_JOINT_ANGLES)
             }
@@ -203,10 +205,21 @@ export function JointInspector({
           <RotateCcw aria-hidden="true" size={16} strokeWidth={1.75} />
           Reset
         </button>
-        <button disabled={disabled} onClick={savePose} type="button">
+        <button
+          disabled={disabled || !canSavePose}
+          onClick={() => {
+            const result = onSavePose?.()
+            if (onSavePose === undefined) savePose()
+            else if (result instanceof Promise) void result.catch(() => undefined)
+          }}
+          type="button"
+        >
           <Save aria-hidden="true" size={16} strokeWidth={1.75} />
           Save Pose
         </button>
+        {canSavePose ? null : (
+          <p className="save-pose-hint">Create a Job in Robot Jobs to save a Pose.</p>
+        )}
         <button
           disabled={disabled}
           onClick={() => {

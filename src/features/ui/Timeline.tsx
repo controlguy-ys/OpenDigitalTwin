@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Pause, Play, Square, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   simulationJointSource,
   type SimulationJointSource,
@@ -10,10 +10,18 @@ import {
   type RobotKeyframe,
 } from '../joints/keyframes'
 import { useRobotStore } from '../joints/robot-store'
+import { jobCommandService, type JobCommandService } from '../jobs/job-command-service'
+import { projectMutationService } from '../project/project-store-browser'
 
 export interface TimelineProps {
   disabled?: boolean
   source?: SimulationJointSource
+  activeJobId?: string | null
+  commands?: Pick<JobCommandService, 'deletePose' | 'movePose' | 'setPoseSpeed'>
+}
+
+function publishedActiveJobId(): string | null {
+  return projectMutationService.readPublished()?.snapshot.simulation.activeJobId ?? null
 }
 
 function isPlaybackQualityBlocked(quality: string): boolean {
@@ -39,6 +47,8 @@ function snapshotKeyframes(
 export function Timeline({
   disabled = false,
   source = simulationJointSource,
+  activeJobId: activeJobIdOverride,
+  commands = jobCommandService,
 }: TimelineProps) {
   const keyframes = useRobotStore((state) => state.keyframes)
   const playing = useRobotStore((state) => state.playing)
@@ -48,9 +58,14 @@ export function Timeline({
   )
   const setPlaying = useRobotStore((state) => state.setPlaying)
   const stopPlayback = useRobotStore((state) => state.stopPlayback)
-  const moveKeyframe = useRobotStore((state) => state.moveKeyframe)
-  const deleteKeyframe = useRobotStore((state) => state.deleteKeyframe)
-  const setKeyframeSpeed = useRobotStore((state) => state.setKeyframeSpeed)
+  const publishedJobId = useSyncExternalStore(
+    projectMutationService.subscribe,
+    publishedActiveJobId,
+    publishedActiveJobId,
+  )
+  const activeJobId = activeJobIdOverride === undefined
+    ? publishedJobId
+    : activeJobIdOverride
   const frameIdRef = useRef<number | null>(null)
   const generationRef = useRef(0)
   const elapsedMsRef = useRef(0)
@@ -246,7 +261,13 @@ export function Timeline({
                   max={100}
                   min={1}
                   onChange={(event) => {
-                    setKeyframeSpeed(keyframe.id, Number(event.currentTarget.value))
+                    if (activeJobId !== null) {
+                      void commands.setPoseSpeed(
+                        activeJobId,
+                        keyframe.id,
+                        Number(event.currentTarget.value),
+                      )
+                    }
                   }}
                   type="number"
                   value={keyframe.speedPercentToNext ?? 100}
@@ -257,7 +278,11 @@ export function Timeline({
                 <button
                   aria-label={`Move ${keyframe.name} up`}
                   disabled={disabled || playing || index === 0}
-                  onClick={() => moveKeyframe(keyframe.id, -1)}
+                  onClick={() => {
+                    if (activeJobId !== null) {
+                      void commands.movePose(activeJobId, keyframe.id, index - 1)
+                    }
+                  }}
                   type="button"
                 >
                   <ChevronUp aria-hidden="true" size={14} />
@@ -265,7 +290,11 @@ export function Timeline({
                 <button
                   aria-label={`Move ${keyframe.name} down`}
                   disabled={disabled || playing || index === keyframes.length - 1}
-                  onClick={() => moveKeyframe(keyframe.id, 1)}
+                  onClick={() => {
+                    if (activeJobId !== null) {
+                      void commands.movePose(activeJobId, keyframe.id, index + 1)
+                    }
+                  }}
                   type="button"
                 >
                   <ChevronDown aria-hidden="true" size={14} />
@@ -273,7 +302,11 @@ export function Timeline({
                 <button
                   aria-label={`Delete ${keyframe.name}`}
                   disabled={disabled || playing}
-                  onClick={() => deleteKeyframe(keyframe.id)}
+                  onClick={() => {
+                    if (activeJobId !== null) {
+                      void commands.deletePose(activeJobId, keyframe.id)
+                    }
+                  }}
                   type="button"
                 >
                   <Trash2 aria-hidden="true" size={14} />

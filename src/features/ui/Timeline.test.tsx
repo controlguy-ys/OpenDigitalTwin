@@ -6,6 +6,7 @@ import { SimulationJointSource } from '../joints/SimulationJointSource'
 import type { RobotKeyframe } from '../joints/keyframes'
 import { useRobotStore } from '../joints/robot-store'
 import { Timeline } from './Timeline'
+import type { JobCommandService } from '../jobs/job-command-service'
 
 const START: RobotKeyframe = {
   id: 'start',
@@ -242,31 +243,31 @@ describe('Timeline', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled()
   })
 
-  it('edits pose order, outgoing speed, and deletion from the timeline', async () => {
+  it('submits durable pose order, outgoing speed, and deletion commands', async () => {
     const user = userEvent.setup()
-    render(<Timeline source={new SimulationJointSource()} />)
-
-    await user.click(screen.getByRole('button', { name: 'Move Pose 2 up' }))
-    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
-      'end',
-      'start',
-    ])
-
-    const speed = screen.getByRole('spinbutton', {
-      name: 'Pose 2 speed to next pose',
-    })
-    fireEvent.change(speed, { target: { value: '40' } })
-    expect(useRobotStore.getState().keyframes[0]).toMatchObject({
-      speedPercentToNext: 40,
-    })
-    expect(useRobotStore.getState().keyframes[0]?.durationMs).toBeCloseTo(
-      1388.889,
-      2,
+    const commands = {
+      movePose: vi.fn(async () => undefined),
+      setPoseSpeed: vi.fn(async () => undefined),
+      deletePose: vi.fn(async () => undefined),
+    } as unknown as JobCommandService
+    render(
+      <Timeline
+        activeJobId="job-a"
+        commands={commands}
+        source={new SimulationJointSource()}
+      />,
     )
 
+    await user.click(screen.getByRole('button', { name: 'Move Pose 2 up' }))
+    expect(commands.movePose).toHaveBeenCalledWith('job-a', 'end', 0)
+
+    const speed = screen.getByRole('spinbutton', {
+      name: 'Pose 1 speed to next pose',
+    })
+    fireEvent.change(speed, { target: { value: '40' } })
+    expect(commands.setPoseSpeed).toHaveBeenCalledWith('job-a', 'start', 40)
+
     await user.click(screen.getByRole('button', { name: 'Delete Pose 2' }))
-    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
-      'start',
-    ])
+    expect(commands.deletePose).toHaveBeenCalledWith('job-a', 'end')
   })
 })

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useStore } from 'zustand'
 import type { SceneEntityIdV1 } from '../domain/project/scene-state-v1'
 import { useEquipmentStore } from '../features/equipment/equipment-store'
@@ -19,6 +19,9 @@ import { SceneEntityInspector } from '../features/scene/SceneEntityInspector'
 import { SceneExplorer } from '../features/scene/SceneExplorer'
 import { SceneContextMenu } from '../features/scene/SceneContextMenu'
 import { Timeline } from '../features/ui/Timeline'
+import { BottomWorkspace } from '../features/ui/BottomWorkspace'
+import { RobotJobList } from '../features/jobs/RobotJobList'
+import { jobCommandService } from '../features/jobs/job-command-service'
 import { RobotImportDialog } from '../features/robot/RobotImportDialog'
 import { RobotConfigurationDialog } from '../features/robot/RobotConfigurationDialog'
 import { useRobotGeometryStore } from '../features/robot/robot-geometry-store'
@@ -38,8 +41,62 @@ import { CoordinateFramesDialog } from '../features/frames/CoordinateFramesDialo
 import type { RobotRigRegistration } from '../features/robot/RobotModel'
 import { CollisionPanel } from '../features/collision/CollisionPanel'
 import { usePublishedSceneRuntime } from '../features/scene/scene-runtime-selector'
+import { useCollisionStore } from '../features/collision/collision-store'
 import { deleteSceneEntitySafely } from './safe-scene-deletion'
 import type { SceneContextRequest } from '../features/scene/scene-context-request'
+
+type RobotInspectorTab = 'Transform' | 'Mechanics' | 'Geometry' | 'Frames'
+
+export interface RobotTargetInspectorProps {
+  readonly transform: ReactNode
+  readonly onOpenMechanics: () => void
+  readonly onOpenGeometry: () => void
+  readonly onOpenFrames: () => void
+}
+
+export function RobotTargetInspector({
+  transform,
+  onOpenMechanics,
+  onOpenGeometry,
+  onOpenFrames,
+}: RobotTargetInspectorProps) {
+  const [tab, setTab] = useState<RobotInspectorTab>('Transform')
+  const openEditor = tab === 'Mechanics'
+    ? onOpenMechanics
+    : tab === 'Geometry'
+      ? onOpenGeometry
+      : onOpenFrames
+
+  return (
+    <div className="robot-target-inspector">
+      <div aria-label="Robot Inspector editors" role="tablist">
+        {(['Transform', 'Mechanics', 'Geometry', 'Frames'] as const).map((candidate) => (
+          <button
+            aria-controls={`robot-${candidate.toLowerCase()}-panel`}
+            aria-selected={tab === candidate}
+            id={`robot-${candidate.toLowerCase()}-tab`}
+            key={candidate}
+            onClick={() => setTab(candidate)}
+            role="tab"
+            type="button"
+          >
+            {candidate}
+          </button>
+        ))}
+      </div>
+      <section
+        aria-label={tab}
+        className="robot-target-inspector-panel"
+        id={`robot-${tab.toLowerCase()}-panel`}
+        role="tabpanel"
+      >
+        {tab === 'Transform' ? transform : (
+          <button onClick={openEditor} type="button">Open {tab} editor</button>
+        )}
+      </section>
+    </div>
+  )
+}
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -72,6 +129,12 @@ export function App() {
     (state) => state.selectedEntityId,
   )
   const sceneRuntime = usePublishedSceneRuntime()
+  const activeSnapshot = useProjectStore((state) => state.activeSnapshot)
+  const activeJob = activeSnapshot?.simulation.jobs.find(
+    ({ id }) => id === activeSnapshot.simulation.activeJobId,
+  )
+  const collisionCount = useCollisionStore((state) =>
+    state.validationReport?.findings.length ?? state.currentFindings.length)
   const controlsDisabled = sceneStatus !== 'ready'
   const jointControlsDisabled = controlsDisabled || sourceMode === 'opcua'
   const activeJointSource =
@@ -208,23 +271,44 @@ export function App() {
             onSelect={selectSceneEntity}
           />
         }
+        jobTree={<RobotJobList />}
         bottomRail={
-          <>
-            <Timeline
+          <BottomWorkspace
+            collision={<CollisionPanel focusRequest={collisionFocusRequest} />}
+            collisionCount={collisionCount}
+            collisionOpenRequest={collisionFocusRequest}
+            timeline={<Timeline
               disabled={jointControlsDisabled}
               source={simulationJointSource}
-            />
-            <CollisionPanel focusRequest={collisionFocusRequest} />
-          </>
+            />}
+          />
         }
         bottomRailOpenRequest={collisionFocusRequest}
         controlsDisabled={controlsDisabled}
         inspector={
           selectedSceneEntityId === null ? (
             <JointInspector
+              canSavePose={activeJob !== undefined}
               disabled={jointControlsDisabled}
               onReset={handleResetInteraction}
+              onSavePose={async () => {
+                await jobCommandService.saveCurrentPose(
+                  `Pose ${(activeJob?.poses.length ?? 0) + 1}`,
+                )
+              }}
               source={simulationJointSource}
+            />
+          ) : selectedSceneEntityId === 'robot:active' ? (
+            <RobotTargetInspector
+              onOpenFrames={() => setIsCoordinateFramesOpen(true)}
+              onOpenGeometry={() => setIsRobotGeometryOpen(true)}
+              onOpenMechanics={() => setIsRobotConfigurationOpen(true)}
+              transform={
+                <SceneEntityInspector
+                  disabled={controlsDisabled}
+                  entityId={selectedSceneEntityId}
+                />
+              }
             />
           ) : (
             <SceneEntityInspector
@@ -235,9 +319,19 @@ export function App() {
         }
         onOpenStepImport={() => setIsImportOpen(true)}
         onOpenRobotImport={() => setIsRobotImportOpen(true)}
-        onOpenRobotConfiguration={() => setIsRobotConfigurationOpen(true)}
-        onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
-        onOpenCoordinateFrames={() => setIsCoordinateFramesOpen(true)}
+        onCreateBox={() => {
+          void sceneCommandService.createBox({
+            name: 'Box', dimensionsM: [0.1, 0.1, 0.1], color: '#38BDF8',
+          }).then(selectSceneEntity).catch(() => undefined)
+        }}
+        onCreateCylinder={() => {
+          void sceneCommandService.createCylinder({
+            name: 'Cylinder', radiusM: 0.05, heightM: 0.1, color: '#38BDF8',
+          }).then(selectSceneEntity).catch(() => undefined)
+        }}
+        onCreateGroup={() => {
+          void sceneCommandService.createGroup('Group').then(selectSceneEntity).catch(() => undefined)
+        }}
         onSourceModeChange={(mode) => {
           useRobotStore.getState().stopPlayback()
           setSourceMode(mode)

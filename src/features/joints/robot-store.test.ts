@@ -178,6 +178,20 @@ describe('robot store', () => {
     )
   })
 
+  it('projects published Project Job poses without creating legacy browser durability', () => {
+    useRobotStore.getState().replacePublishedKeyframes([{
+      id: 'project-pose',
+      name: 'Project Pose',
+      anglesDeg: [1, 2, 3, 4, 5, 6],
+      durationMs: 1_000,
+      easing: 'linear',
+      speedPercentToNext: 100,
+    }])
+
+    expect(useRobotStore.getState().keyframes.map(({ id }) => id)).toEqual(['project-pose'])
+    expect(localStorage.getItem('robot-sim.pose-sequence.v1')).toBeNull()
+  })
+
   it('distinguishes a stop-time reset from a resumable pause', () => {
     const initialRevision = useRobotStore.getState().playbackResetRevision
     useRobotStore.getState().setPlaying(true)

@@ -111,6 +111,7 @@ export interface RobotStoreState extends RobotFrameState {
   hydrateKeyframes(): void
   clearKeyframes(): void
   replaceKeyframes(keyframes: readonly RobotKeyframe[]): void
+  replacePublishedKeyframes(keyframes: readonly RobotKeyframe[]): void
   moveKeyframe(id: string, direction: -1 | 1): void
   deleteKeyframe(id: string): void
   setKeyframeSpeed(id: string, speedPercent: number): void
@@ -133,7 +134,7 @@ export const jointAngleSelectors = [
 export const useRobotStore = create<RobotStoreState>()((set) => ({
   ...initialRobotState,
   gripperOpen: true,
-  keyframes: readPersistedKeyframes(),
+  keyframes: [],
   playbackResetRevision: 0,
 
   setJoint: (jointIndex, angleDeg) => {
@@ -217,6 +218,16 @@ export const useRobotStore = create<RobotStoreState>()((set) => ({
       })),
     )
     persistKeyframes(next)
+    set({ keyframes: next, playing: false })
+  },
+
+  replacePublishedKeyframes: (keyframes) => {
+    const next = recalculateKeyframeDurations(
+      keyframes.map((keyframe) => ({
+        ...keyframe,
+        anglesDeg: [...keyframe.anglesDeg],
+      })),
+    )
     set({ keyframes: next, playing: false })
   },
 

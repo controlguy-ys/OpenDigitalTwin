@@ -611,7 +611,7 @@ export function createBrowserProjectRuntime(
             maxVelocityDegPerSec: joint.maxVelocityDegPerSec,
           })),
         })
-        useRobotStore.getState().replaceKeyframes(
+        useRobotStore.getState().replacePublishedKeyframes(
           (activeJob(bundle.snapshot)?.poses ?? []).map((pose) => ({
             ...pose,
             anglesDeg: [...pose.anglesDeg],
