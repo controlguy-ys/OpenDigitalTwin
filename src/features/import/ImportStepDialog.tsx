@@ -44,6 +44,7 @@ export interface ImportStepDialogProps {
   client: ImportStepController
   cache: ImportStepGeometryCache
   commands: Pick<SceneCommandService, 'importStepObject'>
+  importUnavailableReason?: string
   onSelect(id: string): void
   onClose(): void
   createId?: () => string
@@ -141,6 +142,7 @@ export function ImportStepDialog({
   client,
   cache,
   commands,
+  importUnavailableReason,
   onSelect,
   onClose,
   createId = defaultId,
@@ -474,11 +476,15 @@ export function ImportStepDialog({
           <span>STEP file</span>
           <input
             accept=".step,.stp"
-            disabled={stage === 'committing'}
+            disabled={stage === 'committing' || importUnavailableReason !== undefined}
             onChange={handleFile}
             type="file"
           />
         </label>
+
+        {importUnavailableReason === undefined ? null : (
+          <p role="alert">{importUnavailableReason}</p>
+        )}
 
         {stage === 'converting' ? (
           <div aria-live="polite" className="import-converting">

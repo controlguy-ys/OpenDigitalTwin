@@ -1,87 +1,97 @@
-# WebDigitalTwin Project Status — 2026-07-13
+# WebDigitalTwin Project Status — 2026-07-16
 
 ## Summary
 
-The CRB 15000 browser simulator has completed the baseline implementation
-through Task 9. The repository contains the supplied STEP source, normalized
-runtime GLBs, simulation and interaction code, automated unit/integration and
-CAD checks, the approved extension Tech Spec, and four execution-ready
-extension plans.
+The repository now implements a reusable, single-Robot Project V3 Scene Editor
+in the browser. The approved short-term scope covers portable Project storage,
+Object hierarchy and transforms, Simulation Jobs, one Linear Axis, explicit
+mount contact, Geometry Proxy Collision, and essential coordinate-aware viewport
+controls. Legacy Project V2 browser/runtime authority is not part of this stage.
 
-## Completed baseline work
+## Delivered capabilities
 
-| Plan task | Delivered outcome | Representative commit |
-| --- | --- | --- |
-| 1 | Approved industrial desktop/narrow visual references and UI specification | `d8cd1b3` |
-| 2 | React 19, TypeScript, Vite, Vitest, Three/Rapier application foundation | `6075151` |
-| 3 | Seven supplied STEP links converted and validated as browser GLBs | `ec1adef` |
-| 4 | Manifest-driven CRB kinematics and Simulation joint-frame boundary | `3bf00cf` |
-| 5 | Complete STEP-derived CRB workcell renderer | `78c23a9` |
-| 6 | Six joint controls, poses, keyframes, and playback hardening | `2b4d948`, `51effb8` |
-| 7 | Persistent equipment, cups, machines, and stack-light assets | `05292dc` |
-| 8 | Browser Web Worker STEP import, persistence, units, and resource limits | `ba7d3f4`, `2095c49`, `a189dac` |
-| 9 | Selection, transforms, Rapier collision, gripper pick/place, and lifecycle race hardening | `7e3d1a5`, `786afc5` |
+| Area | Current outcome |
+| --- | --- |
+| Robot | One six-axis Robot, seven Link Geometry mappings, editable mechanics and collision Boxes |
+| Scene | MCP-rooted Robot/Object/Group/Linear-Axis hierarchy with one-level Groups |
+| Objects | Whole-file STEP Assets, shared Instances, Box/Cylinder primitives, status overlays |
+| Transforms | Manual Local XYZ/RPY, derived World pose, World-pose-preserving reparent/ungroup |
+| Ownership | Manual or OPC UA Object transform/status ownership with explicit switching |
+| Jobs | Named Jobs containing ordered Poses with editable outgoing speed and deletion |
+| External axis | One manual X/Y/Z Linear Axis with carriage and Robot attach/detach |
+| Collision | Deterministic Box/compound-Box query, Job validation, explicit mount contact |
+| Viewport | Actual TCP marker, World View Cube, Home/Fit/Focus, coordinate layers/status |
+| Layout | Split Scene Objects/Robot Jobs sidebar, exclusive Timeline/Collision workspace, themes |
+| Persistence | Atomic Project V3 Save/Export/Import/reload with source staging and revision recovery |
 
-## Remaining baseline work
+## Resource and transaction boundary
 
-- **Task 10 — Industrial UI completion:** finish responsive states, visual
-  fidelity, accessibility details, and final operator-facing interaction polish.
-- **Task 11 — Production E2E:** add the read-only debug bridge and Playwright
-  coverage for loading, joints, persistence, collision, import, and pick/place.
-- **Task 12 — Final audit:** run visual comparison, documentation review,
-  production checks, and the full completion audit.
+- Up to 64 imported STEP Object Assets and 256 Object Instances.
+- Advisory warnings at STEP Asset 52 and Object Instance 205 do not block work.
+- A 65th STEP Asset is blocked before STEP parsing or source staging.
+- A 257th Instance is rejected without changing the published revision, active
+  pointer, or source blobs.
+- One STEP Object may be reused by multiple Instances. Primitive Assets consume
+  no STEP bytes but still consume Asset/Instance/render budgets.
+- The seven-file mapping rule belongs only to new Robot import.
 
-## Approved extension Tech Spec
+## Persistence boundary
 
-The approved extension is documented in
-[`2026-07-11-frame-graph-generic-robot-opcua-pose-sequence-design.md`](../superpowers/specs/2026-07-11-frame-graph-generic-robot-opcua-pose-sequence-design.md).
-It defines:
+Durable Project content includes Scene hierarchy, Local Poses, visibility,
+Robot/Geometry/mechanics, Objects, Jobs/Poses, Linear Axis configuration and
+attachments, mount contact, collision policy, Frames, and OPC UA bindings.
 
-1. Manually editable World/MCP/Robot Base/TCP/fixture/equipment coordinate frames.
-2. Importable generic robot definitions from STEP plus Manifest and resolved URDF.
-3. Custom mechanical origins, axes, limits, offsets, flange/TCP, and collision geometry.
-4. Per-RobotInstance Simulation or read-only OPC UA joint-angle ownership.
-5. Ordered Pose Sequences with per-segment 1–100% velocity-based speed.
-6. Persistence, conflict handling, lifecycle cleanup, security boundaries, and acceptance tests.
+Theme, camera and coordinate-layer preferences, drawer layout, selection, and
+Isolate remain browser-local. Home View changes only camera state. Reload clears
+Isolate while retaining persisted Hide state.
 
-Execution is decomposed into four implementation plans under
-`docs/superpowers/plans/`. The short-term MVP implements a deliberately reduced
-slice of those plans; the full multi-frame, lifecycle, and security designs
-remain planning artifacts.
+## Verification scope
 
-## Short-term MVP delivered
+The publication gate is:
 
-- One active robot with runtime replacement of 1–7 STEP link files.
-- Editable and persisted six-axis origins, axes, limits, maximum velocities,
-  robot name, and base XYZ/RPY using CRB datasheet defaults.
-- Manual equipment XYZ/RPY, deletion, and numeric status overlays with
-  Manual/OPC UA ownership.
-- Persisted Pose ordering, deletion, and 1–100% velocity-aware outgoing speed.
-- Anonymous, read-only OPC UA Client middleware using no security policy or
-  message security, plus a browser WebSocket source selector.
+```powershell
+npm run lint
+npm run test:run
+npm run cad:validate
+npm run build
+npm run test:e2e -- tests/project-v3-roundtrip.spec.ts tests/reusable-scene-editor.spec.ts tests/viewport-spatial-controls.spec.ts tests/geometry-collision.spec.ts
+npm run test:e2e:hash
+npm run test:e2e:archive
+```
+
+Additional focused browser evidence is provided by
+`tests/project-resource-performance.spec.ts`. Exact 256/257 publication behavior
+is intentionally covered at `ProjectMutationService` integration level because
+hydrating a synthetic 255-Instance `.wdtwin` exceeded the 180-second browser
+archive test budget; the test still uses the real repository, coordinator,
+pointer, revision, and source-blob stores.
+
+Fresh verification on 2026-07-16:
+
+- `npm run lint`: PASS, no findings.
+- `npm run test:run`: 116 files and 958 tests PASS in 111.26 seconds.
+- `npm run cad:validate`: 7 Link Assets valid, 0 errors, 0 warnings.
+- `npm run build`: PASS, 2,203 modules transformed.
+- focused resource browser tests: 2/2 PASS in 58.2 seconds.
+- combined Project/Scene/Viewport/Collision E2E: 6/6 PASS in 10.3 minutes.
+- `npm run test:e2e:hash`: 1/1 PASS.
+- `npm run test:e2e:archive`: 1/1 PASS.
+
+The build retains the existing informational OCCT `path`/`crypto` browser
+externalization messages and the bundle-size advisory. They are non-blocking
+and introduce no TypeScript, lint, unit, CAD, or Playwright failure.
 
 ## Current limitations
 
-- The runtime intentionally supports one robot at a time and exactly six joints.
-- Imported robot STEP geometry is runtime-session data; the editable mechanical
-  configuration persists, while imported robot source files must be selected
-  again after a full browser reload.
-- MCP/Base/TCP/object Frame Graph editing is specified but not implemented.
-- OPC UA connection settings are file-based in the middleware MVP; credentials,
-  certificates, encryption, write operations, and controller commands are excluded.
-- Pose duration uses configured maximum joint velocity and saved outgoing speed;
-  advanced acceleration/jerk/dynamics are excluded.
-- The application is not safety-rated and performs no controller or PLC writes.
+- One active Robot and one manual Linear Axis; no axis chain.
+- New Robot import currently requires all seven `LINK00`–`LINK06` mappings.
+- Groups are one level deep and editing is single-selection.
+- No IK, Cartesian jog, path authoring, dynamics, physical collision response,
+  acceleration/jerk planning, or safety-rated validation.
+- No automatic STEP assembly splitting, semantic Joint extraction, or automatic
+  mesh simplification/repair.
+- OPC UA is anonymous, read-only middleware scope; there are no controller
+  writes, credentials/certificates, or public-internet deployment guarantees.
 
-## Verification record
-
-Publication verification on 2026-07-13:
-
-- `npm run lint`: PASS.
-- `npm run test:run`: 36 test files and 217 tests PASS.
-- `npm run cad:validate`: 7 link assets valid, 0 errors, 0 warnings.
-- `npm run build`: TypeScript and Vite production build PASS.
-- `npm audit --audit-level=high`: 0 vulnerabilities.
-- Recorded non-blocking upstream advisories: `occt-import-js` browser
-  externalization messages for `path`/`crypto`, and the Vite large-chunk
-  advisory for the CAD/runtime bundle.
+The application is a geometric planning and visualization aid, not a Robot
+controller or safety function.

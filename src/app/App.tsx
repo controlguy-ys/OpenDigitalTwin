@@ -59,6 +59,10 @@ import { useCollisionStore } from '../features/collision/collision-store'
 import { deleteSceneEntitySafely } from './safe-scene-deletion'
 import type { SceneContextRequest } from '../features/scene/scene-context-request'
 import { MAX_POSES_PER_JOB, MAX_PROJECT_POSES } from '../domain/project/simulation-job-v1'
+import {
+  MAX_OBJECT_INSTANCES,
+  MAX_STEP_OBJECT_ASSETS,
+} from '../domain/project/project-v3'
 
 type RobotInspectorTab = 'Transform' | 'Mechanics' | 'Geometry' | 'Frames'
 const ROBOT_INSPECTOR_TABS = ['Transform', 'Mechanics', 'Geometry', 'Frames'] as const
@@ -192,6 +196,7 @@ export function App() {
     null,
   )
   const sourceQuality = useRobotStore((state) => state.sourceQuality)
+  const jointAnglesDeg = useRobotStore((state) => state.anglesDeg)
   const hydrateEquipment = useEquipmentStore((state) => state.hydrate)
   const hydrateObjectAssets = useObjectAssetStore((state) => state.hydrate)
   const hydrateRobotGeometry = useRobotGeometryStore((state) => state.hydrate)
@@ -201,6 +206,10 @@ export function App() {
   const selectedSceneEntityId = useStore(
     sceneEditorStore,
     (state) => state.selectedEntityId,
+  )
+  const isolatedSceneEntityId = useStore(
+    sceneEditorStore,
+    (state) => state.isolatedEntityId,
   )
   const sceneRuntime = usePublishedSceneRuntime()
   const axisRuntime = sceneRuntime.linearAxis
@@ -234,6 +243,14 @@ export function App() {
       })
       : null
   const activeSnapshot = useProjectStore((state) => state.activeSnapshot)
+  const stepAssetCount = activeSnapshot?.objectAssets.filter(
+    (asset) => asset.sourceKind === 'step',
+  ).length ?? 0
+  const stepImportUnavailableReason = stepAssetCount >= MAX_STEP_OBJECT_ASSETS
+    ? `STEP Asset limit reached: ${stepAssetCount} of ${MAX_STEP_OBJECT_ASSETS}.`
+    : (activeSnapshot?.objectInstances.length ?? 0) >= MAX_OBJECT_INSTANCES
+      ? `Object Instance limit reached: ${activeSnapshot?.objectInstances.length ?? 0} of ${MAX_OBJECT_INSTANCES}.`
+      : undefined
   const activeJob = activeSnapshot?.simulation.jobs.find(
     ({ id }) => id === activeSnapshot.simulation.activeJobId,
   )
@@ -375,11 +392,19 @@ export function App() {
   return (
     <>
       {import.meta.env.MODE === 'test' ? (
-        <output data-testid="project-semantic-diagnostic" hidden>
-          {activeSnapshot === undefined || activeSnapshot === null
-            ? 'null'
-            : JSON.stringify(activeSnapshot)}
-        </output>
+        <>
+          <output data-testid="project-semantic-diagnostic" hidden>
+            {activeSnapshot === undefined || activeSnapshot === null
+              ? 'null'
+              : JSON.stringify(activeSnapshot)}
+          </output>
+          <output data-testid="scene-editor-diagnostic" hidden>
+            {isolatedSceneEntityId ?? 'null'}
+          </output>
+          <output data-testid="robot-joint-diagnostic" hidden>
+            {JSON.stringify(jointAnglesDeg)}
+          </output>
+        </>
       ) : null}
       <AppShell
         projectMenu={<ProjectMenu />}
@@ -503,6 +528,9 @@ export function App() {
         cache={importedGeometryRepository}
         client={stepImportClient}
         commands={sceneCommandService}
+        {...(stepImportUnavailableReason === undefined
+          ? {}
+          : { importUnavailableReason: stepImportUnavailableReason })}
         onClose={() => setIsImportOpen(false)}
         onSelect={(id) => selectSceneEntity(`object:${id}`)}
         open={isImportOpen}

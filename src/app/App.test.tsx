@@ -80,6 +80,19 @@ describe('App scene editor integration', () => {
     expect(screen.queryByText('Equipment', { selector: 'h2' })).not.toBeInTheDocument()
   })
 
+  it('exposes transient isolate state only through the test-mode diagnostic', () => {
+    sceneEditorStore.getState().isolate('object:cup-1')
+
+    render(<App />)
+
+    expect(screen.getByTestId('scene-editor-diagnostic')).toHaveTextContent(
+      'object:cup-1',
+    )
+    expect(screen.getByTestId('robot-joint-diagnostic')).toHaveTextContent(
+      '[0,0,0,0,0,0]',
+    )
+  })
+
   it('composes common Transform and Manual controls for the selected Linear Axis', () => {
     sceneEditorStore.setState({ selectedEntityId: 'linear-axis:active' })
 

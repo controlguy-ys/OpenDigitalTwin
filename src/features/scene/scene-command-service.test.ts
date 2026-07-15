@@ -143,6 +143,40 @@ describe('SceneCommandService', () => {
     })
   })
 
+  it('rejects a 65th STEP Asset before source staging or publication', async () => {
+    const current = projection() as unknown as {
+      objectAssets: unknown[]
+      objectInstances: unknown[]
+    }
+    current.objectAssets = Array.from({ length: 64 }, (_, index) => ({
+      ...stepAsset(),
+      id: `asset-${index}`,
+      sourceKind: 'step',
+      sourceSha256: index.toString(16).padStart(64, '0'),
+    }))
+    const harness = mutationHarness(
+      current as unknown as StoredWorkcellProjectSnapshotProjectionV3,
+    )
+    const stageStepSource = vi.fn(async () => ({
+      sourceSha256: 'f'.repeat(64),
+      preparedSourceGroup: { ownerKeys: ['object-asset:asset-cup'] } as never,
+    }))
+    const commands = createSceneCommandService({
+      mutationService: harness.mutationService,
+      stageStepSource,
+    })
+
+    await expect(commands.importStepObject({
+      asset: stepAsset(),
+      instance: objectInstance(),
+      graspable: true,
+    })).rejects.toThrow('MAX_STEP_OBJECT_ASSETS is 64')
+
+    expect(stageStepSource).not.toHaveBeenCalled()
+    expect(harness.replaceFromActive).not.toHaveBeenCalled()
+    expect(harness.active().objectAssets).toHaveLength(64)
+  })
+
   it('deletes an Object and every durable entity reference in one recipe while retaining a shared Asset', async () => {
     const first = objectInstance()
     const second = { ...objectInstance(), id: 'cup-2', name: 'Cup 2' }

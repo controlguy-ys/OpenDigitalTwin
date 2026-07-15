@@ -24,6 +24,7 @@ import { repositoryProjectFixture } from './project-revision-repository.test-sup
 import { createBrowserProjectRuntime } from './browser-project-runtime'
 import { useCollisionStore } from '../collision/collision-store'
 import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
+import { createSceneCommandService } from '../scene/scene-command-service'
 
 const databases: ProjectDatabase[] = []
 
@@ -191,6 +192,105 @@ it('publishes one validated V3 candidate before observers see it', async () => {
   expect(runtime.apply).toHaveBeenCalledTimes(2)
   expect((await foundation.repository.readPointer())?.state).toBe('stable')
 })
+
+it('accepts Instance 256 and rejects 257 without changing revision or sources', async () => {
+  const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+  const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+  const database = new ProjectDatabase(`mutation-instance-boundary-${crypto.randomUUID()}`)
+  databases.push(database)
+  const foundation = createProjectRevisionFoundation({
+    database,
+    revisionIdentityHasher,
+    sourceHashService: hashService,
+    sourceStagingOptions: {
+      sourceDigest: createProjectSourceDigest(hashService),
+    },
+  })
+  const runtime: ProjectRuntimeV3<{ snapshot: WorkcellProjectSnapshotV3 }> = {
+    prepare: vi.fn(async (snapshot) => ({ snapshot })),
+    apply: vi.fn(() => publication()),
+    dispose: vi.fn(),
+  }
+  let commitIndex = 0
+  const coordinator = createProjectPublicationCoordinator({
+    repository: foundation.repository,
+    runtime,
+    createCommitToken: () => `instance-boundary-${++commitIndex}`,
+  })
+  const mutationService = createProjectMutationService({
+    repository: foundation.repository,
+    sourceStaging: foundation.sourceStaging,
+    coordinator,
+  })
+  const base = await repositoryProjectFixture({ name: 'Instance Boundary' })
+  const instances = Array.from({ length: 255 }, (_, index) => ({
+    id: `boundary-${index}`,
+    assetId: 'asset-box',
+    name: `Boundary ${index}`,
+    manualNumericStatus: 0,
+    statusSource: 'manual' as const,
+    statusOverlayVisible: false,
+    scale: [1, 1, 1] as const,
+    graspable: false,
+  }))
+  const project: WorkcellProjectSnapshotV3 = {
+    ...base,
+    objectAssets: [{
+      id: 'asset-box', name: 'Boundary Box', sourceKind: 'box',
+      dimensionsM: [0.1, 0.1, 0.1], color: '#38BDF8',
+      colliderCenter: [0, 0, 0], collisionHalfExtents: [0.05, 0.05, 0.05],
+      collisionBoxes: [{
+        id: 'primitive-body', center: [0, 0, 0], halfExtents: [0.05, 0.05, 0.05],
+        quaternion: [0, 0, 0, 1],
+      }],
+      statistics: { vertices: 24, triangles: 12, meshes: 1, materials: 1 },
+    }],
+    objectInstances: instances,
+    scene: {
+      ...base.scene,
+      entities: [
+        ...base.scene.entities.filter(
+          (entity) => entity.kind !== 'object' || entity.target.kind !== 'object-instance',
+        ),
+        ...instances.map((instance) => ({
+          kind: 'object' as const,
+          id: `object:${instance.id}` as const,
+          name: instance.name,
+          parentId: null,
+          localPose: { positionM: [0, 0, 0] as const, quaternion: [0, 0, 0, 1] as const },
+          visible: false,
+          target: { kind: 'object-instance' as const, id: instance.id },
+          transformSource: 'manual' as const,
+        })),
+      ],
+    },
+  }
+  const staged = await stageProjectSourcesV3(
+    project,
+    foundation.sourceStaging,
+    revisionIdentityHasher,
+  )
+  await mutationService.replacePreparedUntrusted({ ...staged, warnings: [] })
+
+  let duplicateIndex = 256
+  const commands = createSceneCommandService({
+    mutationService,
+    createId: () => `boundary-${duplicateIndex++}`,
+  })
+  await commands.duplicateObject('object:boundary-0')
+  expect(mutationService.readPublished()?.snapshot.objectInstances).toHaveLength(256)
+
+  const pointerBeforeFailure = await foundation.repository.readPointer()
+  const sourcesBeforeFailure = await database.projectSourceBlobs.toArray()
+  const revisionBeforeFailure = mutationService.readPublished()?.revisionId
+  await expect(commands.duplicateObject('object:boundary-0'))
+    .rejects.toThrow('MAX_OBJECT_INSTANCES is 256')
+
+  expect(mutationService.readPublished()?.revisionId).toBe(revisionBeforeFailure)
+  expect(mutationService.readPublished()?.snapshot.objectInstances).toHaveLength(256)
+  expect(await foundation.repository.readPointer()).toEqual(pointerBeforeFailure)
+  expect(await database.projectSourceBlobs.toArray()).toEqual(sourcesBeforeFailure)
+}, 30_000)
 
 it('flushes feature subscribers only after the mutation service exposes the matching bundle', async () => {
   const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })

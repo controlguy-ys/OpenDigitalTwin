@@ -182,6 +182,36 @@ describe('ImportStepDialog', () => {
     expect(harness.onSelect).not.toHaveBeenCalled()
   })
 
+  it('rejects a limit-blocked STEP before parsing or mutating scene surfaces', async () => {
+    const user = userEvent.setup()
+    const client: ImportStepController = {
+      import: vi.fn(async () => LINK00_RESULT),
+      cancel: vi.fn(),
+    }
+    const commands = {
+      importStepObject: vi.fn(async () => 'object:never' as const),
+    } as Pick<SceneCommandService, 'importStepObject'>
+    render(
+      <ImportStepDialog
+        cache={{ set: vi.fn() }}
+        client={client}
+        commands={commands}
+        importUnavailableReason="STEP Asset limit reached: 64 of 64."
+        onClose={vi.fn()}
+        onSelect={vi.fn()}
+        open
+      />,
+    )
+
+    const input = screen.getByLabelText('STEP file')
+    expect(input).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent('64 of 64')
+    await user.upload(input, stepFile('SI_UNIT(.MILLI.,.METRE.);'))
+
+    expect(client.import).not.toHaveBeenCalled()
+    expect(commands.importStepObject).not.toHaveBeenCalled()
+  })
+
   it('configures and atomically confirms a known-unit STEP asset', async () => {
     const user = userEvent.setup()
     const harness = renderDialog()

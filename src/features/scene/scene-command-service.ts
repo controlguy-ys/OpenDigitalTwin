@@ -4,6 +4,10 @@ import type {
   ObjectInstanceRecordV3,
   PreparedProjectSourceGroupV1,
 } from '../../domain/project/project-v3'
+import {
+  MAX_OBJECT_INSTANCES,
+  MAX_STEP_OBJECT_ASSETS,
+} from '../../domain/project/project-v3'
 import type {
   LinearAxisConfigurationV1,
   SceneEntityIdV1,
@@ -299,6 +303,27 @@ function thresholdWarnings(
   }
 }
 
+function assertObjectInstanceCapacity(
+  current: StoredWorkcellProjectSnapshotProjectionV3,
+): void {
+  if (current.objectInstances.length < MAX_OBJECT_INSTANCES) return
+  throw new Error(
+    `MAX_OBJECT_INSTANCES is ${MAX_OBJECT_INSTANCES}; current usage is ${current.objectInstances.length}.`,
+  )
+}
+
+function assertStepAssetCapacity(
+  current: StoredWorkcellProjectSnapshotProjectionV3,
+): void {
+  const stepAssetCount = current.objectAssets.filter(
+    (asset) => asset.sourceKind === 'step',
+  ).length
+  if (stepAssetCount < MAX_STEP_OBJECT_ASSETS) return
+  throw new Error(
+    `MAX_STEP_OBJECT_ASSETS is ${MAX_STEP_OBJECT_ASSETS}; current usage is ${stepAssetCount}.`,
+  )
+}
+
 export function createSceneCommandService(
   options: SceneCommandServiceOptions,
 ): SceneCommandService {
@@ -316,6 +341,7 @@ export function createSceneCommandService(
       | Readonly<{ kind: 'cylinder'; input: CreateCylinderObjectInputV1 }>,
   ): Promise<`object:${string}`> => {
     const { input, kind } = request
+    assertObjectInstanceCapacity(activeSnapshot(options))
     const id = createId()
     const entityId = `object:${id}` as const
     const assetId = `asset-${id}`
@@ -326,6 +352,7 @@ export function createSceneCommandService(
       throw new Error('SCENE_PRIMITIVE_DIMENSIONS_INVALID: Primitive dimensions must be positive and finite.')
     }
     await mutate((current) => {
+      assertObjectInstanceCapacity(current)
       if (
         current.objectAssets.some(({ id: candidate }) => candidate === assetId) ||
         current.objectInstances.some(({ id: candidate }) => candidate === id) ||
@@ -503,9 +530,14 @@ export function createSceneCommandService(
       if (options.stageStepSource === undefined) {
         throw new Error('PROJECT_SOURCE_STAGING_REQUIRED: STEP import requires Project source staging.')
       }
+      const published = activeSnapshot(options)
+      assertStepAssetCapacity(published)
+      assertObjectInstanceCapacity(published)
       const ownerKey = `object-asset:${input.asset.id}` as const
       const staged = await options.stageStepSource(input.asset.sourceBytes, ownerKey)
       await mutate((current) => {
+        assertStepAssetCapacity(current)
+        assertObjectInstanceCapacity(current)
         if (current.objectAssets.some(({ id }) => id === input.asset.id)) {
           throw new Error(`OBJECT_ASSET_DUPLICATE: ${input.asset.id} already exists.`)
         }
@@ -586,13 +618,16 @@ export function createSceneCommandService(
     },
 
     async duplicateObject(entityId) {
-      const publishedEntity = entityIn(activeSnapshot(options), entityId)
+      const published = activeSnapshot(options)
+      const publishedEntity = entityIn(published, entityId)
       if (publishedEntity.kind !== 'object' || publishedEntity.target.kind !== 'object-instance') {
         throw new Error('SCENE_DUPLICATE_OBJECT_REQUIRED: Only imported Objects can be duplicated.')
       }
+      assertObjectInstanceCapacity(published)
       const instanceId = createId()
       const duplicateId = `object:${instanceId}` as const
       await mutate((active) => {
+        assertObjectInstanceCapacity(active)
         const entity = entityIn(active, entityId)
         if (entity.kind !== 'object' || entity.target.kind !== 'object-instance') {
           throw new Error('SCENE_DUPLICATE_OBJECT_REQUIRED: Only imported Objects can be duplicated.')

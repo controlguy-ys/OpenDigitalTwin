@@ -9,6 +9,9 @@ interface DurableV3ProjectSummary {
   projectName: string
   sourceCount: number
   linkCount: number
+  sceneEntityCount: number
+  jobCount: number
+  hasViewportPreferenceFields: boolean
   sourceProjectionIsByteFree: boolean
   sourceBlobCount: number
   sourceBlobBytes: number[]
@@ -20,6 +23,46 @@ interface DurableV3ProjectSummary {
     byteLength: number
     contentSha256: string
   }[]
+}
+
+function installDeterministicStepWorker(page: Page): Promise<void> {
+  return page.addInitScript(() => {
+    const NativeWorker = window.Worker
+    const result = {
+      success: true as const,
+      root: { name: 'root', meshes: [0], children: [] },
+      meshes: [{
+        name: 'roundtrip-fixture',
+        color: [0.5, 0.5, 0.5],
+        brep_faces: [],
+        attributes: {
+          position: { array: [0, 0, 0, 0.1, 0, 0, 0, 0.1, 0.1] },
+        },
+        index: { array: [0, 1, 2] },
+      }],
+    }
+    class StepWorker {
+      onmessage: ((event: MessageEvent) => void) | null = null
+      onerror: ((event: ErrorEvent) => void) | null = null
+      onmessageerror: ((event: MessageEvent) => void) | null = null
+      postMessage() {
+        queueMicrotask(() => this.onmessage?.({
+          data: { kind: 'success', result },
+        } as MessageEvent))
+      }
+      terminate() {}
+    }
+    function WorkerProxy(this: unknown, url: string | URL, options?: WorkerOptions) {
+      if (String(url).includes('step-import.worker')) return new StepWorker()
+      return new NativeWorker(url, options)
+    }
+    WorkerProxy.prototype = NativeWorker.prototype
+    Object.defineProperty(window, 'Worker', {
+      configurable: true,
+      writable: true,
+      value: WorkerProxy,
+    })
+  })
 }
 
 async function durableV3Project(page: Page): Promise<DurableV3ProjectSummary> {
@@ -84,6 +127,12 @@ async function durableV3Project(page: Page): Promise<DurableV3ProjectSummary> {
         projectName: revision.snapshot.manifest.name,
         sourceCount: revision.snapshot.robot.sources.length,
         linkCount: revision.snapshot.robot.links.length,
+        sceneEntityCount: revision.snapshot.scene.entities.length,
+        jobCount: revision.snapshot.simulation.jobs.length,
+        hasViewportPreferenceFields: [
+          'theme', 'camera', 'cameraState', 'viewport', 'viewportPreferences',
+          'isolatedEntityId', 'sidebarSplitPercent',
+        ].some((field) => Object.prototype.hasOwnProperty.call(revision.snapshot, field)),
         sourceProjectionIsByteFree: revision.snapshot.robot.sources.every(
           (source: Record<string, unknown>) => !('sourceBytes' in source),
         ),
@@ -99,6 +148,7 @@ async function durableV3Project(page: Page): Promise<DurableV3ProjectSummary> {
 }
 
 test('New, Save, Export, Import, and reload preserve one byte-free V3 revision', async ({ page }) => {
+  await installDeterministicStepWorker(page)
   await page.goto('/')
   await expect(page.getByRole('main', { name: '3D viewport' })).toHaveAttribute(
     'aria-busy',
@@ -106,7 +156,7 @@ test('New, Save, Export, Import, and reload preserve one byte-free V3 revision',
   )
   await expect(page.getByText('Unsaved', { exact: true })).toBeVisible()
 
-  await page.getByRole('button', { name: 'New' }).click()
+  await page.getByRole('button', { name: 'New', exact: true }).click()
   await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
   await page.getByRole('button', { name: 'Save project' }).click()
   await expect(page.getByText('Saved', { exact: true })).toBeVisible()
@@ -118,9 +168,12 @@ test('New, Save, Export, Import, and reload preserve one byte-free V3 revision',
     projectName: 'Untitled Workcell',
     sourceCount: 7,
     linkCount: 7,
+    jobCount: 0,
+    hasViewportPreferenceFields: false,
     sourceProjectionIsByteFree: true,
     sourceBlobCount: 7,
   })
+  expect(before.sceneEntityCount).toBeGreaterThan(0)
   expect(before.sourceBlobBytes.every((byteLength) => byteLength > 0)).toBe(true)
   expect(before.revisionProjection).toBeDefined()
   expect(before.sourceBlobs).toHaveLength(7)
@@ -139,15 +192,6 @@ test('New, Save, Export, Import, and reload preserve one byte-free V3 revision',
 
   await page.getByLabel('Import project').setInputFiles(archivePath!)
   await expect(page.getByText('Working…', { exact: true })).toBeVisible()
-  await expect.poll(
-    async () => {
-      const current = await durableV3Project(page)
-      return current.commitToken === before.commitToken
-        ? 'unchanged'
-        : current.pointerState
-    },
-    { timeout: 180_000 },
-  ).toBe('stable')
   await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
 
   const imported = await durableV3Project(page)

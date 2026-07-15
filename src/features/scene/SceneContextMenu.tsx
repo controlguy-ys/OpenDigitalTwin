@@ -42,6 +42,18 @@ const IDENTITY_POSE: ScenePoseV1 = Object.freeze({
 
 let transformClipboard: ScenePoseV1 | null = null
 
+function useModalBackgroundInert(): void {
+  useEffect(() => {
+    const applicationRoot = document.getElementById('root')
+    if (applicationRoot === null) return
+    const wasInert = applicationRoot.inert
+    applicationRoot.inert = true
+    return () => {
+      applicationRoot.inert = wasInert
+    }
+  }, [])
+}
+
 function MenuItem({ children, onClick }: Readonly<{
   children: string
   onClick: () => unknown | Promise<unknown>
@@ -60,6 +72,7 @@ function ConfirmationDialog({
   onCancel: () => void
   onConfirm: () => Promise<boolean>
 }>) {
+  useModalBackgroundInert()
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
     typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
@@ -122,6 +135,7 @@ function GroupChoiceDialog({
   onCancel: () => void
   onChoose: (groupId: `group:${string}`) => Promise<boolean>
 }>) {
+  useModalBackgroundInert()
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
     typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
