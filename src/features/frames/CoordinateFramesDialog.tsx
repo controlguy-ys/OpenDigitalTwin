@@ -10,7 +10,7 @@ import {
 } from '../../domain/frames/pose3d'
 import { useRobotStore } from '../joints/robot-store'
 import type { RobotRigRegistration } from '../robot/RobotModel'
-import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
+import { usePublishedSceneRuntime } from '../scene/scene-runtime-selector'
 import { useCoordinateFrameStore } from './coordinate-frame-store'
 
 type FrameId = 'world' | 'mcp' | 'base' | 'flange' | 'tcp'
@@ -60,8 +60,7 @@ function updateTuple(tuple: Vector3Draft, index: number, value: number): Vector3
 export function CoordinateFramesDialog({ open, onClose, rig }: CoordinateFramesDialogProps) {
   const frames = useCoordinateFrameStore((state) => state.frames)
   const setFramePose = useCoordinateFrameStore((state) => state.setFramePose)
-  const configuration = useRobotConfigurationStore((state) => state.configuration)
-  const setBasePose = useRobotConfigurationStore((state) => state.setBasePose)
+  const sceneRuntime = usePublishedSceneRuntime()
   const anglesDeg = useRobotStore((state) => state.anglesDeg)
   const [selectedFrame, setSelectedFrame] = useState<FrameId>('mcp')
   const [draft, setDraft] = useState<FrameDraft>(() =>
@@ -70,7 +69,7 @@ export function CoordinateFramesDialog({ open, onClose, rig }: CoordinateFramesD
   const [error, setError] = useState<string | null>(null)
 
   const selectedOption = FRAME_OPTIONS.find(({ id }) => id === selectedFrame)!
-  const editable = selectedFrame === 'mcp' || selectedFrame === 'base' || selectedFrame === 'tcp'
+  const editable = selectedFrame === 'mcp' || selectedFrame === 'tcp'
 
   const selectedPose = useMemo((): Pose3D => {
     if (selectedFrame === 'world') return IDENTITY_POSE
@@ -78,15 +77,15 @@ export function CoordinateFramesDialog({ open, onClose, rig }: CoordinateFramesD
       return serializableTransformToPose3D(frames[selectedFrame])
     }
     if (selectedFrame === 'base') {
-      return {
-        position: configuration.basePosition,
-        quaternion: rpyToQuaternion(configuration.baseRotationDeg.map(MathUtils.degToRad) as Vector3Draft),
-      }
+      const pose = sceneRuntime.robot?.localPose
+      return pose === undefined
+        ? IDENTITY_POSE
+        : { position: pose.positionM, quaternion: pose.quaternion }
     }
     if (rig === null) return IDENTITY_POSE
     rig.toolFrame.updateWorldMatrix(true, false)
     return matrix4ToPose3D(rig.toolFrame.matrixWorld)
-  }, [anglesDeg, configuration.basePosition, configuration.baseRotationDeg, frames, rig, selectedFrame])
+  }, [anglesDeg, frames, rig, sceneRuntime.robot, selectedFrame])
 
   useEffect(() => {
     if (!open) return
@@ -105,8 +104,6 @@ export function CoordinateFramesDialog({ open, onClose, rig }: CoordinateFramesD
     const pose = draftToPose(draft)
     if (selectedFrame === 'mcp' || selectedFrame === 'tcp') {
       setFramePose(selectedFrame, pose)
-    } else if (selectedFrame === 'base') {
-      setBasePose([...pose.position], [...draft.rotationDeg])
     }
     setError(null)
   }
@@ -153,6 +150,7 @@ export function CoordinateFramesDialog({ open, onClose, rig }: CoordinateFramesD
             </select>
           </label>
           <p><strong>Reference:</strong> {selectedOption.reference}</p>
+          {selectedFrame === 'base' ? <p>Robot Base is edited in the Scene Inspector.</p> : null}
           {selectedFrame === 'flange' && rig === null ? <p>Robot rig is not ready.</p> : null}
           {vectorFields('Position', draft.positionMm, (positionMm) => setDraft({ ...draft, positionMm }), 'mm')}
           {vectorFields('Rotation', draft.rotationDeg, (rotationDeg) => setDraft({ ...draft, rotationDeg }), 'deg')}

@@ -44,18 +44,6 @@ export function RobotConfigurationDialog({
 
   if (!open) return null
 
-  const setBaseValue = (
-    field: 'basePosition' | 'baseRotationDeg',
-    index: number,
-    value: number,
-  ) => {
-    setDraft((current) => {
-      const tuple = [...current[field]] as [number, number, number]
-      tuple[index] = field === 'basePosition' ? value / 1000 : value
-      return { ...current, [field]: tuple }
-    })
-  }
-
   const updateJoint = (index: number, update: Partial<EditableRobotJoint>) => {
     setDraft((current) => ({
       ...current,
@@ -76,19 +64,6 @@ export function RobotConfigurationDialog({
     vector[vectorIndex] = field === 'origin' ? value / 1000 : value
     updateJoint(jointIndex, { [field]: vector } as Partial<EditableRobotJoint>)
   }
-
-  const baseFields: readonly [
-    'basePosition' | 'baseRotationDeg',
-    number,
-    string,
-  ][] = [
-    ['basePosition', 0, 'Base X (mm)'],
-    ['basePosition', 1, 'Base Y (mm)'],
-    ['basePosition', 2, 'Base Z (mm)'],
-    ['baseRotationDeg', 0, 'Base Roll (deg)'],
-    ['baseRotationDeg', 1, 'Base Pitch (deg)'],
-    ['baseRotationDeg', 2, 'Base Yaw (deg)'],
-  ]
 
   return (
     <div
@@ -118,29 +93,9 @@ export function RobotConfigurationDialog({
             value={draft.name}
           />
         </label>
-        <fieldset>
-          <legend>Robot base pose</legend>
-          <div className="robot-base-grid">
-            {baseFields.map(([field, index, label]) => (
-              <label key={label}>
-                <span>{label}</span>
-                <input
-                  aria-label={label}
-                  onChange={(event) =>
-                    setBaseValue(field, index, event.currentTarget.valueAsNumber)
-                  }
-                  step="any"
-                  type="number"
-                  value={
-                    field === 'basePosition'
-                      ? draft[field][index]! * 1000
-                      : draft[field][index]
-                  }
-                />
-              </label>
-            ))}
-          </div>
-        </fieldset>
+        <p className="robot-import-hint">
+          Robot base pose is edited in the Scene Inspector. This dialog changes mechanics only.
+        </p>
         <div className="robot-joint-config-scroll">
           <table className="robot-joint-config-table">
             <caption>Joint mechanics — origin in millimetres</caption>
@@ -211,7 +166,11 @@ export function RobotConfigurationDialog({
         {error === null ? null : <p role="alert">{error}</p>}
         <footer>
           <button
-            onClick={() => setDraft(createDatasheetRobotConfiguration())}
+            onClick={() => setDraft((current) => ({
+              ...createDatasheetRobotConfiguration(),
+              basePosition: [...current.basePosition],
+              baseRotationDeg: [...current.baseRotationDeg],
+            }))}
             type="button"
           >
             Restore datasheet draft

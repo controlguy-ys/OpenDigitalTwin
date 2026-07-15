@@ -196,6 +196,231 @@ button {
   border-right: 1px solid var(--color-border);
 }
 
+.scene-explorer {
+  position: relative;
+  display: grid;
+  grid-template-rows: 48px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+}
+
+.scene-explorer > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.scene-explorer h2,
+.scene-entity-inspector h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.scene-explorer button,
+.scene-entity-inspector button,
+.scene-context-menu button,
+.scene-confirmation button {
+  color: var(--color-text);
+  cursor: pointer;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.scene-explorer > header button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.scene-tree-scroll ul {
+  padding: 6px 0 6px 12px;
+  margin: 0;
+  list-style: none;
+}
+
+.scene-tree-scroll > ul {
+  padding-left: 6px;
+}
+
+.scene-tree-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 6px;
+}
+
+.scene-tree-row button:first-child {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 6px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border-color: transparent;
+}
+
+.scene-tree-row button:last-child {
+  padding: 4px 5px;
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.scene-tree-scroll [aria-selected='true'] > .scene-tree-row > button:first-child {
+  color: var(--color-accent);
+  background: rgb(56 189 248 / 8%);
+  border-color: var(--color-accent);
+}
+
+.scene-kind {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  background: var(--color-muted);
+  border-radius: 50%;
+}
+
+.scene-kind-robot { background: var(--color-accent); }
+.scene-kind-group { border-radius: 1px; }
+.scene-kind-linear-axis { background: var(--color-warning); }
+
+.scene-entity-inspector {
+  height: 100%;
+  padding-bottom: 16px;
+  overflow: auto;
+}
+
+.scene-entity-inspector > h2 {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.scene-entity-inspector > header,
+.scene-entity-inspector > p {
+  padding: 0 16px;
+}
+
+.scene-entity-inspector > header {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 12px;
+}
+
+.scene-entity-inspector > header small,
+.scene-entity-inspector > p {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.scene-entity-inspector fieldset {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  margin: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.scene-entity-inspector legend {
+  padding: 0 4px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.scene-transform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scene-transform-grid label {
+  display: grid;
+  gap: 4px;
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.scene-transform-grid input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px;
+  color: var(--color-text);
+  font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.scene-entity-inspector fieldset > button {
+  min-height: 32px;
+}
+
+.scene-entity-inspector [role='alert'],
+.scene-context-menu [role='alert'] {
+  margin: 8px 16px;
+  color: var(--color-fault);
+  font-size: 10px;
+}
+
+.scene-context-menu {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 12;
+  display: grid;
+  min-width: 190px;
+  max-height: calc(100% - 16px);
+  padding: 5px;
+  overflow: auto;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+}
+
+.scene-context-menu button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 10px;
+  text-align: left;
+  border-color: transparent;
+}
+
+.scene-confirmation {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  z-index: 120;
+  min-width: 280px;
+  padding: 16px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 18px 52px rgb(0 0 0 / 50%);
+  transform: translate(-50%, -50%);
+}
+
+.scene-confirmation > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.scene-confirmation button {
+  min-height: 30px;
+  padding: 4px 9px;
+}
+
 .equipment-assets {
   height: 100%;
   overflow: auto;

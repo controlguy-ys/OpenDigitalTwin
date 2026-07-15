@@ -7,14 +7,14 @@ import { useRobotConfigurationStore } from './robot-configuration-store'
 describe('RobotConfigurationDialog', () => {
   beforeEach(() => useRobotConfigurationStore.getState().resetToDatasheet())
 
-  it('applies base and mechanical dimension edits', async () => {
+  it('retires base-pose controls while preserving mechanical edits', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
+    useRobotConfigurationStore.getState().setBasePose([0.4, 0.1, 0], [10, 20, 30])
     render(<RobotConfigurationDialog onClose={onClose} open />)
 
-    fireEvent.change(screen.getByLabelText('Base X (mm)'), {
-      target: { value: '500' },
-    })
+    expect(screen.queryByLabelText('Base X (mm)')).not.toBeInTheDocument()
+    expect(screen.getByText(/base pose is edited in the Scene Inspector/i)).toBeVisible()
     fireEvent.change(screen.getByLabelText('J3 origin Z (mm)'), {
       target: { value: '800' },
     })
@@ -24,7 +24,8 @@ describe('RobotConfigurationDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Apply configuration' }))
 
     expect(useRobotConfigurationStore.getState().configuration).toMatchObject({
-      basePosition: [0.5, 0, 0],
+      basePosition: [0.4, 0.1, 0],
+      baseRotationDeg: [10, 20, 30],
     })
     expect(
       useRobotConfigurationStore.getState().configuration.joints[2],

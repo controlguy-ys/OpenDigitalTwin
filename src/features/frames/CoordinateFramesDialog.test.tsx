@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { quaternionToRpy, serializableTransformToPose3D } from '../../domain/frames/pose3d'
@@ -29,16 +29,20 @@ describe('CoordinateFramesDialog', () => {
     expect(quaternionToRpy(pose.quaternion)[2]).toBeCloseTo(Math.PI / 6)
   })
 
-  it('edits Robot Base under MCP and TCP under Flange', async () => {
+  it('keeps Robot Base read-only and directs edits to the Scene Inspector', async () => {
     const user = userEvent.setup()
     render(<CoordinateFramesDialog onClose={vi.fn()} open rig={null} />)
 
     await user.selectOptions(screen.getByLabelText('Coordinate frame'), 'base')
-    fireEvent.change(screen.getByLabelText('Position Y (mm)'), {
-      target: { value: '-80' },
-    })
-    await user.click(screen.getByRole('button', { name: 'Apply frame' }))
-    expect(useRobotConfigurationStore.getState().configuration.basePosition[1]).toBeCloseTo(-0.08)
+    expect(screen.getByLabelText('Position Y (mm)')).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Apply frame' })).toBeDisabled()
+    expect(screen.getByText(/Robot Base is edited in the Scene Inspector/i)).toBeVisible()
+    expect(useRobotConfigurationStore.getState().configuration.basePosition[1]).toBe(0)
+  })
+
+  it('continues to edit TCP under Flange', async () => {
+    const user = userEvent.setup()
+    render(<CoordinateFramesDialog onClose={vi.fn()} open rig={null} />)
 
     await user.selectOptions(screen.getByLabelText('Coordinate frame'), 'tcp')
     await user.clear(screen.getByLabelText('Position Z (mm)'))

@@ -514,6 +514,24 @@ describe('SceneCommandService', () => {
     })
   })
 
+  it('switches OPC UA transform ownership to Manual through one Project V3 recipe', async () => {
+    const entity: SceneEntityV1 = {
+      kind: 'object', id: 'object:live-part', name: 'Live Part', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'live-part' }, transformSource: 'opcua',
+    }
+    const harness = mutationHarness(projection([robot(), entity]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.setTransformSource('object:live-part', 'manual')
+
+    expect(harness.replaceFromActive).toHaveBeenCalledTimes(1)
+    expect(harness.active().scene.entities).toContainEqual({
+      ...entity,
+      transformSource: 'manual',
+    })
+  })
+
   it('updates and deletes built-in Equipment through Project V3 recipes and clears mount contact', async () => {
     const equipment: SceneEntityV1 = {
       kind: 'object', id: 'equipment:cup-01', name: 'Cup', parentId: null,

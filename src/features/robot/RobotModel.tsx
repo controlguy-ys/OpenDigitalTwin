@@ -34,6 +34,7 @@ import {
   useCollisionStore,
 } from '../collision/collision-store'
 import type { SceneRuntimeEntityV1 } from '../scene/scene-runtime-selector'
+import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -68,6 +69,7 @@ export interface RobotRigRegistration {
 }
 
 interface RobotModelProps {
+  onEntityContextMenu?: (entityId: SceneEntityIdV1) => void
   registerRig?: (registration: RobotRigRegistration | null) => void
   sceneEntity?: SceneRuntimeEntityV1 | null
 }
@@ -221,7 +223,11 @@ export function describeRobotLoadError(error: unknown): string {
   return message.startsWith(prefix) ? message : `${prefix}${message}`
 }
 
-export function RobotModel({ registerRig, sceneEntity }: RobotModelProps) {
+export function RobotModel({
+  onEntityContextMenu,
+  registerRig,
+  sceneEntity,
+}: RobotModelProps) {
   const loadedLinks = useLoader(GLTFLoader, ROBOT_LINK_URLS)
   const configuration = useRobotConfigurationStore((state) => state.configuration)
   const definition = useMemo(
@@ -363,6 +369,12 @@ export function RobotModel({ registerRig, sceneEntity }: RobotModelProps) {
         <group name={`${id}-interaction`}>
           <mesh
             name={`${id}-selection-target`}
+            onContextMenu={(event: ThreeEvent<MouseEvent>) => {
+              event.stopPropagation()
+              event.nativeEvent.preventDefault()
+              selectRobotLink(id)
+              onEntityContextMenu?.('robot:active')
+            }}
             onPointerDown={(event: ThreeEvent<PointerEvent>) => {
               event.stopPropagation()
               selectRobotLink(id)

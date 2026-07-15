@@ -35,6 +35,7 @@ import {
 import type { OutlineState } from '../interaction/outline-state'
 import type { SceneRuntimeProjectionV1 } from '../scene/scene-runtime-selector'
 import { sceneEditorStore } from '../project/project-store-browser'
+import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
 
 interface EquipmentInstanceProps {
   entityId: ExternalCollisionEntityId
@@ -43,6 +44,7 @@ interface EquipmentInstanceProps {
     Map<ExternalCollisionEntityId, Object3D>
   >
   onDraggingChange(dragging: boolean): void
+  onEntityContextMenu?: (entityId: SceneEntityIdV1) => void
 }
 
 export function isExternalCollisionRegistrationActive(
@@ -117,6 +119,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
   record,
   equipmentObjectsRef,
   onDraggingChange,
+  onEntityContextMenu,
 }: EquipmentInstanceProps) {
   const objectRef = useRef<Group>(null)
   const selection = useInteractionStore((state) => state.selection)
@@ -160,6 +163,12 @@ const EquipmentInstance = memo(function EquipmentInstance({
     <>
       <group
         name={record.id}
+        onContextMenu={(event: ThreeEvent<MouseEvent>) => {
+          event.stopPropagation()
+          event.nativeEvent.preventDefault()
+          selectEquipment(entityId)
+          onEntityContextMenu?.(entityId)
+        }}
         onPointerDown={(event: ThreeEvent<PointerEvent>) => {
           event.stopPropagation()
           selectEquipment(entityId)
@@ -186,7 +195,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
           commitTransform={
             commitSceneTransform
           }
-          equipmentId={record.id}
+          entityId={entityId}
           objectRef={objectRef}
           onDraggingChange={onDraggingChange}
           previewTransform={
@@ -248,6 +257,7 @@ export interface EquipmentSceneProps {
     Map<ExternalCollisionEntityId, Object3D>
   >
   onDraggingChange?(dragging: boolean): void
+  onEntityContextMenu?(entityId: SceneEntityIdV1): void
   sceneRuntime?: SceneRuntimeProjectionV1
 }
 
@@ -256,6 +266,7 @@ const NOOP_DRAGGING_CHANGE = () => undefined
 export function EquipmentScene({
   equipmentObjectsRef: providedEquipmentObjectsRef,
   onDraggingChange = NOOP_DRAGGING_CHANGE,
+  onEntityContextMenu,
   sceneRuntime,
 }: EquipmentSceneProps = {}) {
   const records = useEquipmentStore((state) => state.records)
@@ -366,6 +377,9 @@ export function EquipmentScene({
             equipmentObjectsRef={equipmentObjectsRef}
             key={entityId}
             onDraggingChange={onDraggingChange}
+            {...(onEntityContextMenu === undefined
+              ? {}
+              : { onEntityContextMenu })}
             record={record}
           />
         ))}

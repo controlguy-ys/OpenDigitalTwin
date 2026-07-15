@@ -1,5 +1,5 @@
 import { Canvas, useLoader } from '@react-three/fiber'
-import { Suspense, useCallback, useState } from 'react'
+import { Suspense, useCallback, useRef, useState } from 'react'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import {
   ROBOT_LINK_URLS,
@@ -12,6 +12,7 @@ import { useInteractionStore } from '../interaction/interaction-store'
 import { RobotStatusOverlay } from '../robot/RobotStatusOverlay'
 import { SceneErrorBoundary } from './SceneErrorBoundary'
 import { Workcell } from './Workcell'
+import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
 
 export type SceneRenderStatus = 'loading' | 'ready' | 'error'
 
@@ -21,15 +22,18 @@ export interface SceneCanvasProps {
   registerInteractionController?: (
     controller: InteractionRuntimeController | null,
   ) => void
+  onContextMenu?: (entityId: SceneEntityIdV1 | null) => void
 }
 
 export function SceneCanvas({
   onStatusChange,
   registerRig,
   registerInteractionController,
+  onContextMenu,
 }: SceneCanvasProps) {
   const [sceneKey, setSceneKey] = useState(0)
   const [status, setStatus] = useState<SceneRenderStatus>('loading')
+  const entityContextHandledRef = useRef(false)
 
   const updateStatus = useCallback(
     (nextStatus: SceneRenderStatus) => {
@@ -71,8 +75,30 @@ export function SceneCanvas({
     setSceneKey((key) => key + 1)
   }, [registerRig, updateStatus])
 
+  const handleEntityContextMenu = useCallback(
+    (entityId: SceneEntityIdV1) => {
+      entityContextHandledRef.current = true
+      onContextMenu?.(entityId)
+      queueMicrotask(() => {
+        entityContextHandledRef.current = false
+      })
+    },
+    [onContextMenu],
+  )
+
   return (
-    <div className="scene-canvas" data-scene-status={status}>
+    <div
+      className="scene-canvas"
+      data-scene-status={status}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        if (entityContextHandledRef.current) {
+          entityContextHandledRef.current = false
+          return
+        }
+        onContextMenu?.(null)
+      }}
+    >
       <SceneErrorBoundary
         formatError={describeRobotLoadError}
         key={sceneKey}
@@ -93,6 +119,7 @@ export function SceneCanvas({
         >
           <Suspense fallback={null}>
             <Workcell
+              onEntityContextMenu={handleEntityContextMenu}
               registerInteractionController={registerInteractionController}
               registerRig={handleRigRegistration}
             />

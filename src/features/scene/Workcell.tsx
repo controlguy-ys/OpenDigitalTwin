@@ -32,11 +32,13 @@ import {
   usePublishedSceneRuntime,
   type SceneRuntimeProjectionV1,
 } from './scene-runtime-selector'
+import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
 interface WorkcellProps {
   registerRig: (registration: RobotRigRegistration | null) => void
+  onEntityContextMenu?: (entityId: SceneEntityIdV1) => void
   registerInteractionController?:
     | ((controller: InteractionRuntimeController | null) => void)
     | undefined
@@ -115,6 +117,7 @@ const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
 export function Workcell({
   registerRig,
   registerInteractionController,
+  onEntityContextMenu,
 }: WorkcellProps) {
   const sceneRuntime = usePublishedSceneRuntime()
   const renderEntities = workcellRenderEntities(sceneRuntime)
@@ -173,9 +176,18 @@ export function Workcell({
         <EquipmentScene
           equipmentObjectsRef={equipmentObjectsRef}
           onDraggingChange={handleEquipmentDraggingChange}
+          {...(onEntityContextMenu === undefined
+            ? {}
+            : { onEntityContextMenu })}
           sceneRuntime={{ ...sceneRuntime, entities: renderEntities }}
         />
         <RobotModel
+          {...(onEntityContextMenu === undefined
+            ? {}
+            : {
+                onEntityContextMenu: () =>
+                  onEntityContextMenu('robot:active'),
+              })}
           registerRig={handleRigRegistration}
           sceneEntity={sceneRuntime.robot}
         />

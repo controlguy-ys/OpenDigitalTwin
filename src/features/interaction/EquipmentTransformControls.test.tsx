@@ -30,7 +30,7 @@ describe('EquipmentTransformControls', () => {
     const secondDraggingChange = vi.fn()
     const props = {
       commitTransform: vi.fn(async () => undefined),
-      equipmentId: 'cup-01',
+      entityId: 'object:cup-01' as const,
       objectRef,
       previewTransform: vi.fn(),
     }
@@ -67,7 +67,7 @@ describe('EquipmentTransformControls', () => {
     render(
       <EquipmentTransformControls
         commitTransform={commitTransform}
-        equipmentId="cup-01"
+        entityId="object:cup-01"
         objectRef={objectRef}
         onDraggingChange={onDraggingChange}
         previewTransform={previewTransform}
@@ -82,7 +82,7 @@ describe('EquipmentTransformControls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'preview transform' }))
 
     expect(previewTransform).toHaveBeenCalledTimes(3)
-    expect(previewTransform).toHaveBeenLastCalledWith('cup-01', {
+    expect(previewTransform).toHaveBeenLastCalledWith('object:cup-01', {
       position: [3, 2, 3],
       quaternion: [0, 0, 0, 1],
       scale: [1, 1, 1],
@@ -94,6 +94,6 @@ describe('EquipmentTransformControls', () => {
     expect(onDraggingChange).toHaveBeenNthCalledWith(1, true)
     expect(onDraggingChange).toHaveBeenLastCalledWith(false)
     expect(commitTransform).toHaveBeenCalledTimes(1)
-    expect(commitTransform).toHaveBeenCalledWith('cup-01')
+    expect(commitTransform).toHaveBeenCalledWith('object:cup-01')
   })
 })

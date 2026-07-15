@@ -2,9 +2,10 @@ import { TransformControls } from '@react-three/drei/core/TransformControls.js'
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 import type { Object3D } from 'three'
 import type { SerializableTransform } from '../../domain/equipment/equipment'
+import type { ExternalCollisionEntityId } from './interaction-store'
 
 export interface EquipmentTransformControlsProps {
-  equipmentId: string
+  entityId: ExternalCollisionEntityId
   objectRef: RefObject<Object3D | null>
   previewTransform(id: string, transform: SerializableTransform): void
   commitTransform(id: string): Promise<void>
@@ -20,7 +21,7 @@ export function readObjectTransform(object: Object3D): SerializableTransform {
 }
 
 export function EquipmentTransformControls({
-  equipmentId,
+  entityId,
   objectRef,
   previewTransform,
   commitTransform,
@@ -47,12 +48,12 @@ export function EquipmentTransformControls({
       }}
       onMouseUp={() => {
         onDraggingChangeRef.current(false)
-        void commitTransform(equipmentId)
+        void commitTransform(entityId)
       }}
       onObjectChange={() => {
         const object = objectRef.current
         if (object !== null) {
-          previewTransform(equipmentId, readObjectTransform(object))
+          previewTransform(entityId, readObjectTransform(object))
         }
       }}
       size={0.8}

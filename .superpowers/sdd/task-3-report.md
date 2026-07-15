@@ -189,3 +189,58 @@ application functional while Task 4 repository publication remains out of scope:
   `project-store-browser.ts` and should be removed when Task 4 wires V3 decode results
   into stable repository publication.
 - No PLC transfer, deployment, OPC UA live write, or unrelated UI behavior is included.
+
+---
+
+# Task 3 Report: Scene Hierarchy Editing
+
+## Outcome
+
+- Replaced the flat equipment browser with a bounded recursive Scene Explorer backed
+  by the published hierarchy, including selection, visibility, isolate, show-all, and
+  entity/empty-area context menus.
+- Added a shared Scene Entity Inspector for Robot, Object, Group, and Linear Axis
+  entities. Local transforms are edited in millimetres and intrinsic ZYX degrees;
+  world transforms and parent-relative context remain read-only.
+- Added quaternion-safe RPY conversion with finite/non-zero validation, angle
+  normalization, round-trip coverage, and a gimbal-lock regression.
+- Added filtered context commands for empty space and each entity kind, destructive
+  confirmations, transform copy/paste/reset, grouping, and the explicit OPC UA to
+  Manual ownership confirmation required before reparenting an externally owned
+  Object.
+- Routed transform controls through canonical scene entity IDs, made the common scene
+  model authoritative for Robot Base editing, and retired the duplicate Robot Base
+  writers from Robot Mechanics and Coordinate Frames.
+- Wired right-clicks from actual R3F equipment/robot hit targets through Workcell to
+  the application menu. Blank viewport context is independent of prior selection, so
+  a stale selected entity can never supply the background menu target.
+
+## RED-to-GREEN evidence
+
+- Initial UI RED: three suites failed to import the absent RPY editor, Scene Explorer,
+  and Scene Entity Inspector. GREEN: 3 files, 9 tests passed.
+- Integration RED: six files failed on the absent context menu and transform-source
+  command, non-canonical transform-control ID, duplicate Robot Base writers, and the
+  old flat App surfaces. GREEN: 6 files, 29 tests passed.
+- Viewport boundary RED: with `object:stale-selection` selected, a blank viewport
+  right-click incorrectly emitted that entity ID. GREEN: 2 files, 3 tests passed;
+  actual rendered entity context emits its canonical ID exactly once, and a subsequent
+  blank right-click emits `null`.
+- Final focused regression: 26 files, 112 tests passed.
+
+## Verification
+
+- Full serial Vitest (`npx vitest run --maxWorkers=1`): 99 files, 806 tests passed in
+  271.66 seconds.
+- Lint (`npm run lint`): passed with zero warnings.
+- Production build (`npm run build`): passed (`tsc -b` and Vite production bundle).
+  Vite reported only the existing OCCT browser-externalization and large-chunk
+  advisories; there were no TypeScript or build errors.
+- Working-tree whitespace check (`git diff --check`): passed.
+- Scope scan: empty viewport exposes only Create Group, Create Box, and Create
+  Cylinder; no Fit All or later-stage viewport command was added.
+
+## Scope boundary
+
+- No Task 4 or later scene-editor capability, PLC transfer, deployment, or live OPC UA
+  write is included.

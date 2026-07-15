@@ -54,6 +54,10 @@ export interface SceneCommandService {
   duplicateObject(entityId: SceneEntityIdV1): Promise<`object:${string}`>
   rename(entityId: SceneEntityIdV1, name: string): Promise<void>
   setVisible(entityId: SceneEntityIdV1, visible: boolean): Promise<void>
+  setTransformSource(
+    entityId: `object:${string}` | `equipment:${string}`,
+    source: 'manual' | 'opcua',
+  ): Promise<void>
   setLocalPose(entityId: SceneEntityIdV1, pose: ScenePoseV1): Promise<void>
   setWorldPose(entityId: SceneEntityIdV1, pose: ScenePoseV1): Promise<void>
   reparent(entityId: SceneEntityIdV1, parentId: SceneEntityIdV1 | null): Promise<void>
@@ -450,6 +454,15 @@ export function createSceneCommandService(
 
     async setVisible(entityId, visible) {
       await mutate((current) => replaceEntity(current, entityId, (entity) => ({ ...entity, visible })))
+    },
+
+    async setTransformSource(entityId, source) {
+      await mutate((current) => replaceEntity(current, entityId, (entity) => {
+        if (entity.kind !== 'object') {
+          throw new Error('SCENE_OBJECT_REQUIRED: Transform ownership applies only to Objects.')
+        }
+        return { ...entity, transformSource: source }
+      }))
     },
 
     async setLocalPose(entityId, pose) {
