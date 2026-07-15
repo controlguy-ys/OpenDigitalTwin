@@ -23,8 +23,6 @@ import {
 import type {
   ExternalEntityId,
   ProjectBuiltInEquipmentRecordV3,
-  ProjectExternalEntityTransformStateV3,
-  TransformSource,
 } from './external-entity-v3'
 import type { ProjectOpcUaNumericStatusBindingV3 } from './opcua-numeric-status-binding-v3'
 import type {
@@ -34,6 +32,7 @@ import type {
 import {
   MAX_OBJECT_ASSETS,
   MAX_OBJECT_INSTANCES,
+  MAX_STEP_OBJECT_ASSETS,
   MAX_VISIBLE_RENDER_ITEMS,
   MAX_VISIBLE_STATUS_OVERLAYS,
   type BoxObjectAssetRecordV3,
@@ -44,6 +43,10 @@ import {
   type ObjectInstanceRecordV3,
   type StepObjectAssetRecordV3,
 } from './object-asset-v3'
+import {
+  validateProjectSceneState,
+  type ProjectSceneStateV1,
+} from './scene-state-v1'
 import type {
   FixedSixAxisRobotMechanicsV3,
   FixedSixAxisJointManifestV1,
@@ -120,7 +123,10 @@ export type WorkcellProjectSnapshotV3 = DeepReadonly<
   > & {
     readonly manifest: WorkcellProjectManifestV3
     readonly robot: Readonly<
-      Omit<WorkcellProjectSnapshotV2['robot'], 'links' | 'joints'> & {
+      Omit<
+        WorkcellProjectSnapshotV2['robot'],
+        'links' | 'joints' | 'basePosition' | 'baseRotationDeg'
+      > & {
         readonly sources: readonly RobotStepSourceAssetV3[]
         readonly links: readonly RobotLinkGeometryRecordV3[]
         readonly mechanics: FixedSixAxisRobotMechanicsV3
@@ -132,10 +138,10 @@ export type WorkcellProjectSnapshotV3 = DeepReadonly<
       readonly tcp: ProjectRigidTransformV3
     }>
     readonly simulation: ProjectSimulationStateV3
+    readonly scene: ProjectSceneStateV1
     readonly objectAssets: readonly ObjectAssetRecordV3[]
     readonly objectInstances: readonly ObjectInstanceRecordV3[]
     readonly builtInEquipment: readonly ProjectBuiltInEquipmentRecordV3[]
-    readonly externalEntities: readonly ProjectExternalEntityTransformStateV3[]
     readonly opcUa: Readonly<
       Omit<WorkcellProjectSnapshotV2['opcUa'], 'equipment'> & {
         readonly numericStatusBindings: readonly ProjectOpcUaNumericStatusBindingV3[]
@@ -179,6 +185,7 @@ export {
   MAX_JOBS,
   MAX_OBJECT_ASSETS,
   MAX_OBJECT_INSTANCES,
+  MAX_STEP_OBJECT_ASSETS,
   MAX_POSES_PER_JOB,
   MAX_PROJECT_POSES,
   MAX_VISIBLE_RENDER_ITEMS,
@@ -203,7 +210,6 @@ export type {
   ObjectAssetRecordV3,
   ObjectInstanceRecordV3,
   ProjectBuiltInEquipmentRecordV3,
-  ProjectExternalEntityTransformStateV3,
   ProjectOpcUaEquipmentTransformBindingV3,
   ProjectOpcUaNumericStatusBindingV3,
   ProjectPoseStepV3,
@@ -217,7 +223,6 @@ export type {
   RobotStepSourceAssetV3,
   SimulationJobV1,
   StepObjectAssetRecordV3,
-  TransformSource,
 }
 
 const encoder = new TextEncoder()
@@ -894,16 +899,12 @@ function validateRobot(
 ): RobotValidationResultV3 {
   const robot = closedRecord(value, 'robot', [
     'name',
-    'basePosition',
-    'baseRotationDeg',
     'sources',
     'links',
     'mechanics',
     'mechanicsProvenance',
   ])
   boundedString(robot.name, 'robot.name', MAX_NAME_UTF8_BYTES)
-  numericTuple(robot.basePosition, 3, 'robot.basePosition')
-  numericTuple(robot.baseRotationDeg, 3, 'robot.baseRotationDeg')
 
   const sources = arrayValue(robot.sources, 'robot.sources')
   if (
@@ -1136,6 +1137,7 @@ function validateAssets(
   const assetIds = new Set<string>()
   const assetTriangles = new Map<string, number>()
   let sourceBytes = 0
+  let stepAssetCount = 0
   let collisionBoxes = 0
   assets.forEach((value, index) => {
     const label = `objectAssets[${index}]`
@@ -1182,6 +1184,10 @@ function validateAssets(
     )
     const sourceKind = base.sourceKind
     if (sourceKind === 'step') {
+      stepAssetCount += 1
+      if (stepAssetCount > MAX_STEP_OBJECT_ASSETS) {
+        fail(`MAX_STEP_OBJECT_ASSETS is ${MAX_STEP_OBJECT_ASSETS}.`)
+      }
       const asset = closedRecord(value, label, [
         'id',
         'name',
@@ -1298,19 +1304,18 @@ interface EntityValidationResultV3 {
 function validateInstances(
   value: unknown,
   assetIds: ReadonlySet<string>,
-  assetTriangles: ReadonlyMap<string, number>,
 ): {
   readonly instanceIds: ReadonlySet<string>
+  readonly instanceAssetIds: ReadonlyMap<string, string>
   readonly statusSources: ReadonlyMap<string, 'manual' | 'opcua'>
-  readonly visibleObjectTriangles: number
 } {
   const instances = arrayValue(value, 'objectInstances')
   if (instances.length > MAX_OBJECT_INSTANCES) {
     fail(`MAX_OBJECT_INSTANCES is ${MAX_OBJECT_INSTANCES}.`)
   }
   const ids = new Set<string>()
+  const instanceAssetIds = new Map<string, string>()
   const statusSources = new Map<string, 'manual' | 'opcua'>()
-  let visibleObjectTriangles = 0
   instances.forEach((value, index) => {
     const label = `objectInstances[${index}]`
     const instance = closedRecord(value, label, [
@@ -1320,7 +1325,7 @@ function validateInstances(
       'manualNumericStatus',
       'statusSource',
       'statusOverlayVisible',
-      'visible',
+      'scale',
       'graspable',
     ])
     const id = identifier(instance.id, `${label}.id`)
@@ -1330,6 +1335,7 @@ function validateInstances(
     if (!assetIds.has(assetId)) {
       fail(`${label} references missing Object Asset ${assetId}.`)
     }
+    instanceAssetIds.set(id, assetId)
     boundedString(instance.name, `${label}.name`, MAX_NAME_UTF8_BYTES)
     finite(instance.manualNumericStatus, `${label}.manualNumericStatus`)
     if (instance.statusSource !== 'manual' && instance.statusSource !== 'opcua') {
@@ -1337,12 +1343,10 @@ function validateInstances(
     }
     statusSources.set(`object:${id}`, instance.statusSource)
     booleanValue(instance.statusOverlayVisible, `${label}.statusOverlayVisible`)
-    if (booleanValue(instance.visible, `${label}.visible`)) {
-      visibleObjectTriangles += assetTriangles.get(assetId) ?? 0
-    }
+    numericTuple(instance.scale, 3, `${label}.scale`, true)
     booleanValue(instance.graspable, `${label}.graspable`)
   })
-  return { instanceIds: ids, statusSources, visibleObjectTriangles }
+  return { instanceIds: ids, instanceAssetIds, statusSources }
 }
 
 function exactOptionalTuple(
@@ -1443,72 +1447,6 @@ function externalEntityId(value: unknown, label: string): string {
   return id
 }
 
-function validateExternalEntities(
-  value: unknown,
-  expectedIds: ReadonlySet<string>,
-  normalize: boolean,
-): ReadonlyMap<string, 'manual' | 'opcua'> {
-  const states = arrayValue(value, 'externalEntities')
-  const ids = new Set<string>()
-  const sources = new Map<string, 'manual' | 'opcua'>()
-  states.forEach((value, index) => {
-    const label = `externalEntities[${index}]`
-    const state = closedRecord(
-      value,
-      label,
-      ['entityId', 'manualTransform', 'transformSource'],
-    )
-    const entityId = externalEntityId(state.entityId, `${label}.entityId`)
-    if (ids.has(entityId)) fail(`externalEntities contains duplicate ${entityId}.`)
-    ids.add(entityId)
-    if (!expectedIds.has(entityId)) fail(`externalEntities contains orphan ${entityId}.`)
-    validateTransform(
-      state.manualTransform,
-      `${label}.manualTransform`,
-      normalize,
-      false,
-    )
-    if (state.transformSource !== 'manual' && state.transformSource !== 'opcua') {
-      fail(`${label}.transformSource is unsupported.`)
-    }
-    sources.set(entityId, state.transformSource)
-  })
-  expectedIds.forEach((entityId) => {
-    if (!ids.has(entityId)) fail(`externalEntities is missing ${entityId}.`)
-  })
-  return sources
-}
-
-export function validateBuiltInEquipmentDefaultPairsV3(
-  configurationDefaults: readonly ProjectBuiltInEquipmentRecordV3[],
-  transformDefaults: readonly ProjectExternalEntityTransformStateV3[],
-): Readonly<{
-  readonly configurations: readonly ProjectBuiltInEquipmentRecordV3[]
-  readonly transforms: readonly ProjectExternalEntityTransformStateV3[]
-}> {
-  const configurations = structuredClone(configurationDefaults)
-  const transforms = structuredClone(transformDefaults)
-  if (configurations.length !== transforms.length) {
-    fail('Built-in Equipment defaults must contain one configuration/transform pair per id.')
-  }
-  const { builtInIds } = validateBuiltIns(configurations)
-  const expectedIds = new Set<string>(
-    Array.from(builtInIds, (id) => `equipment:${id}`),
-  )
-  transforms.forEach((transform, index) => {
-    if (
-      transform.transformSource !== 'manual' ||
-      !transform.entityId.startsWith('equipment:')
-    ) {
-      fail(`Built-in Equipment transform default ${index} must be MCP-local Manual state.`)
-    }
-  })
-  validateExternalEntities(transforms, expectedIds, true)
-  deepFreezeConfiguration(configurations)
-  deepFreezeConfiguration(transforms)
-  return Object.freeze({ configurations, transforms })
-}
-
 function validateEntities(
   snapshot: Record<string, unknown>,
   assets: AssetValidationResultV3,
@@ -1517,18 +1455,42 @@ function validateEntities(
   const instances = validateInstances(
     snapshot.objectInstances,
     assets.assetIds,
-    assets.assetTriangles,
   )
   const builtIns = validateBuiltIns(snapshot.builtInEquipment)
   const canonicalIds = new Set<string>([
     ...Array.from(instances.instanceIds, (id) => `object:${id}`),
     ...Array.from(builtIns.builtInIds, (id) => `equipment:${id}`),
   ])
-  const transformSources = validateExternalEntities(
-    snapshot.externalEntities,
-    canonicalIds,
-    normalize,
-  )
+  let scene: ProjectSceneStateV1
+  try {
+    scene = validateProjectSceneState(snapshot.scene)
+  } catch (error) {
+    fail(error instanceof Error ? error.message : 'scene is invalid.')
+  }
+  if (scene.entities.filter(({ kind }) => kind === 'robot').length !== 1) {
+    fail('SCENE_ROBOT_REQUIRED: Project Scene must contain exactly one Robot.')
+  }
+  const targetIds = new Set<string>()
+  const transformSources = new Map<string, 'manual' | 'opcua'>()
+  let visibleObjectTriangles = 0
+  for (const entity of scene.entities) {
+    if (entity.kind !== 'object') continue
+    const canonicalId = entity.target.kind === 'object-instance'
+      ? `object:${entity.target.id}`
+      : `equipment:${entity.target.id}`
+    if (targetIds.has(canonicalId)) fail(`SCENE_TARGET_DUPLICATE: ${canonicalId} is targeted more than once.`)
+    targetIds.add(canonicalId)
+    if (!canonicalIds.has(canonicalId)) fail(`SCENE_TARGET_ORPHAN: ${canonicalId} has no domain record.`)
+    transformSources.set(canonicalId, entity.transformSource)
+    if (entity.visible && entity.target.kind === 'object-instance') {
+      const assetId = instances.instanceAssetIds.get(entity.target.id)
+      visibleObjectTriangles += assetId === undefined ? 0 : assets.assetTriangles.get(assetId) ?? 0
+    }
+  }
+  canonicalIds.forEach((id) => {
+    if (!targetIds.has(id)) fail(`SCENE_TARGET_MISSING: ${id} has no Scene Object.`)
+  })
+  if (normalize) snapshot.scene = scene
   return {
     instanceIds: instances.instanceIds,
     canonicalIds,
@@ -1537,7 +1499,7 @@ function validateEntities(
       ...builtIns.statusSources,
     ]),
     transformSources,
-    visibleObjectTriangles: instances.visibleObjectTriangles,
+    visibleObjectTriangles,
   }
 }
 
@@ -1821,10 +1783,10 @@ function validateSnapshotCore(
     'robot',
     'frames',
     'simulation',
+    'scene',
     'objectAssets',
     'objectInstances',
     'builtInEquipment',
-    'externalEntities',
     'opcUa',
     'collisionPolicy',
   ])

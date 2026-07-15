@@ -297,7 +297,7 @@ function objectInstance(
     manualNumericStatus: 0,
     statusSource: 'manual',
     statusOverlayVisible: true,
-    visible: true,
+    scale: [1, 1, 1],
     graspable: false,
   }
 }
@@ -353,8 +353,6 @@ function validV3Project(): WorkcellProjectSnapshotV3 {
     },
     robot: {
       name: 'Six-axis robot',
-      basePosition: [0, 0, 0],
-      baseRotationDeg: [0, 0, 0],
       sources: [robotSource()],
       links: LINK_IDS.map((linkId) => robotLink(linkId)),
       mechanics: mechanics(),
@@ -362,13 +360,22 @@ function validV3Project(): WorkcellProjectSnapshotV3 {
     },
     frames: { mcp: IDENTITY, tcp: IDENTITY },
     simulation: { activeJobId: 'job-1', jobs: [job()] },
+    scene: {
+      robotMountContact: { baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: null },
+      entities: [
+        { kind: 'robot', id: 'robot:active', name: 'Robot', parentId: null,
+          localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true },
+        { kind: 'object', id: 'object:instance-1', name: 'Object', parentId: null,
+          localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+          target: { kind: 'object-instance', id: 'instance-1' }, transformSource: 'manual' },
+        { kind: 'object', id: 'equipment:cup-01', name: 'Cup', parentId: null,
+          localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+          target: { kind: 'built-in-equipment', id: 'cup-01' }, transformSource: 'manual' },
+      ],
+    },
     objectAssets: [primitiveBox()],
     objectInstances: [objectInstance()],
     builtInEquipment: [builtInEquipment()],
-    externalEntities: [
-      { entityId: 'object:instance-1', manualTransform: IDENTITY, transformSource: 'manual' },
-      { entityId: 'equipment:cup-01', manualTransform: IDENTITY, transformSource: 'manual' },
-    ],
     opcUa: {
       endpointUrl: 'opc.tcp://127.0.0.1:4840',
       samplingIntervalMs: 100,
@@ -500,7 +507,8 @@ describe('Workcell Project V3 contract', () => {
     expect(() => validateWorkcellProjectSnapshotV3(numeric)).toThrow(/numeric|binding/i)
 
     const transform = mutable(validV3Project())
-    transform.externalEntities[0]!.transformSource = 'opcua'
+    const objectScene = transform.scene.entities.find(({ id }) => id === 'object:instance-1')!
+    if (objectScene.kind === 'object') objectScene.transformSource = 'opcua'
     expect(() => validateWorkcellProjectSnapshotV3(transform)).toThrow(/transform|binding/i)
 
     const dormant = mutable(validV3Project())
@@ -860,19 +868,21 @@ describe('Workcell Project V3 contract', () => {
         { length: instanceCount },
         (_, index) => mutable(objectInstance(`instance-${index}`, `asset-${index % assetCount}`)),
       )
-      snapshot.externalEntities = [
+      snapshot.scene.entities = [
+        snapshot.scene.entities.find(({ kind }) => kind === 'robot')!,
         ...snapshot.objectInstances.map(({ id }) => ({
-          entityId: `object:${id}` as const,
-          manualTransform: mutable(IDENTITY),
+          kind: 'object' as const, id: `object:${id}` as const, name: id, parentId: null,
+          localPose: { positionM: [0, 0, 0] as [number, number, number], quaternion: [0, 0, 0, 1] as [number, number, number, number] },
+          visible: true, target: { kind: 'object-instance' as const, id },
           transformSource: 'manual' as const,
         })),
-        { entityId: 'equipment:cup-01', manualTransform: mutable(IDENTITY), transformSource: 'manual' },
+        snapshot.scene.entities.find(({ id }) => id === 'equipment:cup-01')!,
       ]
       return snapshot
     }
-    expect(() => validateWorkcellProjectSnapshotV3(objectCounts(256, 512))).not.toThrow()
-    expect(() => validateWorkcellProjectSnapshotV3(objectCounts(257, 512))).toThrow(/MAX_OBJECT_ASSETS/)
-    expect(() => validateWorkcellProjectSnapshotV3(objectCounts(256, 513))).toThrow(/MAX_OBJECT_INSTANCES/)
+    expect(() => validateWorkcellProjectSnapshotV3(objectCounts(256, 256))).not.toThrow()
+    expect(() => validateWorkcellProjectSnapshotV3(objectCounts(257, 256))).toThrow(/MAX_OBJECT_ASSETS/)
+    expect(() => validateWorkcellProjectSnapshotV3(objectCounts(256, 257))).toThrow(/MAX_OBJECT_INSTANCES/)
 
     type Mutator = (snapshot: DeepMutable<WorkcellProjectSnapshotV3>, value: string) => void
     const fields: readonly [string, Mutator][] = [
@@ -886,7 +896,11 @@ describe('Workcell Project V3 contract', () => {
       ['Asset name', (snapshot, value) => { snapshot.objectAssets[0]!.name = value }],
       ['Instance id', (snapshot, value) => {
         snapshot.objectInstances[0]!.id = value
-        snapshot.externalEntities[0]!.entityId = `object:${value}`
+        const entity = snapshot.scene.entities.find(({ id }) => id === 'object:instance-1')!
+        if (entity.kind === 'object') {
+          entity.id = `object:${value}`
+          entity.target.id = value
+        }
       }],
       ['Instance name', (snapshot, value) => { snapshot.objectInstances[0]!.name = value }],
       ['Job id', (snapshot, value) => {
@@ -952,12 +966,11 @@ describe('Workcell Project V3 contract', () => {
 
   it('requires one built-in record/state pair and exact content-addressed Robot source IDs', () => {
     const missingState = mutable(validV3Project())
-    missingState.externalEntities = missingState.externalEntities.filter(({ entityId }) => entityId !== 'equipment:cup-01')
+    missingState.scene.entities = missingState.scene.entities.filter(({ id }) => id !== 'equipment:cup-01')
     expect(() => validateWorkcellProjectSnapshotV3(missingState)).toThrow(/equipment/i)
 
     const unknown = mutable(validV3Project())
     unknown.builtInEquipment[0]!.id = 'unknown'
-    unknown.externalEntities[1]!.entityId = 'equipment:unknown'
     expect(() => validateWorkcellProjectSnapshotV3(unknown)).toThrow(/catalog/i)
 
     const geometry = mutable(validV3Project())
@@ -1137,7 +1150,7 @@ describe('Workcell Project V3 contract', () => {
     ['Object Asset', (snapshot: DeepMutable<WorkcellProjectSnapshotV3>) => Object.assign(snapshot.objectAssets[0]!, { sourceBytes: new ArrayBuffer(1) })],
     ['Object Instance', (snapshot: DeepMutable<WorkcellProjectSnapshotV3>) => Object.assign(snapshot.objectInstances[0]!, { transform: IDENTITY })],
     ['built-in Equipment', (snapshot: DeepMutable<WorkcellProjectSnapshotV3>) => Object.assign(snapshot.builtInEquipment[0]!, { numericStatus: 1 })],
-    ['external state', (snapshot: DeepMutable<WorkcellProjectSnapshotV3>) => Object.assign(snapshot.externalEntities[0]!, { liveTransform: IDENTITY })],
+    ['Scene state', (snapshot: DeepMutable<WorkcellProjectSnapshotV3>) => Object.assign(snapshot.scene.entities[0]!, { liveTransform: IDENTITY })],
     ['collision policy', (snapshot: DeepMutable<WorkcellProjectSnapshotV3>) => Object.assign(snapshot.collisionPolicy, { findings: [] })],
   ])('rejects unknown nested %s fields', (_label, mutate) => {
     const snapshot = mutable(validV3Project())
@@ -1187,7 +1200,7 @@ describe('Workcell Project V3 contract', () => {
     }],
   ])('rejects %s on a numeric tuple', (_label, mutateTuple) => {
     const snapshot = mutable(validV3Project())
-    mutateTuple(snapshot.robot.basePosition)
+    mutateTuple(snapshot.scene.entities[0]!.localPose.positionM)
     expect(() => validateWorkcellProjectSnapshotV3(snapshot))
       .toThrow(/Invalid workcell project V3:.*(?:array|sparse|unknown|enumerable|data|plain)/i)
   })
@@ -1328,8 +1341,68 @@ describe('Workcell Project V3 contract', () => {
 
   it('exports the approved structural budgets', () => {
     expect(MAX_OBJECT_ASSETS).toBe(256)
-    expect(MAX_OBJECT_INSTANCES).toBe(512)
+    expect(MAX_OBJECT_INSTANCES).toBe(256)
     expect(MAX_VISIBLE_RENDER_ITEMS).toBe(1_024)
     expect(MAX_VISIBLE_STATUS_OVERLAYS).toBe(128)
+  })
+
+  it('makes Scene the only durable owner of Robot and external placement state', () => {
+    const snapshot = mutable(validV3Project()) as unknown as Record<string, any>
+    delete snapshot.robot.basePosition
+    delete snapshot.robot.baseRotationDeg
+    delete snapshot.externalEntities
+    delete snapshot.objectInstances[0].visible
+    snapshot.objectInstances[0].scale = [1, 1, 1]
+    snapshot.scene = {
+      robotMountContact: { baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: null },
+      entities: [
+        { kind: 'robot', id: 'robot:active', name: 'Robot', parentId: null,
+          localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true },
+        { kind: 'object', id: 'object:instance-1', name: 'Object', parentId: null,
+          localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+          target: { kind: 'object-instance', id: 'instance-1' }, transformSource: 'manual' },
+        { kind: 'object', id: 'equipment:cup-01', name: 'Cup', parentId: null,
+          localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+          target: { kind: 'built-in-equipment', id: 'cup-01' }, transformSource: 'manual' },
+      ],
+    }
+    expect(() => validateWorkcellProjectSnapshotV3(snapshot)).not.toThrow()
+
+    snapshot.scene.entities.push({ ...snapshot.scene.entities[1] })
+    expect(() => validateWorkcellProjectSnapshotV3(snapshot)).toThrow(/SCENE_TARGET_DUPLICATE/)
+  })
+
+  it('accepts 64 STEP assets and 256 instances and rejects one above each', () => {
+    const projectCounts = (stepCount: number, instanceCount: number) => {
+      const snapshot = mutable(validV3Project()) as unknown as Record<string, any>
+      delete snapshot.robot.basePosition
+      delete snapshot.robot.baseRotationDeg
+      delete snapshot.externalEntities
+      snapshot.objectAssets = Array.from({ length: stepCount }, (_, index) => stepAsset(`step-${index}`))
+      snapshot.objectInstances = Array.from({ length: instanceCount }, (_, index) => ({
+        ...objectInstance(`instance-${index}`, `step-${index % stepCount}`),
+        scale: [1, 1, 1],
+      }))
+      snapshot.objectInstances.forEach((instance: Record<string, unknown>) => delete instance.visible)
+      snapshot.scene = {
+        robotMountContact: null,
+        entities: [
+          { kind: 'robot', id: 'robot:active', name: 'Robot', parentId: null,
+            localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true },
+          ...snapshot.objectInstances.map((instance: { id: string }) => ({
+            kind: 'object', id: `object:${instance.id}`, name: instance.id, parentId: null,
+            localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+            target: { kind: 'object-instance', id: instance.id }, transformSource: 'manual',
+          })),
+          { kind: 'object', id: 'equipment:cup-01', name: 'Cup', parentId: null,
+            localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+            target: { kind: 'built-in-equipment', id: 'cup-01' }, transformSource: 'manual' },
+        ],
+      }
+      return snapshot
+    }
+    expect(() => validateWorkcellProjectSnapshotV3(projectCounts(64, 256))).not.toThrow()
+    expect(() => validateWorkcellProjectSnapshotV3(projectCounts(65, 256))).toThrow('MAX_STEP_OBJECT_ASSETS')
+    expect(() => validateWorkcellProjectSnapshotV3(projectCounts(64, 257))).toThrow('MAX_OBJECT_INSTANCES')
   })
 })

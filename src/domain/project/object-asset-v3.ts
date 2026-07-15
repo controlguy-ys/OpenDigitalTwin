@@ -10,7 +10,8 @@ export type DeepReadonly<T> = T extends ArrayBuffer
       : T
 
 export const MAX_OBJECT_ASSETS = 256
-export const MAX_OBJECT_INSTANCES = 512
+export const MAX_STEP_OBJECT_ASSETS = 64
+export const MAX_OBJECT_INSTANCES = 256
 export const MAX_VISIBLE_RENDER_ITEMS = 1_024
 export const MAX_VISIBLE_STATUS_OVERLAYS = 128
 
@@ -53,7 +54,8 @@ export type ObjectAssetRecordV3 =
   | CylinderObjectAssetRecordV3
 
 export type ObjectInstanceRecordV3 = Readonly<
-  Omit<ObjectInstanceRecordV1, 'transform' | 'numericStatus'> & {
+  Omit<ObjectInstanceRecordV1, 'transform' | 'numericStatus' | 'visible'> & {
+    readonly scale: readonly [number, number, number]
     readonly graspable: boolean
     readonly manualNumericStatus: number
   }

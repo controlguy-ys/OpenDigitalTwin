@@ -55,8 +55,6 @@ async function validV3Project(): Promise<WorkcellProjectSnapshotV3> {
     },
     robot: {
       name: 'Legacy Robot',
-      basePosition: [0, 0, 0],
-      baseRotationDeg: [0, 0, 0],
       sources: [{
         id: DIGEST_ABC,
         sha256: DIGEST_ABC,
@@ -113,10 +111,16 @@ async function validV3Project(): Promise<WorkcellProjectSnapshotV3> {
       activeJobId: 'job-default',
       jobs: [{ id: 'job-default', name: 'Default Job', revision: 1, poses: [] }],
     },
+    scene: {
+      robotMountContact: { baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: null },
+      entities: [{
+        kind: 'robot', id: 'robot:active', name: 'Robot', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+      }],
+    },
     objectAssets: [],
     objectInstances: [],
     builtInEquipment: [],
-    externalEntities: [],
     opcUa: {
       endpointUrl: 'opc.tcp://127.0.0.1:4840',
       samplingIntervalMs: 100,

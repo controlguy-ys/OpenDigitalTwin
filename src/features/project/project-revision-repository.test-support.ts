@@ -82,8 +82,6 @@ export async function repositoryProjectFixture(
     },
     robot: {
       name: 'Robot',
-      basePosition: [0, 0, 0],
-      baseRotationDeg: [0, 0, 0],
       sources: [{
         id: sourceDigest,
         sha256: sourceDigest,
@@ -132,10 +130,16 @@ export async function repositoryProjectFixture(
         { id: 'job-b', name: 'Second', revision: 1, poses: [] },
       ],
     },
+    scene: {
+      robotMountContact: { baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: null },
+      entities: [{
+        kind: 'robot', id: 'robot:active', name: 'Robot', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+      }],
+    },
     objectAssets,
     objectInstances: [],
     builtInEquipment: [],
-    externalEntities: [],
     opcUa: {
       endpointUrl: 'opc.tcp://127.0.0.1:4840',
       samplingIntervalMs: 100,

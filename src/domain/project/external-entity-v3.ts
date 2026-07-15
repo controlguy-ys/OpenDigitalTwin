@@ -1,17 +1,9 @@
 import type {
   EquipmentStatus,
   EquipmentStatusSource,
-  SerializableTransform,
 } from '../equipment/equipment'
 
 export type ExternalEntityId = `equipment:${string}` | `object:${string}`
-export type TransformSource = 'manual' | 'opcua'
-
-export interface ProjectExternalEntityTransformStateV3 {
-  readonly entityId: ExternalEntityId
-  readonly manualTransform: SerializableTransform
-  readonly transformSource: TransformSource
-}
 
 export interface ProjectBuiltInEquipmentRecordV3 {
   readonly id: string

@@ -39,7 +39,7 @@ const V3_JSON_PATHS = Object.freeze([
   'objects/assets.json',
   'objects/instances.json',
   'equipment/built-ins.json',
-  'external/entities.json',
+  'scene/state.json',
   'simulation/jobs.json',
   'opcua/bindings.json',
   'collision/policy.json',
@@ -373,8 +373,6 @@ export async function encodeWorkcellProjectV3(
       jsonEntry('frames.json', owned.frames),
       jsonEntry('robot/configuration.json', {
         name: owned.robot.name,
-        basePosition: owned.robot.basePosition,
-        baseRotationDeg: owned.robot.baseRotationDeg,
         mechanics: owned.robot.mechanics,
         mechanicsProvenance: owned.robot.mechanicsProvenance,
       }),
@@ -386,8 +384,11 @@ export async function encodeWorkcellProjectV3(
         .sort((left, right) => codeUnitCompare(left.id, right.id))),
       jsonEntry('equipment/built-ins.json', [...owned.builtInEquipment]
         .sort((left, right) => codeUnitCompare(left.id, right.id))),
-      jsonEntry('external/entities.json', [...owned.externalEntities]
-        .sort((left, right) => codeUnitCompare(left.entityId, right.entityId))),
+      jsonEntry('scene/state.json', {
+        ...owned.scene,
+        entities: [...owned.scene.entities]
+          .sort((left, right) => codeUnitCompare(left.id, right.id)),
+      }),
       jsonEntry('simulation/jobs.json', owned.simulation),
       jsonEntry('opcua/bindings.json', {
         endpointUrl: owned.opcUa.endpointUrl,
@@ -543,7 +544,7 @@ export async function decodeWorkcellProjectV3(
       objectAssets,
       objectInstances: json.get('objects/instances.json'),
       builtInEquipment: json.get('equipment/built-ins.json'),
-      externalEntities: json.get('external/entities.json'),
+      scene: json.get('scene/state.json'),
       opcUa: json.get('opcua/bindings.json'),
       collisionPolicy: json.get('collision/policy.json'),
     } as unknown as ByteFreeWorkcellProjectProjectionV3

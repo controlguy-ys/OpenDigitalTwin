@@ -7,13 +7,17 @@ import {
   WORKCELL_PROJECT_SCHEMA_VERSION_V3,
   type WorkcellProjectSnapshotV3,
 } from '../../domain/project/project-v3'
+import { worldPoseForEntity } from '../../domain/scene/scene-transform'
 import { createPortableId } from '../../lib/id/create-portable-id'
 import {
   BoxGeometry,
   CylinderGeometry,
+  Euler,
   Group,
+  MathUtils,
   Mesh,
   MeshStandardMaterial,
+  Quaternion,
 } from 'three'
 import {
   createProjectHashService,
@@ -155,22 +159,33 @@ function projectObjectReadModels(snapshot: WorkcellProjectSnapshotV3): {
 } {
   const assets = snapshot.objectAssets
   const assetIds = new Set(assets.map(({ id }) => id))
-  const transforms = new Map(snapshot.externalEntities.map((state) => [state.entityId, state]))
+  const sceneObjects = new Map(snapshot.scene.entities
+    .filter((entity) => entity.kind === 'object')
+    .map((entity) => [entity.id, entity]))
   const instances = snapshot.objectInstances
     .filter(({ assetId }) => assetIds.has(assetId))
-    .map((instance) => ({
-      id: instance.id,
-      assetId: instance.assetId,
-      name: instance.name,
-      transform: mutableTransform(
-        transforms.get(`object:${instance.id}`)?.manualTransform ?? identityTransform(),
-      ),
-      numericStatus: instance.manualNumericStatus,
-      graspable: instance.graspable,
-      statusSource: instance.statusSource,
-      statusOverlayVisible: instance.statusOverlayVisible,
-      visible: instance.visible,
-    }))
+    .map((instance) => {
+      const sceneEntity = sceneObjects.get(`object:${instance.id}`)
+      if (sceneEntity === undefined) {
+        throw new Error(`SCENE_TARGET_MISSING: object:${instance.id} has no Scene Object.`)
+      }
+      const worldPose = worldPoseForEntity(snapshot.scene, sceneEntity.id)
+      return {
+        id: instance.id,
+        assetId: instance.assetId,
+        name: instance.name,
+        transform: {
+          position: [...worldPose.positionM] as [number, number, number],
+          quaternion: [...worldPose.quaternion] as [number, number, number, number],
+          scale: [...instance.scale] as [number, number, number],
+        },
+        numericStatus: instance.manualNumericStatus,
+        graspable: instance.graspable,
+        statusSource: instance.statusSource,
+        statusOverlayVisible: instance.statusOverlayVisible,
+        visible: sceneEntity.visible,
+      }
+    })
   return { assets, instances }
 }
 
@@ -355,8 +370,6 @@ export function createBrowserProjectRuntime(
         },
         robot: {
           name: configuration.name,
-          basePosition: [...configuration.basePosition],
-          baseRotationDeg: [...configuration.baseRotationDeg],
           sources,
           links: sourceLinks.map((link, index) => ({
             linkId: link.linkId,
@@ -398,10 +411,26 @@ export function createBrowserProjectRuntime(
         },
         frames: { mcp: identityTransform(), tcp: identityTransform() },
         simulation: { activeJobId: null, jobs: [] },
+        scene: {
+          robotMountContact: { baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: null },
+          entities: [{
+            kind: 'robot',
+            id: 'robot:active',
+            name: configuration.name,
+            parentId: null,
+            localPose: {
+              positionM: [...configuration.basePosition],
+              quaternion: new Quaternion().setFromEuler(new Euler(
+                ...configuration.baseRotationDeg.map(MathUtils.degToRad) as [number, number, number],
+                'XYZ',
+              )).toArray() as [number, number, number, number],
+            },
+            visible: true,
+          }],
+        },
         objectAssets: [],
         objectInstances: [],
         builtInEquipment: [],
-        externalEntities: [],
         opcUa: DEFAULT_OPC_UA,
         collisionPolicy: {
           enabled: DEFAULT_COLLISION_POLICY.enabled,
@@ -477,10 +506,12 @@ export function createBrowserProjectRuntime(
           assets: resources.objectRecords,
           instances: resources.objectInstances,
         })
+        const robotPose = worldPoseForEntity(bundle.snapshot.scene, 'robot:active')
+        const robotEuler = new Euler().setFromQuaternion(new Quaternion(...robotPose.quaternion), 'XYZ')
         useRobotConfigurationStore.getState().setConfiguration({
           name: bundle.snapshot.robot.name,
-          basePosition: [...bundle.snapshot.robot.basePosition],
-          baseRotationDeg: [...bundle.snapshot.robot.baseRotationDeg],
+          basePosition: [...robotPose.positionM],
+          baseRotationDeg: [robotEuler.x, robotEuler.y, robotEuler.z].map(MathUtils.radToDeg) as [number, number, number],
           joints: bundle.snapshot.robot.mechanics.joints.map((joint) => ({
             id: joint.id,
             parentLink: joint.parentLink,

@@ -205,12 +205,17 @@ async function projectFixture(
     manualNumericStatus: index,
     statusSource: 'manual' as const,
     statusOverlayVisible: true,
-    visible: true,
+    scale: [1, 1, 1] as const,
     graspable: false,
   }))
   const objectStates = instances.map((instance) => ({
-    entityId: `object:${instance.id}` as const,
-    manualTransform: IDENTITY,
+    kind: 'object' as const,
+    id: `object:${instance.id}` as const,
+    name: instance.name,
+    parentId: null,
+    localPose: { positionM: [0, 0, 0] as const, quaternion: [0, 0, 0, 1] as const },
+    visible: true,
+    target: { kind: 'object-instance' as const, id: instance.id },
     transformSource: 'manual' as const,
   }))
   return {
@@ -224,8 +229,6 @@ async function projectFixture(
     },
     robot: {
       name: 'Assembly Robot',
-      basePosition: [0, 0, 0],
-      baseRotationDeg: [0, 0, 0],
       sources: [{
         id: assemblySha256,
         sha256: assemblySha256,
@@ -269,6 +272,17 @@ async function projectFixture(
         { id: 'job-a', name: 'Second stored Job', revision: 1, poses: [] },
       ],
     },
+    scene: {
+      robotMountContact: { baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: null },
+      entities: [
+        { kind: 'robot', id: 'robot:active', name: 'Robot', parentId: null,
+          localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true },
+        ...objectStates,
+        { kind: 'object', id: 'equipment:cup-01', name: 'Cup 01', parentId: null,
+          localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+          target: { kind: 'built-in-equipment', id: 'cup-01' }, transformSource: 'manual' },
+      ],
+    },
     objectAssets,
     objectInstances: instances,
     builtInEquipment: [{
@@ -283,10 +297,6 @@ async function projectFixture(
       collisionHalfExtents: [0.055, 0.055, 0.075],
       stackLightAnchor: null,
     }],
-    externalEntities: [
-      ...objectStates,
-      { entityId: 'equipment:cup-01', manualTransform: IDENTITY, transformSource: 'manual' },
-    ],
     opcUa: {
       endpointUrl: 'opc.tcp://127.0.0.1:4840',
       samplingIntervalMs: 100,
@@ -527,6 +537,8 @@ describe('deterministic Project V3 archive', () => {
     expect(Object.keys(entries)).toEqual(Object.keys(entries).sort())
     const assets = JSON.parse(new TextDecoder().decode(entries['objects/assets.json'])) as { id: string }[]
     expect(assets.map(({ id }) => id)).toEqual(['a-asset', 'z-asset'])
+    expect(entries['scene/state.json']).toBeDefined()
+    expect(entries['external/entities.json']).toBeUndefined()
   })
 
   it('is byte-identical for equivalent property insertion and set collection order', async () => {
@@ -544,7 +556,7 @@ describe('deterministic Project V3 archive', () => {
     ;(reordered.objectAssets as unknown[]).reverse()
     ;(reordered.objectInstances as unknown[]).reverse()
     ;(reordered.builtInEquipment as unknown[]).reverse()
-    ;(reordered.externalEntities as unknown[]).reverse()
+    ;((reordered.scene as { entities: unknown[] }).entities).reverse()
     const opcUa = reordered.opcUa as {
       numericStatusBindings: unknown[]
       equipmentTransforms: unknown[]

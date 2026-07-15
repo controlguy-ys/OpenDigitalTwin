@@ -11,7 +11,7 @@ const UNORDERED_COLLECTION_PATHS = [
   ['objectAssets', '*', 'collisionBoxes'],
   ['objectInstances'],
   ['builtInEquipment'],
-  ['externalEntities'],
+  ['scene', 'entities'],
   ['opcUa', 'joints'],
   ['opcUa', 'numericStatusBindings'],
   ['opcUa', 'equipmentTransforms'],

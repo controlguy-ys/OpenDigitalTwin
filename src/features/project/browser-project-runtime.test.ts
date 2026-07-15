@@ -129,17 +129,24 @@ function withPrimitiveAssets(
     manualNumericStatus: index,
     statusSource: 'manual',
     statusOverlayVisible: false,
-    visible: true,
+    scale: [1, 1, 1],
   }))
-  next.externalEntities = next.objectInstances.map((instance: { id: string }, index: number) => ({
-    entityId: `object:${instance.id}` as const,
-    manualTransform: {
-      position: [index * 2, 0, 0] as [number, number, number],
-      quaternion: [0, 0, 0, 1] as [number, number, number, number],
-      scale: [1, 1, 1] as [1, 1, 1],
-    },
-    transformSource: 'manual' as const,
-  }))
+  next.scene.entities = [
+    ...next.scene.entities,
+    ...next.objectInstances.map((instance: { id: string; name: string }, index: number) => ({
+      kind: 'object' as const,
+      id: `object:${instance.id}` as const,
+      name: instance.name,
+      parentId: null,
+      localPose: {
+        positionM: [index * 2, 0, 0] as [number, number, number],
+        quaternion: [0, 0, 0, 1] as [number, number, number, number],
+      },
+      visible: true,
+      target: { kind: 'object-instance' as const, id: instance.id },
+      transformSource: 'manual' as const,
+    })),
+  ]
   return next
 }
 
