@@ -405,3 +405,48 @@ application functional while Task 4 repository publication remains out of scope:
   context propagation, Axis-carriage filtering, Collision focus, OPC-UA UI/service
   ownership, and publication-only runtime status. It adds no Legacy or Task 4+
   capability, PLC transfer, deployment, or live OPC-UA write.
+
+---
+
+## Fourth Review Follow-up: Viewport-Root Overlay Portal
+
+### Outcome
+
+- Rendered the complete Scene context overlay fragment through a React portal owned
+  by `document.body`. Explorer-launched and viewport-launched menus/dialogs now share
+  viewport coordinates, clamping, and backdrop semantics even when their logical
+  parent is a transformed responsive rail.
+- Preserved React event bubbling to the logical menu owner, modal click isolation,
+  initial focus, Escape and async-failure focus return, and resize-listener cleanup.
+- Added a document-safe inline fallback for non-browser/SSR rendering and guarded all
+  overlay return-focus ref initialization against an unavailable document.
+
+### RED-to-GREEN evidence
+
+- Responsive-composition RED: an Explorer menu remained under its transformed rail,
+  the App viewport menu remained under the viewport `main`, and server rendering with
+  no document threw while reading `activeElement`. The 3-file RED had 3 failures and
+  28 passes.
+- GREEN: Explorer, App, and ContextMenu suites passed 3 files and 31 tests. The tests
+  prove menu and modal backdrop are direct body children, focus returns through both
+  dialog and menu dismissal, portal event bubbling keeps underlying commands blocked,
+  cleanup remains active, and document-free inline rendering does not throw.
+
+### Verification
+
+- Fourth-review focused matrix: 34 files, 195 tests passed in 42.08 seconds.
+- Full serial Vitest (`npx vitest run --maxWorkers=1`): 100 files, 840 tests passed in
+  267.66 seconds.
+- Lint (`npm run lint`): exit 0 with zero warnings.
+- Production build (`npm run build`): exit 0 (`tsc -b` and Vite production bundle).
+  Vite reported only the existing OCCT browser-externalization and large-chunk
+  advisories; there were no TypeScript or build errors.
+- Working-tree and staged whitespace checks (`git diff --check` and
+  `git diff --cached --check`): passed before commit.
+
+### Scope boundary
+
+- This follow-up changes only the overlay DOM mount root and SSR guard. Project V3,
+  held interactions, OPC-UA ownership/runtime status, safe deletion, Axis filtering,
+  Collision focus, and every earlier Task 3 closure remain unchanged. It adds no
+  Legacy or Task 4+ behavior, PLC transfer, deployment, or live OPC-UA write.

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { SceneEntityIdV1, ScenePoseV1 } from '../../domain/project/scene-state-v1'
 import { sceneCommandService } from '../project/project-store-browser'
 import type { SceneCommandService } from './scene-command-service'
@@ -61,7 +62,9 @@ function ConfirmationDialog({
 }>) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
-    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
   )
 
   useEffect(() => {
@@ -121,7 +124,9 @@ function GroupChoiceDialog({
 }>) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
-    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
   )
 
   useEffect(() => {
@@ -194,7 +199,9 @@ export function SceneContextMenu({
   const [menuPosition, setMenuPosition] = useState(position)
   const menuRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
-    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
   )
   const groups = runtime.groups
     .filter(({ entityId: groupId }) => groupId !== entity?.parentId)
@@ -298,7 +305,7 @@ export function SceneContextMenu({
     </>
   )
 
-  return (
+  const overlay = (
     <>
       <div
         aria-hidden={modalOpen ? true : undefined}
@@ -469,4 +476,7 @@ export function SceneContextMenu({
       ) : null}
     </>
   )
+  return typeof document === 'undefined'
+    ? overlay
+    : createPortal(overlay, document.body)
 }

@@ -55,6 +55,8 @@ describe('App scene editor integration', () => {
     expect(screen.queryByRole('menuitem', { name: 'Fit All' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Entity viewport context' }))
+    const entityMenu = screen.getByRole('menu', { name: 'Cup commands' })
+    expect(entityMenu.parentElement).toBe(document.body)
     expect(screen.getByRole('menuitem', { name: 'Duplicate' })).toBeVisible()
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeVisible()
     expect(screen.queryByRole('menuitem', { name: 'Fit All' })).not.toBeInTheDocument()

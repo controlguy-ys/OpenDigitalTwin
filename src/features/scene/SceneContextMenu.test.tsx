@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { renderToString } from 'react-dom/server'
 import type { SceneCommandService } from './scene-command-service'
 import { SceneContextMenu } from './SceneContextMenu'
 import { testSceneRuntime } from './scene-ui-test-fixtures'
@@ -49,6 +50,23 @@ describe('SceneContextMenu', () => {
     expect(screen.queryByRole('menuitem', { name: 'Fit All' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('menuitem', { name: 'Create Box' }))
     expect(service.createBox).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to inline overlay rendering when no document portal target exists', () => {
+    vi.stubGlobal('document', undefined)
+    try {
+      expect(() => renderToString(
+        <SceneContextMenu
+          commands={commands()}
+          entityId={null}
+          onDelete={vi.fn()}
+          onIsolate={vi.fn()}
+          runtime={testSceneRuntime()}
+        />,
+      )).not.toThrow()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('filters Robot commands and exposes only existing dedicated surfaces', () => {

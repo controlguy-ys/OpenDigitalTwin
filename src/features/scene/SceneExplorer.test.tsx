@@ -80,6 +80,38 @@ describe('SceneExplorer', () => {
     expect(onDelete).toHaveBeenCalledWith('object:cup-1')
   })
 
+  it('portals Explorer menu and dialog layers outside a transformed responsive rail', async () => {
+    const user = userEvent.setup()
+    render(
+      <aside data-testid="transformed-asset-rail" style={{ transform: 'translateX(0)' }}>
+        <SceneExplorer
+          commands={{ setVisible: vi.fn(async () => undefined) }}
+          onDelete={vi.fn()}
+          onIsolate={vi.fn()}
+          onSelect={vi.fn()}
+          onShowAll={vi.fn()}
+          runtime={testSceneRuntime()}
+          selectedEntityId={null}
+        />
+      </aside>,
+    )
+
+    const cup = screen.getByRole('treeitem', { name: 'Cup' })
+    cup.focus()
+    fireEvent.contextMenu(cup, { clientX: 90, clientY: 110 })
+    const menu = screen.getByRole('menu', { name: 'Cup commands' })
+    expect(menu.parentElement).toBe(document.body)
+    expect(screen.getByTestId('transformed-asset-rail')).not.toContainElement(menu)
+
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const backdrop = screen.getByTestId('scene-modal-backdrop')
+    expect(backdrop.parentElement).toBe(document.body)
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(cup).toHaveFocus()
+  })
+
   it('supports minimal tree keyboard navigation and activation', () => {
     const onSelect = vi.fn()
     render(
