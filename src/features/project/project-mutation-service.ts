@@ -138,10 +138,10 @@ export function createProjectMutationService(
 
     replacePreparedUntrusted(result) {
       return enqueue(async () => {
-        requireEditable()
-        const previous = coordinator.readPublished()
-        const nextProjection = result.projection
         try {
+          requireEditable()
+          const previous = coordinator.readPublished()
+          const nextProjection = result.projection
           const candidate = repository.createCandidate({
             projection: nextProjection,
             preparedSourceGroups: result.preparedSourceGroups,

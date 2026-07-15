@@ -112,6 +112,30 @@ it('revokes a prepared STEP source when the coordinator has no published bundle'
   expect(harness.revoke).toHaveBeenCalledWith(harness.preparedSource)
 })
 
+it('revokes every prepared token when recovery blocks untrusted replacement', async () => {
+  const harness = earlyFailureMutationHarness(true)
+  const secondPreparedSource = Object.freeze({ kind: 'second-prepared-source' }) as never
+  const preparedSourceGroups: readonly PreparedProjectSourceGroupV1[] = [
+    ...harness.preparedSources,
+    {
+      ownerKeys: ['object-asset:second-step'],
+      preparedSource: secondPreparedSource,
+    },
+  ]
+
+  await expect(harness.service.replacePreparedUntrusted({
+    projection: { manifest: { name: 'blocked replacement' } } as never,
+    preparedSourceGroups,
+    warnings: [],
+  })).rejects.toThrow('PROJECT_RECOVERY_REQUIRED')
+
+  expect(harness.revoke).toHaveBeenCalledTimes(2)
+  expect(harness.revoke).toHaveBeenCalledWith(harness.preparedSource)
+  expect(harness.revoke).toHaveBeenCalledWith(secondPreparedSource)
+  expect(harness.createCandidate).not.toHaveBeenCalled()
+  expect(harness.replace).not.toHaveBeenCalled()
+})
+
 it('publishes one validated V3 candidate before observers see it', async () => {
   const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
   const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
