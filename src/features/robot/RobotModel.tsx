@@ -6,7 +6,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react'
-import { Euler, MathUtils, Mesh, type Object3D } from 'three'
+import { Mesh, type Object3D } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
 import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
@@ -33,6 +33,7 @@ import {
   createCollisionEntityOutlineSelector,
   useCollisionStore,
 } from '../collision/collision-store'
+import type { SceneRuntimeEntityV1 } from '../scene/scene-runtime-selector'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -68,6 +69,26 @@ export interface RobotRigRegistration {
 
 interface RobotModelProps {
   registerRig?: (registration: RobotRigRegistration | null) => void
+  sceneEntity?: SceneRuntimeEntityV1 | null
+}
+
+export function applyRobotSceneRuntime(
+  root: Object3D,
+  runtime: SceneRuntimeEntityV1,
+): void {
+  root.position.set(...runtime.worldPose.positionM)
+  root.quaternion.set(...runtime.worldPose.quaternion).normalize()
+  root.visible = runtime.effectiveVisible
+  root.updateMatrix()
+}
+
+export function robotRuntimeHiddenEntityIds(
+  hiddenEntityIds: readonly string[],
+  runtime: SceneRuntimeEntityV1 | null | undefined,
+): readonly string[] {
+  return runtime?.effectiveVisible === false && !hiddenEntityIds.includes('robot')
+    ? [...hiddenEntityIds, 'robot']
+    : hiddenEntityIds
 }
 
 export function createRobotRigRegistration(
@@ -200,7 +221,7 @@ export function describeRobotLoadError(error: unknown): string {
   return message.startsWith(prefix) ? message : `${prefix}${message}`
 }
 
-export function RobotModel({ registerRig }: RobotModelProps) {
+export function RobotModel({ registerRig, sceneEntity }: RobotModelProps) {
   const loadedLinks = useLoader(GLTFLoader, ROBOT_LINK_URLS)
   const configuration = useRobotConfigurationStore((state) => state.configuration)
   const definition = useMemo(
@@ -256,20 +277,17 @@ export function RobotModel({ registerRig }: RobotModelProps) {
     LINK06: useCollisionStore(ROBOT_COLLISION_OUTLINE_SELECTORS.LINK06),
   } as const satisfies Record<RobotLinkId, 'collision' | 'near-miss' | null>
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
+  const runtimeHiddenEntityIds = useMemo(
+    () => robotRuntimeHiddenEntityIds(hiddenEntityIds, sceneEntity),
+    [hiddenEntityIds, sceneEntity],
+  )
   const selectRobotLink = useInteractionStore((state) => state.selectRobotLink)
 
   useLayoutEffect(() => {
-    rig.root.position.set(...configuration.basePosition)
-    rig.root.quaternion.setFromEuler(
-      new Euler(
-        MathUtils.degToRad(configuration.baseRotationDeg[0]),
-        MathUtils.degToRad(configuration.baseRotationDeg[1]),
-        MathUtils.degToRad(configuration.baseRotationDeg[2]),
-        'ZYX',
-      ),
-    )
-    rig.root.updateMatrix()
-  }, [configuration.basePosition, configuration.baseRotationDeg, rig.root])
+    if (sceneEntity !== null && sceneEntity !== undefined) {
+      applyRobotSceneRuntime(rig.root, sceneEntity)
+    }
+  }, [rig.root, sceneEntity])
 
   useLayoutEffect(() => {
     setRigAngles(rig, [j1, j2, j3, j4, j5, j6])
@@ -302,27 +320,29 @@ export function RobotModel({ registerRig }: RobotModelProps) {
         registration,
         geometryRecords,
         geometryRevision,
-        hiddenEntityIds,
+        runtimeHiddenEntityIds,
       ),
     [
       geometryRecords,
       geometryRevision,
-      hiddenEntityIds,
+      runtimeHiddenEntityIds,
       registration,
     ],
   )
 
   useLayoutEffect(() => {
-    rig.root.visible = !hiddenEntityIds.includes('robot')
+    rig.root.visible =
+      (sceneEntity?.effectiveVisible ?? true) &&
+      !runtimeHiddenEntityIds.includes('robot')
     for (const { id } of ROBOT_LINK_ASSETS) {
       registration.links[id].visible =
         (geometryRecordsByLink.get(id)?.visible ?? true) &&
-        !hiddenEntityIds.includes(id)
+        !runtimeHiddenEntityIds.includes(id)
     }
-  }, [geometryRecordsByLink, hiddenEntityIds, registration.links, rig.root])
+  }, [geometryRecordsByLink, registration.links, rig.root, runtimeHiddenEntityIds, sceneEntity])
 
   const linkInteractionPortals = ROBOT_LINK_ASSETS.flatMap(({ id }) => {
-    if (hiddenEntityIds.includes(id)) {
+    if (runtimeHiddenEntityIds.includes(id)) {
       return []
     }
     const geometry = geometryRecordsByLink.get(id)
@@ -401,7 +421,7 @@ export function RobotModel({ registerRig }: RobotModelProps) {
     <>
       <primitive dispose={null} object={rig.root} />
       <RobotGripper
-        collisionActive={!hiddenEntityIds.includes('robot')}
+        collisionActive={!runtimeHiddenEntityIds.includes('robot')}
         tcpFrame={rig.tcpFrame}
       />
       {linkInteractionPortals}

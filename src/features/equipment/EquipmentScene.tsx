@@ -33,6 +33,8 @@ import {
   useCollisionStore,
 } from '../collision/collision-store'
 import type { OutlineState } from '../interaction/outline-state'
+import type { SceneRuntimeProjectionV1 } from '../scene/scene-runtime-selector'
+import { sceneEditorStore } from '../project/project-store-browser'
 
 interface EquipmentInstanceProps {
   entityId: ExternalCollisionEntityId
@@ -130,12 +132,19 @@ const EquipmentInstance = memo(function EquipmentInstance({
   const commitTransform = useEquipmentStore(
     (state) => state.commitEquipmentTransform,
   )
-  const previewObjectTransform = useObjectAssetStore(
-    (state) => state.previewInstanceTransform,
-  )
-  const commitObjectTransform = useObjectAssetStore(
-    (state) => state.commitInstanceTransform,
-  )
+  const previewObjectTransform = useCallback((id: string, transform: EquipmentRecord['transform']) => {
+    const entityId = `object:${id}` as const
+    const pose = {
+      positionM: [...transform.position] as [number, number, number],
+      quaternion: [...transform.quaternion] as [number, number, number, number],
+    }
+    const editor = sceneEditorStore.getState()
+    if (editor.draftPose?.entityId === entityId) editor.updateDraft(pose)
+    else editor.beginDraft(entityId, pose)
+  }, [])
+  const commitObjectTransform = useCallback(async (_id: string) => {
+    await sceneEditorStore.getState().applyDraft()
+  }, [])
   const selected =
     selection?.kind === 'equipment' && selection.entityId === entityId
   const outlineState =
@@ -246,6 +255,7 @@ export interface EquipmentSceneProps {
     Map<ExternalCollisionEntityId, Object3D>
   >
   onDraggingChange?(dragging: boolean): void
+  sceneRuntime?: SceneRuntimeProjectionV1
 }
 
 const NOOP_DRAGGING_CHANGE = () => undefined
@@ -253,6 +263,7 @@ const NOOP_DRAGGING_CHANGE = () => undefined
 export function EquipmentScene({
   equipmentObjectsRef: providedEquipmentObjectsRef,
   onDraggingChange = NOOP_DRAGGING_CHANGE,
+  sceneRuntime,
 }: EquipmentSceneProps = {}) {
   const records = useEquipmentStore((state) => state.records)
   const objectAssets = useObjectAssetStore((state) => state.assets)
@@ -261,6 +272,23 @@ export function EquipmentScene({
     () => runtimeGraspParticipants(records, objectAssets, objectInstances),
     [objectAssets, objectInstances, records],
   )
+  const publishedParticipants = useMemo(() => participants.flatMap((participant) => {
+    const runtime = sceneRuntime?.byId.get(participant.entityId)
+    if (runtime !== undefined && !runtime.effectiveVisible) return []
+    return [{
+      ...participant,
+      record: runtime === undefined
+        ? participant.record
+        : {
+            ...participant.record,
+            transform: {
+              ...participant.record.transform,
+              position: [...runtime.worldPose.positionM] as [number, number, number],
+              quaternion: [...runtime.worldPose.quaternion] as [number, number, number, number],
+            },
+          },
+    }]
+  }), [participants, sceneRuntime])
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
   const localEquipmentObjectsRef = useRef(
@@ -273,6 +301,7 @@ export function EquipmentScene({
     const cleanups: (() => void)[] = []
     for (const record of records) {
       const entityId = `equipment:${record.id}` as const
+      if (sceneRuntime?.byId.get(entityId)?.effectiveVisible === false) continue
       if (!isExternalCollisionRegistrationActive(
         entityId,
         record.id,
@@ -294,6 +323,7 @@ export function EquipmentScene({
     const assetsById = new Map(objectAssets.map((asset) => [asset.id, asset]))
     for (const instance of objectInstances) {
       const entityId = `object:${instance.id}` as const
+      if (sceneRuntime?.byId.get(entityId)?.effectiveVisible === false) continue
       if (!isExternalCollisionRegistrationActive(
         entityId,
         instance.id,
@@ -325,11 +355,12 @@ export function EquipmentScene({
     objectAssets,
     objectInstances,
     records,
+    sceneRuntime,
   ])
 
   return (
     <group name="equipment-scene">
-      {participants
+      {publishedParticipants
         .filter(
           ({ entityId, record }) =>
             entityId !== heldEntityId &&

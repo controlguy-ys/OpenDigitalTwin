@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import type {
   EquipmentOriginMode,
-  EquipmentRecord,
   EquipmentSourceUnit,
 } from '../../domain/equipment/equipment'
 import type {
@@ -27,6 +26,7 @@ import {
   createThreeGroupFromOcct,
   type ImportedThreeAsset,
 } from './occt-to-three'
+import type { SceneCommandService } from '../scene/scene-command-service'
 
 export const MAX_STEP_FILE_BYTES = MAX_OBJECT_ASSET_BYTES
 
@@ -43,11 +43,7 @@ export interface ImportStepDialogProps {
   open: boolean
   client: ImportStepController
   cache: ImportStepGeometryCache
-  onCommit?(record: EquipmentRecord): Promise<void>
-  onCommitAsset?(
-    asset: ObjectAssetRecordV2,
-    instance: ObjectInstanceRecordV1,
-  ): Promise<void>
+  commands: Pick<SceneCommandService, 'importStepObject'>
   onSelect(id: string): void
   onClose(): void
   createId?: () => string
@@ -144,8 +140,7 @@ export function ImportStepDialog({
   open,
   client,
   cache,
-  onCommit,
-  onCommitAsset,
+  commands,
   onSelect,
   onClose,
   createId = defaultId,
@@ -383,37 +378,10 @@ export function ImportStepDialog({
     const assetId = createAssetId()
     const positionZ =
       WORKBENCH_TOP_Z - asset.bounds.min[2] * draft.scale
-    const stackLightAnchor: [number, number, number] | null = draft.stackLight
-      ? draft.originMode === 'center'
-        ? [0, 0, asset.bounds.size[2] / 2 + 0.18]
-        : [
-            asset.bounds.center[0],
-            asset.bounds.center[1],
-            asset.bounds.max[2] + 0.18,
-          ]
-      : null
-    const record: EquipmentRecord = {
-      id: instanceId,
-      name: draft.name.trim(),
-      kind: 'imported',
-      status: 'OFF',
-      transform: {
-        position: [0.65, 0.35, positionZ],
-        quaternion: [0, 0, 0, 1],
-        scale: [draft.scale, draft.scale, draft.scale],
-      },
-      graspable: draft.graspable,
-      collisionHalfExtents: [...draft.collisionHalfExtents],
-      stackLightAnchor,
-      sourceBytes: draft.bytes,
-      importMetadata: {
-        sourceFileName: draft.sourceFileName,
-        detectedUnit: draft.detectedUnit,
-        selectedSourceUnit,
-        postImportScale: postScale(draft.detectedUnit, selectedSourceUnit),
-        originMode: draft.originMode,
-        colliderCenter: [...asset.colliderCenter],
-      },
+    const transform = {
+      position: [0.65, 0.35, positionZ] as [number, number, number],
+      quaternion: [0, 0, 0, 1] as [number, number, number, number],
+      scale: [draft.scale, draft.scale, draft.scale] as [number, number, number],
     }
 
     const objectAsset: ObjectAssetRecordV2 = {
@@ -437,7 +405,7 @@ export function ImportStepDialog({
       id: instanceId,
       assetId,
       name: draft.name.trim(),
-      transform: record.transform,
+      transform,
       numericStatus: 0,
       statusSource: 'manual',
       statusOverlayVisible: true,
@@ -445,18 +413,16 @@ export function ImportStepDialog({
     }
 
     try {
-      if (onCommitAsset !== undefined) {
-        await onCommitAsset(objectAsset, objectInstance)
-      } else if (onCommit !== undefined) {
-        await onCommit(record)
-      } else {
-        throw new Error('No Object Asset commit handler is configured.')
-      }
+      await commands.importStepObject({
+        asset: objectAsset,
+        instance: objectInstance,
+        graspable: draft.graspable,
+      })
       if (operationId.current !== commitOperation) {
         return
       }
       candidateAsset.current = null
-      cache.set(onCommitAsset === undefined ? record.id : assetId, asset)
+      cache.set(assetId, asset)
       onSelect(instanceId)
       setDraft(null)
       setStage('idle')

@@ -15,6 +15,7 @@ import { useInteractionStore } from '../interaction/interaction-store'
 import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
 import { robotGeometryRepository } from '../robot/robot-geometry-repository'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
+import { WORKBENCH_TOP_Z } from '../scene/workcell-constants'
 import {
   createBrowserProjectRuntime,
   type BrowserProjectRuntimeBundleV1,
@@ -241,6 +242,8 @@ describe('browser project collision policy bridge', () => {
       },
     })
     expect(captured.collisionPolicy).toEqual(DEFAULT_COLLISION_POLICY)
+    expect(captured.scene.entities.find(({ kind }) => kind === 'robot')?.localPose)
+      .toEqual({ positionM: [0, 0, WORKBENCH_TOP_Z], quaternion: [0, 0, 0, 1] })
   })
 
   it('restores the persisted collision policy without staging STEP geometry', async () => {

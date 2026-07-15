@@ -1,0 +1,340 @@
+import { describe, expect, it, vi } from 'vitest'
+import type { ObjectAssetRecordV2, ObjectInstanceRecordV1 } from '../../domain/project/project'
+import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
+import type { StoredWorkcellProjectSnapshotProjectionV3 } from '../project/project-db'
+import type { ProjectMutationService } from '../project/project-mutation-service'
+import { createSceneCommandService } from './scene-command-service'
+
+const IDENTITY_POSE = {
+  positionM: [0, 0, 0] as const,
+  quaternion: [0, 0, 0, 1] as const,
+}
+
+function robot(): SceneEntityV1 {
+  return {
+    kind: 'robot',
+    id: 'robot:active',
+    name: 'Robot',
+    parentId: null,
+    localPose: IDENTITY_POSE,
+    visible: true,
+  }
+}
+
+function projection(
+  entities: readonly SceneEntityV1[] = [robot()],
+): StoredWorkcellProjectSnapshotProjectionV3 {
+  return {
+    scene: { entities, robotMountContact: null },
+    objectAssets: [],
+    objectInstances: [],
+    builtInEquipment: [],
+    opcUa: { numericStatusBindings: [], equipmentTransforms: [] },
+    collisionPolicy: { ignoredPairKeys: [], enabledRobotSelfPairs: [] },
+  } as unknown as StoredWorkcellProjectSnapshotProjectionV3
+}
+
+function mutationHarness(initial: StoredWorkcellProjectSnapshotProjectionV3) {
+  let active = structuredClone(initial)
+  const replaceFromActive = vi.fn<ProjectMutationService['replaceFromActive']>(
+    async (recipe) => {
+      active = recipe(active)
+    },
+  )
+  const mutationService = {
+    replaceFromActive,
+    readPublished: vi.fn(() => ({
+      revisionId: 'test-revision',
+      snapshot: active,
+      generation: 1,
+    })),
+  } as unknown as ProjectMutationService
+  return { mutationService, replaceFromActive, active: () => active }
+}
+
+function stepAsset(): ObjectAssetRecordV2 {
+  return {
+    id: 'asset-cup',
+    name: 'Cup',
+    sourceFileName: 'cup.step',
+    sourceBytes: new Uint8Array([1, 2, 3]).buffer,
+    importScale: 0.001,
+    originMode: 'center',
+    colliderCenter: [0, 0, 0],
+    collisionHalfExtents: [0.05, 0.05, 0.1],
+    collisionBoxes: [{
+      id: 'default',
+      center: [0, 0, 0],
+      halfExtents: [0.05, 0.05, 0.1],
+      quaternion: [0, 0, 0, 1],
+    }],
+    statistics: { vertices: 12, triangles: 4, meshes: 1, materials: 1 },
+  }
+}
+
+function objectInstance(): ObjectInstanceRecordV1 {
+  return {
+    id: 'cup-1',
+    assetId: 'asset-cup',
+    name: 'Cup',
+    transform: {
+      position: [0.4, 0.2, 1.05],
+      quaternion: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    },
+    numericStatus: 7,
+    statusSource: 'manual',
+    statusOverlayVisible: true,
+    visible: true,
+  }
+}
+
+describe('SceneCommandService', () => {
+  it('imports the STEP Asset, Instance, Scene Entity, transform state, and target reference in one publication', async () => {
+    const harness = mutationHarness(projection())
+    const preparedSourceGroup = { ownerKeys: ['object-asset:asset-cup'] } as never
+    const commands = createSceneCommandService({
+      mutationService: harness.mutationService,
+      stageStepSource: vi.fn(async () => ({
+        sourceSha256: 'a'.repeat(64),
+        preparedSourceGroup,
+      })),
+    })
+
+    await commands.importStepObject({
+      asset: stepAsset(),
+      instance: objectInstance(),
+      graspable: true,
+    })
+
+    expect(harness.replaceFromActive).toHaveBeenCalledTimes(1)
+    expect(harness.replaceFromActive.mock.calls[0]?.[1]).toEqual([preparedSourceGroup])
+    expect(harness.active()).toMatchObject({
+      objectAssets: [{ id: 'asset-cup', sourceKind: 'step', sourceSha256: 'a'.repeat(64) }],
+      objectInstances: [{
+        id: 'cup-1', assetId: 'asset-cup', scale: [1, 1, 1], manualNumericStatus: 7,
+      }],
+      scene: {
+        entities: expect.arrayContaining([expect.objectContaining({
+          id: 'object:cup-1',
+          kind: 'object',
+          localPose: { positionM: [0.4, 0.2, 1.05], quaternion: [0, 0, 0, 1] },
+          target: { kind: 'object-instance', id: 'cup-1' },
+        })]),
+      },
+    })
+  })
+
+  it('deletes an Object and every durable entity reference in one recipe while retaining a shared Asset', async () => {
+    const first = objectInstance()
+    const second = { ...objectInstance(), id: 'cup-2', name: 'Cup 2' }
+    const objectEntity = (id: string): SceneEntityV1 => ({
+      kind: 'object',
+      id: `object:${id}`,
+      name: id,
+      parentId: null,
+      localPose: IDENTITY_POSE,
+      visible: true,
+      target: { kind: 'object-instance', id },
+      transformSource: 'manual',
+    })
+    const current = projection([robot(), objectEntity('cup-1'), objectEntity('cup-2')]) as unknown as {
+      objectAssets: unknown[]
+      objectInstances: unknown[]
+      opcUa: { numericStatusBindings: unknown[]; equipmentTransforms: unknown[] }
+      collisionPolicy: { ignoredPairKeys: string[] }
+    }
+    current.objectAssets = [
+      { ...stepAsset(), sourceKind: 'step', sourceSha256: 'a'.repeat(64) },
+      { ...stepAsset(), id: 'asset-unused', sourceKind: 'step', sourceSha256: 'b'.repeat(64) },
+    ]
+    current.objectInstances = [first, second]
+    current.opcUa.numericStatusBindings = [{ entityId: 'object:cup-1', nodeId: 'ns=2;s=Cup', scale: 1, offset: 0 }]
+    current.opcUa.equipmentTransforms = [{ entityId: 'object:cup-1' }]
+    current.collisionPolicy.ignoredPairKeys = ['object:cup-1|robot-link:LINK00']
+    const harness = mutationHarness(current as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.deleteEntity('object:cup-1')
+
+    expect(harness.replaceFromActive).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(harness.active())).not.toContain('object:cup-1')
+    expect(harness.active().objectInstances.map(({ id }) => id)).toEqual(['cup-2'])
+    expect(harness.active().objectAssets.map(({ id }) => id)).toEqual(['asset-cup', 'asset-unused'])
+  })
+
+  it('rejects Robot deletion and an Axis carriage Group before publication', async () => {
+    const carriage: SceneEntityV1 = {
+      kind: 'group', id: 'group:carriage', name: 'Carriage', parentId: 'linear-axis:active',
+      localPose: IDENTITY_POSE, visible: true,
+    }
+    const axis: SceneEntityV1 = {
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: 0,
+      maxPositionM: 1, homePositionM: 0, currentPositionM: 0,
+      carriageEntityId: 'group:carriage', robotEntityId: null,
+    }
+    const harness = mutationHarness(projection([robot(), axis, carriage]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await expect(commands.deleteEntity('robot:active')).rejects.toThrow('ROBOT_DELETE_UNAVAILABLE')
+    await expect(commands.ungroup('group:carriage')).rejects.toThrow('SCENE_AXIS_CARRIAGE_ATTACHED')
+    expect(harness.replaceFromActive).not.toHaveBeenCalled()
+  })
+
+  it('creates Box and Cylinder primitives as Project V3 Asset, Instance, and Scene Entity recipes', async () => {
+    const harness = mutationHarness(projection())
+    const ids = ['box-1', 'cylinder-1']
+    const commands = createSceneCommandService({
+      mutationService: harness.mutationService,
+      createId: () => ids.shift()!,
+    })
+
+    await commands.createBox({
+      name: 'Guard', dimensionsM: [1, 0.5, 0.2], color: '#AABBCC',
+    })
+    await commands.createCylinder({
+      name: 'Post', radiusM: 0.1, heightM: 0.8, color: '#112233',
+    })
+
+    expect(harness.replaceFromActive).toHaveBeenCalledTimes(2)
+    expect(harness.active().objectAssets).toEqual([
+      expect.objectContaining({ sourceKind: 'box', dimensionsM: [1, 0.5, 0.2] }),
+      expect.objectContaining({ sourceKind: 'cylinder', radiusM: 0.1, heightM: 0.8 }),
+    ])
+    expect(harness.active().objectInstances).toHaveLength(2)
+    expect(harness.active().scene.entities.map(({ id }) => id)).toEqual([
+      'robot:active', 'object:box-1', 'object:cylinder-1',
+    ])
+  })
+
+  it('reparents and ungroups direct members without changing World pose or child visibility', async () => {
+    const group: SceneEntityV1 = {
+      kind: 'group', id: 'group:fixture', name: 'Fixture', parentId: null,
+      localPose: { ...IDENTITY_POSE, positionM: [1, 0, 0] }, visible: true,
+    }
+    const child: SceneEntityV1 = {
+      kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,
+      localPose: { ...IDENTITY_POSE, positionM: [2, 0, 0] }, visible: true,
+      target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+    }
+    const harness = mutationHarness(projection([robot(), group, child]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.reparent('object:cup-1', 'group:fixture')
+    await commands.setVisible('group:fixture', false)
+    expect(harness.active().scene.entities.find(({ id }) => id === 'object:cup-1')).toMatchObject({
+      parentId: 'group:fixture',
+      localPose: { positionM: [1, 0, 0] },
+      visible: true,
+    })
+
+    await commands.setVisible('group:fixture', true)
+    await commands.ungroup('group:fixture')
+    expect(harness.active().scene.entities.find(({ id }) => id === 'object:cup-1')).toMatchObject({
+      parentId: null,
+      localPose: { positionM: [2, 0, 0] },
+      visible: true,
+    })
+    expect(harness.active().scene.entities.some(({ id }) => id === 'group:fixture')).toBe(false)
+  })
+
+  it('duplicates only the Instance and Scene Entity, reuses the Asset, and warns non-blockingly at the 205th Instance', async () => {
+    const instance = objectInstance()
+    const entity: SceneEntityV1 = {
+      kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+    }
+    const current = projection([robot(), entity]) as unknown as {
+      objectAssets: unknown[]
+      objectInstances: unknown[]
+    }
+    current.objectAssets = [{ ...stepAsset(), sourceKind: 'step', sourceSha256: 'a'.repeat(64) }]
+    current.objectInstances = [
+      instance,
+      ...Array.from({ length: 203 }, (_, index) => ({ ...instance, id: `other-${index}` })),
+    ]
+    const harness = mutationHarness(current as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const onWarning = vi.fn()
+    const commands = createSceneCommandService({
+      mutationService: harness.mutationService,
+      createId: () => 'cup-copy',
+      onWarning,
+    })
+
+    await commands.duplicateObject('object:cup-1')
+
+    expect(harness.active().objectAssets).toHaveLength(1)
+    expect(harness.active().objectInstances).toHaveLength(205)
+    expect(harness.active().scene.entities).toContainEqual(expect.objectContaining({
+      id: 'object:cup-copy', target: { kind: 'object-instance', id: 'cup-copy' },
+    }))
+    expect(onWarning).toHaveBeenCalledWith({
+      code: 'OBJECT_INSTANCE_WARNING', current: 205, limit: 256,
+    })
+  })
+
+  it('rechecks an Axis carriage Group inside the queued recipe when published state changes after invocation', async () => {
+    const group: SceneEntityV1 = {
+      kind: 'group', id: 'group:carriage', name: 'Carriage', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+    }
+    const initial = projection([robot(), group])
+    const attachedGroup: SceneEntityV1 = { ...group, parentId: 'linear-axis:active' }
+    const axis: SceneEntityV1 = {
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: 0,
+      maxPositionM: 1, homePositionM: 0, currentPositionM: 0,
+      carriageEntityId: 'group:carriage', robotEntityId: null,
+    }
+    let active = projection([robot(), axis, attachedGroup])
+    const replaceFromActive = vi.fn<ProjectMutationService['replaceFromActive']>(async (recipe) => {
+      const candidate = recipe(active)
+      active = candidate
+    })
+    const mutationService = {
+      readPublished: vi.fn(() => ({ revisionId: 'old', snapshot: initial, generation: 1 })),
+      replaceFromActive,
+    } as unknown as ProjectMutationService
+    const commands = createSceneCommandService({ mutationService })
+    const before = structuredClone(active)
+
+    await expect(commands.ungroup('group:carriage')).rejects.toThrow(
+      'SCENE_AXIS_CARRIAGE_ATTACHED',
+    )
+
+    expect(replaceFromActive).toHaveBeenCalledTimes(1)
+    expect(active).toEqual(before)
+  })
+
+  it('updates Object status fields through one Project V3 recipe instead of the read-model store', async () => {
+    const entity: SceneEntityV1 = {
+      kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+    }
+    const current = projection([robot(), entity]) as unknown as {
+      objectInstances: unknown[]
+    }
+    current.objectInstances = [{
+      id: 'cup-1', assetId: 'asset-cup', name: 'Cup', manualNumericStatus: 0,
+      statusSource: 'manual', statusOverlayVisible: true, scale: [1, 1, 1], graspable: true,
+    }]
+    const harness = mutationHarness(current as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.updateObjectInstance('object:cup-1', {
+      numericStatus: 9,
+      statusSource: 'opcua',
+      statusOverlayVisible: false,
+    })
+
+    expect(harness.replaceFromActive).toHaveBeenCalledTimes(1)
+    expect(harness.active().objectInstances[0]).toMatchObject({
+      manualNumericStatus: 9,
+      statusSource: 'opcua',
+      statusOverlayVisible: false,
+    })
+  })
+})

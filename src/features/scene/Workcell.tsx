@@ -28,6 +28,10 @@ import {
   createCollisionEntityOutlineSelector,
   useCollisionStore,
 } from '../collision/collision-store'
+import {
+  usePublishedSceneRuntime,
+  type SceneRuntimeProjectionV1,
+} from './scene-runtime-selector'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
@@ -47,6 +51,10 @@ const WORKBENCH_LEGS = [
 
 const selectWorkbenchCollisionOutline =
   createCollisionEntityOutlineSelector('workcell:workbench')
+
+export function workcellRenderEntities(runtime: SceneRuntimeProjectionV1) {
+  return runtime.entities.filter(({ effectiveVisible }) => effectiveVisible)
+}
 
 const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
   const collisionOutline = useCollisionStore(selectWorkbenchCollisionOutline)
@@ -108,6 +116,8 @@ export function Workcell({
   registerRig,
   registerInteractionController,
 }: WorkcellProps) {
+  const sceneRuntime = usePublishedSceneRuntime()
+  const renderEntities = workcellRenderEntities(sceneRuntime)
   const [rig, setRig] = useState<RobotRigRegistration | null>(null)
   const [orbitEnabled, setOrbitEnabled] = useState(true)
   const mcp = useCoordinateFrameStore((state) => state.frames.mcp)
@@ -163,10 +173,12 @@ export function Workcell({
         <EquipmentScene
           equipmentObjectsRef={equipmentObjectsRef}
           onDraggingChange={handleEquipmentDraggingChange}
+          sceneRuntime={{ ...sceneRuntime, entities: renderEntities }}
         />
-        <group name="robot-workbench-mount" position={[0, 0, WORKBENCH_TOP_Z]}>
-          <RobotModel registerRig={handleRigRegistration} />
-        </group>
+        <RobotModel
+          registerRig={handleRigRegistration}
+          sceneEntity={sceneRuntime.robot}
+        />
       </group>
       <CurrentPoseCollisionSystem />
       {rig === null ? null : (

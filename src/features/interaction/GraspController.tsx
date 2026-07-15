@@ -17,6 +17,7 @@ import {
 } from '../equipment/EquipmentScene'
 import { useEquipmentStore } from '../equipment/equipment-store'
 import { useObjectAssetStore } from '../objects/object-asset-store'
+import { sceneEditorStore } from '../project/project-store-browser'
 import { useRobotStore } from '../joints/robot-store'
 import type { RobotRigRegistration } from '../robot/RobotModel'
 import {
@@ -144,9 +145,13 @@ export function GraspController({
         const canonicalId = entityId as ExternalCollisionEntityId
         const localId = externalCollisionEntityLocalId(canonicalId)
         if (canonicalId.startsWith('object:')) {
-          useObjectAssetStore
-            .getState()
-            .previewInstanceTransform(localId, transform)
+          const editor = sceneEditorStore.getState()
+          const pose = {
+            positionM: [...transform.position] as [number, number, number],
+            quaternion: [...transform.quaternion] as [number, number, number, number],
+          }
+          if (editor.draftPose?.entityId === canonicalId) editor.updateDraft(pose)
+          else editor.beginDraft(canonicalId, pose)
         } else {
           useEquipmentStore
             .getState()
@@ -160,7 +165,7 @@ export function GraspController({
         const canonicalId = entityId as ExternalCollisionEntityId
         const localId = externalCollisionEntityLocalId(canonicalId)
         return canonicalId.startsWith('object:')
-          ? useObjectAssetStore.getState().commitInstanceTransform(localId)
+          ? sceneEditorStore.getState().applyDraft()
           : useEquipmentStore.getState().commitEquipmentTransform(localId)
       },
       resetInteraction: () => {

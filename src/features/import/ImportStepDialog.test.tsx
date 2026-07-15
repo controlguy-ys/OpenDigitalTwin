@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import type { EquipmentRecord } from '../../domain/equipment/equipment'
+import type { SceneCommandService } from '../scene/scene-command-service'
 import type { OcctSuccessResult } from '../../lib/cad/occt-types'
 import type { ImportedThreeAsset } from './occt-to-three'
 import {
@@ -64,8 +64,8 @@ function renderDialog(
   const cache: ImportStepGeometryCache = {
     set: vi.fn<(id: string, asset: ImportedThreeAsset) => void>(),
   }
-  const onCommit = vi.fn<(record: EquipmentRecord) => Promise<void>>(
-    async () => undefined,
+  const onCommit = vi.fn<SceneCommandService['importStepObject']>(
+    async (input) => `object:${input.instance.id}`,
   )
   const onSelect = vi.fn<(id: string) => void>()
   const onClose = vi.fn()
@@ -75,7 +75,7 @@ function renderDialog(
       client={client}
       createId={() => 'imported-link00'}
       onClose={onClose}
-      onCommit={onCommit}
+      commands={{ importStepObject: onCommit }}
       onSelect={onSelect}
       open
     />,
@@ -84,18 +84,20 @@ function renderDialog(
 }
 
 describe('ImportStepDialog', () => {
-  it('commits one reusable Object Asset and one scene Instance', async () => {
+  it('routes the confirmed import through the Project V3 scene command once', async () => {
     const user = userEvent.setup()
-    const onCommitAsset = vi.fn(async () => undefined)
+    const commands = {
+      importStepObject: vi.fn(async () => 'object:instance-link00' as const),
+    } as Pick<SceneCommandService, 'importStepObject'>
     const cache: ImportStepGeometryCache = { set: vi.fn() }
     render(
       <ImportStepDialog
         cache={cache}
         client={{ import: vi.fn(async () => LINK00_RESULT), cancel: vi.fn() }}
+        commands={commands}
         createAssetId={() => 'asset-link00'}
         createId={() => 'instance-link00'}
         onClose={vi.fn()}
-        onCommitAsset={onCommitAsset}
         onSelect={vi.fn()}
         open
       />,
@@ -108,17 +110,51 @@ describe('ImportStepDialog', () => {
     await screen.findByText('0.242 × 0.200 × 0.214 m')
     await user.click(screen.getByRole('button', { name: 'Add to scene' }))
 
-    expect(onCommitAsset).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(commands.importStepObject).toHaveBeenCalledTimes(1)
+    expect(commands.importStepObject).toHaveBeenCalledWith(expect.objectContaining({
+      asset: expect.objectContaining({ id: 'asset-link00' }),
+      instance: expect.objectContaining({ id: 'instance-link00' }),
+    }))
+    expect(cache.set).toHaveBeenCalledWith('asset-link00', expect.any(Object))
+  })
+
+  it('commits one reusable Object Asset and one scene Instance', async () => {
+    const user = userEvent.setup()
+    const onCommitAsset = vi.fn<SceneCommandService['importStepObject']>(
+      async (input) => `object:${input.instance.id}`,
+    )
+    const cache: ImportStepGeometryCache = { set: vi.fn() }
+    render(
+      <ImportStepDialog
+        cache={cache}
+        client={{ import: vi.fn(async () => LINK00_RESULT), cancel: vi.fn() }}
+        createAssetId={() => 'asset-link00'}
+        createId={() => 'instance-link00'}
+        onClose={vi.fn()}
+        commands={{ importStepObject: onCommitAsset }}
+        onSelect={vi.fn()}
+        open
+      />,
+    )
+
+    await user.upload(
+      screen.getByLabelText('STEP file'),
+      stepFile('SI_UNIT(.MILLI.,.METRE.);'),
+    )
+    await screen.findByText('0.242 × 0.200 × 0.214 m')
+    await user.click(screen.getByRole('button', { name: 'Add to scene' }))
+
+    expect(onCommitAsset).toHaveBeenCalledWith(expect.objectContaining({
+      asset: expect.objectContaining({
         id: 'asset-link00',
         sourceFileName: 'LINK00_CAD.step',
         statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
       }),
-      expect.objectContaining({
+      instance: expect.objectContaining({
         id: 'instance-link00',
         assetId: 'asset-link00',
       }),
-    )
+    }))
     expect(cache.set).toHaveBeenCalledWith(
       'asset-link00',
       expect.objectContaining({ bounds: expect.any(Object) }),
@@ -170,29 +206,25 @@ describe('ImportStepDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Add to scene' }))
 
     expect(harness.onCommit).toHaveBeenCalledTimes(1)
-    const record = harness.onCommit.mock.calls[0]![0]
-    expect(record).toMatchObject({
-      id: 'imported-link00',
-      name: 'LINK00_CAD',
-      kind: 'imported',
+    const input = harness.onCommit.mock.calls[0]![0]
+    expect(input).toMatchObject({
       graspable: true,
-      collisionHalfExtents: [0.121, 0.1, 0.107],
-      stackLightAnchor: [0, 0, 0.287],
-      importMetadata: {
+      asset: {
+        id: expect.any(String),
+        collisionHalfExtents: [0.121, 0.1, 0.107],
         sourceFileName: 'LINK00_CAD.step',
-        detectedUnit: 'millimeter',
-        selectedSourceUnit: 'millimeter',
-        postImportScale: 1,
+        importScale: 1,
         originMode: 'center',
         colliderCenter: [0, 0, 0],
       },
+      instance: { id: 'imported-link00', name: 'LINK00_CAD' },
     })
-    expect(record.sourceBytes?.byteLength).toBeGreaterThan(0)
+    expect(input.asset.sourceBytes.byteLength).toBeGreaterThan(0)
     expect(harness.cache.set).toHaveBeenCalledWith(
-      record.id,
+      input.asset.id,
       expect.objectContaining({ bounds: expect.any(Object) }),
     )
-    expect(harness.onSelect).toHaveBeenCalledWith(record.id)
+    expect(harness.onSelect).toHaveBeenCalledWith(input.instance.id)
     expect(harness.onClose).toHaveBeenCalledTimes(1)
   })
 
@@ -209,16 +241,14 @@ describe('ImportStepDialog', () => {
     await user.selectOptions(screen.getByLabelText('Origin mode'), 'source')
     await user.click(screen.getByRole('button', { name: 'Add to scene' }))
 
-    const record = harness.onCommit.mock.calls[0]![0]
-    expect(record.importMetadata).toMatchObject({
-      detectedUnit: 'unknown',
-      selectedSourceUnit: 'inch',
-      postImportScale: 0.0254,
+    const input = harness.onCommit.mock.calls[0]![0]
+    expect(input.asset).toMatchObject({
+      importScale: 0.0254,
       originMode: 'source',
     })
-    expect(record.importMetadata?.colliderCenter[0]).toBeCloseTo(-0.0005334, 10)
-    expect(record.importMetadata?.colliderCenter[1]).toBe(0)
-    expect(record.importMetadata?.colliderCenter[2]).toBeCloseTo(0.0027178, 10)
+    expect(input.asset.colliderCenter[0]).toBeCloseTo(-0.0005334, 10)
+    expect(input.asset.colliderCenter[1]).toBe(0)
+    expect(input.asset.colliderCenter[2]).toBeCloseTo(0.0027178, 10)
   })
 
   it('cancel and corrupt conversion leave records, cache, and selection unchanged and allow retry', async () => {
@@ -298,7 +328,10 @@ describe('ImportStepDialog', () => {
       finishCommit = resolve
     })
     const harness = renderDialog()
-    harness.onCommit.mockImplementationOnce(() => commit)
+    harness.onCommit.mockImplementationOnce(async () => {
+      await commit
+      return 'object:imported-link00'
+    })
 
     await user.upload(
       screen.getByLabelText('STEP file'),
@@ -328,7 +361,7 @@ describe('ImportStepDialog', () => {
         cache={{ set: vi.fn() }}
         client={client}
         onClose={vi.fn()}
-        onCommit={vi.fn(async () => undefined)}
+        commands={{ importStepObject: vi.fn(async () => 'object:idle' as const) }}
         onSelect={vi.fn()}
         open
       />,

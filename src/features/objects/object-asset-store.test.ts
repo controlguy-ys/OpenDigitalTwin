@@ -71,6 +71,24 @@ afterEach(async () => {
 })
 
 describe('Object Asset persistence', () => {
+  it('keeps the Project V3 published read model memory-only and rejects independent deletion', async () => {
+    const database = createDatabase('published-read-model')
+    const store = createObjectAssetStore(database, { mode: 'published-read-model' })
+
+    await store.getState().replaceProject(
+      [machineAsset()],
+      [machineInstance('machine-01')],
+    )
+
+    expect(store.getState().assets).toHaveLength(1)
+    expect(store.getState().instances).toHaveLength(1)
+    expect(await database.assets.count()).toBe(0)
+    expect(await database.instances.count()).toBe(0)
+    await expect(store.getState().removeInstance('machine-01')).rejects.toThrow(
+      'PROJECT_V3_COMMAND_REQUIRED',
+    )
+  })
+
   it('migrates legacy IndexedDB Asset rows and preserves Instances', async () => {
     const db = createDatabase('legacy-rows')
     const { collisionBoxes: _boxes, ...legacy } = machineAsset()

@@ -28,6 +28,8 @@ import { useObjectAssetStore } from '../features/objects/object-asset-store'
 import { objectRecords } from '../features/objects/object-equipment-adapter'
 import {
   projectStore,
+  sceneCommandService,
+  sceneEditorStore,
   useProjectStore,
 } from '../features/project/project-store-browser'
 import { ProjectMenu } from '../features/project/ProjectMenu'
@@ -62,18 +64,22 @@ export function App() {
   const hydrateObjectAssets = useObjectAssetStore((state) => state.hydrate)
   const hydrateRobotGeometry = useRobotGeometryStore((state) => state.hydrate)
   const hydrateProject = useProjectStore((state) => state.hydrate)
-  const addAssetInstance = useObjectAssetStore((state) => state.addAssetInstance)
-  const updateObjectInstance = useObjectAssetStore((state) => state.updateInstance)
-  const removeObjectInstance = useObjectAssetStore((state) => state.removeInstance)
-  const previewObjectTransform = useObjectAssetStore(
-    (state) => state.previewInstanceTransform,
-  )
-  const commitObjectTransform = useObjectAssetStore(
-    (state) => state.commitInstanceTransform,
-  )
-  const cancelObjectTransform = useObjectAssetStore(
-    (state) => state.cancelInstanceTransform,
-  )
+  const previewObjectTransform = useCallback((id: string, transform: {
+    position: [number, number, number]
+    quaternion: [number, number, number, number]
+  }) => {
+    const entityId = `object:${id}` as const
+    const pose = { positionM: [...transform.position] as const, quaternion: [...transform.quaternion] as const }
+    const editor = sceneEditorStore.getState()
+    if (editor.draftPose?.entityId === entityId) editor.updateDraft(pose)
+    else editor.beginDraft(entityId, pose)
+  }, [])
+  const commitObjectTransform = useCallback(async (_id: string) => {
+    await sceneEditorStore.getState().applyDraft()
+  }, [])
+  const cancelObjectTransform = useCallback((_id: string) => {
+    sceneEditorStore.getState().cancelDraft()
+  }, [])
   const allEquipmentRecords = useMemo(
     () => [...equipmentRecords, ...objectRecords(objectAssets, objectInstances)],
     [equipmentRecords, objectAssets, objectInstances],
@@ -183,7 +189,7 @@ export function App() {
             if (controller !== null) {
               await controller.releaseHeldEquipment(entityId)
             }
-            await removeObjectInstance(id)
+            await sceneCommandService.deleteEntity(`object:${id}`)
             useInteractionStore.getState().clearSelectionForEntity(entityId)
           } finally {
             useInteractionStore.getState().endEquipmentRemoval(entityId)
@@ -229,18 +235,24 @@ export function App() {
         },
       })
     },
-    [clearSelection, removeEquipment, removeObjectInstance],
+    [clearSelection, removeEquipment],
   )
 
   const updateObjectField = useCallback(
     async (id: string, update: Record<string, unknown>) => {
-      const instance = useObjectAssetStore
-        .getState()
-        .instances.find((candidate) => candidate.id === id)
-      if (instance === undefined) return
-      await updateObjectInstance({ ...instance, ...update })
+      await sceneCommandService.updateObjectInstance(`object:${id}`, {
+        ...(typeof update.numericStatus === 'number'
+          ? { numericStatus: update.numericStatus }
+          : {}),
+        ...(update.statusSource === 'manual' || update.statusSource === 'opcua'
+          ? { statusSource: update.statusSource }
+          : {}),
+        ...(typeof update.statusOverlayVisible === 'boolean'
+          ? { statusOverlayVisible: update.statusOverlayVisible }
+          : {}),
+      })
     },
-    [updateObjectInstance],
+    [],
   )
 
   const externalEntityMutations = useMemo(
@@ -348,8 +360,8 @@ export function App() {
       <ImportStepDialog
         cache={importedGeometryRepository}
         client={stepImportClient}
+        commands={sceneCommandService}
         onClose={() => setIsImportOpen(false)}
-        onCommitAsset={addAssetInstance}
         onSelect={(id) => selectEquipment(`object:${id}`)}
         open={isImportOpen}
       />

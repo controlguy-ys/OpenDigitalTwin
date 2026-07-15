@@ -12,6 +12,8 @@ import { createProjectMutationService } from './project-mutation-service'
 import { createProjectPublicationCoordinator } from './project-publication-coordinator'
 import { createProjectRevisionFoundation } from './project-revision-repository'
 import { createProjectStore, type ProjectStoreState } from './project-store'
+import { createSceneCommandService } from '../scene/scene-command-service'
+import { createSceneEditorStore } from '../scene/scene-editor-store'
 
 const hashService = createProjectHashService({ subtle: crypto.subtle })
 const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
@@ -53,6 +55,28 @@ export const projectStore = createProjectStore({
   encode: (snapshot) => encodeWorkcellProject(snapshot, {
     projectRevisionIdentityHasher: revisionIdentityHasher,
   }),
+})
+
+export const sceneCommandService = createSceneCommandService({
+  mutationService: projectMutationService,
+  stageStepSource: async (sourceBytes, ownerKey) => {
+    const preparedSource = await foundation.sourceStaging.stage('object', sourceBytes)
+    return {
+      sourceSha256: preparedSource.sha256,
+      preparedSourceGroup: Object.freeze({
+        ownerKeys: Object.freeze([ownerKey]),
+        preparedSource,
+      }),
+    }
+  },
+  onWarning: (warning) => {
+    console.warn(`${warning.code}: ${warning.current} of ${warning.limit}`)
+  },
+})
+
+export const sceneEditorStore = createSceneEditorStore({
+  mutationService: projectMutationService,
+  setLocalPose: sceneCommandService.setLocalPose,
 })
 
 export function useProjectStore<T>(selector: (state: ProjectStoreState) => T): T {

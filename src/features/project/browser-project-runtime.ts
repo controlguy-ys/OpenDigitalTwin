@@ -44,6 +44,7 @@ import {
 import { robotGeometryRepository } from '../robot/robot-geometry-repository'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
 import { restoreRobotGeometryRecords } from '../robot/robot-step-import'
+import { WORKBENCH_TOP_Z } from '../scene/workcell-constants'
 import type {
   AppliedProjectRuntimePublicationV1,
   PreparedProjectRuntimeBundleV1,
@@ -487,7 +488,11 @@ export function createBrowserProjectRuntime(
             name: configuration.name,
             parentId: null,
             localPose: {
-              positionM: [...configuration.basePosition],
+              positionM: [
+                configuration.basePosition[0],
+                configuration.basePosition[1],
+                configuration.basePosition[2] + WORKBENCH_TOP_Z,
+              ],
               quaternion: new Quaternion().setFromEuler(new Euler(
                 ...configuration.baseRotationDeg.map(MathUtils.degToRad) as [number, number, number],
                 'XYZ',

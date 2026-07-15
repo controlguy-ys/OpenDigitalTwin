@@ -8,6 +8,7 @@ import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
 import { geometryEntityRegistry } from '../collision/geometry-entity-registry'
 import {
   ROBOT_LINK_ASSETS,
+  applyRobotSceneRuntime,
   attachRobotRigRegistration,
   createRobotLinkInteractionPortal,
   createRobotRigRegistration,
@@ -15,7 +16,9 @@ import {
   detachRobotRigRegistration,
   isCompleteRobotRigRegistration,
   registerRobotGeometryEntities,
+  robotRuntimeHiddenEntityIds,
 } from './RobotModel'
+import type { SceneRuntimeEntityV1 } from '../scene/scene-runtime-selector'
 import { registerRobotToolGeometryEntity } from './RobotGripper'
 
 vi.mock('@react-three/fiber', () => ({
@@ -61,6 +64,36 @@ function geometryRecords(): RobotLinkGeometryRecordV1[] {
 }
 
 describe('RobotModel asset registration', () => {
+  it('ignores a conflicting configuration-store base pose in favor of the published Scene runtime', () => {
+    const mcp = new Group()
+    mcp.position.set(10, 0, 0)
+    const root = new Group()
+    root.position.set(99, 98, 97)
+    root.rotation.set(0.3, 0.2, 0.1)
+    mcp.add(root)
+    const runtime = {
+      worldPose: {
+        positionM: [1.2, -0.4, 0.8],
+        quaternion: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
+      },
+      effectiveVisible: false,
+    } as unknown as SceneRuntimeEntityV1
+
+    applyRobotSceneRuntime(root, runtime)
+
+    expect(root.position.toArray()).toEqual([1.2, -0.4, 0.8])
+    expect(root.quaternion.toArray()).toEqual([0, 0, Math.SQRT1_2, Math.SQRT1_2])
+    expect(root.visible).toBe(false)
+    mcp.updateWorldMatrix(true, true)
+    expect(root.getWorldPosition(new Vector3()).toArray()).toEqual([11.2, -0.4, 0.8])
+  })
+
+  it('suppresses Robot collision and interaction participants when published visibility is false', () => {
+    const runtime = { effectiveVisible: false } as SceneRuntimeEntityV1
+
+    expect(robotRuntimeHiddenEntityIds(['LINK06'], runtime)).toEqual(['LINK06', 'robot'])
+  })
+
   it('gives every Link interaction portal a stable React key', () => {
     const slot = new Group()
     const child = createElement('group')

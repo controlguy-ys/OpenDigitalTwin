@@ -226,7 +226,20 @@ function replaceById<T extends { id: string }>(
   return result
 }
 
-function createObjectAssetState(database: ObjectAssetDatabase) {
+export interface ObjectAssetStoreOptions {
+  readonly mode?: 'durable-cache' | 'published-read-model'
+}
+
+function createObjectAssetState(
+  database: ObjectAssetDatabase,
+  options: ObjectAssetStoreOptions = {},
+) {
+  const publishedReadModel = options.mode === 'published-read-model'
+  const requireProjectCommand = (): void => {
+    if (publishedReadModel) {
+      throw new Error('PROJECT_V3_COMMAND_REQUIRED: Mutate durable Object state through SceneCommandService.')
+    }
+  }
   let hydrated = false
   let hydrationPromise: Promise<void> | null = null
   const committedTransforms = new Map<string, SerializableTransform>()
@@ -251,6 +264,11 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
     const hydrate = (): Promise<void> => {
       if (hydrated) return Promise.resolve()
       if (hydrationPromise !== null) return hydrationPromise
+      if (publishedReadModel) {
+        hydrated = true
+        set({ persistenceStatus: 'memory-only', warnings: [] })
+        return Promise.resolve()
+      }
       set({ persistenceStatus: 'loading' })
       hydrationPromise = (async () => {
         try {
@@ -312,6 +330,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
       warnings: [],
       hydrate,
       addAssetInstance: async (asset, instance) => {
+        requireProjectCommand()
         validateAsset(asset)
         validateInstance(instance)
         if (instance.assetId !== asset.id) {
@@ -380,6 +399,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
         set({ assets: nextAssets, instances: nextInstances })
       },
       upsertAsset: async (asset) => {
+        requireProjectCommand()
         validateAsset(asset)
         await hydrate()
         const next = cloneAsset(asset)
@@ -393,6 +413,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
         }
       },
       createInstance: async (instance) => {
+        requireProjectCommand()
         validateInstance(instance)
         await hydrate()
         if (!get().assets.some(({ id }) => id === instance.assetId)) {
@@ -416,6 +437,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
         }
       },
       updateInstance: async (instance) => {
+        requireProjectCommand()
         validateInstance(instance)
         await hydrate()
         if (!get().assets.some(({ id }) => id === instance.assetId)) {
@@ -437,6 +459,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
         }
       },
       previewInstanceTransform: (id, transform) => {
+        requireProjectCommand()
         finiteTuple(transform.position, 3, 'Object Instance position')
         finiteTuple(transform.quaternion, 4, 'Object Instance quaternion')
         finiteTuple(transform.scale, 3, 'Object Instance scale', true)
@@ -450,6 +473,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
         }))
       },
       commitInstanceTransform: async (id) => {
+        requireProjectCommand()
         await hydrate()
         const instance = get().instances.find((candidate) => candidate.id === id)
         if (instance === undefined) return
@@ -465,6 +489,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
         pendingTransforms.delete(id)
       },
       cancelInstanceTransform: (id) => {
+        requireProjectCommand()
         const transform = committedTransforms.get(id)
         if (transform === undefined) return
         pendingTransforms.delete(id)
@@ -489,6 +514,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
         }))
       },
       removeInstance: async (id) => {
+        requireProjectCommand()
         await hydrate()
         set((state) => ({
           instances: state.instances.filter((instance) => instance.id !== id),
@@ -504,6 +530,7 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
         }
       },
       removeAsset: async (id) => {
+        requireProjectCommand()
         await hydrate()
         if (get().instances.some(({ assetId }) => assetId === id)) {
           throw new Error('Object Asset cannot be deleted while Instances reference it.')
@@ -523,10 +550,13 @@ function createObjectAssetState(database: ObjectAssetDatabase) {
   }
 }
 
-export function createObjectAssetStore(database: ObjectAssetDatabase) {
-  return createStore<ObjectAssetStoreState>()(createObjectAssetState(database))
+export function createObjectAssetStore(
+  database: ObjectAssetDatabase,
+  options: ObjectAssetStoreOptions = {},
+) {
+  return createStore<ObjectAssetStoreState>()(createObjectAssetState(database, options))
 }
 
 export const useObjectAssetStore = create<ObjectAssetStoreState>()(
-  createObjectAssetState(objectAssetDb),
+  createObjectAssetState(objectAssetDb, { mode: 'published-read-model' }),
 )
