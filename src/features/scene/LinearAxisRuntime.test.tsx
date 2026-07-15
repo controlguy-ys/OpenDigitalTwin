@@ -39,7 +39,7 @@ function runtime(entities: readonly SceneEntityV1[]) {
 }
 
 function axisConfigurationIdentity(sceneRuntime: ReturnType<typeof runtime>): string {
-  const identity = runtimeAxisConfigurationIdentity(sceneRuntime.linearAxis)
+  const identity = runtimeAxisConfigurationIdentity(sceneRuntime)
   if (identity === null) throw new Error('Expected Linear Axis')
   return identity
 }
@@ -324,5 +324,167 @@ describe('LinearAxisRuntime', () => {
     act(() => listeners[0]?.({ positionM: 1.9, timestampMs: 99, quality: 'GOOD' }))
     act(() => frameUpdate())
     expect(carriageObject.position.toArray()).toEqual([0, 0.75, 0])
+  })
+
+  it('waits to subscribe until the nested carriage hierarchy matches committed state', () => {
+    const axisA: SceneEntityV1 = {
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: 0,
+      maxPositionM: 2, homePositionM: 0, currentPositionM: 0.5,
+      carriageEntityId: 'group:carriage', robotEntityId: null,
+    }
+    const axisB: SceneEntityV1 = { ...axisA, currentPositionM: 0.75 }
+    const carriage: SceneEntityV1 = {
+      kind: 'group', id: 'group:carriage', name: 'Carriage', parentId: axisA.id,
+      localPose: IDENTITY_POSE, visible: true,
+    }
+    const memberA: SceneEntityV1 = {
+      kind: 'object', id: 'object:member', name: 'Member', parentId: carriage.id,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'member' }, transformSource: 'manual',
+    }
+    const memberB: SceneEntityV1 = {
+      ...memberA, localPose: { ...IDENTITY_POSE, positionM: [0.25, 0, 0] },
+    }
+    const runtimeA = runtime([axisA, carriage, memberA])
+    const runtimeB = runtime([axisB, carriage, memberB])
+    const events: string[] = []
+    const source = {
+      kind: 'manual' as const,
+      subscribe: vi.fn(() => {
+        events.push('subscribe')
+        return () => events.push('cleanup')
+      }),
+      synchronizeCommittedState(positionM: number) {
+        events.push(`sync:${positionM}`)
+      },
+      setPositionM: vi.fn(async () => undefined),
+      home: vi.fn(async () => undefined),
+    }
+    const committedState: LinearAxisCommittedStateV1 = {
+      axisEntityId: axisB.id,
+      configurationIdentity: axisConfigurationIdentity(runtimeB),
+      positionM: axisB.currentPositionM,
+      homePositionM: axisB.homePositionM,
+    }
+    const view = render(
+      <LinearAxisRuntime
+        committedState={committedState}
+        objectRoots={new Map()}
+        robotRoot={null}
+        runtime={runtimeA}
+        source={source}
+      />,
+    )
+
+    expect(events).toEqual([])
+    view.rerender(
+      <LinearAxisRuntime
+        committedState={committedState}
+        objectRoots={new Map()}
+        robotRoot={null}
+        runtime={runtimeB}
+        source={source}
+      />,
+    )
+    expect(events).toEqual(['subscribe', 'sync:0.75'])
+  })
+
+  it.each([
+    ['descendant local World pose', (entities: SceneEntityV1[]) => entities.map((entity) =>
+      entity.id === 'object:member'
+        ? { ...entity, localPose: { ...IDENTITY_POSE, positionM: [0.4, 0, 0] as const } }
+        : entity)],
+    ['descendant parent membership', (entities: SceneEntityV1[]) => entities.map((entity) =>
+      entity.id === 'object:member' ? { ...entity, parentId: null } : entity)],
+    ['attached Robot World pose', (entities: SceneEntityV1[]) => entities.map((entity) =>
+      entity.id === 'robot:active'
+        ? { ...entity, localPose: { ...IDENTITY_POSE, positionM: [0, 0.5, 0] as const } }
+        : entity)],
+  ] as const)('distinguishes the same IDs after a changed %s', (_label, mutate) => {
+    const entities: SceneEntityV1[] = [{
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: 0,
+      maxPositionM: 2, homePositionM: 0, currentPositionM: 0.5,
+      carriageEntityId: 'group:carriage', robotEntityId: 'robot:active',
+    }, {
+      kind: 'group', id: 'group:carriage', name: 'Carriage',
+      parentId: 'linear-axis:active', localPose: IDENTITY_POSE, visible: true,
+    }, {
+      kind: 'object', id: 'object:member', name: 'Member', parentId: 'group:carriage',
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'member' }, transformSource: 'manual',
+    }, {
+      kind: 'robot', id: 'robot:active', name: 'Robot',
+      parentId: 'linear-axis:active', localPose: IDENTITY_POSE, visible: true,
+    }]
+
+    expect(axisConfigurationIdentity(runtime(entities))).not.toBe(
+      axisConfigurationIdentity(runtime(mutate(entities))),
+    )
+  })
+
+  it('keeps the subscription when only an unrelated runtime Entity changes', () => {
+    const axis: SceneEntityV1 = {
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: 0,
+      maxPositionM: 2, homePositionM: 0, currentPositionM: 0.5,
+      carriageEntityId: 'object:carriage', robotEntityId: null,
+    }
+    const carriage: SceneEntityV1 = {
+      kind: 'object', id: 'object:carriage', name: 'Carriage', parentId: axis.id,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'carriage' }, transformSource: 'manual',
+    }
+    const unrelatedA: SceneEntityV1 = {
+      kind: 'object', id: 'object:rail', name: 'Rail', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'rail' }, transformSource: 'manual',
+    }
+    const unrelatedB: SceneEntityV1 = {
+      ...unrelatedA, localPose: { ...IDENTITY_POSE, positionM: [10, 0, 0] },
+    }
+    const runtimeA = runtime([axis, carriage, unrelatedA])
+    const runtimeB = runtime([axis, carriage, unrelatedB])
+    const events: string[] = []
+    const source = {
+      kind: 'manual' as const,
+      subscribe: vi.fn(() => {
+        events.push('subscribe')
+        return () => events.push('cleanup')
+      }),
+      synchronizeCommittedState: vi.fn(() => events.push('sync')),
+      setPositionM: vi.fn(async () => undefined),
+      home: vi.fn(async () => undefined),
+    }
+    const committedState: LinearAxisCommittedStateV1 = {
+      axisEntityId: axis.id,
+      configurationIdentity: axisConfigurationIdentity(runtimeA),
+      positionM: axis.currentPositionM,
+      homePositionM: axis.homePositionM,
+    }
+    const view = render(
+      <LinearAxisRuntime
+        committedState={committedState}
+        objectRoots={new Map()}
+        robotRoot={null}
+        runtime={runtimeA}
+        source={source}
+      />,
+    )
+    expect(events).toEqual(['subscribe', 'sync'])
+    events.length = 0
+
+    view.rerender(
+      <LinearAxisRuntime
+        committedState={committedState}
+        objectRoots={new Map()}
+        robotRoot={null}
+        runtime={runtimeB}
+        source={source}
+      />,
+    )
+    expect(axisConfigurationIdentity(runtimeB)).toBe(committedState.configurationIdentity)
+    expect(events).toEqual([])
   })
 })

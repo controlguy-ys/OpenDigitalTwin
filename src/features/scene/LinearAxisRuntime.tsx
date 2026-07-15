@@ -14,19 +14,69 @@ const UNIT_SCALE = new Vector3(1, 1, 1)
 const DECOMPOSED_SCALE = new Vector3()
 export const LINEAR_AXIS_RUNTIME_FRAME_PRIORITY = -1
 
-export function linearAxisConfigurationIdentity(
-  axis: SceneRuntimeEntityV1 | null | undefined,
-): string | null {
-  if (axis?.source.kind !== 'linear-axis') return null
+function motionEntityIdentity(entity: SceneRuntimeEntityV1): readonly unknown[] {
   return [
-    axis.entityId,
-    ...axis.worldMatrix,
-    axis.source.direction,
-    axis.source.minPositionM,
-    axis.source.maxPositionM,
-    axis.source.carriageEntityId,
-    axis.source.robotEntityId,
-  ].join('|')
+    entity.entityId,
+    entity.kind,
+    entity.parentId,
+    ...entity.localPose.positionM,
+    ...entity.localPose.quaternion,
+    ...entity.worldMatrix,
+  ]
+}
+
+function isInCarriageSubtree(
+  runtime: SceneRuntimeProjectionV1,
+  entity: SceneRuntimeEntityV1,
+  carriageId: string,
+): boolean {
+  let candidate: SceneRuntimeEntityV1 | undefined = entity
+  const visited = new Set<string>()
+  while (candidate !== undefined && !visited.has(candidate.entityId)) {
+    if (candidate.entityId === carriageId) return true
+    visited.add(candidate.entityId)
+    candidate = candidate.parentId === null
+      ? undefined
+      : runtime.byId.get(candidate.parentId)
+  }
+  return false
+}
+
+export function linearAxisConfigurationIdentity(
+  runtime: SceneRuntimeProjectionV1,
+): string | null {
+  const axis = runtime.linearAxis
+  if (axis?.source.kind !== 'linear-axis') return null
+  const carriageId = axis.source.carriageEntityId
+  const carriageEntities = carriageId === null
+    ? []
+    : runtime.entities
+      .filter((entity) => isInCarriageSubtree(runtime, entity, carriageId))
+      .sort((first, second) => first.entityId < second.entityId
+        ? -1
+        : first.entityId > second.entityId
+          ? 1
+          : 0)
+      .map(motionEntityIdentity)
+  const robot = axis.source.robotEntityId !== null &&
+    runtime.robot?.entityId === axis.source.robotEntityId
+    ? motionEntityIdentity(runtime.robot)
+    : null
+  return JSON.stringify([
+    'linear-axis-motion-v1',
+    motionEntityIdentity(axis),
+    [
+      axis.source.direction,
+      axis.source.minPositionM,
+      axis.source.maxPositionM,
+      axis.source.homePositionM,
+      axis.source.currentPositionM,
+      axis.source.carriageEntityId,
+      axis.source.robotEntityId,
+    ],
+    carriageEntities,
+    robot,
+  ])
 }
 
 function axisTravelVector(
@@ -152,6 +202,7 @@ export function LinearAxisRuntime({
     ? axis.source.maxPositionM
     : 0
   const latestTimestampMs = useRef(Number.NEGATIVE_INFINITY)
+  const motionIdentity = linearAxisConfigurationIdentity(runtime)
   const subscriptionGeneration = useRef(0)
   const lastGoodPositionM = useRef(
     axis?.source.kind === 'linear-axis' ? axis.source.currentPositionM : 0,
@@ -168,7 +219,7 @@ export function LinearAxisRuntime({
       source === null ||
       committedState === null ||
       committedState.axisEntityId !== axis.entityId ||
-      committedState.configurationIdentity !== linearAxisConfigurationIdentity(axis)
+      committedState.configurationIdentity !== motionIdentity
     ) return
     const unsubscribe = source.subscribe((frame) => {
       if (subscriptionGeneration.current !== generation) return
@@ -203,7 +254,7 @@ export function LinearAxisRuntime({
     committedState?.positionM,
     minPositionM,
     maxPositionM,
-    runtime,
+    motionIdentity,
     source,
   ])
 

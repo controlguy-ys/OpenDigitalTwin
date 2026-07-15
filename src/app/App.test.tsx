@@ -124,12 +124,16 @@ describe('App scene editor integration', () => {
     view.rerender(<App />)
 
     expect(observedCanvasProps.current?.linearAxisSource).toBe(source)
-    expect(observedCanvasProps.current?.linearAxisCommittedState).toMatchObject({
+    const replacementCommittedState = observedCanvasProps.current
+      ?.linearAxisCommittedState as LinearAxisCommittedStateV1
+    expect(replacementCommittedState).toMatchObject({
       axisEntityId: 'linear-axis:active',
-      configurationIdentity: initialCommittedState?.configurationIdentity,
       positionM: 0.75,
       homePositionM: 0,
     })
+    expect(replacementCommittedState.configurationIdentity).not.toBe(
+      initialCommittedState?.configurationIdentity,
+    )
     expect(canvasLifecycle.frames).toEqual([0])
   })
 

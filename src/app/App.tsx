@@ -223,7 +223,7 @@ export function App() {
     sceneCommandService.moveLinearAxisHome,
     sceneCommandService.setLinearAxisPosition,
   ])
-  const axisConfigurationIdentity = linearAxisConfigurationIdentity(axisRuntime)
+  const axisConfigurationIdentity = linearAxisConfigurationIdentity(sceneRuntime)
   const linearAxisCommittedState: LinearAxisCommittedStateV1 | null =
     axisRuntime?.source.kind === 'linear-axis' && axisConfigurationIdentity !== null
       ? Object.freeze({

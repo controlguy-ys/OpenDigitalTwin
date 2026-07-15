@@ -231,3 +231,43 @@
 - `npm run build`: PASS; only the existing browser-externalization notices and
   chunk-size advisory remain.
 - `git diff --check`: PASS with line-ending conversion notices only.
+
+## Motion Hierarchy Identity Follow-up
+
+### Outcome
+
+- Replaced the shallow Axis identity with a deterministic motion identity that
+  covers every Axis field consumed by synchronization, the carriage root and
+  complete descendant hierarchy, and the attached Robot identity and matrix.
+- Carriage members are serialized in canonical entity-id order using ordinal
+  comparisons. Each motion entity records its kind, parent, local pose, and
+  world matrix, so same-id parent, pose, or matrix changes cannot validate a
+  stale nested runtime.
+- Included committed/runtime Axis position and Home state in the handshake.
+  Runtime A remains unsubscribed when committed identity B is staged; once
+  runtime B arrives, Runtime subscribes first and then synchronizes B.
+- Excluded unrelated runtime entities and caches from the identity. Projection
+  updates outside the motion hierarchy leave the token unchanged and do not
+  tear down or recreate the source subscription.
+- The Runtime effect now depends on the canonical motion identity instead of
+  the whole runtime projection, while preserving the existing generation guard,
+  cleanup ordering, and stale-listener protection.
+
+### RED Evidence
+
+- Motion-identity RED: 1 file failed; 5 expected tests failed and 13 passed in
+  4.61s. Committed identity B falsely subscribed and synchronized runtime A;
+  same-id carriage parent/local/world and Robot world changes were missed; and
+  an unrelated entity update caused a resubscription.
+
+### Final Verification
+
+- Runtime and App identity slice: 2 files / 26 tests passed in 7.10s.
+- Focused source, App, Inspector, Runtime, SceneCanvas, and Workcell slice:
+  6 files / 44 tests passed in 10.26s.
+- Expanded Scene, Project, and App suite: 31 files / 331 tests passed in 37.13s.
+- Fresh full serial suite: 108 files / 909 tests passed in 232.11s.
+- `npm run lint`: PASS.
+- `npm run build`: PASS; only the existing browser-externalization notices and
+  chunk-size advisory remain.
+- `git diff --check`: PASS with line-ending conversion notices only.
