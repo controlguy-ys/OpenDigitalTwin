@@ -35,6 +35,7 @@ import {
 } from '../collision/collision-store'
 import type { SceneRuntimeEntityV1 } from '../scene/scene-runtime-selector'
 import type { SceneEntityContextHandler } from '../scene/scene-context-request'
+import { applySceneRuntimeWorldMatrix } from '../scene/LinearAxisRuntime'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -78,10 +79,8 @@ export function applyRobotSceneRuntime(
   root: Object3D,
   runtime: SceneRuntimeEntityV1,
 ): void {
-  root.position.set(...runtime.worldPose.positionM)
-  root.quaternion.set(...runtime.worldPose.quaternion).normalize()
+  applySceneRuntimeWorldMatrix(root, runtime)
   root.visible = runtime.effectiveVisible
-  root.updateMatrix()
 }
 
 export function robotRuntimeHiddenEntityIds(

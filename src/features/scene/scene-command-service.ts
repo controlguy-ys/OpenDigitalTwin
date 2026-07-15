@@ -5,6 +5,7 @@ import type {
   PreparedProjectSourceGroupV1,
 } from '../../domain/project/project-v3'
 import type {
+  LinearAxisConfigurationV1,
   SceneEntityIdV1,
   SceneEntityV1,
   ScenePoseV1,
@@ -47,6 +48,13 @@ export interface SceneCommandWarningV1 {
 }
 
 export interface SceneCommandService {
+  createLinearAxis(input: LinearAxisConfigurationV1): Promise<void>
+  setLinearAxisPosition(positionM: number): Promise<void>
+  moveLinearAxisHome(): Promise<void>
+  setLinearAxisCarriage(entityId: SceneEntityIdV1 | null): Promise<void>
+  attachRobotToLinearAxis(): Promise<void>
+  detachRobotFromLinearAxis(): Promise<void>
+  deleteLinearAxis(): Promise<void>
   importStepObject(input: ImportStepObjectInputV1): Promise<`object:${string}`>
   createGroup(name: string): Promise<`group:${string}`>
   createBox(input: CreateBoxObjectInputV1): Promise<`object:${string}`>
@@ -126,6 +134,40 @@ function replaceEntity(
         ? update(entity)
         : entity),
     },
+  }
+}
+
+function linearAxisIn(
+  current: StoredWorkcellProjectSnapshotProjectionV3,
+): Extract<SceneEntityV1, { kind: 'linear-axis' }> {
+  const axis = current.scene.entities.find(({ kind }) => kind === 'linear-axis')
+  if (axis?.kind !== 'linear-axis') {
+    throw new Error('LINEAR_AXIS_MISSING: No Linear Axis exists.')
+  }
+  return axis
+}
+
+function assertLinearAxisConfiguration(input: LinearAxisConfigurationV1): void {
+  const values = [
+    input.minPositionM,
+    input.maxPositionM,
+    input.homePositionM,
+    input.currentPositionM,
+  ]
+  if (values.some((value) => !Number.isFinite(value))) {
+    throw new Error('LINEAR_AXIS_POSITION_INVALID: Linear Axis positions must be finite.')
+  }
+  if (
+    input.minPositionM > input.maxPositionM ||
+    input.homePositionM < input.minPositionM ||
+    input.homePositionM > input.maxPositionM ||
+    input.currentPositionM < input.minPositionM ||
+    input.currentPositionM > input.maxPositionM
+  ) {
+    throw new Error('LINEAR_AXIS_RANGE_INVALID: Linear Axis positions are inconsistent.')
+  }
+  if (input.carriageEntityId !== null || input.robotEntityId !== null) {
+    throw new Error('LINEAR_AXIS_CREATE_DETACHED_REQUIRED: Attach Entities after creating the Axis.')
   }
 }
 
@@ -320,6 +362,116 @@ export function createSceneCommandService(
   }
 
   const service: SceneCommandService = {
+    async createLinearAxis(input) {
+      assertLinearAxisConfiguration(input)
+      await mutate((current) => {
+        if (current.scene.entities.some(({ kind }) => kind === 'linear-axis')) {
+          throw new Error('LINEAR_AXIS_ALREADY_EXISTS: Only one Linear Axis is supported.')
+        }
+        const axis: SceneEntityV1 = {
+          kind: 'linear-axis', id: 'linear-axis:active', name: 'Linear Axis',
+          parentId: null, localPose: IDENTITY_POSE, visible: true,
+          ...input,
+        }
+        return {
+          ...current,
+          scene: { ...current.scene, entities: [...current.scene.entities, axis] },
+        }
+      })
+    },
+
+    async setLinearAxisPosition(positionM) {
+      if (!Number.isFinite(positionM)) {
+        throw new Error('LINEAR_AXIS_POSITION_INVALID: Linear Axis position must be finite.')
+      }
+      await mutate((current) => {
+        const axis = linearAxisIn(current)
+        if (positionM < axis.minPositionM || positionM > axis.maxPositionM) {
+          throw new Error(
+            `LINEAR_AXIS_OUT_OF_RANGE: Position must be between ${axis.minPositionM} and ${axis.maxPositionM} m.`,
+          )
+        }
+        return replaceEntity(current, axis.id, (entity) => ({
+          ...entity,
+          currentPositionM: positionM,
+        } as SceneEntityV1))
+      })
+    },
+
+    async moveLinearAxisHome() {
+      await mutate((current) => {
+        const axis = linearAxisIn(current)
+        return replaceEntity(current, axis.id, (entity) => ({
+          ...entity,
+          currentPositionM: axis.homePositionM,
+        } as SceneEntityV1))
+      })
+    },
+
+    async setLinearAxisCarriage(entityId) {
+      await mutate((current) => {
+        const axis = linearAxisIn(current)
+        if (axis.carriageEntityId === entityId) return current
+        if (entityId !== null) {
+          const candidate = entityIn(current, entityId)
+          if (candidate.kind !== 'object' && candidate.kind !== 'group') {
+            throw new Error('LINEAR_AXIS_CARRIAGE_REQUIRED: Carriage must be an Object or Group.')
+          }
+          if (candidate.kind === 'object' && candidate.transformSource === 'opcua') {
+            throw new Error('SCENE_TRANSFORM_OWNED_BY_OPCUA: Switch transform source to Manual first.')
+          }
+        }
+        let scene = current.scene
+        if (axis.carriageEntityId !== null) {
+          scene = reparentSceneEntityPreservingWorld(scene, axis.carriageEntityId, null)
+        }
+        if (entityId !== null) {
+          scene = reparentSceneEntityPreservingWorld(scene, entityId, axis.id)
+        }
+        return { ...current, scene }
+      })
+    },
+
+    async attachRobotToLinearAxis() {
+      await mutate((current) => {
+        const axis = linearAxisIn(current)
+        const robotEntity = entityIn(current, 'robot:active')
+        if (robotEntity.kind !== 'robot') throw new Error('ROBOT_ENTITY_MISSING: Robot Entity is missing.')
+        if (axis.robotEntityId === robotEntity.id) return current
+        return {
+          ...current,
+          scene: reparentSceneEntityPreservingWorld(current.scene, robotEntity.id, axis.id),
+        }
+      })
+    },
+
+    async detachRobotFromLinearAxis() {
+      await mutate((current) => {
+        const axis = linearAxisIn(current)
+        if (axis.robotEntityId === null) return current
+        return {
+          ...current,
+          scene: reparentSceneEntityPreservingWorld(current.scene, axis.robotEntityId, null),
+        }
+      })
+    },
+
+    async deleteLinearAxis() {
+      await mutate((current) => {
+        const axis = linearAxisIn(current)
+        if (axis.carriageEntityId !== null || axis.robotEntityId !== null) {
+          throw new Error('LINEAR_AXIS_DELETE_ATTACHED: Detach the carriage and Robot before deletion.')
+        }
+        return {
+          ...current,
+          scene: {
+            ...current.scene,
+            entities: current.scene.entities.filter(({ id }) => id !== axis.id),
+          },
+        }
+      })
+    },
+
     async importStepObject(input) {
       if (options.stageStepSource === undefined) {
         throw new Error('PROJECT_SOURCE_STAGING_REQUIRED: STEP import requires Project source staging.')

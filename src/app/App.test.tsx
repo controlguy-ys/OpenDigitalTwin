@@ -44,6 +44,17 @@ describe('App scene editor integration', () => {
     expect(screen.queryByText('Equipment', { selector: 'h2' })).not.toBeInTheDocument()
   })
 
+  it('composes common Transform and Manual controls for the selected Linear Axis', () => {
+    sceneEditorStore.setState({ selectedEntityId: 'linear-axis:active' })
+
+    render(<App />)
+
+    expect(screen.getByLabelText('Local X (mm)')).toBeVisible()
+    expect(screen.getByRole('spinbutton', { name: 'Axis position (mm)' })).toHaveValue(0)
+    expect(screen.getByRole('button', { name: 'Move Home' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Attach Robot' })).toBeVisible()
+  })
+
   it('opens only implemented empty and Entity menus from the 3D viewport boundary', async () => {
     const user = userEvent.setup()
     render(<App />)

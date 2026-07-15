@@ -1,6 +1,6 @@
 import { createPortal } from '@react-three/fiber'
 import { createElement } from 'react'
-import { Group, Quaternion, Vector3 } from 'three'
+import { Group, Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION } from '../../domain/robot/crb15000'
 import { createRobotRig } from '../../domain/robot/kinematics'
@@ -71,10 +71,16 @@ describe('RobotModel asset registration', () => {
     root.position.set(99, 98, 97)
     root.rotation.set(0.3, 0.2, 0.1)
     mcp.add(root)
+    const worldMatrix = new Matrix4().compose(
+      new Vector3(1.2, -0.4, 0.8),
+      new Quaternion(0, 0, Math.SQRT1_2, Math.SQRT1_2),
+      new Vector3(1, 1, 1),
+    )
     const runtime = {
+      worldMatrix: [...worldMatrix.elements],
       worldPose: {
-        positionM: [1.2, -0.4, 0.8],
-        quaternion: [0, 0, Math.SQRT1_2, Math.SQRT1_2],
+        positionM: [88, 77, 66],
+        quaternion: [0, 0, 0, 1],
       },
       effectiveVisible: false,
     } as unknown as SceneRuntimeEntityV1
@@ -82,7 +88,12 @@ describe('RobotModel asset registration', () => {
     applyRobotSceneRuntime(root, runtime)
 
     expect(root.position.toArray()).toEqual([1.2, -0.4, 0.8])
-    expect(root.quaternion.toArray()).toEqual([0, 0, Math.SQRT1_2, Math.SQRT1_2])
+    expect(root.quaternion.toArray()).toEqual([
+      expect.closeTo(0, 14),
+      expect.closeTo(0, 14),
+      expect.closeTo(Math.SQRT1_2, 14),
+      expect.closeTo(Math.SQRT1_2, 14),
+    ])
     expect(root.visible).toBe(false)
     mcp.updateWorldMatrix(true, true)
     expect(root.getWorldPosition(new Vector3()).toArray()).toEqual([11.2, -0.4, 0.8])

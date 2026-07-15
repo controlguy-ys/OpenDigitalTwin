@@ -1,143 +1,107 @@
-# Task 5 Report: Collision Policy, Findings, and Report UI
+# Task 5 Report: One Manual Linear Axis and Robot Mounting
 
 ## Outcome
 
-Implemented the collision policy and findings inspection slice for the geometry
-proxy runtime:
+- Added one Project V3-owned axis-aligned Linear Axis with X/Y/Z direction,
+  finite closed bounds, persisted Manual position, Move Home, one Object-or-Group
+  carriage, and optional Robot attachment.
+- Added the narrow `LinearAxisSourceV1` boundary and shipped only
+  `ManualLinearAxisSource`. Successful Manual writes publish `GOOD` scalar
+  frames after the durable command completes; rejected writes retain the last
+  committed state.
+- Added one-recipe Project V3 commands for create, position, Home, carriage,
+  Robot attach/detach, and detached-only deletion. Carriage replacement and
+  Robot mounting preserve World pose atomically.
+- Rejected non-Object/Group carriage targets and OPC-UA-owned Objects before
+  mutation. Fixed rail remains an ordinary MCP-level Object, while a carriage
+  Group keeps its member Objects Group-local.
+- Added the moving Frame visualization and same-animation-update World-matrix
+  synchronization for the carriage descendants and Robot before current-pose
+  collision sampling. Fixed rail geometry is not moved.
+- Made the scene runtime publish computed World matrices and made `RobotModel`
+  consume that matrix rather than any Robot configuration base coordinates.
+- Added selected-Axis Inspector composition with the common Transform Inspector,
+  bounded numeric/slider Manual position, uncommitted range diagnostics, Move
+  Home, carriage selection/clear, Robot attach/detach, and detached-only delete.
+- Corrected the existing scene validator to honor the normative closed relation
+  `min <= home/current <= max`, including a valid zero-travel range.
 
-- extended the collision store with independently selectable policy, current
-  findings, diagnostics, validation report, navigation, stale-report, and
-  optional playback-pause state;
-- added canonical `ignorePair()` / `restorePair()` actions, finite warning
-  distance validation, owned incoming rows, and stable navigation clamping;
-- added deterministic JSON and CSV report encoders with schema version 1,
-  stable row ordering, RFC-style CSV escaping, exact product language, and a
-  10,000-finding export cap;
-- mounted an accessible `Geometry Proxy Collision` panel beside Timeline with
-  millimetre policy input, live counts, diagnostics, ignore/restore controls,
-  first/previous/next finding navigation, pause control, report downloads, and
-  the non-safety disclaimer;
-- connected collision red, near-miss yellow, and selection blue outlines for
-  Robot Links, built-in/imported/held Objects, and the Workbench;
-- focused only the selected finding pair without mutating scene transforms;
-- kept policy persistence on the V2 browser runtime bridge and added a
-  canonical ignored-pair capture regression test.
+## RED Evidence
 
-## TDD Evidence
+1. Initial exact Task 5 RED:
 
-### RED
+   `npm run test:run -- src/features/scene/LinearAxisRuntime.test.tsx src/features/scene/LinearAxisInspector.test.tsx src/features/scene/linear-axis-source.test.ts src/features/scene/scene-command-service.test.ts`
 
-Command:
+   Result: 3 suites failed and 1 passed; 18 existing tests passed in 5.99s.
+   The Manual source, Axis runtime, and Axis Inspector modules did not exist.
 
-```text
-npm run test:run -- src/features/collision/collision-store.test.ts src/features/collision/collision-report.test.ts src/features/collision/CollisionPanel.test.tsx src/features/interaction/outline-state.test.ts
-```
+2. Durable commands and Robot matrix authority:
 
-Observed expected failures before production implementation:
+   `npm run test:run -- src/features/scene/scene-command-service.test.ts src/features/robot/RobotModel.test.ts`
 
-- missing `CollisionPanel` and `collision-report` modules;
-- missing store actions `setCollisionEnabled`, `ignorePair`,
-  `setValidationReport`, and navigation setters;
-- existing outline code attempted `startsWith()` on a finding row and could not
-  distinguish near misses.
+   Result: 2 files failed; 7 expected tests failed and 28 passed in 4.62s.
+   Six durable Axis methods were absent, and `RobotModel` used a conflicting
+   World-pose fixture instead of the required computed World matrix.
 
-Result: 4 test files failed, 5 new behavior tests failed, and 5 existing tests
-passed.
+3. Workcell/App integration correction:
 
-### GREEN
+   `npm run test:run -- src/features/scene/Workcell.test.tsx src/app/App.test.tsx`
 
-Focused store/report/panel/outline command:
+   With only the unverified wiring temporarily removed, result: 2 files failed;
+   2 expected tests failed and 4 passed in 6.79s. Workcell had no live Axis
+   bindings, and selected-Axis Manual controls were absent while the common
+   Transform Inspector remained present. Minimal wiring was then restored.
 
-```text
-npm run test:run -- src/features/collision/collision-store.test.ts src/features/collision/collision-report.test.ts src/features/collision/CollisionPanel.test.tsx src/features/interaction/outline-state.test.ts
-```
+4. Normative closed-bound correction:
 
-Result: 4 files, 18 tests passed.
+   `npm run test:run -- src/domain/project/scene-state-v1.test.ts`
 
-Expanded collision/App/outline integration command:
+   Result: 1 test failed and 6 passed in 3.02s because the existing validator
+   rejected the spec-valid `min === home === current === max` range.
 
-```text
-npm run test:run -- src/features/collision src/features/interaction/outline-state.test.ts src/features/interaction/GraspController.test.tsx src/features/equipment src/features/robot/RobotModel.test.ts src/features/scene src/app src/features/project/browser-project-runtime.test.ts src/features/project/project-store.test.ts
-```
+## GREEN Evidence
 
-Result: 22 files, 99 tests passed.
+- Manual source, runtime, Inspector, commands, and Robot matrix slice:
+  5 files / 50 tests passed in 7.82s.
+- Workcell/App integration: 2 files / 6 tests passed in 6.67s.
+- Closed-bound validator plus Axis Inspector: 2 files / 10 tests passed in 5.73s.
+- Fresh required focused Task 5 suite: 20 files / 124 tests passed in 22.86s.
+- Fresh full serial suite: 107 files / 885 tests passed in 292.23s.
 
-## Final Verification
+## Exact Verification
 
-```text
-npm run test:run
-```
+- `npm run test:run -- src/features/scene src/features/robot`: PASS,
+  20 files / 124 tests in 22.86s.
+- `npx vitest run --maxWorkers=1`: PASS,
+  107 files / 885 tests in 292.23s.
+- `npm run lint`: PASS, exit 0.
+- `npm run build`: PASS, exit 0. Vite retained the existing `path`/`crypto`
+  browser-externalization notices and chunk-size advisory.
+- `git diff --check`: PASS; line-ending conversion notices only.
+- `git diff --cached --check`: PASS after staging only Task 5 implementation,
+  tests, validator correction, integration wiring, and this report.
 
-Result: 68 files, 385 tests passed, 0 failed.
+## Files Outside the Brief
 
-```text
-npm run lint
-npm run build
-git diff --check
-```
+- `src/app/App.tsx` and `src/app/App.test.tsx`: compose the existing common
+  Transform Inspector with Manual Axis controls for the selected Axis.
+- `src/features/scene/scene-runtime-selector.ts`: publish the computed World
+  matrix consumed by both the Robot and Axis collision synchronization path.
+- `src/domain/project/scene-state-v1.ts` and `scene-state-v1.test.ts`: align the
+  inherited range validator with the normative inclusive inequality.
+- `src/features/scene/Workcell.test.tsx`: prove Workcell supplies the published
+  runtime and live Object/Robot roots to the Axis updater.
+- `.superpowers/sdd/task-5-report.md`: replace the stale unrelated collision
+  report with the required Task 5 TDD and verification evidence.
 
-Results:
+## Scope Boundary
 
-- oxlint passed;
-- TypeScript and Vite production build passed;
-- diff check passed.
-
-Accessibility coverage uses semantic headings, checkboxes, spinbuttons,
-navigation buttons, named lists, status text, and named download controls.
-Download tests verify that both generated Blob URLs are revoked.
-
-## Notes
-
-- The UI and reports use the exact labels `Geometry Proxy Collision` and
-  `Approximate Clearance`.
-- Reports and UI state contain no STEP bytes or project secrets.
-- Results remain proxy-based and are explicitly not physics, RobotWare,
-  SafeMove, or safety-rated validation.
-- Vite retains the pre-existing OCCT `path` / `crypto` browser-externalization
-  messages and large-chunk warning; neither is introduced by this task and the
-  production build succeeds.
-
-## Fix Review
-
-The post-implementation review identified three precision and render-isolation
-gaps. They were corrected with a second RED-to-GREEN cycle:
-
-- selected navigation now owns a stable full-row key containing both Entity
-  IDs, both Box IDs, kind, signed clearance, sample index, and time. Reordered
-  reports preserve the exact row; stale reports preserve selection; removal or
-  source replacement resets to the first valid row;
-- collision, near-miss, and selection color now come from the exact selected
-  finding. A near-miss row and collision row sharing one pair no longer collapse
-  to the collision severity;
-- Robot Link, Equipment/Object, held Object, and Workbench rendering subscribe
-  only to primitive per-Entity outline selectors. Unrelated navigation keeps
-  unrelated participants and the top-level Canvas boundary from rerendering;
-- report ordering now includes `firstEntityId` and `secondEntityId` before Box
-  tie-breaks, making shuffled reversed-orientation JSON and CSV byte-identical.
-
-Review RED result: 3 files failed with 5 expected failures and 11 existing
-tests passing. Review GREEN results:
-
-- focused: 5 files, 24 tests passed;
-- expanded collision/UI integration: 23 files, 104 tests passed;
-- full suite: 69 files, 390 tests passed with 0 failures;
-- lint, production build, and diff-check passed.
-
-## Second Fix
-
-The final review exercised navigation across the 100 ms live-finding refresh.
-The finding identity is now structural: pair, both Entity IDs, both Box IDs,
-kind, sample index, and time. Signed clearance is intentionally excluded, so a
-new measurement updates the selected row without changing its identity.
-
-When a structural row remains, navigation follows it to its new index. When it
-is removed, the previous index is clamped to the new finding length instead of
-resetting unconditionally to zero; an empty result resets both index and key to
-`null`. Current-pose and validation-report replacement use the same rule.
-
-Second Fix RED: 1 file ran with 2 expected failures and 10 existing tests
-passing. Second Fix GREEN:
-
-- focused collision navigation/report UI: 4 files, 23 tests passed;
-- full suite: 69 files, 392 tests passed with 0 failures;
-- lint, production build, and diff-check passed.
+- No OPC UA Axis nodes, subscription UI, interpolation, middleware, PLC/live
+  writes, physics, motor dynamics, or collision mount-contact policy.
+- No primitives/camera work, Legacy mode, deploy, transfer, restart, push, or
+  merge.
+- Project V3 remains the sole durable placement/attachment authority; Robot
+  configuration base fields are not restored as a renderer transform owner.
+- Existing held/safe deletion, OPC UA Object ownership, hierarchy/world-pose
+  math, body portals, Jobs shell/keyboard behavior, and Robot Base Inspector
+  ownership remain unchanged.

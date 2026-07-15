@@ -27,6 +27,18 @@ function robot(): SceneEntityV1 {
   }
 }
 
+function linearAxis(
+  overrides: Partial<Extract<SceneEntityV1, { kind: 'linear-axis' }>> = {},
+): Extract<SceneEntityV1, { kind: 'linear-axis' }> {
+  return {
+    kind: 'linear-axis', id: 'linear-axis:active', name: 'Linear Axis', parentId: null,
+    localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: -1,
+    maxPositionM: 2, homePositionM: 0.25, currentPositionM: 0.5,
+    carriageEntityId: null, robotEntityId: null,
+    ...overrides,
+  }
+}
+
 function projection(
   entities: readonly SceneEntityV1[] = [robot()],
 ): StoredWorkcellProjectSnapshotProjectionV3 {
@@ -593,4 +605,130 @@ describe('SceneCommandService', () => {
     })
     expect(JSON.stringify(harness.active().opcUa)).not.toContain('equipment:cup-01')
   })
+
+  it('creates at most one validated MCP-level Linear Axis in one Project V3 recipe', async () => {
+    const harness = mutationHarness(projection())
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.createLinearAxis({
+      direction: 'y', minPositionM: -2, maxPositionM: 3,
+      homePositionM: 0.25, currentPositionM: 0.5,
+      carriageEntityId: null, robotEntityId: null,
+    })
+
+    expect(harness.active().scene.entities).toContainEqual({
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Linear Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'y', minPositionM: -2,
+      maxPositionM: 3, homePositionM: 0.25, currentPositionM: 0.5,
+      carriageEntityId: null, robotEntityId: null,
+    })
+    await expect(commands.createLinearAxis({
+      direction: 'x', minPositionM: 0, maxPositionM: 1,
+      homePositionM: 0, currentPositionM: 0,
+      carriageEntityId: null, robotEntityId: null,
+    })).rejects.toThrow('LINEAR_AXIS_ALREADY_EXISTS')
+    expect(harness.replaceFromActive).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects an out-of-range position without clamping and moves Home through one recipe', async () => {
+    const harness = mutationHarness(projection([robot(), linearAxis()]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await expect(commands.setLinearAxisPosition(2.1)).rejects.toThrow('LINEAR_AXIS_OUT_OF_RANGE')
+    expect(linearAxisFrom(harness.active()).currentPositionM).toBe(0.5)
+
+    await commands.moveLinearAxisHome()
+    expect(linearAxisFrom(harness.active()).currentPositionM).toBe(0.25)
+  })
+
+  it('attaches and detaches the Robot without a World-pose jump', async () => {
+    const sceneRobot: SceneEntityV1 = {
+      ...robot(), localPose: { ...IDENTITY_POSE, positionM: [4, 5, 6] },
+    }
+    const harness = mutationHarness(projection([sceneRobot, linearAxis({
+      localPose: { ...IDENTITY_POSE, positionM: [10, 0, 0] },
+    })]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+    const before = worldPoseForEntity(harness.active().scene, 'robot:active')
+
+    await commands.attachRobotToLinearAxis()
+    expect(linearAxisFrom(harness.active()).robotEntityId).toBe('robot:active')
+    expect(worldPoseForEntity(harness.active().scene, 'robot:active')).toEqual(before)
+
+    await commands.detachRobotFromLinearAxis()
+    expect(linearAxisFrom(harness.active()).robotEntityId).toBeNull()
+    expect(worldPoseForEntity(harness.active().scene, 'robot:active')).toEqual(before)
+  })
+
+  it('replaces one Object-or-Group carriage atomically while preserving both World poses', async () => {
+    const previous: SceneEntityV1 = {
+      kind: 'object', id: 'object:previous', name: 'Previous', parentId: 'linear-axis:active',
+      localPose: { ...IDENTITY_POSE, positionM: [1, 0, 0] }, visible: true,
+      target: { kind: 'object-instance', id: 'previous' }, transformSource: 'manual',
+    }
+    const next: SceneEntityV1 = {
+      kind: 'group', id: 'group:next', name: 'Next', parentId: null,
+      localPose: { ...IDENTITY_POSE, positionM: [7, 8, 9] }, visible: true,
+    }
+    const harness = mutationHarness(projection([
+      robot(), linearAxis({ carriageEntityId: 'object:previous' }), previous, next,
+    ]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+    const previousWorld = worldPoseForEntity(harness.active().scene, 'object:previous')
+    const nextWorld = worldPoseForEntity(harness.active().scene, 'group:next')
+
+    await commands.setLinearAxisCarriage('group:next')
+
+    expect(harness.replaceFromActive).toHaveBeenCalledTimes(1)
+    expect(linearAxisFrom(harness.active()).carriageEntityId).toBe('group:next')
+    expect(harness.active().scene.entities.find(({ id }) => id === 'object:previous')?.parentId).toBeNull()
+    expect(harness.active().scene.entities.find(({ id }) => id === 'group:next')?.parentId)
+      .toBe('linear-axis:active')
+    expect(worldPoseForEntity(harness.active().scene, 'object:previous')).toEqual(previousWorld)
+    expect(worldPoseForEntity(harness.active().scene, 'group:next')).toEqual(nextWorld)
+  })
+
+  it('rejects a non-carriage Entity and an OPC-UA-owned Object without mutation', async () => {
+    const opcObject: SceneEntityV1 = {
+      kind: 'object', id: 'object:live', name: 'Live', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'live' }, transformSource: 'opcua',
+    }
+    const harness = mutationHarness(projection([robot(), linearAxis(), opcObject]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+    const before = structuredClone(harness.active().scene)
+
+    await expect(commands.setLinearAxisCarriage('robot:active')).rejects.toThrow(
+      'LINEAR_AXIS_CARRIAGE_REQUIRED',
+    )
+    await expect(commands.setLinearAxisCarriage('object:live')).rejects.toThrow(
+      'SCENE_TRANSFORM_OWNED_BY_OPCUA',
+    )
+    expect(harness.active().scene).toEqual(before)
+  })
+
+  it('deletes the Linear Axis only after carriage and Robot are detached', async () => {
+    const attachedRobot: SceneEntityV1 = {
+      ...robot(), parentId: 'linear-axis:active',
+    }
+    const harness = mutationHarness(projection([
+      linearAxis({ robotEntityId: 'robot:active' }), attachedRobot,
+    ]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await expect(commands.deleteLinearAxis()).rejects.toThrow('LINEAR_AXIS_DELETE_ATTACHED')
+    await commands.detachRobotFromLinearAxis()
+    await commands.deleteLinearAxis()
+
+    expect(harness.active().scene.entities.some(({ kind }) => kind === 'linear-axis')).toBe(false)
+    expect(harness.active().scene.entities.find(({ id }) => id === 'robot:active')?.parentId).toBeNull()
+  })
 })
+
+function linearAxisFrom(
+  snapshot: StoredWorkcellProjectSnapshotProjectionV3,
+): Extract<SceneEntityV1, { kind: 'linear-axis' }> {
+  const axis = snapshot.scene.entities.find(({ kind }) => kind === 'linear-axis')
+  if (axis?.kind !== 'linear-axis') throw new Error('Expected Linear Axis')
+  return axis
+}

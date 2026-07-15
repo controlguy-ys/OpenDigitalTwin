@@ -9,6 +9,7 @@ import {
   worldPoseForEntity,
 } from '../../domain/scene/scene-transform'
 import { useSyncExternalStore } from 'react'
+import { Matrix4, Quaternion, Vector3 } from 'three'
 import {
   projectMutationService,
   sceneEditorStore,
@@ -29,9 +30,18 @@ export interface SceneRuntimeEntityV1 {
   readonly parentId: SceneEntityIdV1 | null
   readonly localPose: ScenePoseV1
   readonly worldPose: ScenePoseV1
+  readonly worldMatrix: readonly number[]
   readonly persistedVisible: boolean
   readonly effectiveVisible: boolean
   readonly source: SceneEntityV1
+}
+
+function matrixForPose(pose: ScenePoseV1): readonly number[] {
+  return Object.freeze([...new Matrix4().compose(
+    new Vector3(...pose.positionM),
+    new Quaternion(...pose.quaternion).normalize(),
+    new Vector3(1, 1, 1),
+  ).elements])
 }
 
 export interface SceneRuntimeProjectionV1 {
@@ -85,13 +95,15 @@ export function selectSceneRuntime(
   const entities = projectedScene.entities.map((entity): SceneRuntimeEntityV1 => {
     const hierarchyVisible = entity.visible && ancestors(sceneEntities, entity)
       .every((ancestor) => ancestor.visible)
+    const worldPose = worldPoseForEntity(projectedScene, entity.id)
     return Object.freeze({
       entityId: entity.id,
       kind: entity.kind,
       name: entity.name,
       parentId: entity.parentId,
       localPose: entity.localPose,
-      worldPose: worldPoseForEntity(projectedScene, entity.id),
+      worldPose,
+      worldMatrix: matrixForPose(worldPose),
       persistedVisible: entity.visible,
       effectiveVisible: hierarchyVisible && isolateAllows(
         sceneEntities,

@@ -282,7 +282,7 @@ function validateEntity(value: unknown, index: number): SceneEntityV1 {
     const homePositionM = finite(source.homePositionM, `${label}.homePositionM`)
     const currentPositionM = finite(source.currentPositionM, `${label}.currentPositionM`)
     if (
-      minPositionM >= maxPositionM || homePositionM < minPositionM ||
+      minPositionM > maxPositionM || homePositionM < minPositionM ||
       homePositionM > maxPositionM || currentPositionM < minPositionM ||
       currentPositionM > maxPositionM
     ) {

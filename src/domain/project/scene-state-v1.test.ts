@@ -130,13 +130,16 @@ describe('ProjectSceneStateV1 validation', () => {
     ))).toThrow('SCENE_OPCUA_OBJECT_REQUIRES_MCP_PARENT')
   })
 
-  it('normalizes finite non-zero quaternions and rejects invalid axis ranges', () => {
+  it('normalizes finite non-zero quaternions and accepts a closed zero-travel axis range', () => {
     const normalized = validateProjectSceneState(scene({
       ...object('object:cup-1'),
       localPose: { positionM: [1, 2, 3], quaternion: [0, 0, 0, 2] },
     }))
     expect(normalized.entities[0]!.localPose.quaternion).toEqual([0, 0, 0, 1])
-    expect(() => validateProjectSceneState(scene(axis({ minPositionM: 1, maxPositionM: 1 }))))
+    expect(() => validateProjectSceneState(scene(axis({
+      minPositionM: 1, maxPositionM: 1, homePositionM: 1, currentPositionM: 1,
+    })))).not.toThrow()
+    expect(() => validateProjectSceneState(scene(axis({ minPositionM: 2, maxPositionM: 1 }))))
       .toThrow('SCENE_LINEAR_AXIS_RANGE')
   })
 

@@ -16,6 +16,7 @@ import {
   type SceneRenderStatus,
 } from '../features/scene/SceneCanvas'
 import { SceneEntityInspector } from '../features/scene/SceneEntityInspector'
+import { LinearAxisInspector } from '../features/scene/LinearAxisInspector'
 import { SceneExplorer } from '../features/scene/SceneExplorer'
 import { SceneContextMenu } from '../features/scene/SceneContextMenu'
 import { Timeline } from '../features/ui/Timeline'
@@ -348,6 +349,14 @@ export function App() {
                 />
               }
             />
+          ) : selectedSceneEntityId === 'linear-axis:active' ? (
+            <div className="linear-axis-target-inspector">
+              <SceneEntityInspector
+                disabled={controlsDisabled}
+                entityId={selectedSceneEntityId}
+              />
+              <LinearAxisInspector disabled={controlsDisabled} />
+            </div>
           ) : (
             <SceneEntityInspector
               disabled={controlsDisabled}

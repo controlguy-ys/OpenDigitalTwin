@@ -33,6 +33,7 @@ import {
   type SceneRuntimeProjectionV1,
 } from './scene-runtime-selector'
 import type { SceneEntityContextHandler } from './scene-context-request'
+import { LinearAxisRuntime } from './LinearAxisRuntime'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
@@ -56,6 +57,14 @@ const selectWorkbenchCollisionOutline =
 
 export function workcellRenderEntities(runtime: SceneRuntimeProjectionV1) {
   return runtime.entities.filter(({ effectiveVisible }) => effectiveVisible)
+}
+
+export function workcellLinearAxisBindings(
+  runtime: SceneRuntimeProjectionV1,
+  objectRoots: ReadonlyMap<string, Object3D>,
+  robotRoot: Object3D | null,
+) {
+  return { runtime, objectRoots, robotRoot }
 }
 
 const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
@@ -191,6 +200,11 @@ export function Workcell({
           registerRig={handleRigRegistration}
           sceneEntity={sceneRuntime.robot}
         />
+        <LinearAxisRuntime {...workcellLinearAxisBindings(
+          sceneRuntime,
+          equipmentObjectsRef.current,
+          rig?.rig.root ?? null,
+        )} />
       </group>
       <CurrentPoseCollisionSystem />
       {rig === null ? null : (
