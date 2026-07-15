@@ -74,6 +74,7 @@ export interface EquipmentStoreState {
   records: readonly EquipmentRecord[]
   persistenceStatus: EquipmentPersistenceStatus
   warnings: readonly string[]
+  replaceRuntimeRecords(records: readonly EquipmentRecord[]): void
   hydrate(): Promise<void>
   upsertEquipment(record: EquipmentRecord): Promise<void>
   previewEquipmentTransform(id: string, transform: SerializableTransform): void
@@ -324,6 +325,17 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
       records: builtInRecords(),
       persistenceStatus: 'idle',
       warnings: [],
+      replaceRuntimeRecords: (records) => {
+        const nextRecords = records.map((record) => {
+          if (!isEquipmentRecord(record)) {
+            throw new Error('Invalid runtime Equipment record; no changes were applied.')
+          }
+          return cloneEquipmentRecord(record)
+        })
+        pendingTransformPreviews.clear()
+        rememberCommittedTransforms(nextRecords)
+        set({ records: nextRecords })
+      },
       hydrate,
       upsertEquipment: async (record) => {
         if (!isEquipmentRecord(record)) {

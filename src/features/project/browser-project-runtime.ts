@@ -1,4 +1,5 @@
 import { DEFAULT_COLLISION_POLICY } from '../../domain/collision/collision'
+import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type {
   ObjectInstanceRecordV1,
   RobotLinkGeometryRecordV2,
@@ -25,6 +26,7 @@ import {
 } from '../../lib/hash/sha256'
 import { useCollisionStore } from '../collision/collision-store'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
+import { useEquipmentStore } from '../equipment/equipment-store'
 import { stepImportClient } from '../import/StepImportClient'
 import {
   ImportedGeometryRepository,
@@ -33,6 +35,7 @@ import {
 import type { ImportedThreeAsset } from '../import/occt-to-three'
 import { useRobotStore } from '../joints/robot-store'
 import { useObjectAssetStore } from '../objects/object-asset-store'
+import { useInteractionStore } from '../interaction/interaction-store'
 import { loadDefaultRobotGeometry } from '../robot/default-robot-geometry'
 import {
   createDatasheetRobotConfiguration,
@@ -57,6 +60,8 @@ interface BrowserProjectRuntimeResources {
   readonly robotLinks: readonly RobotLinkGeometryRecordV2[]
   readonly objectRecords: WorkcellProjectSnapshotV3['objectAssets']
   readonly objectInstances: readonly ObjectInstanceRecordV1[]
+  readonly equipmentRecords: readonly EquipmentRecord[]
+  readonly hiddenBuiltInEquipmentIds: readonly string[]
 }
 
 export type BrowserProjectRuntimeBundleV1 = PreparedProjectRuntimeBundleV1<
@@ -135,6 +140,8 @@ function activeJob(snapshot: WorkcellProjectSnapshotV3) {
 
 function projectRobotReadModels(snapshot: WorkcellProjectSnapshotV3): RobotLinkGeometryRecordV2[] {
   const sources = new Map(snapshot.robot.sources.map((source) => [source.id, source]))
+  const robotEntity = snapshot.scene.entities.find(({ kind }) => kind === 'robot')
+  if (robotEntity?.kind !== 'robot') throw new Error('SCENE_ROBOT_REQUIRED: Robot Scene Entity is missing.')
   return snapshot.robot.links.map((link) => {
     const source = sources.get(link.sourceRefs[0]!.sourceAssetId)
     if (source === undefined) throw new Error(`Robot Link ${link.linkId} has no source.`)
@@ -144,7 +151,7 @@ function projectRobotReadModels(snapshot: WorkcellProjectSnapshotV3): RobotLinkG
       sourceFileName: source.sourceFileName,
       sourceBytes: source.sourceBytes,
       localTransform: mutableTransform(link.operatorAdjustment),
-      visible: link.visible,
+      visible: robotEntity.visible,
       collisionCenter: [...firstCollision.center],
       collisionHalfExtents: [...firstCollision.halfExtents],
       collisionBoxes: mutableCollisionBoxes(link.collisionBoxes),
@@ -187,6 +194,66 @@ function projectObjectReadModels(snapshot: WorkcellProjectSnapshotV3): {
       }
     })
   return { assets, instances }
+}
+
+function projectBuiltInEquipmentReadModels(snapshot: WorkcellProjectSnapshotV3): {
+  readonly records: readonly EquipmentRecord[]
+  readonly hiddenIds: readonly string[]
+} {
+  const sceneObjects = new Map(snapshot.scene.entities
+    .filter((entity) => entity.kind === 'object')
+    .map((entity) => [entity.id, entity]))
+  const hiddenIds: string[] = []
+  const records = snapshot.builtInEquipment.map((record): EquipmentRecord => {
+    const sceneEntity = sceneObjects.get(`equipment:${record.id}`)
+    if (sceneEntity === undefined) {
+      throw new Error(`SCENE_TARGET_MISSING: equipment:${record.id} has no Scene Object.`)
+    }
+    const worldPose = worldPoseForEntity(snapshot.scene, sceneEntity.id)
+    if (!sceneEntity.visible) hiddenIds.push(`equipment:${record.id}`)
+    return {
+      id: record.id,
+      name: record.name,
+      kind: record.kind,
+      status: record.status,
+      numericStatus: record.manualNumericStatus,
+      statusSource: record.statusSource,
+      statusOverlayVisible: record.statusOverlayVisible,
+      transform: {
+        position: [...worldPose.positionM],
+        quaternion: [...worldPose.quaternion],
+        scale: [1, 1, 1],
+      },
+      graspable: record.graspable,
+      collisionHalfExtents: [...record.collisionHalfExtents],
+      ...(record.collisionCenter === undefined
+        ? {}
+        : { collisionCenter: [...record.collisionCenter] }),
+      stackLightAnchor: record.stackLightAnchor === null
+        ? null
+        : [...record.stackLightAnchor],
+    }
+  })
+  return { records, hiddenIds }
+}
+
+function replaceBuiltInVisibility(
+  currentHiddenIds: readonly string[],
+  previousRecords: readonly EquipmentRecord[],
+  nextRecords: readonly EquipmentRecord[],
+  nextHiddenIds: readonly string[],
+): readonly string[] {
+  const managedIds = new Set([
+    ...previousRecords.filter(({ kind }) => kind !== 'imported').map(({ id }) => id),
+    ...nextRecords.map(({ id }) => id),
+  ])
+  return [
+    ...currentHiddenIds.filter((id) => {
+      const localId = id.startsWith('equipment:') ? id.slice('equipment:'.length) : id
+      return !managedIds.has(localId)
+    }),
+    ...nextHiddenIds,
+  ]
 }
 
 function primitiveObjectAsset(
@@ -328,6 +395,8 @@ export function createBrowserProjectRuntime(
     useRobotStore,
     useCoordinateFrameStore,
     useCollisionStore,
+    useEquipmentStore,
+    useInteractionStore,
     robotGeometryRepository,
     importedGeometryRepository,
   ].map((source) => source as unknown as NotificationSource)
@@ -382,7 +451,6 @@ export function createBrowserProjectRuntime(
             coordinateMode: 'link-local',
             zeroPoseLocalization: identityTransform(),
             operatorAdjustment: mutableTransform(link.localTransform),
-            visible: link.visible,
             collisionBoxes: mutableCollisionBoxes(link.collisionBoxes),
             statistics: { ...link.statistics },
           })),
@@ -445,6 +513,7 @@ export function createBrowserProjectRuntime(
     async prepare(snapshot) {
       const robotLinks = projectRobotReadModels(snapshot)
       const objects = projectObjectReadModels(snapshot)
+      const equipment = projectBuiltInEquipmentReadModels(snapshot)
       const objectRepository = new ImportedGeometryRepository(stepImportClient)
       let robotAssets: ReadonlyMap<RobotLinkGeometryRecordV2['linkId'], ImportedThreeAsset> | null = null
       const primitiveAssets = new Map<string, ImportedThreeAsset>()
@@ -471,6 +540,8 @@ export function createBrowserProjectRuntime(
           robotLinks,
           objectRecords: objects.assets,
           objectInstances: objects.instances,
+          equipmentRecords: equipment.records,
+          hiddenBuiltInEquipmentIds: equipment.hiddenIds,
         })
         resourceOwnership.set(resources, 'prepared')
         return resources
@@ -496,6 +567,8 @@ export function createBrowserProjectRuntime(
         robot: useRobotStore.getState(),
         frames: useCoordinateFrameStore.getState(),
         collision: useCollisionStore.getState(),
+        equipment: useEquipmentStore.getState(),
+        interaction: useInteractionStore.getState(),
       }
       const publication = beginReadModelPublication(notificationSources)
       let previousRobotAssets: ReadonlyMap<RobotLinkGeometryRecordV2['linkId'], ImportedThreeAsset> | undefined
@@ -505,6 +578,15 @@ export function createBrowserProjectRuntime(
         useObjectAssetStore.setState({
           assets: resources.objectRecords,
           instances: resources.objectInstances,
+        })
+        useEquipmentStore.getState().replaceRuntimeRecords(resources.equipmentRecords)
+        useInteractionStore.setState({
+          hiddenEntityIds: replaceBuiltInVisibility(
+            previousStores.interaction.hiddenEntityIds,
+            previousStores.equipment.records,
+            resources.equipmentRecords,
+            resources.hiddenBuiltInEquipmentIds,
+          ),
         })
         const robotPose = worldPoseForEntity(bundle.snapshot.scene, 'robot:active')
         const robotEuler = new Euler().setFromQuaternion(new Quaternion(...robotPose.quaternion), 'XYZ')
@@ -548,6 +630,8 @@ export function createBrowserProjectRuntime(
         useRobotStore.setState(previousStores.robot, true)
         useCoordinateFrameStore.setState(previousStores.frames, true)
         useCollisionStore.setState(previousStores.collision, true)
+        useEquipmentStore.getState().replaceRuntimeRecords(previousStores.equipment.records)
+        useInteractionStore.setState(previousStores.interaction, true)
         if (previousRobotAssets !== undefined) {
           robotGeometryRepository.exchange(previousRobotAssets)
         }
@@ -579,6 +663,8 @@ export function createBrowserProjectRuntime(
           useRobotStore.setState(previousStores.robot, true)
           useCoordinateFrameStore.setState(previousStores.frames, true)
           useCollisionStore.setState(previousStores.collision, true)
+          useEquipmentStore.getState().replaceRuntimeRecords(previousStores.equipment.records)
+          useInteractionStore.setState(previousStores.interaction, true)
           robotGeometryRepository.exchange(previousRobotAssets!)
           importedGeometryRepository.exchangeAll(previousObjectAssets!)
           publication.rollback()

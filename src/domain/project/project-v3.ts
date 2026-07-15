@@ -959,7 +959,6 @@ function validateRobot(
       'coordinateMode',
       'zeroPoseLocalization',
       'operatorAdjustment',
-      'visible',
       'collisionBoxes',
       'statistics',
     ])
@@ -1020,7 +1019,6 @@ function validateRobot(
       normalize,
       false,
     )
-    booleanValue(link.visible, `${label}.visible`)
     collisionBoxes += validateCollisionBoxes(
       link.collisionBoxes,
       label,
@@ -1298,6 +1296,7 @@ interface EntityValidationResultV3 {
   readonly canonicalIds: ReadonlySet<string>
   readonly statusSources: ReadonlyMap<string, 'manual' | 'opcua'>
   readonly transformSources: ReadonlyMap<string, 'manual' | 'opcua'>
+  readonly robotVisible: boolean
   readonly visibleObjectTriangles: number
 }
 
@@ -1467,7 +1466,8 @@ function validateEntities(
   } catch (error) {
     fail(error instanceof Error ? error.message : 'scene is invalid.')
   }
-  if (scene.entities.filter(({ kind }) => kind === 'robot').length !== 1) {
+  const robotEntities = scene.entities.filter(({ kind }) => kind === 'robot')
+  if (robotEntities.length !== 1) {
     fail('SCENE_ROBOT_REQUIRED: Project Scene must contain exactly one Robot.')
   }
   const targetIds = new Set<string>()
@@ -1499,6 +1499,7 @@ function validateEntities(
       ...builtIns.statusSources,
     ]),
     transformSources,
+    robotVisible: robotEntities[0]!.visible,
     visibleObjectTriangles,
   }
 }
@@ -1809,7 +1810,10 @@ function validateSnapshotCore(
   if (robot.sourceBytes + assets.sourceBytes > MAX_PROJECT_SOURCE_BYTES) {
     fail('Project exceeds the raw STEP byte budget.')
   }
-  if (robot.triangles + entities.visibleObjectTriangles > MAX_SCENE_TRIANGLES) {
+  if (
+    (entities.robotVisible ? robot.triangles : 0) +
+      entities.visibleObjectTriangles > MAX_SCENE_TRIANGLES
+  ) {
     fail('Visible Scene exceeds the triangle budget.')
   }
   if (robot.collisionBoxes + assets.collisionBoxes > MAX_COLLISION_BOXES_PER_PROJECT) {

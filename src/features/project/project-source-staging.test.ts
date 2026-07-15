@@ -78,7 +78,6 @@ async function validV3Project(): Promise<WorkcellProjectSnapshotV3> {
         coordinateMode: 'link-local' as const,
         zeroPoseLocalization: structuredClone(IDENTITY),
         operatorAdjustment: structuredClone(IDENTITY),
-        visible: true,
         collisionBoxes: [{
           id: 'default',
           center: [0, 0, 0],

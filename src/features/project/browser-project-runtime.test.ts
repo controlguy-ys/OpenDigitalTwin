@@ -6,10 +6,12 @@ import { DEFAULT_COLLISION_POLICY } from '../../domain/collision/collision'
 import { Group } from 'three'
 import { useCollisionStore } from '../collision/collision-store'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
+import { useEquipmentStore } from '../equipment/equipment-store'
 import { importedGeometryRepository } from '../import/imported-geometry-repository'
 import type { ImportedThreeAsset } from '../import/occt-to-three'
 import { useRobotStore } from '../joints/robot-store'
 import { useObjectAssetStore } from '../objects/object-asset-store'
+import { useInteractionStore } from '../interaction/interaction-store'
 import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
 import { robotGeometryRepository } from '../robot/robot-geometry-repository'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
@@ -73,6 +75,8 @@ afterEach(() => {
   useCoordinateFrameStore.setState(originalFrames, true)
   useCollisionStore.getState().replaceCollisionState(originalCollision, null)
   useCollisionStore.getState().setValidationReport(null)
+  useEquipmentStore.setState(originalEquipment, true)
+  useInteractionStore.setState(originalInteraction, true)
   robotGeometryRepository.clear()
   importedGeometryRepository.replaceAll(new Map())
 })
@@ -84,7 +88,7 @@ function withPrimitiveAssets(
   const next = structuredClone(snapshot) as any
   next.manifest.name = 'Primitive Cell'
   next.robot.name = 'Primitive Robot'
-  next.robot.links[0]!.visible = false
+  next.scene.entities.find(({ kind }: { kind: string }) => kind === 'robot')!.visible = false
   next.frames.mcp.position = [0.25, 0, 0]
   next.collisionPolicy.warningDistanceM = 0.075
   next.objectAssets = [{
@@ -149,6 +153,8 @@ function withPrimitiveAssets(
   ]
   return next
 }
+const originalEquipment = useEquipmentStore.getState()
+const originalInteraction = useInteractionStore.getState()
 
 function geometryAsset(dispose = vi.fn()): ImportedThreeAsset {
   return {
@@ -176,6 +182,8 @@ function publishedSignature(runtime: ReturnType<typeof createBrowserProjectRunti
     warningDistanceM: useCollisionStore.getState().policy.warningDistanceM,
     hasBoxGeometry: importedGeometryRepository.get('box-asset') !== undefined,
     hasCylinderGeometry: importedGeometryRepository.get('cylinder-asset') !== undefined,
+    equipmentIds: useEquipmentStore.getState().records.map(({ id }) => id),
+    hiddenEntityIds: useInteractionStore.getState().hiddenEntityIds,
   })
 }
 
@@ -325,6 +333,42 @@ describe('browser project collision policy bridge', () => {
     expect(importedGeometryRepository.get('cylinder-asset')?.group.children).toHaveLength(1)
   })
 
+  it('publishes Robot and Built-in Equipment Scene visibility and complete Equipment state', async () => {
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map(robotLink),
+      prepareRobotAssets: async () => new Map(),
+    })
+    const snapshot = structuredClone(await runtime.createNew()) as any
+    snapshot.scene.entities.find(({ kind }: { kind: string }) => kind === 'robot').visible = false
+    snapshot.builtInEquipment = [{
+      id: 'cup-01', name: 'Published Cup', kind: 'cup', status: 'WARNING',
+      manualNumericStatus: 37, statusSource: 'manual', statusOverlayVisible: false,
+      graspable: true, collisionHalfExtents: [0.055, 0.055, 0.075],
+      stackLightAnchor: null,
+    }]
+    snapshot.scene.entities.push({
+      kind: 'object', id: 'equipment:cup-01', name: 'Published Cup', parentId: null,
+      localPose: { positionM: [1, 2, 3], quaternion: [0, 0, 0, 1] },
+      visible: false, target: { kind: 'built-in-equipment', id: 'cup-01' },
+      transformSource: 'manual',
+    })
+
+    const resources = await runtime.prepare(snapshot, 'equipment-revision')
+    publishRuntime(runtime, {
+      revisionId: 'equipment-revision', snapshot, generation: 1, resources,
+    })
+
+    expect(useRobotGeometryStore.getState().links.every(({ visible }) => !visible)).toBe(true)
+    expect(useEquipmentStore.getState().records).toEqual([{
+      id: 'cup-01', name: 'Published Cup', kind: 'cup', status: 'WARNING',
+      numericStatus: 37, statusSource: 'manual', statusOverlayVisible: false,
+      transform: { position: [1, 2, 3], quaternion: [0, 0, 0, 1], scale: [1, 1, 1] },
+      graspable: true, collisionHalfExtents: [0.055, 0.055, 0.075],
+      stackLightAnchor: null,
+    }])
+    expect(useInteractionStore.getState().hiddenEntityIds).toContain('equipment:cup-01')
+  })
+
   it('notifies every read-model subscriber only after one complete bundle switch', async () => {
     const runtime = createBrowserProjectRuntime({
       loadRobotGeometry: async () => LINK_IDS.map(robotLink),
@@ -344,6 +388,8 @@ describe('browser project collision policy bridge', () => {
       useRobotStore.subscribe(observe),
       useCoordinateFrameStore.subscribe(observe),
       useCollisionStore.subscribe(observe),
+      useEquipmentStore.subscribe(observe),
+      useInteractionStore.subscribe(observe),
       robotGeometryRepository.subscribe(observe),
       importedGeometryRepository.subscribe(observe),
     ]
@@ -352,7 +398,7 @@ describe('browser project collision policy bridge', () => {
     const complete = publishedSignature(runtime)
     for (const unsubscribe of unsubscribes) unsubscribe()
 
-    expect(observations).toHaveLength(8)
+    expect(observations).toHaveLength(10)
     expect(new Set(observations)).toEqual(new Set([complete]))
   })
 
@@ -376,6 +422,8 @@ describe('browser project collision policy bridge', () => {
       useRobotStore.subscribe(observe),
       useCoordinateFrameStore.subscribe(observe),
       useCollisionStore.subscribe(observe),
+      useEquipmentStore.subscribe(observe),
+      useInteractionStore.subscribe(observe),
       robotGeometryRepository.subscribe(observe),
       importedGeometryRepository.subscribe(observe),
     ]

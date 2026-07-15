@@ -140,6 +140,31 @@ function tuple(value: unknown, length: number, label: string): number[] {
   return value.map((entry, index) => finite(entry, `${label}[${index}]`))
 }
 
+function entityArray(value: unknown): unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    return sceneFail('SCENE_ENTITIES_INVALID', 'scene.entities must be a plain array.')
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  if (Reflect.ownKeys(descriptors).length !== value.length + 1) {
+    return sceneFail('SCENE_ENTITIES_NOT_DENSE', 'scene.entities must be a dense closed array.')
+  }
+  const ordered: PropertyDescriptor[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (descriptor === undefined) {
+      return sceneFail('SCENE_ENTITIES_NOT_DENSE', 'scene.entities must not be sparse.')
+    }
+    if (!descriptor.enumerable) {
+      return sceneFail('SCENE_ENTITIES_INVALID', `scene.entities[${index}] must be enumerable.`)
+    }
+    if (!('value' in descriptor)) {
+      return sceneFail('SCENE_ENTITIES_INVALID', `scene.entities[${index}] must be a data field.`)
+    }
+    ordered.push(descriptor)
+  }
+  return ordered.map((descriptor) => descriptor.value)
+}
+
 function pose(value: unknown, label: string): ScenePoseV1 {
   const source = record(value, label, ['positionM', 'quaternion'])
   const positionM = tuple(source.positionM, 3, `${label}.positionM`)
@@ -287,10 +312,7 @@ function deepFreeze(value: unknown): void {
 
 export function validateProjectSceneState(value: unknown): ProjectSceneStateV1 {
   const source = record(value, 'scene', ['entities', 'robotMountContact'])
-  if (!Array.isArray(source.entities) || Object.getPrototypeOf(source.entities) !== Array.prototype) {
-    return sceneFail('SCENE_ENTITIES_INVALID', 'scene.entities must be an array.')
-  }
-  const entities = source.entities.map(validateEntity)
+  const entities = entityArray(source.entities).map(validateEntity)
   const byId = new Map<SceneEntityIdV1, SceneEntityV1>()
   const robots = entities.filter(({ kind }) => kind === 'robot').length
   const axes = entities.filter(({ kind }) => kind === 'linear-axis').length

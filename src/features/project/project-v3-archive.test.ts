@@ -252,7 +252,6 @@ async function projectFixture(
         coordinateMode: 'assembly-zero-pose',
         zeroPoseLocalization: IDENTITY,
         operatorAdjustment: IDENTITY,
-        visible: true,
         collisionBoxes: [{
           id: 'body',
           center: [0, 0, 0],
@@ -537,6 +536,10 @@ describe('deterministic Project V3 archive', () => {
     expect(Object.keys(entries)).toEqual(Object.keys(entries).sort())
     const assets = JSON.parse(new TextDecoder().decode(entries['objects/assets.json'])) as { id: string }[]
     expect(assets.map(({ id }) => id)).toEqual(['a-asset', 'z-asset'])
+    const archivedLinks = JSON.parse(new TextDecoder().decode(
+      entries['robot/links/index.json'],
+    )) as Record<string, unknown>[]
+    expect(archivedLinks.every((link) => !Object.hasOwn(link, 'visible'))).toBe(true)
     expect(entries['scene/state.json']).toBeDefined()
     expect(entries['external/entities.json']).toBeUndefined()
   })

@@ -41,6 +41,29 @@ const axis = (overrides: Partial<Extract<SceneEntityV1, { kind: 'linear-axis' }>
 })
 
 describe('ProjectSceneStateV1 validation', () => {
+  it('rejects sparse and accessor-backed entity arrays without invoking getters', () => {
+    const sparse = [robot()]
+    delete sparse[0]
+    expect(() => validateProjectSceneState({ entities: sparse, robotMountContact: null }))
+      .toThrow(/SCENE_ENTITIES_.*(?:sparse|dense)/)
+
+    let getterCalls = 0
+    const accessorBacked: SceneEntityV1[] = []
+    Object.defineProperty(accessorBacked, '0', {
+      get: () => {
+        getterCalls += 1
+        return robot()
+      },
+      enumerable: true,
+    })
+    accessorBacked.length = 1
+    expect(() => validateProjectSceneState({
+      entities: accessorBacked,
+      robotMountContact: null,
+    })).toThrow(/SCENE_ENTITIES_.*data/i)
+    expect(getterCalls).toBe(0)
+  })
+
   it('rejects nested groups, cycles, a second robot, and a second linear axis', () => {
     expect(() => validateProjectSceneState(scene(group('group:a'), group('group:b', 'group:a'))))
       .toThrow('SCENE_GROUP_NESTING')

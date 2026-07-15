@@ -53,6 +53,7 @@ export function isExternalCollisionRegistrationActive(
   return (
     visible &&
     !hiddenEntityIds.includes(localId) &&
+    !hiddenEntityIds.includes(entityId) &&
     !(entityId === heldEntityId && hiddenEntityIds.includes('robot'))
   )
 }
@@ -332,7 +333,8 @@ export function EquipmentScene({
         .filter(
           ({ entityId, record }) =>
             entityId !== heldEntityId &&
-            !hiddenEntityIds.includes(record.id),
+            !hiddenEntityIds.includes(record.id) &&
+            !hiddenEntityIds.includes(entityId),
         )
         .map(({ entityId, record }) => (
           <EquipmentInstance

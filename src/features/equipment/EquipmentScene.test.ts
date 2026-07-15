@@ -42,5 +42,14 @@ describe('external collision registration visibility', () => {
         ['machine-01'],
       ),
     ).toBe(false)
+    expect(
+      isExternalCollisionRegistrationActive(
+        'equipment:machine-01',
+        'machine-01',
+        true,
+        null,
+        ['equipment:machine-01'],
+      ),
+    ).toBe(false)
   })
 })

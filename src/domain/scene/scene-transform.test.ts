@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { Matrix4 } from 'three'
 import type { ProjectSceneStateV1 } from '../project/scene-state-v1'
 import {
   reparentSceneEntityPreservingWorld,
@@ -59,5 +60,49 @@ describe('scene transforms', () => {
     }
     expect(worldPoseForEntity(scene, 'object:part').positionM).toEqual([10, 1.25, 3])
     expect(worldPoseForEntity(scene, 'robot:active').positionM).toEqual([10, 1.25, 4])
+  })
+
+  it('preserves world pose when reparenting onto and off a moving Linear Axis', () => {
+    const movingAxis: ProjectSceneStateV1 = {
+      robotMountContact: null,
+      entities: [
+        { kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+          localPose: pose([10, 0, 0]), visible: true, direction: 'y', minPositionM: -2,
+          maxPositionM: 2, homePositionM: 0, currentPositionM: 1.25,
+          carriageEntityId: null, robotEntityId: null },
+        { kind: 'object', id: 'object:part', name: 'Part', parentId: null,
+          localPose: pose([3, 4, 5]), visible: true,
+          target: { kind: 'object-instance', id: 'part' }, transformSource: 'manual' },
+      ],
+    }
+    const before = worldPoseForEntity(movingAxis, 'object:part')
+    const attached = reparentSceneEntityPreservingWorld(
+      movingAxis, 'object:part', 'linear-axis:active',
+    )
+    expect(worldPoseForEntity(attached, 'object:part')).toEqual(before)
+    expect(attached.entities.find(({ kind }) => kind === 'linear-axis'))
+      .toMatchObject({ carriageEntityId: 'object:part' })
+
+    const detached = reparentSceneEntityPreservingWorld(attached, 'object:part', null)
+    expect(worldPoseForEntity(detached, 'object:part')).toEqual(before)
+    expect(detached.entities.find(({ kind }) => kind === 'linear-axis'))
+      .toMatchObject({ carriageEntityId: null })
+  })
+
+  it('rejects reparent decomposition scale drift above 1e-9', () => {
+    const originalDecompose = Matrix4.prototype.decompose
+    const decompose = vi.spyOn(Matrix4.prototype, 'decompose')
+      .mockImplementation(function (this: Matrix4, position, quaternion, scale) {
+        const result = originalDecompose.call(this, position, quaternion, scale)
+        scale.x = 1 + 1e-8
+        return result
+      })
+    try {
+      expect(() => reparentSceneEntityPreservingWorld(
+        SCENE, 'object:cup-1', 'group:fixture',
+      )).toThrow('SCENE_REPARENT_SCALE_DRIFT')
+    } finally {
+      decompose.mockRestore()
+    }
   })
 })

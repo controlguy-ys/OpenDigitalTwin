@@ -174,7 +174,6 @@ function robotLink(
     coordinateMode: 'assembly-zero-pose',
     zeroPoseLocalization: mutable(IDENTITY),
     operatorAdjustment: mutable(IDENTITY),
-    visible: true,
     collisionBoxes: [{
       id: 'body',
       center: [0, 0, 0],
@@ -1370,6 +1369,20 @@ describe('Workcell Project V3 contract', () => {
 
     snapshot.scene.entities.push({ ...snapshot.scene.entities[1] })
     expect(() => validateWorkcellProjectSnapshotV3(snapshot)).toThrow(/SCENE_TARGET_DUPLICATE/)
+  })
+
+  it('makes robot:active the only durable Robot visibility owner', () => {
+    const snapshot = mutable(validV3Project()) as unknown as Record<string, any>
+    snapshot.robot.links.forEach((link: Record<string, unknown>) => delete link.visible)
+    const robotScene = snapshot.scene.entities.find(
+      (entity: { kind: string }) => entity.kind === 'robot',
+    )
+    robotScene.visible = false
+    expect(() => validateWorkcellProjectSnapshotV3(snapshot)).not.toThrow()
+
+    snapshot.robot.links[0].visible = true
+    expect(() => validateWorkcellProjectSnapshotV3(snapshot))
+      .toThrow(/unknown.*visible|visible.*unknown/i)
   })
 
   it('accepts 64 STEP assets and 256 instances and rejects one above each', () => {

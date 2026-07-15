@@ -37,7 +37,6 @@ export interface RobotLinkGeometryRecordV3 {
   readonly coordinateMode: 'assembly-zero-pose' | 'link-local'
   readonly zeroPoseLocalization: SerializableTransform
   readonly operatorAdjustment: SerializableTransform
-  readonly visible: boolean
   readonly collisionBoxes: readonly ProjectCollisionBoxV2[]
   readonly statistics: GeometryStatistics
 }
