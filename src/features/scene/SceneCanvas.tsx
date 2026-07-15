@@ -54,6 +54,14 @@ export interface SceneCanvasProps {
   linearAxisCommittedState?: LinearAxisCommittedStateV1 | null
 }
 
+export function recordCameraDiagnosticIfEnabled(
+  enabled: boolean,
+  publish: (state: ViewportCameraState) => void,
+  state: ViewportCameraState,
+): void {
+  if (enabled) publish(state)
+}
+
 export function SceneCanvas({
   onStatusChange,
   registerRig,
@@ -75,7 +83,9 @@ export function SceneCanvas({
     const record = () => {
       const cameraState = viewportController.readCameraState()
       viewportPreferenceStore.getState().setCameraState(cameraState)
-      setCameraDiagnostic(cameraState)
+      recordCameraDiagnosticIfEnabled(
+        import.meta.env.MODE === 'test', setCameraDiagnostic, cameraState,
+      )
     }
     return {
       home: () => { viewportController.actions.home(); record() },

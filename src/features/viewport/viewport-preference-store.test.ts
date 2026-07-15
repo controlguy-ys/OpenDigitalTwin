@@ -51,4 +51,36 @@ describe('viewport preference store', () => {
     expect(state.poseFrame).toBe('world')
     expect(state.gizmoFrame).toBe('world')
   })
+
+  it('rejects degenerate persisted camera orientation vectors', () => {
+    for (const cameraVector of [
+      { quaternion: [0, 0, 0, 0], up: [0, 1, 0] },
+      { quaternion: [0, 0, 0, 1], up: [1e-14, 0, 0] },
+    ]) {
+      const storage = memoryStorage()
+      storage.setItem(VIEWPORT_PREFERENCE_STORAGE_KEY, JSON.stringify({
+        cameraState: {
+          position: [3, 4, 5], target: [1, 2, 3], zoom: 1.5,
+          fov: 55, near: 0.02, far: 250, ...cameraVector,
+        },
+      }))
+
+      const state = createViewportPreferenceStore(storage).getState()
+      expect(state.cameraState.position).toEqual([2.2, 1.8, 1.7])
+    }
+  })
+
+  it('normalizes accepted persisted camera quaternion and up vectors', () => {
+    const storage = memoryStorage()
+    storage.setItem(VIEWPORT_PREFERENCE_STORAGE_KEY, JSON.stringify({
+      cameraState: {
+        position: [3, 4, 5], target: [1, 2, 3], quaternion: [0, 0, 0, 2],
+        up: [0, 3, 0], zoom: 1.5, fov: 55, near: 0.02, far: 250,
+      },
+    }))
+
+    const state = createViewportPreferenceStore(storage).getState()
+    expect(state.cameraState.quaternion).toEqual([0, 0, 0, 1])
+    expect(state.cameraState.up).toEqual([0, 1, 0])
+  })
 })

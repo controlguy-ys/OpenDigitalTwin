@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { Group } from 'three'
+import { BoxGeometry, Group, Mesh } from 'three'
 import type { SceneRuntimeProjectionV1 } from './scene-runtime-selector'
 import {
   createViewportBoundResolvers,
@@ -22,7 +22,7 @@ describe('Workcell published render authority', () => {
 
   it('keeps bounds and world-matrix updates out of StrictMode render calculation', () => {
     const visible = new Group()
-    visible.add(new Group())
+    visible.add(new Mesh(new BoxGeometry(1, 1, 1)))
     const update = vi.spyOn(visible, 'updateWorldMatrix')
     const runtime = {
       entities: [],
@@ -46,6 +46,74 @@ describe('Workcell published render authority', () => {
 
     firstRender.focusSelectionBounds()
     expect(update).toHaveBeenCalled()
+  })
+
+  it('disables Focus until the selected committed Entity has registered renderable geometry', () => {
+    const objectRuntime = {
+      entities: [],
+      objects: [{ entityId: 'object:visible', effectiveVisible: true }],
+      byId: new Map([['object:visible', {
+        entityId: 'object:visible', kind: 'object', effectiveVisible: true, parentId: null,
+      }]]),
+      robot: null,
+      linearAxis: null,
+    } as unknown as SceneRuntimeProjectionV1
+
+    const missingRegistration = createViewportBoundResolvers(
+      objectRuntime, 'object:visible', new Map(), null, new Group(),
+    )
+    const loadingStepRoot = new Group()
+    const loadingStep = createViewportBoundResolvers(
+      objectRuntime, 'object:visible', new Map([['object:visible', loadingStepRoot]]), null, new Group(),
+    )
+
+    expect(missingRegistration.canFocusSelection).toBe(false)
+    expect(missingRegistration.focusSelectionBounds().isEmpty()).toBe(true)
+    expect(loadingStep.canFocusSelection).toBe(false)
+    expect(loadingStep.focusSelectionBounds().isEmpty()).toBe(true)
+  })
+
+  it('recognizes committed Robot, Axis, and Group-descendant render roots', () => {
+    const renderable = () => {
+      const root = new Group()
+      root.add(new Mesh(new BoxGeometry(1, 1, 1)))
+      return root
+    }
+    const robot = {
+      entityId: 'robot:active', kind: 'robot', effectiveVisible: true, parentId: null,
+    }
+    const axis = {
+      entityId: 'linear-axis:active', kind: 'linear-axis', effectiveVisible: true, parentId: null,
+    }
+    const group = {
+      entityId: 'group:fixture', kind: 'group', effectiveVisible: true, parentId: null,
+    }
+    const child = {
+      entityId: 'object:child', kind: 'object', effectiveVisible: true, parentId: 'group:fixture',
+    }
+    const runtime = {
+      entities: [robot, axis, group, child], objects: [child], robot, linearAxis: axis,
+      byId: new Map<string, typeof robot | typeof axis | typeof group | typeof child>([
+        ['robot:active', robot], ['linear-axis:active', axis],
+        ['group:fixture', group], ['object:child', child],
+      ]),
+    } as unknown as SceneRuntimeProjectionV1
+    const scene = new Group()
+    const axisRoot = renderable()
+    axisRoot.name = 'linear-axis:active'
+    scene.add(axisRoot)
+    const roots = new Map([['object:child', renderable()]])
+    const robotRoot = renderable()
+
+    expect(createViewportBoundResolvers(
+      runtime, 'robot:active', roots, robotRoot, scene,
+    ).canFocusSelection).toBe(true)
+    expect(createViewportBoundResolvers(
+      runtime, 'linear-axis:active', roots, robotRoot, scene,
+    ).canFocusSelection).toBe(true)
+    expect(createViewportBoundResolvers(
+      runtime, 'group:fixture', roots, robotRoot, scene,
+    ).canFocusSelection).toBe(true)
   })
 
   it('binds the published runtime, live Object roots, and computed Robot root to the axis updater', () => {

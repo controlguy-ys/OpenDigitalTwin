@@ -63,7 +63,12 @@ test('camera, coordinate, preference, and semantic boundaries work end to end', 
   await page.getByRole('button', { name: 'Select CRB15000-12/1.27' }).click()
   await expect(page.getByRole('button', { name: 'Focus Selection' })).toBeEnabled()
   const semanticWithSelection = await projectOutput.textContent()
+  await page.getByRole('button', { name: 'Home View' }).click()
+  const beforeFocus = await diagnostic(cameraOutput)
   await page.getByRole('button', { name: 'Focus Selection' }).click()
+  const afterFocus = await diagnostic(cameraOutput)
+  expect(afterFocus.state.position).not.toEqual(beforeFocus.state.position)
+  expect(afterFocus.state.target).not.toEqual(beforeFocus.state.target)
   expect(await projectOutput.textContent()).toBe(semanticWithSelection)
 
   const pose = page.getByLabel('Actual TCP pose')

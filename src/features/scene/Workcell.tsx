@@ -173,16 +173,44 @@ function selectedBounds(
   return bounds
 }
 
+function hasVisibleRenderableGeometry(root: Object3D | null | undefined): boolean {
+  if (root === null || root === undefined) return false
+  let found = false
+  const visit = (object: Object3D, ancestorsVisible: boolean): void => {
+    if (found || !ancestorsVisible || !object.visible) return
+    const geometry = (object as Object3D & {
+      geometry?: { getAttribute?(name: string): { count: number } | undefined }
+    }).geometry
+    if ((geometry?.getAttribute?.('position')?.count ?? 0) > 0) {
+      found = true
+      return
+    }
+    for (const child of object.children) visit(child, true)
+  }
+  visit(root, true)
+  return found
+}
+
 function hasFocusCandidate(
   runtime: SceneRuntimeProjectionV1,
   selectedEntityId: string | null,
+  objectRoots: ReadonlyMap<string, Object3D>,
+  robotRoot: Object3D | null,
+  scene: Object3D,
 ): boolean {
   if (selectedEntityId === null) return false
   const selected = runtime.byId.get(selectedEntityId as SceneEntityIdV1)
   if (selected === undefined || !selected.effectiveVisible) return false
-  if (selected.kind !== 'group') return true
-  return runtime.objects.some((entity) =>
-    entity.effectiveVisible && runtimeDescendsFrom(runtime, entity.entityId, selected.entityId))
+  if (selected.kind === 'robot') return hasVisibleRenderableGeometry(robotRoot)
+  if (selected.kind === 'linear-axis') {
+    return hasVisibleRenderableGeometry(scene.getObjectByName('linear-axis:active'))
+  }
+  if (selected.kind === 'object') {
+    return hasVisibleRenderableGeometry(objectRoots.get(selected.entityId))
+  }
+  return runtime.objects.some((entity) => entity.effectiveVisible &&
+    runtimeDescendsFrom(runtime, entity.entityId, selected.entityId) &&
+    hasVisibleRenderableGeometry(objectRoots.get(entity.entityId)))
 }
 
 export interface ViewportBoundResolvers {
@@ -199,7 +227,9 @@ export function createViewportBoundResolvers(
   scene: Object3D,
 ): ViewportBoundResolvers {
   return {
-    canFocusSelection: hasFocusCandidate(runtime, selectedEntityId),
+    canFocusSelection: hasFocusCandidate(
+      runtime, selectedEntityId, objectRoots, robotRoot, scene,
+    ),
     fitAllBounds: () => fitAllBounds(runtime, objectRoots, robotRoot, scene),
     focusSelectionBounds: () => selectedBounds(
       runtime, selectedEntityId, objectRoots, robotRoot, scene,
@@ -247,9 +277,25 @@ function ViewportRuntime({
     ),
     [objectRoots, robotRoot, runtime, scene, selectedEntityId],
   )
-  const canFocusSelection = boundResolvers.canFocusSelection
+  const focusReadinessRef = useRef({ entityId: null as string | null, ready: false })
+  const focusProbeFrameRef = useRef(0)
+  const [focusReadiness, setFocusReadiness] = useState(focusReadinessRef.current)
+  const measureFocusReadiness = useCallback(() => {
+    const next = {
+      entityId: selectedEntityId,
+      ready: boundResolvers.canFocusSelection &&
+        !boundResolvers.focusSelectionBounds().isEmpty(),
+    }
+    const current = focusReadinessRef.current
+    if (current.entityId === next.entityId && current.ready === next.ready) return
+    focusReadinessRef.current = next
+    setFocusReadiness(next)
+  }, [boundResolvers, selectedEntityId])
+  const canFocusSelection = focusReadiness.entityId === selectedEntityId && focusReadiness.ready
   const restoredCameraRef = useRef(false)
   const coordinateRevisionRef = useRef('')
+
+  useLayoutEffect(measureFocusReadiness, [measureFocusReadiness])
 
   useLayoutEffect(() => {
     if (!(camera instanceof PerspectiveCamera) || controls === null || restoredCameraRef.current) return
@@ -258,6 +304,14 @@ function ViewportRuntime({
   }, [camera, controls])
 
   useFrame(() => {
+    if (
+      selectedEntityId !== null &&
+      (focusReadinessRef.current.entityId !== selectedEntityId ||
+        !focusReadinessRef.current.ready)
+    ) {
+      focusProbeFrameRef.current = (focusProbeFrameRef.current + 1) % 10
+      if (focusProbeFrameRef.current === 0) measureFocusReadiness()
+    }
     if (mcpRoot === null || robotRoot === null || tcpFrame === null) return
     mcpRoot.updateWorldMatrix(true, false)
     robotRoot.updateWorldMatrix(true, false)
@@ -286,7 +340,10 @@ function ViewportRuntime({
       actions: {
         home: cameraActions.home,
         fitAll: () => cameraActions.fitAll(boundResolvers.fitAllBounds()),
-        focusSelection: () => cameraActions.focusSelection(boundResolvers.focusSelectionBounds()),
+        focusSelection: () => {
+          const bounds = boundResolvers.focusSelectionBounds()
+          if (!bounds.isEmpty()) cameraActions.focusSelection(bounds)
+        },
         setStandardView: cameraActions.setStandardView,
       },
       canFocusSelection,

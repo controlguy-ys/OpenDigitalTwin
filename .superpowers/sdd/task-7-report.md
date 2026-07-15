@@ -10,7 +10,9 @@ DONE
   Pose Frame, Gizmo Frame, and complete camera state (position, target,
   quaternion, up vector, zoom, FOV, and clipping planes).
 - Added camera-only Home View, Fit All, Focus Selection, and fixed World
-  standard views. Focus is disabled without effectively visible geometry.
+  standard views. Focus is disabled until the selected committed Robot,
+  Object, Axis, or Group descendant has registered renderable geometry and a
+  non-empty post-commit bound; STEP loading/failure remains safely disabled.
 - Added a non-draggable World View Cube and compact coordinate status strip
   with Actual TCP XYZ and ZYX RPY readouts in World, MCP, or Base frames.
 - Added labelled, depth-tested World, Robot Base, and Actual TCP triads. Marker
@@ -19,6 +21,8 @@ DONE
   preserving the selected child's orientation during parent-frame translation.
 - Kept camera and layer state outside Project V3, Robot Joint, Job, Timeline,
   collision, entity-pose, and simulation mutation paths.
+- Gated camera diagnostic state publication to test mode and normalized safe
+  persisted camera quaternion/up vectors while rejecting degenerate vectors.
 
 ## TDD evidence
 
@@ -47,16 +51,21 @@ Review-fix RED/GREEN additionally covered deterministic TCP frame conversion,
 complete camera persistence and Home reset, render-pure bounds resolution,
 true rotated-parent gizmo translation, and browser-level semantic invariance.
 
+Final review closure RED reproduced four failures: missing/empty geometry still
+enabled Focus, production diagnostic publication was ungated, degenerate camera
+vectors were accepted, and non-unit vectors were not normalized. The empty-bound
+Focus no-op characterization already passed.
+
 ```text
 npm run test:run -- src/features/viewport src/features/scene/SceneCanvas.test.tsx src/features/scene/Workcell.test.tsx src/features/interaction/EquipmentTransformControls.test.tsx src/features/equipment src/app/App.test.tsx
-19 files passed, 71 tests passed.
+19 files passed, 77 tests passed.
 ```
 
 ## Final verification
 
 ```text
 npx vitest run --maxWorkers=1 --no-file-parallelism
-116 files passed, 947 tests passed, exact-final duration 308.51s.
+116 files passed, 953 tests passed, exact-final duration 308.08s.
 
 npx playwright test tests/viewport-spatial-controls.spec.ts --workers=1
 1 passed; browser scenario 1.4m, total 1.5m.

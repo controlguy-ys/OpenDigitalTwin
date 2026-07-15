@@ -65,6 +65,13 @@ function isFiniteTuple(value: unknown, length: number): value is number[] {
   return Array.isArray(value) && value.length === length && value.every(Number.isFinite)
 }
 
+function normalizedTuple(value: unknown, length: 3 | 4): number[] | null {
+  if (!isFiniteTuple(value, length)) return null
+  const magnitude = Math.hypot(...value)
+  if (magnitude < 1e-8) return null
+  return value.map((component) => component / magnitude)
+}
+
 function normalize(candidate: unknown): StoredViewportPreferences {
   if (candidate === null || typeof candidate !== 'object') {
     return {
@@ -81,9 +88,11 @@ function normalize(candidate: unknown): StoredViewportPreferences {
   const camera = raw.cameraState !== null && typeof raw.cameraState === 'object'
     ? raw.cameraState as Record<string, unknown>
     : {}
+  const quaternion = normalizedTuple(camera.quaternion, 4)
+  const up = normalizedTuple(camera.up, 3)
   const validCamera = isFiniteTuple(camera.position, 3) &&
-    isFiniteTuple(camera.target, 3) && isFiniteTuple(camera.quaternion, 4) &&
-    isFiniteTuple(camera.up, 3) && Number.isFinite(camera.zoom) && Number(camera.zoom) > 0 &&
+    isFiniteTuple(camera.target, 3) && quaternion !== null && up !== null &&
+    Number.isFinite(camera.zoom) && Number(camera.zoom) > 0 &&
     Number.isFinite(camera.fov) && Number(camera.fov) > 0 && Number(camera.fov) < 180 &&
     Number.isFinite(camera.near) && Number(camera.near) > 0 &&
     Number.isFinite(camera.far) && Number(camera.far) > Number(camera.near)
@@ -99,8 +108,8 @@ function normalize(candidate: unknown): StoredViewportPreferences {
     cameraState: validCamera ? {
       position: camera.position as unknown as [number, number, number],
       target: camera.target as unknown as [number, number, number],
-      quaternion: camera.quaternion as unknown as [number, number, number, number],
-      up: camera.up as unknown as [number, number, number],
+      quaternion: quaternion as [number, number, number, number],
+      up: up as [number, number, number],
       zoom: Number(camera.zoom),
       fov: Number(camera.fov),
       near: Number(camera.near),

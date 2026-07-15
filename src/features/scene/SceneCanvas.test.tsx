@@ -3,7 +3,7 @@ import { useEffect, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useInteractionStore } from '../interaction/interaction-store'
 import { sceneEditorStore } from '../project/project-store-browser'
-import { SceneCanvas } from './SceneCanvas'
+import { recordCameraDiagnosticIfEnabled, SceneCanvas } from './SceneCanvas'
 import type { CommittedLinearAxisSourceV1 } from './linear-axis-source'
 import type { LinearAxisCommittedStateV1 } from './linear-axis-source'
 
@@ -76,6 +76,20 @@ describe('SceneCanvas viewport context boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Home View' }))
     expect(cameraCalls.home).toHaveBeenCalledOnce()
     expect(screen.getByRole('button', { name: 'Focus Selection' })).toBeDisabled()
+  })
+
+  it('does not publish test diagnostics for production camera commands', () => {
+    const publish = vi.fn()
+    const state = {
+      position: [2.2, 1.8, 1.7], target: [0.15, 0, 1.55],
+      quaternion: [0, 0, 0, 1], up: [0, 0, 1], zoom: 1,
+      fov: 42, near: 0.1, far: 100,
+    } as const
+
+    recordCameraDiagnosticIfEnabled(false, publish, state)
+    expect(publish).not.toHaveBeenCalled()
+    recordCameraDiagnosticIfEnabled(true, publish, state)
+    expect(publish).toHaveBeenCalledWith(state)
   })
 
   it('targets the actual rendered Entity and never reuses stale selection for the background', () => {

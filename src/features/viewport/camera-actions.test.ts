@@ -62,6 +62,18 @@ describe('viewport camera actions', () => {
     expect(camera.position.distanceTo(controls.target)).toBeGreaterThan(4)
   })
 
+  it('leaves camera and target unchanged when Focus receives empty bounds', () => {
+    const { camera, controls, actions } = harness()
+    const position = camera.position.toArray()
+    const target = controls.target.toArray()
+
+    actions.focusSelection(new Box3())
+
+    expect(camera.position.toArray()).toEqual(position)
+    expect(controls.target.toArray()).toEqual(target)
+    expect(controls.update).not.toHaveBeenCalled()
+  })
+
   it('selects fixed World directions for faces and isometric corners', () => {
     const { camera, controls, actions } = harness()
     controls.target.set(1, 2, 3)
