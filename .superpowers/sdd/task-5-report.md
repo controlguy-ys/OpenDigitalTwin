@@ -105,3 +105,48 @@
 - Existing held/safe deletion, OPC UA Object ownership, hierarchy/world-pose
   math, body portals, Jobs shell/keyboard behavior, and Robot Base Inspector
   ownership remain unchanged.
+
+## Review Follow-up
+
+### Outcome
+
+- Preserved Object-owned non-unit scale while applying axis-driven World pose;
+  current-pose collision snapshots now observe that same scaled World matrix.
+- Made one stable App-owned `ManualLinearAxisSource` the shared renderer and
+  Inspector authority for the active Axis identity. Durable position/Home
+  changes synchronize in place without source recreation.
+- Added coherent initial `GOOD` publication, post-commit publication, isolated
+  subscriber failures, and an optional bounded subscriber-error callback.
+- Subscribed the production renderer to position, quality, and timestamp. Equal
+  timestamps remain valid, strictly older frames are ignored, and `STALE` or
+  `BAD` frames retain the last accepted `GOOD` pose.
+- Made animation ordering explicit: Axis transforms run at priority `-1`, then
+  current-pose collision sampling runs at priority `0`.
+- Rejected a held Object or a Group containing the held descendant both
+  reactively in the Inspector and authoritatively inside the queued Project V3
+  carriage recipe. No interaction state is written to durable Project data.
+- After successful Axis deletion, the App-owned callback clears Scene
+  selection, draft pose, and isolation. Failed deletion does not invoke it.
+- Rejected blank, whitespace, and nonfinite Manual position drafts without a
+  command while retaining the draft and diagnostic.
+
+### RED and Correction Evidence
+
+- Initial review RED: 8 files failed; 16 tests failed and 46 passed in 12.64s.
+  Failures covered all seven review findings.
+- The first full serial run found one compatibility regression in a minimal
+  Robot runtime fixture: 107 files passed and 1 failed; 899 tests passed and 1
+  failed in 298.72s. The matrix helper now defaults to Robot-safe unit scale,
+  while the carriage Object call explicitly preserves Object-owned scale.
+- Compatibility correction slice: 4 files / 28 tests passed in 6.96s.
+
+### Final Verification
+
+- Focused review suite: 8 files / 62 tests passed in 12.34s.
+- Expanded Scene, collision, Project, and App suite: 43 files / 406 tests
+  passed in 47.60s.
+- Fresh full serial suite: 108 files / 900 tests passed in 290.96s.
+- `npm run lint`: PASS.
+- `npm run build`: PASS; only the existing browser-externalization notices and
+  chunk-size advisory remain.
+- `git diff --check`: PASS with line-ending conversion notices only.

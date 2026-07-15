@@ -707,6 +707,64 @@ describe('SceneCommandService', () => {
     expect(harness.active().scene).toEqual(before)
   })
 
+  it('rejects a held Object and a Group containing the held descendant without durable mutation', async () => {
+    const group: SceneEntityV1 = {
+      kind: 'group', id: 'group:held-carriage', name: 'Held carriage', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+    }
+    const heldObject: SceneEntityV1 = {
+      kind: 'object', id: 'object:held-part', name: 'Held part', parentId: 'group:held-carriage',
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'held-part' }, transformSource: 'manual',
+    }
+    const harness = mutationHarness(projection([robot(), linearAxis(), group, heldObject]))
+    const commands = createSceneCommandService({
+      mutationService: harness.mutationService,
+      getHeldEntityId: () => 'object:held-part',
+    })
+    const before = structuredClone(harness.active().scene)
+
+    await expect(commands.setLinearAxisCarriage('object:held-part')).rejects.toThrow(
+      'LINEAR_AXIS_CARRIAGE_HELD',
+    )
+    await expect(commands.setLinearAxisCarriage('group:held-carriage')).rejects.toThrow(
+      'LINEAR_AXIS_CARRIAGE_HELD',
+    )
+    expect(harness.active().scene).toEqual(before)
+  })
+
+  it('rechecks held eligibility inside the queued Project recipe', async () => {
+    const candidate: SceneEntityV1 = {
+      kind: 'object', id: 'object:candidate', name: 'Candidate', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'candidate' }, transformSource: 'manual',
+    }
+    let active = projection([robot(), linearAxis(), candidate])
+    let heldEntityId: `object:${string}` | null = null
+    let continueRecipe!: () => void
+    const recipeGate = new Promise<void>((resolve) => {
+      continueRecipe = resolve
+    })
+    const replaceFromActive = vi.fn<ProjectMutationService['replaceFromActive']>(async (recipe) => {
+      await recipeGate
+      active = recipe(active)
+    })
+    const commands = createSceneCommandService({
+      mutationService: {
+        replaceFromActive,
+        readPublished: vi.fn(() => ({ revisionId: 'test', snapshot: active, generation: 1 })),
+      } as unknown as ProjectMutationService,
+      getHeldEntityId: () => heldEntityId,
+    })
+
+    const pending = commands.setLinearAxisCarriage('object:candidate')
+    heldEntityId = 'object:candidate'
+    continueRecipe()
+
+    await expect(pending).rejects.toThrow('LINEAR_AXIS_CARRIAGE_HELD')
+    expect(linearAxisFrom(active).carriageEntityId).toBeNull()
+  })
+
   it('deletes the Linear Axis only after carriage and Robot are detached', async () => {
     const attachedRobot: SceneEntityV1 = {
       ...robot(), parentId: 'linear-axis:active',

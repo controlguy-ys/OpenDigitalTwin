@@ -98,6 +98,32 @@ export interface SceneCommandServiceOptions {
   ) => Promise<StagedStepObjectSourceV1>
   readonly createId?: () => string
   readonly onWarning?: (warning: SceneCommandWarningV1) => void
+  readonly getHeldEntityId?: () => SceneEntityIdV1 | null
+}
+
+function candidateContainsHeldEntity(
+  current: StoredWorkcellProjectSnapshotProjectionV3,
+  candidateId: SceneEntityIdV1,
+  heldEntityId: SceneEntityIdV1 | null,
+): boolean {
+  if (heldEntityId === null) return false
+  let entity = current.scene.entities.find(({ id }) => id === heldEntityId)
+  while (entity !== undefined) {
+    if (entity.id === candidateId) return true
+    if (entity.parentId === null) return false
+    entity = current.scene.entities.find(({ id }) => id === entity?.parentId)
+  }
+  return false
+}
+
+function assertCarriageNotHeld(
+  current: StoredWorkcellProjectSnapshotProjectionV3,
+  candidateId: SceneEntityIdV1,
+  options: SceneCommandServiceOptions,
+): void {
+  if (candidateContainsHeldEntity(current, candidateId, options.getHeldEntityId?.() ?? null)) {
+    throw new Error('LINEAR_AXIS_CARRIAGE_HELD: Release the held Object before mounting it or its Group.')
+  }
 }
 
 const IDENTITY_POSE: ScenePoseV1 = {
@@ -411,7 +437,6 @@ export function createSceneCommandService(
     async setLinearAxisCarriage(entityId) {
       await mutate((current) => {
         const axis = linearAxisIn(current)
-        if (axis.carriageEntityId === entityId) return current
         if (entityId !== null) {
           const candidate = entityIn(current, entityId)
           if (candidate.kind !== 'object' && candidate.kind !== 'group') {
@@ -420,7 +445,9 @@ export function createSceneCommandService(
           if (candidate.kind === 'object' && candidate.transformSource === 'opcua') {
             throw new Error('SCENE_TRANSFORM_OWNED_BY_OPCUA: Switch transform source to Manual first.')
           }
+          assertCarriageNotHeld(current, candidate.id, options)
         }
+        if (axis.carriageEntityId === entityId) return current
         let scene = current.scene
         if (axis.carriageEntityId !== null) {
           scene = reparentSceneEntityPreservingWorld(scene, axis.carriageEntityId, null)

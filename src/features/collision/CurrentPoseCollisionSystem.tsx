@@ -15,6 +15,8 @@ export interface CurrentPoseCollisionSystemProps {
   pausePlaybackOnCollision?: boolean
 }
 
+export const CURRENT_POSE_COLLISION_FRAME_PRIORITY = 0
+
 export function CurrentPoseCollisionSystem({
   pausePlaybackOnCollision,
 }: CurrentPoseCollisionSystemProps) {
@@ -40,7 +42,7 @@ export function CurrentPoseCollisionSystem({
           : {}),
       })
     })
-  })
+  }, CURRENT_POSE_COLLISION_FRAME_PRIORITY)
 
   return null
 }

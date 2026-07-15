@@ -34,6 +34,7 @@ import {
 } from './scene-runtime-selector'
 import type { SceneEntityContextHandler } from './scene-context-request'
 import { LinearAxisRuntime } from './LinearAxisRuntime'
+import type { LinearAxisSourceV1 } from './linear-axis-source'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
@@ -43,6 +44,7 @@ interface WorkcellProps {
   registerInteractionController?:
     | ((controller: InteractionRuntimeController | null) => void)
     | undefined
+  linearAxisSource?: LinearAxisSourceV1 | null
 }
 
 const WORKBENCH_LEGS = [
@@ -63,8 +65,9 @@ export function workcellLinearAxisBindings(
   runtime: SceneRuntimeProjectionV1,
   objectRoots: ReadonlyMap<string, Object3D>,
   robotRoot: Object3D | null,
+  source: LinearAxisSourceV1 | null,
 ) {
-  return { runtime, objectRoots, robotRoot }
+  return { runtime, objectRoots, robotRoot, source }
 }
 
 const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
@@ -127,6 +130,7 @@ export function Workcell({
   registerRig,
   registerInteractionController,
   onEntityContextMenu,
+  linearAxisSource = null,
 }: WorkcellProps) {
   const sceneRuntime = usePublishedSceneRuntime()
   const renderEntities = workcellRenderEntities(sceneRuntime)
@@ -204,6 +208,7 @@ export function Workcell({
           sceneRuntime,
           equipmentObjectsRef.current,
           rig?.rig.root ?? null,
+          linearAxisSource,
         )} />
       </group>
       <CurrentPoseCollisionSystem />

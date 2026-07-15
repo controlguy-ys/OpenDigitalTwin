@@ -1,9 +1,16 @@
-import { render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
 import { testSceneRuntime, TEST_IDENTITY_POSE } from './scene-ui-test-fixtures'
 import { LinearAxisInspector } from './LinearAxisInspector'
+import { useInteractionStore } from '../interaction/interaction-store'
+
+const IDENTITY_OFFSET = {
+  position: [0, 0, 0] as [number, number, number],
+  quaternion: [0, 0, 0, 1] as [number, number, number, number],
+  scale: [1, 1, 1] as [number, number, number],
+}
 
 function axisRuntime(attachedRobot = false) {
   const axis: SceneEntityV1 = {
@@ -22,7 +29,7 @@ function axisRuntime(attachedRobot = false) {
     localPose: TEST_IDENTITY_POSE, visible: true,
   }
   const object: SceneEntityV1 = {
-    kind: 'object', id: 'object:pallet', name: 'Pallet', parentId: null,
+    kind: 'object', id: 'object:pallet', name: 'Pallet', parentId: 'group:carriage',
     localPose: TEST_IDENTITY_POSE, visible: true,
     target: { kind: 'object-instance', id: 'pallet' }, transformSource: 'manual',
   }
@@ -46,6 +53,8 @@ function commands() {
 }
 
 describe('LinearAxisInspector', () => {
+  beforeEach(() => useInteractionStore.getState().resetInteraction())
+
   it('keeps out-of-range input uncommitted and identifies the allowed range', async () => {
     const user = userEvent.setup()
     const axisCommands = commands()
@@ -90,5 +99,52 @@ describe('LinearAxisInspector', () => {
     await user.click(screen.getByRole('button', { name: 'Detach Robot' }))
 
     expect(axisCommands.detachRobotFromLinearAxis).toHaveBeenCalledOnce()
+  })
+
+  it.each(['', '   ', 'Infinity'])('rejects blank, whitespace, or nonfinite draft %j without a command', async (draft) => {
+    const user = userEvent.setup()
+    const axisCommands = commands()
+    render(<LinearAxisInspector commands={axisCommands} runtime={axisRuntime()} />)
+    const position = screen.getByRole('spinbutton', { name: 'Axis position (mm)' })
+
+    fireEvent.change(position, { target: { value: draft } })
+    await user.click(screen.getByRole('button', { name: 'Apply position' }))
+
+    expect(axisCommands.setLinearAxisPosition).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('finite position')
+  })
+
+  it('reactively disables a held Object and its containing Group as carriage candidates', () => {
+    render(<LinearAxisInspector commands={commands()} runtime={axisRuntime()} />)
+    const objectOption = screen.getByRole('option', { name: 'Pallet' })
+    const groupOption = screen.getByRole('option', { name: 'Carriage Group' })
+    expect(objectOption).toBeEnabled()
+    expect(groupOption).toBeEnabled()
+
+    act(() => {
+      useInteractionStore.getState().enterGraspCandidate('object:pallet')
+      useInteractionStore.getState().holdEquipment('object:pallet', IDENTITY_OFFSET)
+    })
+
+    expect(objectOption).toBeDisabled()
+    expect(groupOption).toBeDisabled()
+  })
+
+  it('notifies the App-owned cleanup boundary only after Axis deletion succeeds', async () => {
+    const user = userEvent.setup()
+    const axisCommands = commands()
+    const onDeleted = vi.fn()
+    render(
+      <LinearAxisInspector
+        commands={axisCommands}
+        onDeleted={onDeleted}
+        runtime={axisRuntime()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Delete Linear Axis' }))
+
+    expect(axisCommands.deleteLinearAxis).toHaveBeenCalledOnce()
+    expect(onDeleted).toHaveBeenCalledOnce()
   })
 })

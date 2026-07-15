@@ -17,15 +17,17 @@ export interface ManualLinearAxisSourceOptions {
   readonly commitPositionM: (positionM: number) => Promise<void>
   readonly commitHome?: () => Promise<void>
   readonly now?: () => number
+  readonly onSubscriberError?: (error: unknown) => void
 }
 
 export class ManualLinearAxisSource implements LinearAxisSourceV1 {
   readonly kind = 'manual' as const
   private positionM: number
-  private readonly homePositionM: number
+  private homePositionM: number
   private readonly commitPositionM: (positionM: number) => Promise<void>
   private readonly commitHome: (() => Promise<void>) | undefined
   private readonly now: () => number
+  private readonly onSubscriberError: ((error: unknown) => void) | undefined
   private readonly listeners = new Set<(frame: LinearAxisFrameV1) => void>()
 
   constructor(options: ManualLinearAxisSourceOptions) {
@@ -37,13 +39,25 @@ export class ManualLinearAxisSource implements LinearAxisSourceV1 {
     this.commitPositionM = options.commitPositionM
     this.commitHome = options.commitHome
     this.now = options.now ?? Date.now
+    this.onSubscriberError = options.onSubscriberError
   }
 
   subscribe(listener: (frame: LinearAxisFrameV1) => void): () => void {
     this.listeners.add(listener)
+    this.publishTo(listener, this.goodFrame())
     return () => {
       this.listeners.delete(listener)
     }
+  }
+
+  synchronizeCommittedState(positionM: number, homePositionM: number): void {
+    if (!Number.isFinite(positionM) || !Number.isFinite(homePositionM)) {
+      throw new Error('LINEAR_AXIS_POSITION_INVALID: Manual positions must be finite.')
+    }
+    const positionChanged = this.positionM !== positionM
+    this.positionM = positionM
+    this.homePositionM = homePositionM
+    if (positionChanged) this.publish(this.goodFrame())
   }
 
   async setPositionM(positionM: number): Promise<void> {
@@ -52,12 +66,34 @@ export class ManualLinearAxisSource implements LinearAxisSourceV1 {
     }
     await this.commitPositionM(positionM)
     this.positionM = positionM
-    const frame = Object.freeze({
+    this.publish(this.goodFrame())
+  }
+
+  private goodFrame(): LinearAxisFrameV1 {
+    return Object.freeze({
       positionM: this.positionM,
       timestampMs: this.now(),
       quality: 'GOOD' as const,
     })
-    for (const listener of Array.from(this.listeners)) listener(frame)
+  }
+
+  private publish(frame: LinearAxisFrameV1): void {
+    for (const listener of Array.from(this.listeners)) this.publishTo(listener, frame)
+  }
+
+  private publishTo(
+    listener: (frame: LinearAxisFrameV1) => void,
+    frame: LinearAxisFrameV1,
+  ): void {
+    try {
+      listener(frame)
+    } catch (error) {
+      try {
+        this.onSubscriberError?.(error)
+      } catch {
+        // Subscriber diagnostics must not change committed command semantics.
+      }
+    }
   }
 
   async home(): Promise<void> {
@@ -67,11 +103,6 @@ export class ManualLinearAxisSource implements LinearAxisSourceV1 {
     }
     await this.commitHome()
     this.positionM = this.homePositionM
-    const frame = Object.freeze({
-      positionM: this.positionM,
-      timestampMs: this.now(),
-      quality: 'GOOD' as const,
-    })
-    for (const listener of Array.from(this.listeners)) listener(frame)
+    this.publish(this.goodFrame())
   }
 }

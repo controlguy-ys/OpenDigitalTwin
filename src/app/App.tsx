@@ -16,7 +16,11 @@ import {
   type SceneRenderStatus,
 } from '../features/scene/SceneCanvas'
 import { SceneEntityInspector } from '../features/scene/SceneEntityInspector'
-import { LinearAxisInspector } from '../features/scene/LinearAxisInspector'
+import {
+  LinearAxisInspector,
+  type LinearAxisCommands,
+} from '../features/scene/LinearAxisInspector'
+import { ManualLinearAxisSource } from '../features/scene/linear-axis-source'
 import { SceneExplorer } from '../features/scene/SceneExplorer'
 import { SceneContextMenu } from '../features/scene/SceneContextMenu'
 import { Timeline } from '../features/ui/Timeline'
@@ -125,6 +129,40 @@ export function RobotTargetInspector({
   )
 }
 
+export function clearDeletedLinearAxisEditorState(): void {
+  const editor = sceneEditorStore.getState()
+  editor.select(null)
+  editor.cancelDraft()
+  editor.showAll()
+}
+
+export interface LinearAxisTargetInspectorProps {
+  readonly disabled: boolean
+  readonly source: ManualLinearAxisSource
+  readonly commands?: LinearAxisCommands
+}
+
+export function LinearAxisTargetInspector({
+  disabled,
+  source,
+  commands,
+}: LinearAxisTargetInspectorProps) {
+  return (
+    <div className="linear-axis-target-inspector">
+      <SceneEntityInspector
+        disabled={disabled}
+        entityId="linear-axis:active"
+      />
+      <LinearAxisInspector
+        {...(commands === undefined ? {} : { commands })}
+        disabled={disabled}
+        onDeleted={clearDeletedLinearAxisEditorState}
+        source={source}
+      />
+    </div>
+  )
+}
+
 export function App() {
   const [sceneStatus, setSceneStatus] =
     useState<SceneRenderStatus>('loading')
@@ -156,6 +194,32 @@ export function App() {
     (state) => state.selectedEntityId,
   )
   const sceneRuntime = usePublishedSceneRuntime()
+  const axisRuntime = sceneRuntime.linearAxis
+  const linearAxisSourceRef = useRef<Readonly<{
+    entityId: string
+    source: ManualLinearAxisSource
+  }> | null>(null)
+  if (axisRuntime?.source.kind !== 'linear-axis') {
+    linearAxisSourceRef.current = null
+  } else {
+    if (linearAxisSourceRef.current?.entityId !== axisRuntime.entityId) {
+      linearAxisSourceRef.current = Object.freeze({
+        entityId: axisRuntime.entityId,
+        source: new ManualLinearAxisSource({
+          initialPositionM: axisRuntime.source.currentPositionM,
+          homePositionM: axisRuntime.source.homePositionM,
+          commitPositionM: sceneCommandService.setLinearAxisPosition,
+          commitHome: sceneCommandService.moveLinearAxisHome,
+        }),
+      })
+    } else {
+      linearAxisSourceRef.current.source.synchronizeCommittedState(
+        axisRuntime.source.currentPositionM,
+        axisRuntime.source.homePositionM,
+      )
+    }
+  }
+  const linearAxisSource = linearAxisSourceRef.current?.source ?? null
   const activeSnapshot = useProjectStore((state) => state.activeSnapshot)
   const activeJob = activeSnapshot?.simulation.jobs.find(
     ({ id }) => id === activeSnapshot.simulation.activeJobId,
@@ -350,13 +414,12 @@ export function App() {
               }
             />
           ) : selectedSceneEntityId === 'linear-axis:active' ? (
-            <div className="linear-axis-target-inspector">
-              <SceneEntityInspector
+            linearAxisSource === null ? null : (
+              <LinearAxisTargetInspector
                 disabled={controlsDisabled}
-                entityId={selectedSceneEntityId}
+                source={linearAxisSource}
               />
-              <LinearAxisInspector disabled={controlsDisabled} />
-            </div>
+            )
           ) : (
             <SceneEntityInspector
               disabled={controlsDisabled}
@@ -388,6 +451,7 @@ export function App() {
         viewport={
           <>
             <SceneCanvas
+              linearAxisSource={linearAxisSource}
               onContextMenu={(entityId, position) => {
                 setViewportContextRequest({ entityId, position })
               }}

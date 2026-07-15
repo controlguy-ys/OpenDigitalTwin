@@ -14,6 +14,7 @@ import { createProjectRevisionFoundation } from './project-revision-repository'
 import { createProjectStore, type ProjectStoreState } from './project-store'
 import { createSceneCommandService } from '../scene/scene-command-service'
 import { createSceneEditorStore } from '../scene/scene-editor-store'
+import { useInteractionStore } from '../interaction/interaction-store'
 
 const hashService = createProjectHashService({ subtle: crypto.subtle })
 const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
@@ -59,6 +60,7 @@ export const projectStore = createProjectStore({
 
 export const sceneCommandService = createSceneCommandService({
   mutationService: projectMutationService,
+  getHeldEntityId: () => useInteractionStore.getState().heldEntityId,
   stageStepSource: async (sourceBytes, ownerKey) => {
     const preparedSource = await foundation.sourceStaging.stage('object', sourceBytes)
     return {

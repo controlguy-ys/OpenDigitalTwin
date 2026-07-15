@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useInteractionStore } from '../interaction/interaction-store'
 import { sceneEditorStore } from '../project/project-store-browser'
 import { SceneCanvas } from './SceneCanvas'
+import type { LinearAxisSourceV1 } from './linear-axis-source'
+
+const observedWorkcellProps = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }))
 
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({
@@ -22,22 +25,24 @@ vi.mock('@react-three/fiber', () => ({
 }))
 
 vi.mock('./Workcell', () => ({
-  Workcell: ({
-    onEntityContextMenu,
-  }: {
+  Workcell: (props: {
     onEntityContextMenu?: (
       entityId: 'object:cup-1',
       position: { x: number; y: number },
     ) => void
-  }) => (
+    linearAxisSource?: unknown
+  }) => {
+    observedWorkcellProps.current = props
+    return (
     <button
       data-testid="rendered-entity"
-      onContextMenu={() => onEntityContextMenu?.('object:cup-1', { x: 12, y: 24 })}
+      onContextMenu={() => props.onEntityContextMenu?.('object:cup-1', { x: 12, y: 24 })}
       type="button"
     >
       Rendered Entity
     </button>
-  ),
+    )
+  },
 }))
 vi.mock('./SceneErrorBoundary', () => ({
   SceneErrorBoundary: ({ children }: { children: ReactNode }) => children,
@@ -75,5 +80,16 @@ describe('SceneCanvas viewport context boundary', () => {
 
     expect(useInteractionStore.getState().selection).toBeNull()
     expect(sceneEditorStore.getState().selectedEntityId).toBeNull()
+  })
+
+  it('passes the App-owned Axis source through to the Workcell renderer', () => {
+    const source: LinearAxisSourceV1 = {
+      kind: 'manual', subscribe: vi.fn(() => vi.fn()),
+      setPositionM: vi.fn(async () => undefined), home: vi.fn(async () => undefined),
+    }
+
+    render(<SceneCanvas linearAxisSource={source} />)
+
+    expect(observedWorkcellProps.current?.linearAxisSource).toBe(source)
   })
 })

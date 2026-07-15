@@ -1,12 +1,23 @@
-import { Group, Quaternion, Vector3 } from 'three'
+import { act, render } from '@testing-library/react'
+import { Group, Matrix4, Quaternion, Vector3 } from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import type { WorkcellProjectSnapshotV3 } from '../../domain/project/project-v3'
 import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
 import { selectSceneRuntime } from './scene-runtime-selector'
 import {
+  LINEAR_AXIS_RUNTIME_FRAME_PRIORITY,
   linearAxisMovingFrameMatrix,
   synchronizeLinearAxisWorldMatrices,
 } from './LinearAxisRuntime'
+import { LinearAxisRuntime } from './LinearAxisRuntime'
+import type { LinearAxisFrameV1, LinearAxisSourceV1 } from './linear-axis-source'
+import {
+  registerGeometryEntity,
+  snapshotGeometryEntities,
+} from '../collision/geometry-entity-registry'
+
+const useFrameMock = vi.hoisted(() => vi.fn())
+vi.mock('@react-three/fiber', () => ({ useFrame: useFrameMock }))
 
 const IDENTITY_POSE = {
   positionM: [0, 0, 0] as const,
@@ -103,5 +114,114 @@ describe('LinearAxisRuntime', () => {
     expect(memberUpdate).toHaveBeenCalledWith(true, true)
     expect(robotUpdate).toHaveBeenCalledWith(true, true)
     expect(member.localPose.positionM).toEqual([2, 0, 0])
+  })
+
+  it('preserves Object-owned non-unit scale in both the rendered and collision World matrices', () => {
+    const axis: SceneEntityV1 = {
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: 0,
+      maxPositionM: 2, homePositionM: 0, currentPositionM: 0.5,
+      carriageEntityId: 'object:carriage', robotEntityId: null,
+    }
+    const carriage: SceneEntityV1 = {
+      kind: 'object', id: 'object:carriage', name: 'Carriage', parentId: 'linear-axis:active',
+      localPose: { ...IDENTITY_POSE, positionM: [0.25, 0, 0] }, visible: true,
+      target: { kind: 'object-instance', id: 'carriage' }, transformSource: 'manual',
+    }
+    const sceneRuntime = runtime([axis, carriage])
+    const carriageObject = new Group()
+    carriageObject.scale.set(2, 3, 4)
+    const cleanup = registerGeometryEntity({
+      id: 'object:carriage', name: 'Carriage', category: 'object',
+      boxes: [{
+        id: 'body', center: [0, 0, 0], halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+      object: carriageObject,
+    })
+
+    try {
+      synchronizeLinearAxisWorldMatrices(
+        sceneRuntime,
+        new Map([['object:carriage', carriageObject]]),
+        null,
+        1.25,
+      )
+
+      expect(carriageObject.position.toArray()).toEqual([1.5, 0, 0])
+      expect(carriageObject.scale.toArray()).toEqual([2, 3, 4])
+      const collision = snapshotGeometryEntities().entities.find(({ id }) => id === 'object:carriage')!
+      const collisionScale = new Vector3()
+      new Matrix4().fromArray(collision.worldMatrix as number[]).decompose(
+        new Vector3(), new Quaternion(), collisionScale,
+      )
+      expect(collisionScale.toArray()).toEqual([2, 3, 4])
+    } finally {
+      cleanup()
+    }
+  })
+
+  it('subscribes the renderer to source frames, orders before collision, and holds last GOOD on STALE/BAD', () => {
+    useFrameMock.mockClear()
+    const axis: SceneEntityV1 = {
+      kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+      localPose: IDENTITY_POSE, visible: true, direction: 'x', minPositionM: 0,
+      maxPositionM: 2, homePositionM: 0, currentPositionM: 0.5,
+      carriageEntityId: 'object:carriage', robotEntityId: null,
+    }
+    const carriage: SceneEntityV1 = {
+      kind: 'object', id: 'object:carriage', name: 'Carriage', parentId: 'linear-axis:active',
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'carriage' }, transformSource: 'manual',
+    }
+    const sceneRuntime = runtime([axis, carriage])
+    const carriageObject = new Group()
+    let listener: ((frame: LinearAxisFrameV1) => void) | null = null
+    const unsubscribe = vi.fn()
+    const source: LinearAxisSourceV1 = {
+      kind: 'manual',
+      subscribe: vi.fn((nextListener) => {
+        listener = nextListener
+        nextListener({ positionM: 0.5, timestampMs: 10, quality: 'GOOD' })
+        return unsubscribe
+      }),
+      setPositionM: vi.fn(async () => undefined),
+      home: vi.fn(async () => undefined),
+    }
+
+    const view = render(
+      <LinearAxisRuntime
+        objectRoots={new Map([['object:carriage', carriageObject]])}
+        robotRoot={null}
+        runtime={sceneRuntime}
+        source={source}
+      />,
+    )
+    const [frameUpdate, priority] = useFrameMock.mock.calls.at(-1)!
+    expect(priority).toBe(LINEAR_AXIS_RUNTIME_FRAME_PRIORITY)
+    expect(priority).toBeLessThan(0)
+
+    act(() => listener?.({ positionM: 1.25, timestampMs: 20, quality: 'GOOD' }))
+    act(() => frameUpdate())
+    expect(carriageObject.position.x).toBe(1.25)
+
+    act(() => listener?.({ positionM: 1.5, timestampMs: 20, quality: 'GOOD' }))
+    act(() => frameUpdate())
+    expect(carriageObject.position.x).toBe(1.5)
+
+    act(() => listener?.({ positionM: 1.75, timestampMs: 21, quality: 'STALE' }))
+    act(() => frameUpdate())
+    expect(carriageObject.position.x).toBe(1.5)
+
+    act(() => listener?.({ positionM: 1.9, timestampMs: 22, quality: 'BAD' }))
+    act(() => frameUpdate())
+    expect(carriageObject.position.x).toBe(1.5)
+
+    act(() => listener?.({ positionM: 1.1, timestampMs: 19, quality: 'GOOD' }))
+    act(() => frameUpdate())
+    expect(carriageObject.position.x).toBe(1.5)
+
+    view.unmount()
+    expect(unsubscribe).toHaveBeenCalledOnce()
   })
 })

@@ -18,6 +18,7 @@ import type {
   SceneContextPosition,
   SceneEntityContextHandler,
 } from './scene-context-request'
+import type { LinearAxisSourceV1 } from './linear-axis-source'
 
 export type SceneRenderStatus = 'loading' | 'ready' | 'error'
 
@@ -31,6 +32,7 @@ export interface SceneCanvasProps {
     entityId: SceneEntityIdV1 | null,
     position: SceneContextPosition,
   ) => void
+  linearAxisSource?: LinearAxisSourceV1 | null
 }
 
 export function SceneCanvas({
@@ -38,6 +40,7 @@ export function SceneCanvas({
   registerRig,
   registerInteractionController,
   onContextMenu,
+  linearAxisSource,
 }: SceneCanvasProps) {
   const [sceneKey, setSceneKey] = useState(0)
   const [status, setStatus] = useState<SceneRenderStatus>('loading')
@@ -128,6 +131,7 @@ export function SceneCanvas({
         >
           <Suspense fallback={null}>
             <Workcell
+              linearAxisSource={linearAxisSource ?? null}
               onEntityContextMenu={handleEntityContextMenu}
               registerInteractionController={registerInteractionController}
               registerRig={handleRigRegistration}

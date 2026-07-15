@@ -6,12 +6,13 @@ import {
   type LinearAxisSourceV1,
 } from './linear-axis-source'
 import type { SceneCommandService } from './scene-command-service'
+import { useInteractionStore } from '../interaction/interaction-store'
 import {
   usePublishedSceneRuntime,
   type SceneRuntimeProjectionV1,
 } from './scene-runtime-selector'
 
-type LinearAxisCommands = Pick<
+export type LinearAxisCommands = Pick<
   SceneCommandService,
   | 'setLinearAxisPosition'
   | 'moveLinearAxisHome'
@@ -26,6 +27,7 @@ export interface LinearAxisInspectorProps {
   readonly commands?: LinearAxisCommands
   readonly source?: LinearAxisSourceV1
   readonly disabled?: boolean
+  readonly onDeleted?: () => void
 }
 
 function displayMillimetres(positionM: number): string {
@@ -37,6 +39,7 @@ export function LinearAxisInspector({
   commands = sceneCommandService,
   source: sourceOverride,
   disabled = false,
+  onDeleted,
 }: LinearAxisInspectorProps) {
   const publishedRuntime = usePublishedSceneRuntime()
   const runtime = runtimeOverride ?? publishedRuntime
@@ -50,12 +53,17 @@ export function LinearAxisInspector({
   )
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const manualSource = useMemo(() => new ManualLinearAxisSource({
     initialPositionM: axis?.currentPositionM ?? 0,
     homePositionM: axis?.homePositionM ?? 0,
     commitPositionM: commands.setLinearAxisPosition,
     commitHome: commands.moveLinearAxisHome,
-  }), [axis?.currentPositionM, axis?.homePositionM, commands])
+  }), [axisRuntime?.entityId, commands])
+  manualSource.synchronizeCommittedState(
+    axis?.currentPositionM ?? 0,
+    axis?.homePositionM ?? 0,
+  )
   const source = sourceOverride ?? manualSource
 
   useEffect(() => {
@@ -71,27 +79,53 @@ export function LinearAxisInspector({
 
   const minMm = axis.minPositionM * 1_000
   const maxMm = axis.maxPositionM * 1_000
-  const run = async (command: () => Promise<void>) => {
-    if (pending) return
+  const run = async (command: () => Promise<void>): Promise<boolean> => {
+    if (pending) return false
     setPending(true)
     setError(null)
     try {
       await command()
+      return true
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Linear Axis command failed.')
+      return false
     } finally {
       setPending(false)
     }
   }
   const applyPosition = () => {
+    if (positionMm.trim().length === 0) {
+      setError('Enter a finite position in millimetres.')
+      return
+    }
     const parsedMm = Number(positionMm)
-    if (!Number.isFinite(parsedMm) || parsedMm < minMm || parsedMm > maxMm) {
+    if (!Number.isFinite(parsedMm)) {
+      setError('Enter a finite position in millimetres.')
+      return
+    }
+    if (parsedMm < minMm || parsedMm > maxMm) {
       setError(`Allowed range: ${minMm} to ${maxMm} mm.`)
       return
     }
     void run(() => source.setPositionM(parsedMm / 1_000))
   }
   const carriageCandidates = [...runtime.groups, ...runtime.objects]
+  const candidateContainsHeldEntity = (candidateId: SceneEntityIdV1): boolean => {
+    if (heldEntityId === null) return false
+    let entity = runtime.byId.get(heldEntityId)
+    while (entity !== undefined) {
+      if (entity.entityId === candidateId) return true
+      if (entity.parentId === null) return false
+      entity = runtime.byId.get(entity.parentId)
+    }
+    return false
+  }
+  const selectedCarriageUnavailable = carriageId !== '' && (() => {
+    const candidate = runtime.byId.get(carriageId)
+    return candidate === undefined ||
+      (candidate.source.kind === 'object' && candidate.source.transformSource === 'opcua') ||
+      candidateContainsHeldEntity(carriageId)
+  })()
 
   return (
     <section className="linear-axis-inspector">
@@ -136,8 +170,9 @@ export function LinearAxisInspector({
             {carriageCandidates.map((candidate) => {
               const opcUaOwned = candidate.source.kind === 'object' &&
                 candidate.source.transformSource === 'opcua'
+              const held = candidateContainsHeldEntity(candidate.entityId)
               return (
-                <option disabled={opcUaOwned} key={candidate.entityId} value={candidate.entityId}>
+                <option disabled={opcUaOwned || held} key={candidate.entityId} value={candidate.entityId}>
                   {candidate.name}
                 </option>
               )
@@ -145,6 +180,7 @@ export function LinearAxisInspector({
           </select>
         </label>
         <button
+          disabled={selectedCarriageUnavailable}
           onClick={() => void run(() => commands.setLinearAxisCarriage(
             carriageId === '' ? null : carriageId,
           ))}
@@ -167,7 +203,9 @@ export function LinearAxisInspector({
       </fieldset>
       <button
         disabled={disabled || pending || axis.carriageEntityId !== null || axis.robotEntityId !== null}
-        onClick={() => void run(commands.deleteLinearAxis)}
+        onClick={() => void run(commands.deleteLinearAxis).then((deleted) => {
+          if (deleted) onDeleted?.()
+        })}
         type="button"
       >
         Delete Linear Axis
