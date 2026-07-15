@@ -22,6 +22,7 @@ controls. Legacy Project V2 browser/runtime authority is not part of this stage.
 | Collision | Deterministic Box/compound-Box query, Job validation, explicit mount contact |
 | Viewport | Actual TCP marker, World View Cube, Home/Fit/Focus, coordinate layers/status |
 | Layout | Split Scene Objects/Robot Jobs sidebar, exclusive Timeline/Collision workspace, themes |
+| Interaction | Type-specific context actions, confirmations, and accessible transient operation feedback |
 | Persistence | Atomic Project V3 Save/Export/Import/reload with source staging and revision recovery |
 
 ## Resource and transaction boundary
@@ -44,6 +45,10 @@ attachments, mount contact, collision policy, Frames, and OPC UA bindings.
 Theme, camera and coordinate-layer preferences, drawer layout, selection, and
 Isolate remain browser-local. Home View changes only camera state. Reload clears
 Isolate while retaining persisted Hide state.
+
+The single Linear Axis is reachable from the Add menu, and Robot mount contact
+is editable from the Robot Inspector. Warnings and rejected operations appear
+as visible status/alert feedback but remain outside Project persistence.
 
 ## Verification scope
 
@@ -69,13 +74,13 @@ pointer, revision, and source-blob stores.
 Fresh verification on 2026-07-16:
 
 - `npm run lint`: PASS, no findings.
-- `npm run test:run`: 116 files and 958 tests PASS in 111.26 seconds.
+- `npm run test:run`: 118 files and 968 tests PASS in 116.70 seconds.
 - `npm run cad:validate`: 7 Link Assets valid, 0 errors, 0 warnings.
-- `npm run build`: PASS, 2,203 modules transformed.
-- focused resource browser tests: 2/2 PASS in 58.2 seconds.
-- combined Project/Scene/Viewport/Collision E2E: 6/6 PASS in 10.3 minutes.
-- `npm run test:e2e:hash`: 1/1 PASS.
-- `npm run test:e2e:archive`: 1/1 PASS.
+- `npm run build`: PASS, 2,205 modules transformed.
+- focused resource browser tests: 2/2 PASS in 58.3 seconds.
+- combined Project/Scene/Viewport/Collision E2E: 6/6 PASS in 10.7 minutes.
+- `npm run test:e2e:hash`: 1/1 PASS in 6.3 seconds.
+- `npm run test:e2e:archive`: 1/1 PASS in 11.4 seconds.
 
 The build retains the existing informational OCCT `path`/`crypto` browser
 externalization messages and the bundle-size advisory. They are non-blocking

@@ -24,6 +24,9 @@ DONE
 - Extended V3 round-trip diagnostics with Scene Entity count, Job count, and an
   explicit absence check for viewport/theme/browser preference fields.
 - Updated README, developer architecture guidance, and current project status.
+- Closed the three post-review gaps: reachable Linear Axis/mount-contact UI,
+  the approved type-specific context-action matrix, and visible non-persistent
+  warning/error feedback.
 
 ## Defects found and closed
 
@@ -42,6 +45,15 @@ DONE
    sources and exceeded its storage-test timeout. The test now uses a
    deterministic Geometry Worker while retaining real archive bytes, digests,
    IndexedDB revisions, pointers, and source blobs.
+6. Linear Axis creation and mount-contact mutation existed below the UI but had
+   no complete operator path. Add now creates the one Axis, and the Robot
+   Inspector publishes complete, incomplete, or cleared mount contact.
+7. Several context-menu actions were missing or shared an over-broad matrix.
+   Each Robot/Object/Group/Axis/empty-space target now exposes only its approved
+   actions, with disabled states and confirmations where required.
+8. Resource warnings and rejected operations could be console-only or swallowed.
+   They now surface as accessible transient status/alert feedback and remain
+   excluded from Project archives.
 
 ## TDD evidence
 
@@ -82,6 +94,20 @@ V3 semantic round-trip:
 1 passed, 21.8 seconds in the focused run.
 ```
 
+Post-review RED/GREEN:
+
+```text
+RED A: Add menu lacked Linear Axis; Scene commands lacked mount-contact mutation;
+       Robot Inspector lacked a mount-contact editor.
+RED B: context menus lacked approved Focus/Fit/Axis/attachment actions and exact
+       per-entity action sets.
+RED C: no visible feedback helper/store existed for warnings and rejections.
+
+GREEN: 8 focused files, 94 tests passed; the context menu suite passed 21/21.
+The reusable browser scenario now creates/configures the Axis and mount contact
+through the real UI rather than injecting Project JSON.
+```
+
 ## Success-criteria coverage
 
 | Criterion | Evidence |
@@ -98,6 +124,9 @@ V3 semantic round-trip:
 | 1366 by 768 no document scroll | reusable Scene browser spec |
 | Theme outside Project | reusable Scene plus V3 durable-summary browser specs |
 | Home View semantic isolation | viewport tests and reusable Scene browser spec |
+| Axis and mount-contact UI reachability | AppShell/App/editor tests and reusable Scene browser spec |
+| Exact context-action matrix | `SceneContextMenu.test.tsx` |
+| Visible, non-persistent feedback | operation-feedback tests and resource browser/archive specs |
 
 The exact 256/257 browser archive fixture was intentionally replaced by the
 real mutation/repository integration proof: importing a synthetic 255-Instance
@@ -113,25 +142,25 @@ npm run lint
 PASS, no findings.
 
 npm run test:run
-116 files passed, 958 tests passed, 111.26 seconds.
+118 files passed, 968 tests passed, 116.70 seconds.
 
 npm run cad:validate
 7 Link Assets valid; 0 errors; 0 warnings.
 
 npm run build
-PASS; 2203 modules transformed.
+PASS; 2205 modules transformed.
 
 npm run test:e2e -- tests/project-v3-roundtrip.spec.ts tests/reusable-scene-editor.spec.ts tests/viewport-spatial-controls.spec.ts tests/geometry-collision.spec.ts
-6 passed in 10.3 minutes.
+6 passed in 10.7 minutes.
 
 npm run test:e2e:hash
-1 passed.
+1 passed in 6.3 seconds.
 
 npm run test:e2e:archive
-1 passed.
+1 passed in 11.4 seconds.
 
 npx playwright test tests/project-resource-performance.spec.ts --max-failures=1
-2 passed in 58.2 seconds.
+2 passed in 58.3 seconds.
 ```
 
 Independent scans found no active browser/runtime compatibility symbol and no

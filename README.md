@@ -20,8 +20,8 @@ reusable STEP Objects, Simulation Jobs, and optional read-only OPC UA input.
 - Simulation Jobs group ordered Poses. Pose order, deletion, and outgoing speed
   are editable, with duration derived deterministically from joint travel,
   configured maximum velocities, and speed percentage.
-- One manual X/Y/Z Linear Axis can carry the Robot while attach/detach preserves
-  the Robot World pose.
+- One manual X/Y/Z Linear Axis can be created from **Add > Linear Axis** and can
+  carry the Robot while attach/detach preserves the Robot World pose.
 - Geometry Proxy Collision reports collision and near-miss findings. An explicit
   Robot base/mount-surface pair is classified separately as mount contact.
 - Actual TCP marker, World View Cube, Home/Fit/Focus camera actions, coordinate
@@ -31,6 +31,8 @@ reusable STEP Objects, Simulation Jobs, and optional read-only OPC UA input.
   Linear Axis, and mount contact in one `.wdtwin` archive.
 - Theme, camera, drawer layout, and Isolate state remain browser-local and are
   not written into the portable Project archive.
+- Resource warnings and rejected operations are shown in the workspace as
+  accessible status/alert messages; this transient UI feedback is not archived.
 
 ## Quick start
 
@@ -50,8 +52,10 @@ Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
 3. Import whole STEP Objects or add simple Box/Cylinder primitives.
 4. Arrange Scene Entities with Groups, visibility, and the XYZ/RPY Inspector.
 5. Create a Robot Job, save Poses, set speed to the next Pose, and reorder them.
-6. Optionally add the single Linear Axis and attach the Robot.
-7. Configure mount contact, then validate the current pose or Job sequence.
+6. Optionally use **Add > Linear Axis**, then attach the Robot from its context
+   menu. Open the Axis settings from its context menu to edit travel values.
+7. Select the Robot and configure its base Link/mount surface in the Inspector,
+   then validate the current pose or Job sequence.
 8. Save and Export the portable Project.
 
 The left workspace is split between **Scene Objects** and **Robot Jobs**. The

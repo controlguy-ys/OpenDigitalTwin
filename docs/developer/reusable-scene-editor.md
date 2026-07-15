@@ -109,6 +109,12 @@ Project V3 supports at most one manual Linear Axis. Direction is exactly X, Y,
 or Z; min, max, home, and current positions are finite metres and must satisfy
 `min <= home/current <= max`.
 
+The operator creates the Axis from **Add > Linear Axis**. The initial Axis is a
+manual X Axis with a 0 to 2 metre range and zero home/current position. Its
+context menu opens Axis settings, moves it Home, assigns or clears one carriage,
+and attaches or detaches the Robot. Ownership-changing actions require explicit
+confirmation and World pose is preserved for attach/detach.
+
 The Axis is a deterministic moving coordinate frame, not a physical motor.
 There is no mass, force, acceleration, drive model, axis chain, second Axis, or
 OPC UA Axis subscription UI in this stage. A small scalar source boundary keeps
@@ -123,6 +129,26 @@ near-miss findings. It is not inserted into user ignored pairs.
 
 An incomplete or invalid mount configuration exempts nothing. Adjacent Robot
 Link topology exclusions and user ignored pairs remain separate policies.
+
+The Robot Inspector exposes the durable configuration directly. The base Link
+is selected from `LINK00` through `LINK06`; the mount surface is selected from
+the currently registered non-Robot collision surfaces. Save may intentionally
+publish an incomplete configuration, while Clear publishes no mount contact.
+
+## Context actions and operator feedback
+
+The right-click menu is type-specific. Robot actions cover focus, base pose,
+Axis attachment, visibility/isolation, and Robot configuration. Object actions
+cover focus, rename/duplicate, pose, grouping/carriage, visibility/isolation,
+and deletion. Group actions operate on the Group or its contents. Axis actions
+cover focus, naming/settings, Home, carriage, Robot attachment, visibility, and
+deletion when detached. Empty space offers only Group/Box/Cylinder creation and
+Fit All. Unavailable actions remain disabled, and destructive or ownership-
+changing operations require confirmation.
+
+Warnings and operation failures are delivered through a transient UI feedback
+store and rendered with `role="status"` or `role="alert"`. They never enter the
+Project snapshot, revision store, source blobs, or `.wdtwin` archive.
 
 ## Project content versus browser preferences
 
