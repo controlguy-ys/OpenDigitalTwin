@@ -32,7 +32,8 @@ reusable STEP Objects, Simulation Jobs, and optional read-only OPC UA input.
 - Theme, camera, drawer layout, and Isolate state remain browser-local and are
   not written into the portable Project archive.
 - Resource warnings and rejected operations are shown in the workspace as
-  accessible status/alert messages; this transient UI feedback is not archived.
+  accessible status/alert messages; warnings remain until dismissal or the next
+  operation, and this transient UI feedback is not archived.
 
 ## Quick start
 
@@ -131,6 +132,8 @@ The reusable Scene acceptance path is in
 [`tests/reusable-scene-editor.spec.ts`](tests/reusable-scene-editor.spec.ts),
 and exact resource boundaries are covered by
 [`tests/project-resource-performance.spec.ts`](tests/project-resource-performance.spec.ts).
+The default Playwright server owns the `build:e2e` test-mode build, so both the
+npm script and direct `npx playwright test ...` invocations use fresh diagnostics.
 
 ## Architecture
 

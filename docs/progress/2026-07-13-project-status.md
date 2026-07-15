@@ -48,7 +48,9 @@ Isolate while retaining persisted Hide state.
 
 The single Linear Axis is reachable from the Add menu, and Robot mount contact
 is editable from the Robot Inspector. Warnings and rejected operations appear
-as visible status/alert feedback but remain outside Project persistence.
+as visible status/alert feedback but remain outside Project persistence. A new
+operation clears the previous message, while a warning raised by the current
+operation remains visible until dismissal or the next operation.
 
 ## Verification scope
 
@@ -74,13 +76,15 @@ pointer, revision, and source-blob stores.
 Fresh verification on 2026-07-16:
 
 - `npm run lint`: PASS, no findings.
-- `npm run test:run`: 118 files and 968 tests PASS in 116.70 seconds.
+- `npm run test:run`: 119 files and 973 tests PASS in 118.88 seconds.
 - `npm run cad:validate`: 7 Link Assets valid, 0 errors, 0 warnings.
 - `npm run build`: PASS, 2,205 modules transformed.
-- focused resource browser tests: 2/2 PASS in 58.3 seconds.
-- combined Project/Scene/Viewport/Collision E2E: 6/6 PASS in 10.7 minutes.
-- `npm run test:e2e:hash`: 1/1 PASS in 6.3 seconds.
-- `npm run test:e2e:archive`: 1/1 PASS in 11.4 seconds.
+- direct reusable Scene reviewer command: 1/1 PASS in three consecutive fresh
+  test-mode builds (1.6, 1.6, and 1.5 minutes total).
+- focused resource browser tests: 2/2 PASS in 1.3 minutes.
+- combined Project/Scene/Viewport/Collision E2E: 6/6 PASS in 11.2 minutes.
+- `npm run test:e2e:hash`: 1/1 PASS in 8.0 seconds.
+- `npm run test:e2e:archive`: 1/1 PASS in 13.4 seconds.
 
 The build retains the existing informational OCCT `path`/`crypto` browser
 externalization messages and the bundle-size advisory. They are non-blocking

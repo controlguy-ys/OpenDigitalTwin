@@ -143,11 +143,22 @@ cover focus, rename/duplicate, pose, grouping/carriage, visibility/isolation,
 and deletion. Group actions operate on the Group or its contents. Axis actions
 cover focus, naming/settings, Home, carriage, Robot attachment, visibility, and
 deletion when detached. Empty space offers only Group/Box/Cylinder creation and
-Fit All. Unavailable actions remain disabled, and destructive or ownership-
-changing operations require confirmation.
+Fit All. Actions invalid for the selected type or attachment state are omitted.
+Paste remains visible but disabled when no transform is copied or OPC UA owns
+the transform. Destructive deletion, Ungroup with children, and OPC UA-to-Manual
+ownership changes require confirmation; ordinary visibility, manual carriage,
+and Robot attachment actions do not.
+
+The Axis carriage chooser lists Groups and Manual-owned Objects only. Choosing
+`Set as Carriage` directly on an OPC UA-owned Object first offers the explicit
+OPC UA-to-Manual confirmation. The chooser uses the same modal lifecycle as
+confirmation dialogs: portal rendering, background inertness, initial focus,
+Tab/Shift+Tab trapping, Escape, opener-focus restoration, and in-dialog errors.
 
 Warnings and operation failures are delivered through a transient UI feedback
-store and rendered with `role="status"` or `role="alert"`. They never enter the
+store and rendered with `role="status"` or `role="alert"`. Starting an operation
+clears the prior message; a warning emitted by that operation remains until the
+operator dismisses it or starts another operation. Feedback never enters the
 Project snapshot, revision store, source blobs, or `.wdtwin` archive.
 
 ## Project content versus browser preferences

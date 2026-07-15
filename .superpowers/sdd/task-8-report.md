@@ -54,6 +54,18 @@ DONE
 8. Resource warnings and rejected operations could be console-only or swallowed.
    They now surface as accessible transient status/alert feedback and remain
    excluded from Project archives.
+9. A direct Playwright invocation previewed whichever `dist` was last built. If
+   that was the production build, the test-only semantic diagnostic did not
+   exist and `expect.poll` misleadingly expired while its locator waited. The
+   default Playwright server now owns a fresh `build:e2e`; the npm script no
+   longer duplicates that build.
+10. The carriage chooser lacked complete modal focus handling, offered OPC UA-
+    owned Objects without an ownership step, and rendered failures behind the
+    active modal. It now shares the modal lifecycle, filters to Manual Objects
+    and Groups, and keeps failures inside the chooser.
+11. A successful operation cleared a resource warning emitted during that same
+    operation. Feedback now clears before work begins and preserves new warning
+    state until dismissal or the next operation.
 
 ## TDD evidence
 
@@ -108,6 +120,21 @@ The reusable browser scenario now creates/configures the Axis and mount contact
 through the real UI rather than injecting Project JSON.
 ```
 
+Re-review RED/GREEN:
+
+```text
+RED: the exact direct Playwright command failed twice in 46.4/46.3 seconds;
+trace evidence showed the semantic diagnostic locator waiting for a missing
+test-only element in production dist, not a stale activeSnapshot.
+RED: build-contract, feedback-timing, carriage-focus/filter, and modal-error
+tests failed for their expected missing behaviors (4 failures, 24 passes).
+
+GREEN: a real repository/publication/browser-runtime/ProjectStore/Scene-selector
+integration proves createLinearAxis publishes one converged active snapshot.
+The focused suite passed 4 files/38 tests, and the exact reviewer command passed
+three consecutive fresh test-mode builds.
+```
+
 ## Success-criteria coverage
 
 | Criterion | Evidence |
@@ -142,7 +169,7 @@ npm run lint
 PASS, no findings.
 
 npm run test:run
-118 files passed, 968 tests passed, 116.70 seconds.
+119 files passed, 973 tests passed, 118.88 seconds.
 
 npm run cad:validate
 7 Link Assets valid; 0 errors; 0 warnings.
@@ -151,16 +178,19 @@ npm run build
 PASS; 2205 modules transformed.
 
 npm run test:e2e -- tests/project-v3-roundtrip.spec.ts tests/reusable-scene-editor.spec.ts tests/viewport-spatial-controls.spec.ts tests/geometry-collision.spec.ts
-6 passed in 10.7 minutes.
+6 passed in 11.2 minutes.
 
 npm run test:e2e:hash
-1 passed in 6.3 seconds.
+1 passed in 8.0 seconds.
 
 npm run test:e2e:archive
-1 passed in 11.4 seconds.
+1 passed in 13.4 seconds.
 
 npx playwright test tests/project-resource-performance.spec.ts --max-failures=1
-2 passed in 58.3 seconds.
+2 passed in 1.3 minutes.
+
+npx playwright test tests/reusable-scene-editor.spec.ts --max-failures=1
+1 passed in three consecutive fresh runs: 1.6, 1.6, and 1.5 minutes total.
 ```
 
 Independent scans found no active browser/runtime compatibility symbol and no
