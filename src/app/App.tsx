@@ -26,7 +26,10 @@ import { RobotGeometryDialog } from '../features/robot/RobotGeometryDialog'
 import { AppShell } from './AppShell'
 import { useObjectAssetStore } from '../features/objects/object-asset-store'
 import { objectRecords } from '../features/objects/object-equipment-adapter'
-import { useProjectStore } from '../features/project/project-store-browser'
+import {
+  projectStore,
+  useProjectStore,
+} from '../features/project/project-store-browser'
 import { ProjectMenu } from '../features/project/ProjectMenu'
 import { CoordinateFramesDialog } from '../features/frames/CoordinateFramesDialog'
 import type { RobotRigRegistration } from '../features/robot/RobotModel'
@@ -115,8 +118,9 @@ export function App() {
         hydrateEquipment(),
         hydrateObjectAssets(),
         hydrateRobotGeometry(),
-        hydrateProject(),
       ])
+      await hydrateProject()
+      if (projectStore.getState().activeSnapshot !== null) return
       if (active) {
         const robotRecords = useRobotGeometryStore.getState().links
         const restoredRobot =

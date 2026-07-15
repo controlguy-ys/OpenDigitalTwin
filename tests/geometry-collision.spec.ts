@@ -118,6 +118,17 @@ function v3CollisionFixture(source: Uint8Array): Buffer {
   const sourcePath = `robot/sources/${digest}.step`
   const sourceBytes = entries[sourcePath]
   if (sourceBytes === undefined) throw new Error(`Missing source STEP: ${sourcePath}`)
+  for (const candidate of sources.slice(1)) {
+    delete entries[`robot/sources/${String(candidate.sha256)}.step`]
+  }
+  putJson(entries, 'robot/sources/index.json', [sourceRecord])
+  putJson(entries, 'robot/links/index.json', links.map((link) => ({
+    ...link,
+    sourceRefs: (link.sourceRefs as Record<string, unknown>[]).map((sourceRef) => ({
+      ...sourceRef,
+      sourceAssetId: digest,
+    })),
+  })))
 
   putJson(entries, 'manifest.json', {
     ...manifest,
@@ -582,6 +593,69 @@ test('accepts V3 geometry collision and report workflows', async ({
   expect(await downloadCsvReport(page)).toContain(
     'Kind,Pair,First Entity,Second Entity,First Box,Second Box,Approximate Clearance (mm),Sample,Time (ms)',
   )
+})
+
+test('preserves V3 collision semantics and report rows through Save, Export, and reload', async ({
+  page,
+}) => {
+  test.setTimeout(300_000)
+  await page.goto('/')
+  await expect(page.getByRole('main', { name: '3D viewport' })).toHaveAttribute(
+    'aria-busy',
+    'false',
+  )
+  await page.getByRole('button', { name: 'New' }).click()
+  await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 180_000 })
+  const [defaultDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Export project' }).click(),
+  ])
+  const fixture = v3CollisionFixture(
+    await readFile(await downloadPath(defaultDownload)),
+  )
+  await page.getByLabel('Import project').setInputFiles({
+    name: 'geometry-collision-v3.wdtwin',
+    mimeType: 'application/zip',
+    buffer: fixture,
+  })
+  await waitForImportedProject(page, 'Geometry Collision Acceptance')
+  await openDrawer(page, 'Timeline and Events sheet')
+  await expect(page.getByLabel('Live collision counts')).toContainText(
+    /Collision [1-9]/,
+  )
+  const beforeSemantics = await activeProjectSemantics(page)
+  const beforeRow = (await downloadJsonReport(page)).findings.find(
+    ({ kind, pairKey }) => kind === 'collision' && pairKey === LINK00_PAIR,
+  )
+  expect(beforeRow).toBeDefined()
+
+  await page.getByRole('button', { name: 'Save project' }).click()
+  await expect(page.getByText('Saved', { exact: true })).toBeVisible()
+  const [projectDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Export project' }).click(),
+  ])
+  expect(projectDownload.suggestedFilename()).toBe(
+    'Geometry Collision Acceptance.wdtwin',
+  )
+  await downloadPath(projectDownload)
+
+  await page.reload()
+  await waitForImportedProject(page, 'Geometry Collision Acceptance')
+  await expect(page.getByRole('main', { name: '3D viewport' })).toHaveAttribute(
+    'aria-busy',
+    'false',
+    { timeout: 180_000 },
+  )
+  await openDrawer(page, 'Timeline and Events sheet')
+  await expect(page.getByLabel('Live collision counts')).toContainText(
+    /Collision [1-9]/,
+  )
+  const reloadedRow = (await downloadJsonReport(page)).findings.find(
+    ({ kind, pairKey }) => kind === 'collision' && pairKey === LINK00_PAIR,
+  )
+  expect(reloadedRow).toEqual(beforeRow)
+  expect(await activeProjectSemantics(page)).toEqual(beforeSemantics)
 })
 
 test('keeps browser animation responsive during held-object Worker validation', async ({

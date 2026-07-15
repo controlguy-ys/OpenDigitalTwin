@@ -94,7 +94,10 @@ describe('Object Asset persistence', () => {
     expect(store.getState().instances[0]!.transform.position).toEqual([
       0.9, 0.8, 0.7,
     ])
-    expect(Array.from(new Uint8Array(store.getState().assets[0]!.sourceBytes))).toEqual([
+    const restoredAsset = store.getState().assets[0]!
+    expect('sourceBytes' in restoredAsset).toBe(true)
+    if (!('sourceBytes' in restoredAsset)) throw new Error('Expected STEP Asset.')
+    expect(Array.from(new Uint8Array(restoredAsset.sourceBytes))).toEqual([
       1, 2, 3, 4,
     ])
     expect((await db.assets.get('machine-asset'))?.collisionBoxes[0]!.id).toBe(
@@ -159,9 +162,10 @@ describe('Object Asset persistence', () => {
     instance.transform.position[0] = 99
     asset.collisionBoxes[1]!.center[0] = 99
 
-    expect(
-      Array.from(new Uint8Array(store.getState().assets[0]!.sourceBytes)),
-    ).toEqual([1, 2, 3, 4])
+    const storedAsset = store.getState().assets[0]!
+    expect('sourceBytes' in storedAsset).toBe(true)
+    if (!('sourceBytes' in storedAsset)) throw new Error('Expected STEP Asset.')
+    expect(Array.from(new Uint8Array(storedAsset.sourceBytes))).toEqual([1, 2, 3, 4])
     expect(store.getState().instances[0]!.transform.position).toEqual([
       0.6, 0.3, 1.1,
     ])

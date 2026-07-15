@@ -1,6 +1,5 @@
 import { DEFAULT_COLLISION_POLICY } from '../../domain/collision/collision'
 import type {
-  ObjectAssetRecordV2,
   ObjectInstanceRecordV1,
   RobotLinkGeometryRecordV2,
 } from '../../domain/project/project'
@@ -9,6 +8,13 @@ import {
   type WorkcellProjectSnapshotV3,
 } from '../../domain/project/project-v3'
 import { createPortableId } from '../../lib/id/create-portable-id'
+import {
+  BoxGeometry,
+  CylinderGeometry,
+  Group,
+  Mesh,
+  MeshStandardMaterial,
+} from 'three'
 import {
   createProjectHashService,
   type ProjectSourceDigest,
@@ -44,7 +50,7 @@ interface BrowserProjectRuntimeResources {
   readonly objectAssets: ReadonlyMap<string, ImportedThreeAsset>
   readonly objectRepository: ImportedGeometryRepository
   readonly robotLinks: readonly RobotLinkGeometryRecordV2[]
-  readonly objectRecords: readonly ObjectAssetRecordV2[]
+  readonly objectRecords: WorkcellProjectSnapshotV3['objectAssets']
   readonly objectInstances: readonly ObjectInstanceRecordV1[]
 }
 
@@ -113,7 +119,7 @@ function activeJob(snapshot: WorkcellProjectSnapshotV3) {
   return snapshot.simulation.jobs.find(({ id }) => id === snapshot.simulation.activeJobId)
 }
 
-function legacyRobotLinks(snapshot: WorkcellProjectSnapshotV3): RobotLinkGeometryRecordV2[] {
+function projectRobotReadModels(snapshot: WorkcellProjectSnapshotV3): RobotLinkGeometryRecordV2[] {
   const sources = new Map(snapshot.robot.sources.map((source) => [source.id, source]))
   return snapshot.robot.links.map((link) => {
     const source = sources.get(link.sourceRefs[0]!.sourceAssetId)
@@ -133,24 +139,11 @@ function legacyRobotLinks(snapshot: WorkcellProjectSnapshotV3): RobotLinkGeometr
   })
 }
 
-function legacyObjects(snapshot: WorkcellProjectSnapshotV3): {
-  readonly assets: ObjectAssetRecordV2[]
+function projectObjectReadModels(snapshot: WorkcellProjectSnapshotV3): {
+  readonly assets: WorkcellProjectSnapshotV3['objectAssets']
   readonly instances: ObjectInstanceRecordV1[]
 } {
   const assets = snapshot.objectAssets
-    .filter((asset) => asset.sourceKind === 'step')
-    .map((asset) => ({
-      id: asset.id,
-      name: asset.name,
-      sourceFileName: asset.sourceFileName,
-      sourceBytes: asset.sourceBytes,
-      importScale: asset.importScale,
-      originMode: asset.originMode,
-      colliderCenter: [...asset.colliderCenter],
-      collisionHalfExtents: [...asset.collisionHalfExtents],
-      collisionBoxes: mutableCollisionBoxes(asset.collisionBoxes),
-      statistics: { ...asset.statistics },
-    } satisfies ObjectAssetRecordV2))
   const assetIds = new Set(assets.map(({ id }) => id))
   const transforms = new Map(snapshot.externalEntities.map((state) => [state.entityId, state]))
   const instances = snapshot.objectInstances
@@ -170,6 +163,106 @@ function legacyObjects(snapshot: WorkcellProjectSnapshotV3): {
   return { assets, instances }
 }
 
+function primitiveObjectAsset(
+  asset: Extract<WorkcellProjectSnapshotV3['objectAssets'][number], {
+    readonly sourceKind: 'box' | 'cylinder'
+  }>,
+): ImportedThreeAsset {
+  const geometry = asset.sourceKind === 'box'
+    ? new BoxGeometry(...asset.dimensionsM)
+    : new CylinderGeometry(
+        asset.radiusM,
+        asset.radiusM,
+        asset.heightM,
+        asset.radialSegments,
+      ).rotateX(Math.PI / 2)
+  const material = new MeshStandardMaterial({ color: asset.color })
+  const group = new Group()
+  group.add(new Mesh(geometry, material))
+  const center = [...asset.colliderCenter] as [number, number, number]
+  const half = [...asset.collisionHalfExtents] as [number, number, number]
+  return {
+    group,
+    colliderCenter: center,
+    bounds: {
+      min: center.map((value, index) => value - half[index]!) as [number, number, number],
+      max: center.map((value, index) => value + half[index]!) as [number, number, number],
+      size: half.map((value) => value * 2) as [number, number, number],
+      center,
+    },
+    dispose() {
+      geometry.dispose()
+      material.dispose()
+      group.clear()
+    },
+  }
+}
+
+type NotificationListener = (...args: unknown[]) => void
+interface NotificationSource {
+  subscribe(listener: NotificationListener): () => void
+}
+interface NotificationState {
+  depth: number
+  readonly pending: Map<NotificationListener, readonly unknown[]>
+}
+
+const notificationStates = new WeakMap<object, NotificationState>()
+
+function installNotificationTransaction(source: NotificationSource): NotificationState {
+  const existing = notificationStates.get(source as object)
+  if (existing !== undefined) return existing
+  const state: NotificationState = { depth: 0, pending: new Map() }
+  const originalSubscribe = source.subscribe.bind(source)
+  source.subscribe = (listener) => originalSubscribe((...args) => {
+    if (state.depth === 0) listener(...args)
+    else state.pending.set(listener, args)
+  })
+  notificationStates.set(source as object, state)
+  return state
+}
+
+function beginReadModelPublication(sources: readonly NotificationSource[]) {
+  const states = sources.map(installNotificationTransaction)
+  for (const state of states) state.depth += 1
+  let closed = false
+  const close = (publish: boolean): void => {
+    if (closed) return
+    closed = true
+    const callbacks: Array<readonly [NotificationListener, readonly unknown[]]> = []
+    for (const state of states) {
+      state.depth -= 1
+      if (state.depth !== 0) continue
+      if (publish) callbacks.push(...state.pending.entries())
+      state.pending.clear()
+    }
+    for (const [listener, args] of callbacks) {
+      try { listener(...args) } catch { /* Published state remains authoritative. */ }
+    }
+  }
+  return Object.freeze({
+    commit: () => close(true),
+    rollback: () => close(false),
+  })
+}
+
+function disposeReplacedAssets<Key>(
+  previous: ReadonlyMap<Key, ImportedThreeAsset>,
+  next: ReadonlyMap<Key, ImportedThreeAsset>,
+): void {
+  for (const [key, asset] of previous) {
+    if (next.get(key) !== asset) asset.dispose()
+  }
+}
+
+function disposePreparedResources(resources: BrowserProjectRuntimeResources): void {
+  for (const asset of resources.robotAssets.values()) asset.dispose()
+  for (const [id, asset] of resources.objectAssets) {
+    if (resources.objectRepository.get(id) !== asset) asset.dispose()
+  }
+  resources.objectRepository.dispose()
+}
+
 export function createBrowserProjectRuntime(
   options: BrowserProjectRuntimeOptions = {},
 ): BrowserProjectRuntime {
@@ -183,6 +276,17 @@ export function createBrowserProjectRuntime(
   const idFactory = options.idFactory ?? (() => createPortableId())
   let active: BrowserProjectRuntimeBundleV1 | null = null
   const resourceOwnership = new WeakMap<object, 'prepared' | 'published' | 'released'>()
+  const notificationSources = [
+    useRobotGeometryStore,
+    useObjectAssetStore,
+    useRobotConfigurationStore,
+    useRobotStore,
+    useCoordinateFrameStore,
+    useCollisionStore,
+    robotGeometryRepository,
+    importedGeometryRepository,
+  ].map((source) => source as unknown as NotificationSource)
+  notificationSources.forEach(installNotificationTransaction)
 
   const runtime: BrowserProjectRuntime = {
     async createNew() {
@@ -229,7 +333,7 @@ export function createBrowserProjectRuntime(
             sourceRefs: [{
               sourceAssetId: sourceIds[index]!,
               nodePath: [-1, index],
-              nodeName: `legacy-whole-source:${link.linkId}`,
+              nodeName: `whole-source:${link.linkId}`,
               meshIndices: [0],
             }],
             coordinateMode: 'link-local',
@@ -290,17 +394,25 @@ export function createBrowserProjectRuntime(
     },
 
     async prepare(snapshot) {
-      const robotLinks = legacyRobotLinks(snapshot)
-      const objects = legacyObjects(snapshot)
+      const robotLinks = projectRobotReadModels(snapshot)
+      const objects = projectObjectReadModels(snapshot)
       const objectRepository = new ImportedGeometryRepository(stepImportClient)
       let robotAssets: ReadonlyMap<RobotLinkGeometryRecordV2['linkId'], ImportedThreeAsset> | null = null
+      const primitiveAssets = new Map<string, ImportedThreeAsset>()
       try {
         robotAssets = await prepareRobotAssets(robotLinks)
-        await objectRepository.restoreObjectAssets(objects.assets)
+        await objectRepository.restoreObjectAssets(
+          objects.assets.filter((asset) => asset.sourceKind === 'step'),
+        )
         const objectAssets = new Map<string, ImportedThreeAsset>()
         for (const asset of objects.assets) {
-          const geometry = objectRepository.get(asset.id)
-          if (geometry === undefined) throw new Error(`Unable to stage Object Asset ${asset.name}.`)
+          const geometry = asset.sourceKind === 'step'
+            ? objectRepository.get(asset.id)
+            : primitiveObjectAsset(asset)
+          if (geometry === undefined) {
+            throw new Error(`Unable to stage Object Asset ${asset.name}.`)
+          }
+          if (asset.sourceKind !== 'step') primitiveAssets.set(asset.id, geometry)
           objectAssets.set(asset.id, geometry)
         }
         const resources = Object.freeze({
@@ -317,6 +429,7 @@ export function createBrowserProjectRuntime(
         if (robotAssets !== null) {
           for (const asset of robotAssets.values()) asset.dispose()
         }
+        for (const asset of primitiveAssets.values()) asset.dispose()
         objectRepository.dispose()
         throw error
       }
@@ -327,55 +440,87 @@ export function createBrowserProjectRuntime(
       if (resourceOwnership.get(resources) !== 'prepared') {
         throw new Error('PROJECT_RUNTIME_BUNDLE_INVALID: Runtime bundle is not prepared.')
       }
-      if (active !== null) resourceOwnership.set(active.resources, 'released')
-      useRobotGeometryStore.setState({ links: resources.robotLinks })
-      useObjectAssetStore.setState({
-        assets: resources.objectRecords,
-        instances: resources.objectInstances,
-      })
-      useRobotConfigurationStore.getState().setConfiguration({
-        name: bundle.snapshot.robot.name,
-        basePosition: [...bundle.snapshot.robot.basePosition],
-        baseRotationDeg: [...bundle.snapshot.robot.baseRotationDeg],
-        joints: bundle.snapshot.robot.mechanics.joints.map((joint) => ({
-          id: joint.id,
-          parentLink: joint.parentLink,
-          childLink: joint.childLink,
-          origin: [...joint.originM],
-          axis: [...joint.axis],
-          minDeg: joint.minDeg,
-          maxDeg: joint.maxDeg,
-          maxVelocityDegPerSec: joint.maxVelocityDegPerSec,
-        })),
-      })
-      useRobotStore.getState().replaceKeyframes(
-        (activeJob(bundle.snapshot)?.poses ?? []).map((pose) => ({
-          ...pose,
-          anglesDeg: [...pose.anglesDeg],
-        })),
-      )
-      useCoordinateFrameStore.getState().replaceFrames({
-        mcp: mutableTransform(bundle.snapshot.frames.mcp),
-        tcp: mutableTransform(bundle.snapshot.frames.tcp),
-      })
-      useCollisionStore.getState().replaceCollisionState({
-        policy: bundle.snapshot.collisionPolicy,
-        currentFindings: [],
-        diagnostics: [],
-      }, null)
-      useCollisionStore.getState().setValidationReport(null)
-      robotGeometryRepository.replace(resources.robotAssets)
-      importedGeometryRepository.replaceAll(resources.objectAssets)
-      resourceOwnership.set(resources, 'published')
-      active = bundle
+      const previousStores = {
+        robotGeometry: useRobotGeometryStore.getState(),
+        objects: useObjectAssetStore.getState(),
+        configuration: useRobotConfigurationStore.getState(),
+        robot: useRobotStore.getState(),
+        frames: useCoordinateFrameStore.getState(),
+        collision: useCollisionStore.getState(),
+      }
+      const publication = beginReadModelPublication(notificationSources)
+      let previousRobotAssets: ReadonlyMap<RobotLinkGeometryRecordV2['linkId'], ImportedThreeAsset> | undefined
+      let previousObjectAssets: ReadonlyMap<string, ImportedThreeAsset> | undefined
+      try {
+        useRobotGeometryStore.setState({ links: resources.robotLinks })
+        useObjectAssetStore.setState({
+          assets: resources.objectRecords,
+          instances: resources.objectInstances,
+        })
+        useRobotConfigurationStore.getState().setConfiguration({
+          name: bundle.snapshot.robot.name,
+          basePosition: [...bundle.snapshot.robot.basePosition],
+          baseRotationDeg: [...bundle.snapshot.robot.baseRotationDeg],
+          joints: bundle.snapshot.robot.mechanics.joints.map((joint) => ({
+            id: joint.id,
+            parentLink: joint.parentLink,
+            childLink: joint.childLink,
+            origin: [...joint.originM],
+            axis: [...joint.axis],
+            minDeg: joint.minDeg,
+            maxDeg: joint.maxDeg,
+            maxVelocityDegPerSec: joint.maxVelocityDegPerSec,
+          })),
+        })
+        useRobotStore.getState().replaceKeyframes(
+          (activeJob(bundle.snapshot)?.poses ?? []).map((pose) => ({
+            ...pose,
+            anglesDeg: [...pose.anglesDeg],
+          })),
+        )
+        useCoordinateFrameStore.getState().replaceFrames({
+          mcp: mutableTransform(bundle.snapshot.frames.mcp),
+          tcp: mutableTransform(bundle.snapshot.frames.tcp),
+        })
+        useCollisionStore.getState().replaceCollisionState({
+          policy: bundle.snapshot.collisionPolicy,
+          currentFindings: [],
+          diagnostics: [],
+        }, null)
+        useCollisionStore.getState().setValidationReport(null)
+        previousRobotAssets = robotGeometryRepository.exchange(resources.robotAssets)
+        previousObjectAssets = importedGeometryRepository.exchangeAll(resources.objectAssets)
+        if (active !== null) resourceOwnership.set(active.resources, 'released')
+        resourceOwnership.set(resources, 'published')
+        active = bundle
+        publication.commit()
+        disposeReplacedAssets(previousRobotAssets, resources.robotAssets)
+        disposeReplacedAssets(previousObjectAssets, resources.objectAssets)
+      } catch (error) {
+        useRobotGeometryStore.setState(previousStores.robotGeometry, true)
+        useObjectAssetStore.setState(previousStores.objects, true)
+        useRobotConfigurationStore.setState(previousStores.configuration, true)
+        useRobotStore.setState(previousStores.robot, true)
+        useCoordinateFrameStore.setState(previousStores.frames, true)
+        useCollisionStore.setState(previousStores.collision, true)
+        if (previousRobotAssets !== undefined) {
+          robotGeometryRepository.exchange(previousRobotAssets)
+        }
+        if (previousObjectAssets !== undefined) {
+          importedGeometryRepository.exchangeAll(previousObjectAssets)
+        }
+        publication.rollback()
+        disposePreparedResources(resources)
+        resourceOwnership.set(resources, 'released')
+        throw error
+      }
     },
 
     dispose(bundle) {
       const ownership = resourceOwnership.get(bundle.resources)
       if (ownership === undefined || ownership === 'released') return
       if (ownership === 'prepared') {
-        for (const asset of bundle.resources.robotAssets.values()) asset.dispose()
-        bundle.resources.objectRepository.dispose()
+        disposePreparedResources(bundle.resources)
       }
       resourceOwnership.set(bundle.resources, 'released')
     },

@@ -1,21 +1,28 @@
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import { validateCollisionBox } from '../../domain/collision/collision'
 import type {
-  ObjectAssetRecordV1,
-  ObjectAssetRecordV2,
   ObjectInstanceRecordV1,
 } from '../../domain/project/project'
+import type { CollisionBox } from '../../domain/collision/collision'
 import type { Object3D } from 'three'
 import type { GeometryEntityRegistration } from '../collision/geometry-entity-registry'
 
+export interface ObjectAssetSceneReadModelV3 {
+  readonly id: string
+  readonly name: string
+  readonly colliderCenter: readonly [number, number, number]
+  readonly collisionHalfExtents: readonly [number, number, number]
+  readonly collisionBoxes?: readonly CollisionBox[] | undefined
+}
+
 export function objectInstanceToGeometryEntity(
-  asset: ObjectAssetRecordV1 | ObjectAssetRecordV2,
+  asset: ObjectAssetSceneReadModelV3,
   instance: ObjectInstanceRecordV1,
   object: Object3D | null,
   held = false,
   colliderRevision = 0,
 ): GeometryEntityRegistration {
-  const boxes = 'collisionBoxes' in asset
+  const boxes = asset.collisionBoxes !== undefined
     ? asset.collisionBoxes
     : [{
         id: 'default',
@@ -35,7 +42,7 @@ export function objectInstanceToGeometryEntity(
 
 export function objectInstanceToEquipmentRecord(
   instance: ObjectInstanceRecordV1,
-  asset: ObjectAssetRecordV1,
+  asset: ObjectAssetSceneReadModelV3,
 ): EquipmentRecord {
   return {
     id: instance.id,
@@ -59,7 +66,7 @@ export function objectInstanceToEquipmentRecord(
 }
 
 export function objectRecords(
-  assets: readonly ObjectAssetRecordV1[],
+  assets: readonly ObjectAssetSceneReadModelV3[],
   instances: readonly ObjectInstanceRecordV1[],
 ): EquipmentRecord[] {
   const assetsById = new Map(assets.map((asset) => [asset.id, asset]))

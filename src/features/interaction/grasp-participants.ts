@@ -1,9 +1,11 @@
 import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type {
-  ObjectAssetRecordV1,
   ObjectInstanceRecordV1,
 } from '../../domain/project/project'
-import { objectRecords } from '../objects/object-equipment-adapter'
+import {
+  objectRecords,
+  type ObjectAssetSceneReadModelV3,
+} from '../objects/object-equipment-adapter'
 import type { ExternalCollisionEntityId } from './interaction-store'
 
 export interface RuntimeGraspParticipant {
@@ -26,7 +28,7 @@ export function collisionEntityToGraspParticipantId(
 
 export function runtimeGraspParticipants(
   equipmentRecords: readonly EquipmentRecord[],
-  assets: readonly ObjectAssetRecordV1[],
+  assets: readonly ObjectAssetSceneReadModelV3[],
   instances: readonly ObjectInstanceRecordV1[],
 ): RuntimeGraspParticipant[] {
   return [

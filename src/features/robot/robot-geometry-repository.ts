@@ -10,10 +10,16 @@ export class RobotGeometryRepository {
     return this.assets.get(linkId)
   }
 
-  replace(nextAssets: ReadonlyMap<RobotLinkId, ImportedThreeAsset>): void {
-    for (const asset of this.assets.values()) asset.dispose()
+  exchange(nextAssets: ReadonlyMap<RobotLinkId, ImportedThreeAsset>): ReadonlyMap<RobotLinkId, ImportedThreeAsset> {
+    const previous = this.assets
     this.assets = new Map(nextAssets)
     this.emit()
+    return previous
+  }
+
+  replace(nextAssets: ReadonlyMap<RobotLinkId, ImportedThreeAsset>): void {
+    const previous = this.exchange(nextAssets)
+    for (const asset of previous.values()) asset.dispose()
   }
 
   replaceLink(linkId: RobotLinkId, nextAsset: ImportedThreeAsset): void {

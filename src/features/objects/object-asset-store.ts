@@ -6,6 +6,7 @@ import type {
   ObjectInstanceRecordV1,
   ProjectCollisionBoxV2,
 } from '../../domain/project/project'
+import type { ObjectAssetRecordV3 } from '../../domain/project/object-asset-v3'
 import { validateCollisionBox } from '../../domain/collision/collision'
 import type { SerializableTransform } from '../../domain/equipment/equipment'
 import {
@@ -29,8 +30,10 @@ export type ObjectAssetPersistenceStatus =
 export const OBJECT_ASSET_PERSISTENCE_WARNING =
   'Object Asset storage is unavailable; changes will remain in memory for this session.'
 
+export type ObjectAssetReadModelV3 = ObjectAssetRecordV2 | ObjectAssetRecordV3
+
 export interface ObjectAssetStoreState {
-  assets: readonly ObjectAssetRecordV2[]
+  assets: readonly ObjectAssetReadModelV3[]
   instances: readonly ObjectInstanceRecordV1[]
   persistenceStatus: ObjectAssetPersistenceStatus
   warnings: readonly string[]

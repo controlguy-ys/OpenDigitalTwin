@@ -691,11 +691,11 @@ function validateRobotPartRef(
     if (
       nodePath.length !== 2 ||
       nodePath[1] !== linkOrdinal ||
-      nodeName !== `legacy-whole-source:${linkId}` ||
+      nodeName !== `whole-source:${linkId}` ||
       coordinateMode !== 'link-local' ||
       !sameNumbers(meshIndices, completeMeshSet)
     ) {
-      fail(`${label}.nodePath is not the reserved legacy whole-source occurrence for ${linkId}.`)
+      fail(`${label}.nodePath is not the canonical whole-source occurrence for ${linkId}.`)
     }
   } else if (
     nodePath.some((entry) => !Number.isInteger(entry) || entry < 0)

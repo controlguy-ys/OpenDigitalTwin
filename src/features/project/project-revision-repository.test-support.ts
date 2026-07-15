@@ -101,7 +101,7 @@ export async function repositoryProjectFixture(
         sourceRefs: [{
           sourceAssetId: sourceDigest,
           nodePath: [-1, index],
-          nodeName: `legacy-whole-source:${linkId}`,
+          nodeName: `whole-source:${linkId}`,
           meshIndices: [0],
         }],
         coordinateMode: 'link-local' as const,

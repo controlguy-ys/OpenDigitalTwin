@@ -74,7 +74,7 @@ async function validV3Project(): Promise<WorkcellProjectSnapshotV3> {
         sourceRefs: [{
           sourceAssetId: DIGEST_ABC,
           nodePath: [-1, index],
-          nodeName: `legacy-whole-source:${linkId}`,
+          nodeName: `whole-source:${linkId}`,
           meshIndices: [0],
         }],
         coordinateMode: 'link-local' as const,

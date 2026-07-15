@@ -969,14 +969,14 @@ describe('Workcell Project V3 contract', () => {
     expect(() => validateWorkcellProjectSnapshotV3(source)).toThrow(/sha256|digest/i)
   })
 
-  it('accepts only the reserved legacy whole-source occurrence exception', () => {
+  it('accepts only the canonical whole-source occurrence exception', () => {
     const legacy = mutable(validV3Project())
     legacy.robot.links.forEach((link, index) => {
       link.coordinateMode = 'link-local'
       link.sourceRefs = [{
         sourceAssetId: DIGEST_A,
         nodePath: [-1, index],
-        nodeName: `legacy-whole-source:${link.linkId}`,
+        nodeName: `whole-source:${link.linkId}`,
         meshIndices: [0],
       }]
     })

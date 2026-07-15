@@ -211,7 +211,8 @@ function ImportedEquipment({ record }: { record: EquipmentRecord }) {
 
   useEffect(() => {
     if (asset === undefined) {
-      void (assetRecord === undefined
+      void (assetRecord === undefined ||
+        ('sourceKind' in assetRecord && assetRecord.sourceKind !== 'step')
         ? importedGeometryRepository.load(record)
         : importedGeometryRepository.loadObjectAsset(assetRecord)
       ).catch(() => undefined)
