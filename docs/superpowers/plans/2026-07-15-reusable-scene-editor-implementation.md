@@ -163,8 +163,11 @@ git commit -m "feat: publish project v3 in the browser"
 - Modify: `src/domain/project/project-v3.ts`
 - Test: `src/domain/project/project-v3.test.ts`
 - Modify: `src/domain/project/object-asset-v3.ts`
+- Modify: `src/domain/project/external-entity-v3.ts`
 - Modify: `src/features/project/project-v3-archive.ts`
 - Test: `src/features/project/project-v3-archive.test.ts`
+- Modify: `src/features/project/browser-project-runtime.ts`
+- Test: `src/features/project/browser-project-runtime.test.ts`
 
 **Interfaces:**
 - Produces: `ProjectSceneStateV1`, four discriminated Scene Entity records, transform-source ownership for Objects, `worldPoseForEntity()`, `reparentSceneEntityPreservingWorld()`, and the 64/256 limits.
@@ -285,7 +288,7 @@ git diff --cached --check
 git commit -m "feat: define the project scene graph"
 ```
 
-Expected: all commands PASS; archives and migrations produce exactly one Robot Scene Entity and valid Object entity references.
+Expected: all commands PASS; New Project and V3 archives contain exactly one Robot Scene Entity and valid Object/Built-in Equipment Scene Entity references, with no duplicate external transform owner.
 
 ---
 
