@@ -73,6 +73,31 @@ describe('Workcell published render authority', () => {
     expect(loadingStep.focusSelectionBounds().isEmpty()).toBe(true)
   })
 
+  it('tracks async geometry added to and removed from the same registered Object root', () => {
+    const root = new Group()
+    const update = vi.spyOn(root, 'updateWorldMatrix')
+    const runtime = {
+      entities: [],
+      objects: [{ entityId: 'object:async-step', effectiveVisible: true }],
+      byId: new Map([['object:async-step', {
+        entityId: 'object:async-step', kind: 'object', effectiveVisible: true, parentId: null,
+      }]]),
+      robot: null,
+      linearAxis: null,
+    } as unknown as SceneRuntimeProjectionV1
+    const resolvers = createViewportBoundResolvers(
+      runtime, 'object:async-step', new Map([['object:async-step', root]]), null, new Group(),
+    )
+
+    expect(resolvers.canFocusSelection).toBe(false)
+    const geometry = new Mesh(new BoxGeometry(1, 1, 1))
+    root.add(geometry)
+    expect(resolvers.canFocusSelection).toBe(true)
+    root.remove(geometry)
+    expect(resolvers.canFocusSelection).toBe(false)
+    expect(update).not.toHaveBeenCalled()
+  })
+
   it('recognizes committed Robot, Axis, and Group-descendant render roots', () => {
     const renderable = () => {
       const root = new Group()

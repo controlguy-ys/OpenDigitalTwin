@@ -227,9 +227,11 @@ export function createViewportBoundResolvers(
   scene: Object3D,
 ): ViewportBoundResolvers {
   return {
-    canFocusSelection: hasFocusCandidate(
-      runtime, selectedEntityId, objectRoots, robotRoot, scene,
-    ),
+    get canFocusSelection() {
+      return hasFocusCandidate(
+        runtime, selectedEntityId, objectRoots, robotRoot, scene,
+      )
+    },
     fitAllBounds: () => fitAllBounds(runtime, objectRoots, robotRoot, scene),
     focusSelectionBounds: () => selectedBounds(
       runtime, selectedEntityId, objectRoots, robotRoot, scene,
@@ -281,12 +283,13 @@ function ViewportRuntime({
   const focusProbeFrameRef = useRef(0)
   const [focusReadiness, setFocusReadiness] = useState(focusReadinessRef.current)
   const measureFocusReadiness = useCallback(() => {
+    const eligible = boundResolvers.canFocusSelection
+    const current = focusReadinessRef.current
+    if (current.entityId === selectedEntityId && current.ready && eligible) return
     const next = {
       entityId: selectedEntityId,
-      ready: boundResolvers.canFocusSelection &&
-        !boundResolvers.focusSelectionBounds().isEmpty(),
+      ready: eligible && !boundResolvers.focusSelectionBounds().isEmpty(),
     }
-    const current = focusReadinessRef.current
     if (current.entityId === next.entityId && current.ready === next.ready) return
     focusReadinessRef.current = next
     setFocusReadiness(next)
@@ -304,11 +307,7 @@ function ViewportRuntime({
   }, [camera, controls])
 
   useFrame(() => {
-    if (
-      selectedEntityId !== null &&
-      (focusReadinessRef.current.entityId !== selectedEntityId ||
-        !focusReadinessRef.current.ready)
-    ) {
+    if (selectedEntityId !== null) {
       focusProbeFrameRef.current = (focusProbeFrameRef.current + 1) % 10
       if (focusProbeFrameRef.current === 0) measureFocusReadiness()
     }

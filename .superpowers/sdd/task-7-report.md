@@ -56,19 +56,25 @@ enabled Focus, production diagnostic publication was ungated, degenerate camera
 vectors were accepted, and non-unit vectors were not normalized. The empty-bound
 Focus no-op characterization already passed.
 
+The final async-root RED reproduced a frozen `canFocusSelection`: adding valid
+geometry to the same registered STEP root remained false. GREEN verifies the
+same root transitions false-to-true-to-false as geometry is added and removed,
+without render-time world-matrix mutation. A low-frequency selected probe reads
+live eligibility and skips committed bounds work while readiness stays valid.
+
 ```text
 npm run test:run -- src/features/viewport src/features/scene/SceneCanvas.test.tsx src/features/scene/Workcell.test.tsx src/features/interaction/EquipmentTransformControls.test.tsx src/features/equipment src/app/App.test.tsx
-19 files passed, 77 tests passed.
+19 files passed, 78 tests passed.
 ```
 
 ## Final verification
 
 ```text
 npx vitest run --maxWorkers=1 --no-file-parallelism
-116 files passed, 953 tests passed, exact-final duration 308.08s.
+116 files passed, 954 tests passed, exact-final duration 307.26s.
 
-npx playwright test tests/viewport-spatial-controls.spec.ts --workers=1
-1 passed; browser scenario 1.4m, total 1.5m.
+npm run test:e2e -- tests/viewport-spatial-controls.spec.ts
+test-mode build passed; 1 browser scenario passed in 1.4m, total 1.5m.
 
 npm run lint
 exit 0, no findings.
