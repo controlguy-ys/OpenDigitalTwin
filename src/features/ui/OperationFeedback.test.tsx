@@ -49,3 +49,28 @@ it('routes a rejected async create operation into the visible feedback boundary'
     text: 'MAX_OBJECT_INSTANCES is 256; current usage is 256 of 256.',
   })
 })
+
+it('clears old feedback before an operation and preserves a warning emitted by that operation', async () => {
+  const store = createOperationFeedbackStore()
+  render(<OperationFeedback store={store} />)
+  store.getState().publishError(new Error('old failure'))
+
+  await runOperationWithFeedback(
+    async () => {
+      expect(store.getState().message).toBeNull()
+      store.getState().publishResourceWarning({
+        code: 'OBJECT_INSTANCE_WARNING', current: 205, limit: 256,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return 'created'
+    },
+    vi.fn(),
+    store,
+  )
+
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'OBJECT_INSTANCE_WARNING: 205 of 256',
+  )
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(screen.getByRole('status')).toBeVisible()
+})

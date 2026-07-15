@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -669,5 +669,56 @@ describe('SceneContextMenu', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('reparent failed')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(moveItem).toHaveFocus()
+  })
+
+  it('makes the carriage chooser modal, traps focus, restores its opener, and omits OPC UA Objects', async () => {
+    const user = userEvent.setup()
+    render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="linear-axis:active"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    const opener = screen.getByRole('menuitem', { name: 'Set Carriage' })
+    await user.click(opener)
+    const dialog = screen.getByRole('dialog', { name: 'Choose carriage' })
+    const firstChoice = within(dialog).getByRole('button', { name: 'Set Fixture Group as carriage' })
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' })
+    expect(firstChoice).toHaveFocus()
+    expect(within(dialog).queryByRole('button', { name: 'Set Live Part as carriage' }))
+      .not.toBeInTheDocument()
+    await user.keyboard('{Shift>}{Tab}{/Shift}')
+    expect(cancel).toHaveFocus()
+    await user.keyboard('{Tab}')
+    expect(firstChoice).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Choose carriage' })).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
+  })
+
+  it('keeps a failed carriage choice error visible inside the active modal', async () => {
+    const user = userEvent.setup()
+    const service = commands()
+    service.setLinearAxisCarriage.mockRejectedValue(new Error('carriage publication failed'))
+    render(
+      <SceneContextMenu
+        commands={service}
+        entityId="linear-axis:active"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    await user.click(screen.getByRole('menuitem', { name: 'Set Carriage' }))
+    const dialog = screen.getByRole('dialog', { name: 'Choose carriage' })
+    await user.click(within(dialog).getByRole('button', { name: 'Set Fixture Group as carriage' }))
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('carriage publication failed')
+    expect(dialog).toBeVisible()
   })
 })

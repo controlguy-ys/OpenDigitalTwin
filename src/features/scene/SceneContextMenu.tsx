@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import { createPortal } from 'react-dom'
 import type { SceneEntityIdV1, ScenePoseV1 } from '../../domain/project/scene-state-v1'
 import { sceneCommandService } from '../project/project-store-browser'
@@ -63,6 +70,44 @@ function useModalBackgroundInert(): void {
   }, [])
 }
 
+function useModalDialog(onCancel: () => void) {
+  useModalBackgroundInert()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const returnFocusRef = useRef(
+    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null,
+  )
+
+  useEffect(() => {
+    dialogRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus()
+    return () => {
+      returnFocusRef.current?.focus()
+    }
+  }, [])
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onCancel()
+      return
+    }
+    if (event.key !== 'Tab') return
+    const buttons = [
+      ...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? []),
+    ]
+    if (buttons.length === 0) return
+    const current = buttons.indexOf(document.activeElement as HTMLElement)
+    const next = event.shiftKey
+      ? (current <= 0 ? buttons.length - 1 : current - 1)
+      : (current >= buttons.length - 1 ? 0 : current + 1)
+    event.preventDefault()
+    buttons[next]?.focus()
+  }
+
+  return { dialogRef, onKeyDown }
+}
+
 function MenuItem({ children, disabled = false, onClick }: Readonly<{
   children: string
   disabled?: boolean
@@ -82,20 +127,7 @@ function ConfirmationDialog({
   onCancel: () => void
   onConfirm: () => Promise<boolean>
 }>) {
-  useModalBackgroundInert()
-  const dialogRef = useRef<HTMLDivElement>(null)
-  const returnFocusRef = useRef(
-    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null,
-  )
-
-  useEffect(() => {
-    dialogRef.current?.querySelector<HTMLElement>('button')?.focus()
-    return () => {
-      returnFocusRef.current?.focus()
-    }
-  }, [])
+  const modal = useModalDialog(onCancel)
 
   return (
     <div className="scene-modal-backdrop" data-testid="scene-modal-backdrop">
@@ -103,23 +135,8 @@ function ConfirmationDialog({
         aria-label={label}
         aria-modal="true"
         className="scene-confirmation"
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            onCancel()
-            return
-          }
-          if (event.key !== 'Tab') return
-          const buttons = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button') ?? [])]
-          if (buttons.length === 0) return
-          const current = buttons.indexOf(document.activeElement as HTMLElement)
-          const next = event.shiftKey
-            ? (current <= 0 ? buttons.length - 1 : current - 1)
-            : (current >= buttons.length - 1 ? 0 : current + 1)
-          event.preventDefault()
-          buttons[next]?.focus()
-        }}
-        ref={dialogRef}
+        onKeyDown={modal.onKeyDown}
+        ref={modal.dialogRef}
         role="dialog"
       >
         <p>{label}</p>
@@ -145,20 +162,7 @@ function GroupChoiceDialog({
   onCancel: () => void
   onChoose: (groupId: `group:${string}`) => Promise<boolean>
 }>) {
-  useModalBackgroundInert()
-  const dialogRef = useRef<HTMLDivElement>(null)
-  const returnFocusRef = useRef(
-    typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null,
-  )
-
-  useEffect(() => {
-    dialogRef.current?.querySelector<HTMLElement>('button')?.focus()
-    return () => {
-      returnFocusRef.current?.focus()
-    }
-  }, [])
+  const modal = useModalDialog(onCancel)
 
   return (
     <div className="scene-modal-backdrop" data-testid="scene-modal-backdrop">
@@ -166,23 +170,8 @@ function GroupChoiceDialog({
         aria-label="Choose group"
         aria-modal="true"
         className="scene-confirmation"
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            onCancel()
-            return
-          }
-          if (event.key !== 'Tab') return
-          const buttons = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button') ?? [])]
-          if (buttons.length === 0) return
-          const current = buttons.indexOf(document.activeElement as HTMLElement)
-          const next = event.shiftKey
-            ? (current <= 0 ? buttons.length - 1 : current - 1)
-            : (current >= buttons.length - 1 ? 0 : current + 1)
-          event.preventDefault()
-          buttons[next]?.focus()
-        }}
-        ref={dialogRef}
+        onKeyDown={modal.onKeyDown}
+        ref={modal.dialogRef}
         role="dialog"
       >
         <p>Move {entityName} to:</p>
@@ -205,17 +194,26 @@ function GroupChoiceDialog({
 
 function CarriageChoiceDialog({
   candidates,
+  error,
   onCancel,
   onChoose,
 }: Readonly<{
   candidates: readonly Readonly<{ entityId: SceneEntityIdV1; name: string }>[]
+  error: string | null
   onCancel: () => void
   onChoose: (entityId: SceneEntityIdV1) => Promise<boolean>
 }>) {
-  useModalBackgroundInert()
+  const modal = useModalDialog(onCancel)
   return (
     <div className="scene-modal-backdrop" data-testid="scene-modal-backdrop">
-      <div aria-label="Choose carriage" aria-modal="true" className="scene-confirmation" role="dialog">
+      <div
+        aria-label="Choose carriage"
+        aria-modal="true"
+        className="scene-confirmation"
+        onKeyDown={modal.onKeyDown}
+        ref={modal.dialogRef}
+        role="dialog"
+      >
         <p>Set Linear Axis carriage:</p>
         {candidates.map((candidate) => (
           <button
@@ -224,6 +222,7 @@ function CarriageChoiceDialog({
             type="button"
           >Set {candidate.name} as carriage</button>
         ))}
+        {error === null ? null : <p role="alert">{error}</p>}
         <button onClick={onCancel} type="button">Cancel</button>
       </div>
     </div>
@@ -274,7 +273,11 @@ export function SceneContextMenu({
   const axis = runtime.linearAxis?.source.kind === 'linear-axis'
     ? runtime.linearAxis.source
     : null
-  const carriageCandidates = [...runtime.groups, ...runtime.objects].map((candidate) => ({
+  const carriageCandidates = [
+    ...runtime.groups,
+    ...runtime.objects.filter((candidate) =>
+      candidate.source.kind !== 'object' || candidate.source.transformSource === 'manual'),
+  ].map((candidate) => ({
     entityId: candidate.entityId,
     name: candidate.name,
   }))
@@ -632,8 +635,20 @@ export function SceneContextMenu({
       {pending === 'choose-carriage' && entity?.kind === 'linear-axis' ? (
         <CarriageChoiceDialog
           candidates={carriageCandidates}
-          onCancel={() => setPending(null)}
-          onChoose={(candidateId) => run(() => commands.setLinearAxisCarriage(candidateId))}
+          error={error}
+          onCancel={() => { setError(null); setPending(null) }}
+          onChoose={async (candidateId) => {
+            try {
+              await commands.setLinearAxisCarriage(candidateId)
+              setError(null)
+              setPending(null)
+              closeMenu()
+              return true
+            } catch (nextError) {
+              setError(nextError instanceof Error ? nextError.message : 'Scene command failed.')
+              return false
+            }
+          }}
         />
       ) : null}
     </>

@@ -22,9 +22,11 @@ import {
 import { createProjectRevisionFoundation } from './project-revision-repository'
 import { repositoryProjectFixture } from './project-revision-repository.test-support'
 import { createBrowserProjectRuntime } from './browser-project-runtime'
+import { createProjectStore } from './project-store'
 import { useCollisionStore } from '../collision/collision-store'
 import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
 import { createSceneCommandService } from '../scene/scene-command-service'
+import { selectSceneRuntime } from '../scene/scene-runtime-selector'
 
 const databases: ProjectDatabase[] = []
 
@@ -364,6 +366,66 @@ it('flushes feature subscribers only after the mutation service exposes the matc
     observation.storeWarningDistanceM === observation.publishedWarningDistanceM,
   )).toBe(true)
 })
+
+it('publishes Linear Axis creation to the active snapshot and Scene read model together', async () => {
+  const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+  const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+  const database = new ProjectDatabase(`mutation-axis-observer-${crypto.randomUUID()}`)
+  databases.push(database)
+  const foundation = createProjectRevisionFoundation({
+    database,
+    revisionIdentityHasher,
+    sourceHashService: hashService,
+    sourceStagingOptions: {
+      sourceDigest: createProjectSourceDigest(hashService),
+    },
+  })
+  const runtime = createBrowserProjectRuntime({
+    prepareRobotAssets: async () => new Map(),
+  })
+  const coordinator = createProjectPublicationCoordinator({
+    repository: foundation.repository,
+    runtime,
+  })
+  const mutationService = createProjectMutationService({
+    repository: foundation.repository,
+    sourceStaging: foundation.sourceStaging,
+    coordinator,
+  })
+  const observedStore = createProjectStore({
+    mutationService,
+    createNew: vi.fn(),
+    stageNew: vi.fn(),
+    decode: vi.fn(),
+    encode: vi.fn(),
+  })
+  const initial = await repositoryProjectFixture({ name: 'Axis observer' })
+  const staged = await stageProjectSourcesV3(
+    initial,
+    foundation.sourceStaging,
+    revisionIdentityHasher,
+  )
+  await mutationService.replacePreparedUntrusted({ ...staged, warnings: [] })
+  const commands = createSceneCommandService({ mutationService })
+
+  await commands.createLinearAxis({
+    direction: 'x', minPositionM: 0, maxPositionM: 2,
+    homePositionM: 0, currentPositionM: 0,
+    carriageEntityId: null, robotEntityId: null,
+  })
+
+  const authoritative = mutationService.readPublished()?.snapshot
+  const observed = observedStore.getState().activeSnapshot
+  expect(observed).toBe(authoritative)
+  expect(observed?.scene.entities.find(({ id }) => id === 'linear-axis:active'))
+    .toMatchObject({ kind: 'linear-axis', direction: 'x' })
+  expect(selectSceneRuntime(observed!, {
+    isolatedEntityId: null,
+    draftPose: null,
+  }).linearAxis?.source).toMatchObject({
+    id: 'linear-axis:active', direction: 'x', currentPositionM: 0,
+  })
+}, 30_000)
 
 it('freezes the active recipe projection and revokes prepared sources when the recipe rejects', async () => {
   const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })

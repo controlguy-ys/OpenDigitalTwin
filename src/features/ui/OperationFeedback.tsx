@@ -42,9 +42,9 @@ export async function runOperationWithFeedback<T>(
   onSuccess: (value: T) => void,
   store: OperationFeedbackStore = operationFeedbackStore,
 ): Promise<void> {
+  store.getState().clear()
   try {
     const value = await operation()
-    store.getState().clear()
     onSuccess(value)
   } catch (error) {
     store.getState().publishError(error)
