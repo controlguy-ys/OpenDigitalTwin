@@ -9,8 +9,8 @@ import {
   useState,
   type ComponentRef,
 } from 'react'
-import { createPortal, useThree } from '@react-three/fiber'
-import { Box3, PerspectiveCamera, type Group, type Object3D } from 'three'
+import { createPortal, useFrame, useThree } from '@react-three/fiber'
+import { Box3, Matrix4, PerspectiveCamera, type Group, type Object3D } from 'three'
 import { useStore } from 'zustand'
 import { CurrentPoseCollisionSystem } from '../collision/CurrentPoseCollisionSystem'
 import { EquipmentScene } from '../equipment/EquipmentScene'
@@ -46,6 +46,8 @@ import type {
 import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
 import {
   createViewportCameraActions,
+  captureViewportCameraState,
+  restoreViewportCameraState,
   type ViewportCameraActions,
   type StandardWorldView,
 } from '../viewport/camera-actions'
@@ -55,6 +57,8 @@ import {
   viewportPreferenceStore,
 } from '../viewport/viewport-preference-store'
 import { sceneEditorStore } from '../project/project-store-browser'
+import type { CoordinateFrameMatrices } from '../viewport/coordinate-pose-readout'
+import type { ViewportCameraState } from '../viewport/viewport-preference-store'
 
 export { WORKBENCH_TOP_Z } from './workcell-constants'
 
@@ -67,6 +71,7 @@ interface WorkcellProps {
   linearAxisSource?: CommittedLinearAxisSourceV1 | null
   linearAxisCommittedState?: LinearAxisCommittedStateV1 | null
   registerViewportController?: (controller: ViewportRuntimeController | null) => void
+  registerCoordinateFrameMatrices?: (matrices: CoordinateFrameMatrices | null) => void
 }
 
 export interface ViewportRuntimeController {
@@ -78,6 +83,7 @@ export interface ViewportRuntimeController {
   }
   readonly canFocusSelection: boolean
   readonly robotRevision: number
+  readCameraState(): ViewportCameraState
 }
 
 const WORKBENCH_LEGS = [
@@ -167,12 +173,49 @@ function selectedBounds(
   return bounds
 }
 
+function hasFocusCandidate(
+  runtime: SceneRuntimeProjectionV1,
+  selectedEntityId: string | null,
+): boolean {
+  if (selectedEntityId === null) return false
+  const selected = runtime.byId.get(selectedEntityId as SceneEntityIdV1)
+  if (selected === undefined || !selected.effectiveVisible) return false
+  if (selected.kind !== 'group') return true
+  return runtime.objects.some((entity) =>
+    entity.effectiveVisible && runtimeDescendsFrom(runtime, entity.entityId, selected.entityId))
+}
+
+export interface ViewportBoundResolvers {
+  readonly canFocusSelection: boolean
+  fitAllBounds(): Box3
+  focusSelectionBounds(): Box3
+}
+
+export function createViewportBoundResolvers(
+  runtime: SceneRuntimeProjectionV1,
+  selectedEntityId: string | null,
+  objectRoots: ReadonlyMap<string, Object3D>,
+  robotRoot: Object3D | null,
+  scene: Object3D,
+): ViewportBoundResolvers {
+  return {
+    canFocusSelection: hasFocusCandidate(runtime, selectedEntityId),
+    fitAllBounds: () => fitAllBounds(runtime, objectRoots, robotRoot, scene),
+    focusSelectionBounds: () => selectedBounds(
+      runtime, selectedEntityId, objectRoots, robotRoot, scene,
+    ),
+  }
+}
+
 interface ViewportRuntimeProps {
   readonly enabled: boolean
   readonly runtime: SceneRuntimeProjectionV1
   readonly objectRoots: ReadonlyMap<string, Object3D>
   readonly robotRoot: Object3D | null
+  readonly mcpRoot: Object3D | null
+  readonly tcpFrame: Object3D | null
   readonly registerController?: (controller: ViewportRuntimeController | null) => void
+  readonly registerCoordinateFrameMatrices?: (matrices: CoordinateFrameMatrices | null) => void
 }
 
 function ViewportRuntime({
@@ -180,7 +223,10 @@ function ViewportRuntime({
   runtime,
   objectRoots,
   robotRoot,
+  mcpRoot,
+  tcpFrame,
   registerController,
+  registerCoordinateFrameMatrices,
 }: ViewportRuntimeProps) {
   const camera = useThree((state) => state.camera)
   const scene = useThree((state) => state.scene)
@@ -195,30 +241,66 @@ function ViewportRuntime({
     if (!(camera instanceof PerspectiveCamera) || controls === null) return null
     return createViewportCameraActions(camera, controls)
   }, [camera, controls])
-  const currentSelectionBounds = selectedBounds(
-    runtime, selectedEntityId, objectRoots, robotRoot, scene,
+  const boundResolvers = useMemo(
+    () => createViewportBoundResolvers(
+      runtime, selectedEntityId, objectRoots, robotRoot, scene,
+    ),
+    [objectRoots, robotRoot, runtime, scene, selectedEntityId],
   )
-  const canFocusSelection = !currentSelectionBounds.isEmpty()
+  const canFocusSelection = boundResolvers.canFocusSelection
+  const restoredCameraRef = useRef(false)
+  const coordinateRevisionRef = useRef('')
+
+  useLayoutEffect(() => {
+    if (!(camera instanceof PerspectiveCamera) || controls === null || restoredCameraRef.current) return
+    restoreViewportCameraState(camera, controls, viewportPreferenceStore.getState().cameraState)
+    restoredCameraRef.current = true
+  }, [camera, controls])
+
+  useFrame(() => {
+    if (mcpRoot === null || robotRoot === null || tcpFrame === null) return
+    mcpRoot.updateWorldMatrix(true, false)
+    robotRoot.updateWorldMatrix(true, false)
+    tcpFrame.updateWorldMatrix(true, false)
+    const matrices: CoordinateFrameMatrices = {
+      world: new Matrix4().identity().elements,
+      mcp: [...mcpRoot.matrixWorld.elements],
+      base: [...robotRoot.matrixWorld.elements],
+      tcp: [...tcpFrame.matrixWorld.elements],
+    }
+    const revision = [...matrices.mcp, ...matrices.base, ...matrices.tcp].join('|')
+    if (revision === coordinateRevisionRef.current) return
+    coordinateRevisionRef.current = revision
+    registerCoordinateFrameMatrices?.(matrices)
+  })
+
+  useEffect(
+    () => () => registerCoordinateFrameMatrices?.(null),
+    [registerCoordinateFrameMatrices],
+  )
 
   useEffect(() => {
-    if (cameraActions === null) return
+    if (cameraActions === null || controls === null || !(camera instanceof PerspectiveCamera)) return
+    const perspectiveCamera = camera
     const controller: ViewportRuntimeController = {
       actions: {
         home: cameraActions.home,
-        fitAll: () => cameraActions.fitAll(fitAllBounds(runtime, objectRoots, robotRoot, scene)),
-        focusSelection: () => cameraActions.focusSelection(selectedBounds(
-          runtime, selectedEntityId, objectRoots, robotRoot, scene,
-        )),
+        fitAll: () => cameraActions.fitAll(boundResolvers.fitAllBounds()),
+        focusSelection: () => cameraActions.focusSelection(boundResolvers.focusSelectionBounds()),
         setStandardView: cameraActions.setStandardView,
       },
       canFocusSelection,
       robotRevision: 0,
+      readCameraState: () => captureViewportCameraState(perspectiveCamera, controls),
     }
     registerController?.(controller)
     return () => registerController?.(null)
   }, [
     cameraActions,
+    camera,
     canFocusSelection,
+    controls,
+    boundResolvers,
     objectRoots,
     registerController,
     robotRoot,
@@ -236,12 +318,9 @@ function ViewportRuntime({
       minDistance={0.8}
       onChange={() => {
         if (!(camera instanceof PerspectiveCamera) || controls === null) return
-        viewportPreferenceStore.getState().setCameraState({
-          position: camera.position.toArray(),
-          target: controls.target.toArray(),
-          quaternion: camera.quaternion.toArray(),
-          zoom: camera.zoom,
-        })
+        viewportPreferenceStore.getState().setCameraState(
+          captureViewportCameraState(camera, controls),
+        )
       }}
       ref={registerOrbitControls}
       target={storedTarget}
@@ -312,12 +391,14 @@ export function Workcell({
   linearAxisSource = null,
   linearAxisCommittedState = null,
   registerViewportController,
+  registerCoordinateFrameMatrices,
 }: WorkcellProps) {
   const sceneRuntime = usePublishedSceneRuntime()
   const renderEntities = workcellRenderEntities(sceneRuntime)
   const [rig, setRig] = useState<RobotRigRegistration | null>(null)
   const [orbitEnabled, setOrbitEnabled] = useState(true)
   const mcp = useCoordinateFrameStore((state) => state.frames.mcp)
+  const mcpObjectRef = useRef<Group>(null)
   const showGrid = useViewportPreferenceStore((state) => state.layers.grid)
   const showWorldFrame = useViewportPreferenceStore((state) => state.layers.worldFrame)
   const showBaseFrame = useViewportPreferenceStore((state) => state.layers.baseFrame)
@@ -372,6 +453,7 @@ export function Workcell({
         name="mcp-frame"
         position={mcp.position}
         quaternion={mcp.quaternion}
+        ref={mcpObjectRef}
       >
         <EquipmentScene
           equipmentObjectsRef={equipmentObjectsRef}
@@ -424,11 +506,16 @@ export function Workcell({
       <ViewportRuntime
         enabled={orbitEnabled}
         objectRoots={equipmentObjectsRef.current}
+        mcpRoot={mcpObjectRef.current}
         {...(registerViewportController === undefined
           ? {}
           : { registerController: registerViewportController })}
         robotRoot={rig?.rig.root ?? null}
         runtime={sceneRuntime}
+        tcpFrame={rig?.tcpFrame ?? null}
+        {...(registerCoordinateFrameMatrices === undefined
+          ? {}
+          : { registerCoordinateFrameMatrices })}
       />
     </>
   )

@@ -1,6 +1,11 @@
 import { Box3, PerspectiveCamera, Vector3 } from 'three'
 import { describe, expect, it, vi } from 'vitest'
-import { createViewportCameraActions, HOME_CAMERA } from './camera-actions'
+import {
+  captureViewportCameraState,
+  createViewportCameraActions,
+  HOME_CAMERA,
+  restoreViewportCameraState,
+} from './camera-actions'
 
 function harness() {
   const camera = new PerspectiveCamera(42, 1.5, 0.1, 100)
@@ -20,7 +25,31 @@ describe('viewport camera actions', () => {
     expect(camera.position.toArray()).toEqual(HOME_CAMERA.position)
     expect(controls.target.toArray()).toEqual(HOME_CAMERA.target)
     expect(camera.zoom).toBe(HOME_CAMERA.zoom)
+    expect(camera.up.toArray()).toEqual(HOME_CAMERA.up)
+    expect(camera.quaternion.toArray()).toEqual(HOME_CAMERA.quaternion)
+    expect(camera.fov).toBe(HOME_CAMERA.fov)
+    expect(camera.near).toBe(HOME_CAMERA.near)
+    expect(camera.far).toBe(HOME_CAMERA.far)
     expect(JSON.stringify(projectSentinel)).toBe(before)
+  })
+
+  it('round-trips a saved Top orientation including quaternion, up, and projection', () => {
+    const first = harness()
+    first.actions.setStandardView('top')
+    first.camera.fov = 55
+    first.camera.near = 0.02
+    first.camera.far = 250
+    const saved = captureViewportCameraState(first.camera, first.controls)
+    const second = harness()
+
+    restoreViewportCameraState(second.camera, second.controls, saved)
+
+    expect(second.camera.position.toArray()).toEqual(saved.position)
+    expect(second.camera.quaternion.toArray()).toEqual(saved.quaternion)
+    expect(second.camera.up.toArray()).toEqual([0, 1, 0])
+    expect(second.camera.fov).toBe(55)
+    expect(second.camera.near).toBe(0.02)
+    expect(second.camera.far).toBe(250)
   })
 
   it('frames bounds and preserves the framed center as Orbit pivot', () => {

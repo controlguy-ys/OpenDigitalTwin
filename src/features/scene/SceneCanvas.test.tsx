@@ -38,7 +38,16 @@ vi.mock('./Workcell', () => ({
   }) => {
     observedWorkcellProps.current = props
     useEffect(() => {
-      props.registerViewportController?.({ actions: cameraCalls, canFocusSelection: false, robotRevision: 0 })
+      props.registerViewportController?.({
+        actions: cameraCalls,
+        canFocusSelection: false,
+        robotRevision: 0,
+        readCameraState: () => ({
+          position: [2.2, 1.8, 1.7], target: [0.15, 0, 1.55],
+          quaternion: [0, 0, 0, 1], up: [0, 0, 1], zoom: 1,
+          fov: 42, near: 0.1, far: 100,
+        }),
+      })
     }, [props.registerViewportController])
     return (
     <button

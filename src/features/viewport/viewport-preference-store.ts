@@ -11,7 +11,11 @@ export interface ViewportCameraState {
   readonly position: readonly [number, number, number]
   readonly target: readonly [number, number, number]
   readonly quaternion: readonly [number, number, number, number]
+  readonly up: readonly [number, number, number]
   readonly zoom: number
+  readonly fov: number
+  readonly near: number
+  readonly far: number
 }
 
 export interface ViewportPreferenceState {
@@ -37,8 +41,17 @@ const DEFAULT_LAYERS = Object.freeze({
 export const DEFAULT_VIEWPORT_CAMERA_STATE: ViewportCameraState = Object.freeze({
   position: [2.2, 1.8, 1.7] as const,
   target: [0.15, 0, 1.55] as const,
-  quaternion: [0, 0, 0, 1] as const,
+  quaternion: [
+    0.28351443473132715,
+    0.6262342308848727,
+    0.6616126318893704,
+    0.29953126496482535,
+  ] as const,
+  up: [0, 0, 1] as const,
   zoom: 1,
+  fov: 42,
+  near: 0.1,
+  far: 100,
 })
 
 interface StoredViewportPreferences {
@@ -70,7 +83,10 @@ function normalize(candidate: unknown): StoredViewportPreferences {
     : {}
   const validCamera = isFiniteTuple(camera.position, 3) &&
     isFiniteTuple(camera.target, 3) && isFiniteTuple(camera.quaternion, 4) &&
-    Number.isFinite(camera.zoom) && Number(camera.zoom) > 0
+    isFiniteTuple(camera.up, 3) && Number.isFinite(camera.zoom) && Number(camera.zoom) > 0 &&
+    Number.isFinite(camera.fov) && Number(camera.fov) > 0 && Number(camera.fov) < 180 &&
+    Number.isFinite(camera.near) && Number(camera.near) > 0 &&
+    Number.isFinite(camera.far) && Number(camera.far) > Number(camera.near)
   return {
     layers: {
       grid: typeof layers.grid === 'boolean' ? layers.grid : true,
@@ -84,7 +100,11 @@ function normalize(candidate: unknown): StoredViewportPreferences {
       position: camera.position as unknown as [number, number, number],
       target: camera.target as unknown as [number, number, number],
       quaternion: camera.quaternion as unknown as [number, number, number, number],
+      up: camera.up as unknown as [number, number, number],
       zoom: Number(camera.zoom),
+      fov: Number(camera.fov),
+      near: Number(camera.near),
+      far: Number(camera.far),
     } : DEFAULT_VIEWPORT_CAMERA_STATE,
   }
 }

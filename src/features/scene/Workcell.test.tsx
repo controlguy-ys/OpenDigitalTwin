@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Group } from 'three'
 import type { SceneRuntimeProjectionV1 } from './scene-runtime-selector'
-import { workcellLinearAxisBindings, workcellRenderEntities } from './Workcell'
+import {
+  createViewportBoundResolvers,
+  workcellLinearAxisBindings,
+  workcellRenderEntities,
+} from './Workcell'
 import type { CommittedLinearAxisSourceV1 } from './linear-axis-source'
 import type { LinearAxisCommittedStateV1 } from './linear-axis-source'
 
@@ -14,6 +18,34 @@ describe('Workcell published render authority', () => {
     } as unknown as SceneRuntimeProjectionV1
 
     expect(workcellRenderEntities(runtime)).toEqual([visible])
+  })
+
+  it('keeps bounds and world-matrix updates out of StrictMode render calculation', () => {
+    const visible = new Group()
+    visible.add(new Group())
+    const update = vi.spyOn(visible, 'updateWorldMatrix')
+    const runtime = {
+      entities: [],
+      objects: [{ entityId: 'object:visible', effectiveVisible: true }],
+      byId: new Map([['object:visible', {
+        entityId: 'object:visible', kind: 'object', effectiveVisible: true, parentId: null,
+      }]]),
+      robot: null,
+      linearAxis: null,
+    } as unknown as SceneRuntimeProjectionV1
+
+    const firstRender = createViewportBoundResolvers(
+      runtime, 'object:visible', new Map([['object:visible', visible]]), null, new Group(),
+    )
+    const strictModeSecondRender = createViewportBoundResolvers(
+      runtime, 'object:visible', new Map([['object:visible', visible]]), null, new Group(),
+    )
+    expect(firstRender.canFocusSelection).toBe(true)
+    expect(strictModeSecondRender.canFocusSelection).toBe(true)
+    expect(update).not.toHaveBeenCalled()
+
+    firstRender.focusSelectionBounds()
+    expect(update).toHaveBeenCalled()
   })
 
   it('binds the published runtime, live Object roots, and computed Robot root to the axis updater', () => {

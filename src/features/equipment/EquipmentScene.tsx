@@ -47,7 +47,8 @@ interface EquipmentInstanceProps {
   onDraggingChange(dragging: boolean): void
   onEntityContextMenu?: SceneEntityContextHandler
   transformManuallyOwned: boolean
-  gizmoSpace: 'world' | 'local'
+  gizmoSpace: 'world' | 'parent'
+  parentQuaternion: readonly [number, number, number, number]
 }
 
 export function isExternalCollisionRegistrationActive(
@@ -133,6 +134,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
   onEntityContextMenu,
   transformManuallyOwned,
   gizmoSpace,
+  parentQuaternion,
 }: EquipmentInstanceProps) {
   const objectRef = useRef<Group>(null)
   const selection = useInteractionStore((state) => state.selection)
@@ -214,6 +216,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
           entityId={entityId}
           objectRef={objectRef}
           onDraggingChange={onDraggingChange}
+          parentQuaternion={[...parentQuaternion]}
           space={gizmoSpace}
           previewTransform={
             previewSceneTransform
@@ -394,12 +397,19 @@ export function EquipmentScene({
             entityId={entityId}
             equipmentObjectsRef={equipmentObjectsRef}
             key={entityId}
-            gizmoSpace={gizmoFrame === 'parent' ? 'local' : 'world'}
+            gizmoSpace={gizmoFrame}
             onDraggingChange={onDraggingChange}
             {...(onEntityContextMenu === undefined
               ? {}
               : { onEntityContextMenu })}
             record={record}
+            parentQuaternion={(() => {
+              const entity = sceneRuntime?.byId.get(entityId)
+              if (entity?.parentId === null || entity?.parentId === undefined) {
+                return [0, 0, 0, 1] as const
+              }
+              return sceneRuntime?.byId.get(entity.parentId)?.worldPose.quaternion ?? [0, 0, 0, 1]
+            })()}
             transformManuallyOwned={
               sceneRuntime === undefined ||
               isSceneTransformManuallyOwned(sceneRuntime, entityId)

@@ -3,6 +3,7 @@ import { useViewportPreferenceStore, viewportPreferenceStore } from './viewport-
 import type { StandardWorldView } from './camera-actions'
 import { CoordinateStatusBar } from './CoordinateStatusBar'
 import { ViewCube } from './ViewCube'
+import type { CoordinateFrameMatrices } from './coordinate-pose-readout'
 
 export interface ViewportOverlayCameraCommands {
   home(): void
@@ -16,6 +17,7 @@ export interface ViewportOverlayProps {
   readonly canFocusSelection: boolean
   readonly robotRevision?: number
   readonly activeTcpName?: string
+  readonly frameMatrices?: CoordinateFrameMatrices | null
   readonly store?: ViewportPreferenceStore
 }
 
@@ -31,6 +33,7 @@ export function ViewportOverlay({
   canFocusSelection,
   robotRevision,
   activeTcpName = 'Actual TCP',
+  frameMatrices = null,
   store = viewportPreferenceStore,
 }: ViewportOverlayProps) {
   const layers = useViewportPreferenceStore((state) => state.layers, store)
@@ -60,7 +63,11 @@ export function ViewportOverlay({
           >{label.replace(' Frame', '')}</button>
         ))}
       </div>
-      <CoordinateStatusBar activeTcpName={activeTcpName} store={store} />
+      <CoordinateStatusBar
+        activeTcpName={activeTcpName}
+        frameMatrices={frameMatrices}
+        store={store}
+      />
     </div>
   )
 }

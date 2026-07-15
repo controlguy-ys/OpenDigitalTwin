@@ -23,7 +23,8 @@ describe('viewport preference store', () => {
     store.getState().setPoseFrame('mcp')
     store.getState().setGizmoFrame('parent')
     store.getState().setCameraState({
-      position: [3, 4, 5], target: [1, 2, 3], quaternion: [0, 0, 0, 1], zoom: 1.5,
+      position: [3, 4, 5], target: [1, 2, 3], quaternion: [0.5, 0.5, 0.5, 0.5],
+      up: [0, 1, 0], zoom: 1.5, fov: 55, near: 0.02, far: 250,
     })
 
     const restored = createViewportPreferenceStore(storage).getState()
@@ -31,6 +32,9 @@ describe('viewport preference store', () => {
     expect(restored.poseFrame).toBe('mcp')
     expect(restored.gizmoFrame).toBe('parent')
     expect(restored.cameraState.position).toEqual([3, 4, 5])
+    expect(restored.cameraState).toMatchObject({
+      quaternion: [0.5, 0.5, 0.5, 0.5], up: [0, 1, 0], fov: 55, near: 0.02, far: 250,
+    })
     expect(storage.getItem(VIEWPORT_PREFERENCE_STORAGE_KEY)).toContain('tcpFrame')
     expect(Array.from({ length: storage.length }, (_, index) => storage.key(index)))
       .not.toContain('robot-sim.active-project')

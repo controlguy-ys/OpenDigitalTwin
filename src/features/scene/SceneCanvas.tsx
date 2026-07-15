@@ -1,5 +1,6 @@
 import { Canvas, useLoader } from '@react-three/fiber'
-import { Suspense, useCallback, useRef, useState } from 'react'
+import { Suspense, useCallback, useMemo, useRef, useState } from 'react'
+import { Vector3 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import {
   ROBOT_LINK_URLS,
@@ -24,7 +25,11 @@ import type {
   LinearAxisCommittedStateV1,
 } from './linear-axis-source'
 import { ViewportOverlay, type ViewportOverlayCameraCommands } from '../viewport/ViewportOverlay'
-import { viewportPreferenceStore } from '../viewport/viewport-preference-store'
+import {
+  viewportPreferenceStore,
+  type ViewportCameraState,
+} from '../viewport/viewport-preference-store'
+import type { CoordinateFrameMatrices } from '../viewport/coordinate-pose-readout'
 
 const NOOP_VIEWPORT_ACTIONS: ViewportOverlayCameraCommands = {
   home: () => undefined,
@@ -61,6 +66,24 @@ export function SceneCanvas({
   const [status, setStatus] = useState<SceneRenderStatus>('loading')
   const entityContextHandledRef = useRef(false)
   const [viewportController, setViewportController] = useState<ViewportRuntimeController | null>(null)
+  const [coordinateFrameMatrices, setCoordinateFrameMatrices] = useState<CoordinateFrameMatrices | null>(null)
+  const [cameraDiagnostic, setCameraDiagnostic] = useState<ViewportCameraState>(
+    viewportPreferenceStore.getState().cameraState,
+  )
+  const overlayActions = useMemo<ViewportOverlayCameraCommands>(() => {
+    if (viewportController === null) return NOOP_VIEWPORT_ACTIONS
+    const record = () => {
+      const cameraState = viewportController.readCameraState()
+      viewportPreferenceStore.getState().setCameraState(cameraState)
+      setCameraDiagnostic(cameraState)
+    }
+    return {
+      home: () => { viewportController.actions.home(); record() },
+      fitAll: () => { viewportController.actions.fitAll(); record() },
+      focusSelection: () => { viewportController.actions.focusSelection(); record() },
+      setStandardView: (view) => { viewportController.actions.setStandardView(view); record() },
+    }
+  }, [viewportController])
 
   const updateStatus = useCallback(
     (nextStatus: SceneRenderStatus) => {
@@ -135,13 +158,17 @@ export function SceneCanvas({
         <Canvas
           camera={{
             position: [...viewportPreferenceStore.getState().cameraState.position],
-            fov: 42,
+            fov: viewportPreferenceStore.getState().cameraState.fov,
+            near: viewportPreferenceStore.getState().cameraState.near,
+            far: viewportPreferenceStore.getState().cameraState.far,
             zoom: viewportPreferenceStore.getState().cameraState.zoom,
           }}
           dpr={[1, 2]}
           onCreated={({ camera }) => {
-            camera.up.set(0, 0, 1)
-            camera.lookAt(...viewportPreferenceStore.getState().cameraState.target)
+            const saved = viewportPreferenceStore.getState().cameraState
+            camera.up.set(...saved.up)
+            camera.quaternion.set(...saved.quaternion).normalize()
+            camera.updateProjectionMatrix()
           }}
           onPointerMissed={() => {
             useInteractionStore.getState().clearSelection()
@@ -157,17 +184,36 @@ export function SceneCanvas({
               registerInteractionController={registerInteractionController}
               registerRig={handleRigRegistration}
               registerViewportController={setViewportController}
+              registerCoordinateFrameMatrices={setCoordinateFrameMatrices}
             />
           </Suspense>
         </Canvas>
       </SceneErrorBoundary>
       <ViewportOverlay
-        actions={viewportController?.actions ?? NOOP_VIEWPORT_ACTIONS}
+        actions={overlayActions}
         canFocusSelection={viewportController?.canFocusSelection ?? false}
+        frameMatrices={coordinateFrameMatrices}
         {...(viewportController === null
           ? {}
           : { robotRevision: viewportController.robotRevision })}
       />
+      {import.meta.env.MODE === 'test' ? (
+        <>
+          <output data-testid="viewport-camera-diagnostic" hidden>
+            {JSON.stringify({
+              ready: viewportController !== null && coordinateFrameMatrices !== null,
+              state: cameraDiagnostic,
+              viewFromDirection: new Vector3(...cameraDiagnostic.position)
+                .sub(new Vector3(...cameraDiagnostic.target)).normalize().toArray(),
+            })}
+          </output>
+          <output data-testid="frame-marker-diagnostic" hidden>
+            {coordinateFrameMatrices === null
+              ? 'pending'
+              : 'World:X,Y,Z|Robot Base:X,Y,Z|Actual TCP:X,Y,Z'}
+          </output>
+        </>
+      ) : null}
       <RobotStatusOverlay visible={status === 'loading'} />
     </div>
   )

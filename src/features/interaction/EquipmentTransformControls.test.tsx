@@ -1,8 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { createRef } from 'react'
-import { Group } from 'three'
+import { Group, Quaternion, Vector3 } from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { EquipmentTransformControls } from './EquipmentTransformControls'
+import {
+  applyParentGizmoTranslation,
+  synchronizeParentGizmoProxy,
+} from './EquipmentTransformControls'
 
 vi.mock('@react-three/drei/core/TransformControls.js', () => ({
   TransformControls: ({
@@ -37,8 +41,26 @@ describe('EquipmentTransformControls', () => {
     }
     const view = render(<EquipmentTransformControls {...props} space="world" />)
     expect(screen.getByTestId('transform-controls')).toHaveAttribute('data-space', 'world')
-    view.rerender(<EquipmentTransformControls {...props} space="local" />)
+    view.rerender(<EquipmentTransformControls {...props} space="parent" />)
     expect(screen.getByTestId('transform-controls')).toHaveAttribute('data-space', 'local')
+  })
+
+  it('moves a rotated child along its rotated Parent axes without changing child orientation', () => {
+    const object = new Group()
+    object.position.set(0, 0, 0)
+    object.quaternion.setFromAxisAngle(new Vector3(0, 0, 1), Math.PI / 4)
+    const originalChildQuaternion = object.quaternion.clone()
+    const parentQuaternion = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), Math.PI / 2)
+    const proxy = new Group()
+
+    synchronizeParentGizmoProxy(proxy, object, parentQuaternion.toArray())
+    proxy.translateX(1)
+    applyParentGizmoTranslation(proxy, object)
+
+    expect(proxy.quaternion.angleTo(parentQuaternion)).toBeCloseTo(0)
+    expect(object.position.x).toBeCloseTo(0)
+    expect(object.position.y).toBeCloseTo(1)
+    expect(object.quaternion.angleTo(originalChildQuaternion)).toBeCloseTo(0)
   })
 
   it('does not fire drag cleanup when a parent rerender supplies a new callback', () => {

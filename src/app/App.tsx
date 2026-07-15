@@ -374,6 +374,13 @@ export function App() {
 
   return (
     <>
+      {import.meta.env.MODE === 'test' ? (
+        <output data-testid="project-semantic-diagnostic" hidden>
+          {activeSnapshot === undefined || activeSnapshot === null
+            ? 'null'
+            : JSON.stringify(activeSnapshot)}
+        </output>
+      ) : null}
       <AppShell
         projectMenu={<ProjectMenu />}
         assetTree={

@@ -1,9 +1,20 @@
 import { Box3, MathUtils, PerspectiveCamera, Sphere, Vector3 } from 'three'
+import type { ViewportCameraState } from './viewport-preference-store'
 
 export const HOME_CAMERA = Object.freeze({
   position: [2.2, 1.8, 1.7] as const,
   target: [0.15, 0, 1.55] as const,
+  quaternion: [
+    0.28351443473132715,
+    0.6262342308848727,
+    0.6616126318893704,
+    0.29953126496482535,
+  ] as const,
+  up: [0, 0, 1] as const,
   zoom: 1,
+  fov: 42,
+  near: 0.1,
+  far: 100,
 })
 
 export type StandardWorldView =
@@ -19,6 +30,39 @@ export interface ViewportCameraActions {
   fitAll(bounds: Box3): void
   focusSelection(bounds: Box3): void
   setStandardView(view: StandardWorldView): void
+}
+
+export function captureViewportCameraState(
+  camera: PerspectiveCamera,
+  controls: OrbitTargetController,
+): ViewportCameraState {
+  return {
+    position: camera.position.toArray(),
+    target: controls.target.toArray(),
+    quaternion: camera.quaternion.toArray(),
+    up: camera.up.toArray(),
+    zoom: camera.zoom,
+    fov: camera.fov,
+    near: camera.near,
+    far: camera.far,
+  }
+}
+
+export function restoreViewportCameraState(
+  camera: PerspectiveCamera,
+  controls: OrbitTargetController,
+  state: ViewportCameraState,
+): void {
+  camera.position.set(...state.position)
+  camera.quaternion.set(...state.quaternion).normalize()
+  camera.up.set(...state.up)
+  camera.zoom = state.zoom
+  camera.fov = state.fov
+  camera.near = state.near
+  camera.far = state.far
+  controls.target.set(...state.target)
+  camera.updateProjectionMatrix()
+  controls.update()
 }
 
 const WORLD_VIEW_DIRECTIONS: Record<StandardWorldView, readonly [number, number, number]> = {
@@ -69,8 +113,14 @@ export function createViewportCameraActions(
     home: () => {
       camera.position.set(...HOME_CAMERA.position)
       controls.target.set(...HOME_CAMERA.target)
+      camera.up.set(...HOME_CAMERA.up)
       camera.zoom = HOME_CAMERA.zoom
-      applyView(camera, controls)
+      camera.fov = HOME_CAMERA.fov
+      camera.near = HOME_CAMERA.near
+      camera.far = HOME_CAMERA.far
+      camera.quaternion.set(...HOME_CAMERA.quaternion)
+      camera.updateProjectionMatrix()
+      controls.update()
     },
     fitAll: (bounds) => frameBounds(camera, controls, bounds),
     focusSelection: (bounds) => frameBounds(camera, controls, bounds),
