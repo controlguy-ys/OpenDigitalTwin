@@ -37,6 +37,7 @@ describe('collision scene selectors', () => {
       revision: 'sequence-1',
       sampleCount: 3,
       findings: [first, second],
+      mountContact: null,
       truncated: false,
     })
     const renders = new Map<string, number>()
@@ -90,6 +91,7 @@ describe('collision scene selectors', () => {
         finding('object:a', 'robot-link:LINK03', 'collision', 1),
         finding('object:a', 'robot-link:LINK03', 'near-miss', 2),
       ],
+      mountContact: null,
       truncated: false,
     })
     const objectOutline = createCollisionEntityOutlineSelector('object:a')

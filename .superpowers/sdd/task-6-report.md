@@ -22,8 +22,9 @@ surface instead of an implicit `LINK00|workbench` exemption.
   ignored-pair controls, and never receives Ignore/Restore actions.
 - JSON reports expose `mountContactPairKey`, `mountContactState`, and the
   independently sorted user-managed `ignoredPairKeys`.
-- The Collision panel presents `Mount Contact: Configured <state>` or
-  `Mount Contact: Incomplete` separately from ordinary collision counts.
+- The Collision panel presents the current source as `Live` or `Job`, reports a
+  complete but unevaluated configuration as `Configured unavailable`, and uses
+  `Incomplete` only when the active mount configuration itself is incomplete.
 
 The geometry acceptance fixture was migrated to the current Project V3 Scene
 archive surface (`scene/state.json`, Scene local poses, and Object Instance
@@ -98,6 +99,35 @@ Test Files  2 passed (2)
 Tests       33 passed (33)
 ```
 
+## Review Follow-up Closure
+
+The review follow-up added seven failing assertions before the fixes. They
+covered a stale ignored mount pair suppressing narrow phase, mount leakage into
+the public ignored-pair report/UI, missing sequence-result mount persistence,
+disabled or not-yet-evaluated configuration semantics, and a Job report whose
+mount state was worse than the current-pose state.
+
+The follow-up implementation now guarantees:
+
+- a configured mount pair is always evaluated even if a stale persisted policy
+  also lists it as ignored;
+- stale mount entries are sanitized from JSON report metadata and the
+  user-managed Ignore/Restore surface;
+- sequence validation persists its owned `mountContact` result in the Job
+  report, and the panel display plus JSON export use that Job state while the
+  Job report is active;
+- disabled validation leaves a complete mount configuration unevaluated instead
+  of manufacturing a false `clear` state;
+- completeness and evaluation are separate, so a valid pair without a matching
+  evaluation reads `Configured unavailable` rather than `Incomplete`.
+
+The browser near-miss assertion was restored to require both a nonzero
+Near-miss count and an exact `kind: 'near-miss'` row for the fixture/LINK00
+pair. The fixture now enters at X = 135 mm through the imported archive, making
+the +45 mm separation deterministic inside the unchanged 50 mm warning band.
+Ignore, Restore, and the restored near-miss report row are asserted without
+changing existing Playwright timeouts.
+
 ## Final Verification
 
 Focused collision/domain gate:
@@ -106,7 +136,7 @@ Focused collision/domain gate:
 npm run test:run -- src/domain/collision src/features/collision
 ```
 
-Result: 16 files, 133 tests passed, 0 failed.
+Result: 16 files, 138 tests passed, 0 failed.
 
 Full serial Vitest gate:
 
@@ -114,7 +144,7 @@ Full serial Vitest gate:
 npx vitest run --maxWorkers=1
 ```
 
-Result: 109 files, 925 tests passed, 0 failed in 317.05 seconds.
+Result: 109 files, 930 tests passed, 0 failed in 273.09 seconds.
 
 Geometry browser acceptance gate, with existing timeouts unchanged:
 
@@ -122,7 +152,7 @@ Geometry browser acceptance gate, with existing timeouts unchanged:
 npm run test:e2e -- tests/geometry-collision.spec.ts
 ```
 
-Result: 3 tests passed, 0 failed in 8.6 minutes. This covers mount status and
+Result: 3 tests passed, 0 failed in 4.2 minutes. This covers mount status and
 report metadata, Ignore/Restore separation, Save/Export/reload preservation,
 and responsive held-Object Worker validation.
 

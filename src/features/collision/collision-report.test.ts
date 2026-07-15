@@ -59,7 +59,7 @@ describe('collision report encoders', () => {
     const ignoredPair = 'object:a|robot-link:LINK02'
     const decoded = JSON.parse(encodeCollisionReportJson([], {
       mountContact: { pairKey: mountPair, state: 'contact' },
-      ignoredPairKeys: [ignoredPair],
+      ignoredPairKeys: [mountPair, ignoredPair],
     })) as {
       mountContactPairKey: string | null
       mountContactState: string | null

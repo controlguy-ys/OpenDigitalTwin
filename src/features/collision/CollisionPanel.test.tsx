@@ -47,6 +47,31 @@ const NEAR_MISS: CollisionFinding = {
   timeMs: null,
 }
 
+const MOUNT_PAIR = 'robot-link:LINK00|workcell:workbench'
+
+function registerMountPair(): void {
+  registerGeometryEntity({
+    id: 'robot-link:LINK00',
+    name: 'LINK00',
+    category: 'robot-link',
+    boxes: [{
+      id: 'default', center: [0, 0, 0], halfExtents: [0.1, 0.1, 0.1],
+      quaternion: [0, 0, 0, 1],
+    }],
+    object: new Group(),
+  })
+  registerGeometryEntity({
+    id: 'workcell:workbench',
+    name: 'Workbench',
+    category: 'environment',
+    boxes: [{
+      id: 'default', center: [0, 0, 0], halfExtents: [0.1, 0.1, 0.1],
+      quaternion: [0, 0, 0, 1],
+    }],
+    object: new Group(),
+  })
+}
+
 function seedFindings() {
   const state = useCollisionStore.getState()
   state.replaceCollisionState({
@@ -129,6 +154,7 @@ describe('CollisionPanel', () => {
       revision: 'completed-registry-run',
       sampleCount: 1,
       findings: [COLLISION],
+      mountContact: null,
       truncated: false,
     })
     return { validate, cancel }
@@ -251,6 +277,7 @@ describe('CollisionPanel', () => {
   })
 
   it('shows mount configuration and contact state separately from finding counts', () => {
+    registerMountPair()
     render(
       <CollisionPanel
         mountContactConfiguration={{
@@ -271,6 +298,89 @@ describe('CollisionPanel', () => {
     expect(screen.queryByRole('button', {
       name: 'Restore robot-link:LINK00|workcell:workbench',
     })).not.toBeInTheDocument()
+  })
+
+  it('shows a complete active mount configuration as unavailable before evaluation', () => {
+    registerMountPair()
+    useCollisionStore.setState({ mountContact: null })
+    render(
+      <CollisionPanel mountContactConfiguration={{
+        baseLinkId: 'LINK00',
+        mountSurfaceCollisionEntityId: 'workcell:workbench',
+      }} />,
+    )
+
+    expect(screen.getByRole('status', { name: 'Mount contact status' }))
+      .toHaveTextContent('Mount Contact: Configured unavailable')
+    expect(screen.getByRole('status', { name: 'Mount contact status' }))
+      .not.toHaveTextContent('Incomplete')
+  })
+
+  it('uses the active Job mount state for display and JSON export', async () => {
+    registerMountPair()
+    const user = userEvent.setup()
+    const createObjectURL = vi.fn((_value: Blob) => 'blob:collision-report')
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: createObjectURL,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    useCollisionStore.setState({
+      mountContact: { pairKey: MOUNT_PAIR, state: 'clear' },
+    })
+    useCollisionStore.getState().setValidationReport({
+      revision: 'job-contact',
+      sampleCount: 1_000,
+      findings: [],
+      mountContact: { pairKey: MOUNT_PAIR, state: 'contact' },
+      truncated: false,
+    })
+    render(
+      <CollisionPanel mountContactConfiguration={{
+        baseLinkId: 'LINK00',
+        mountSurfaceCollisionEntityId: 'workcell:workbench',
+      }} />,
+    )
+
+    expect(screen.getByRole('status', { name: 'Mount contact status' }))
+      .toHaveTextContent('Mount Contact: Configured contact (Job)')
+    await user.click(screen.getByRole('button', { name: 'Download JSON report' }))
+    const decoded = JSON.parse(
+      await createObjectURL.mock.calls[0]![0].text(),
+    ) as { mountContactPairKey: string; mountContactState: string }
+    expect(decoded).toMatchObject({
+      mountContactPairKey: MOUNT_PAIR,
+      mountContactState: 'contact',
+    })
+  })
+
+  it('hides a stale mount overlap from user-managed ignored policy controls', () => {
+    registerMountPair()
+    useCollisionStore.getState().replaceCollisionState({
+      policy: {
+        ...useCollisionStore.getState().policy,
+        ignoredPairKeys: [MOUNT_PAIR, COLLISION.pairKey],
+      },
+      currentFindings: [COLLISION],
+      mountContact: { pairKey: MOUNT_PAIR, state: 'contact' },
+      diagnostics: [],
+    })
+    render(
+      <CollisionPanel mountContactConfiguration={{
+        baseLinkId: 'LINK00',
+        mountSurfaceCollisionEntityId: 'workcell:workbench',
+      }} />,
+    )
+
+    const ignored = screen.getByRole('list', { name: 'Ignored collision pairs' })
+    expect(ignored).toHaveTextContent(COLLISION.pairKey)
+    expect(ignored).not.toHaveTextContent(MOUNT_PAIR)
+    expect(screen.queryByRole('button', { name: `Restore ${MOUNT_PAIR}` }))
+      .not.toBeInTheDocument()
   })
 
   it('passes the same derived mount pair to sequence validation composition', async () => {
@@ -417,6 +527,7 @@ describe('CollisionPanel', () => {
       revision: 'capped-export',
       sampleCount: 20_000,
       findings: [COLLISION],
+      mountContact: null,
       truncated: true,
     })
     render(<CollisionPanel />)
@@ -512,6 +623,7 @@ describe('CollisionPanel', () => {
       revision: 'runtime-1',
       sampleCount: 1,
       findings: [COLLISION],
+      mountContact: null,
       truncated: false,
     })
     const { rerender } = render(
@@ -542,6 +654,7 @@ describe('CollisionPanel', () => {
       revision: 'runtime-1',
       sampleCount: 1,
       findings: [COLLISION],
+      mountContact: null,
       truncated: false,
     })
     const { rerender } = render(<CollisionPanel />)
@@ -734,6 +847,7 @@ describe('CollisionPanel', () => {
       revision: 'capped-run',
       sampleCount: 20_000,
       findings: [COLLISION],
+      mountContact: null,
       truncated: true,
     })
 
@@ -749,6 +863,7 @@ describe('CollisionPanel', () => {
       revision: 'runtime-1',
       sampleCount: 1,
       findings: [COLLISION],
+      mountContact: null,
       truncated: false,
     })
     render(<CollisionPanel />)

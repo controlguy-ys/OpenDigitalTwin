@@ -88,6 +88,22 @@ describe('geometry collision orchestration', () => {
     })
   })
 
+  it('evaluates configured mount contact even when a stale policy also ignores that pair', () => {
+    const mountPairKey = pairKey('robot-link:LINK00', 'workcell:workbench')
+    const result = queryGeometryCollisionsWithTelemetry(
+      [
+        entity('robot-link:LINK00', 'robot-link', 0),
+        entity('workcell:workbench', 'environment', 0.75),
+      ],
+      { ...POLICY, ignoredPairKeys: [mountPairKey] },
+      { mountContactPairKey: mountPairKey },
+    )
+
+    expect(result.mountContact).toEqual({ pairKey: mountPairKey, state: 'contact' })
+    expect(result.telemetry.narrowPhaseTestCount).toBe(1)
+    expect(result.findings).toEqual([])
+  })
+
   it('returns current-pose collision and near-miss rows in stable order', () => {
     const findings = queryGeometryCollisions(
       [

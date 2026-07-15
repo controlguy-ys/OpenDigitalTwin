@@ -141,6 +141,10 @@ describe('collision store', () => {
       revision: 'sequence-17',
       sampleCount: 12,
       findings,
+      mountContact: {
+        pairKey: 'robot-link:LINK00|workcell:workbench',
+        state: 'contact',
+      },
       truncated: false,
     }
 
@@ -151,6 +155,10 @@ describe('collision store', () => {
     expect(store.getState().validationReport?.findings[0]?.separationM).toBe(
       -0.05,
     )
+    expect(store.getState().validationReport?.mountContact).toEqual({
+      pairKey: 'robot-link:LINK00|workcell:workbench',
+      state: 'contact',
+    })
     expect(store.getState().validationReportStale).toBe(true)
     expect(store.getState().validationReportError).toBe(
       'Worker stopped unexpectedly.',
@@ -202,6 +210,7 @@ describe('collision store', () => {
       revision: 'sequence-17',
       sampleCount: 12,
       findings,
+      mountContact: null,
       truncated: false,
     })
 
@@ -316,6 +325,7 @@ describe('collision store', () => {
       revision: 'sequence-clamp-1',
       sampleCount: 3,
       findings: rows,
+      mountContact: null,
       truncated: false,
     })
     store.getState().setSelectedFindingIndex(1)
@@ -323,6 +333,7 @@ describe('collision store', () => {
       revision: 'sequence-clamp-2',
       sampleCount: 3,
       findings: [rows[0]!, rows[2]!],
+      mountContact: null,
       truncated: false,
     })
 

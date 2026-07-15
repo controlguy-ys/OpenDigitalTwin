@@ -398,6 +398,18 @@ export function CollisionPanel({
   const latestTelemetry = useCollisionStore((state) => state.latestTelemetry)
   const diagnostics = useCollisionStore((state) => state.diagnostics)
   const currentMountContact = useCollisionStore((state) => state.mountContact)
+  const registryRevision = useSyncExternalStore(
+    subscribeGeometryEntityRegistry,
+    getGeometryEntityRegistryRevision,
+    getGeometryEntityRegistryRevision,
+  )
+  const configuredMountPairKey = useMemo(
+    () => deriveMountContactPairKey(
+      activeMountContactConfiguration,
+      snapshotGeometryEntities().entities,
+    ),
+    [activeMountContactConfiguration, registryRevision],
+  )
   const navigationFindings = useCollisionStore(
     selectCollisionNavigationFindings,
   )
@@ -434,9 +446,19 @@ export function CollisionPanel({
   const markValidationReportStale = useCollisionStore(
     (state) => state.markValidationReportStale,
   )
-  const displayedMountContact = mountContact === undefined
+  const liveMountContact = mountContact === undefined
     ? currentMountContact
     : mountContact
+  const displayedMountContact = validationReport === null
+    ? liveMountContact
+    : validationReport.mountContact
+  const evaluatedMountContact =
+    displayedMountContact?.pairKey === configuredMountPairKey
+      ? displayedMountContact
+      : null
+  const userIgnoredPairKeys = policy.ignoredPairKeys.filter(
+    (pairKey) => pairKey !== configuredMountPairKey,
+  )
   const defaultValidationRuntime = useDefaultValidationRuntime(
     policy,
     activeMountContactConfiguration,
@@ -502,6 +524,7 @@ export function CollisionPanel({
           revision: result.revision,
           sampleCount: result.sampleCount,
           findings: result.findings,
+          mountContact: result.mountContact,
           truncated: result.truncated,
         })
       }).catch((error: unknown) => {
@@ -564,9 +587,11 @@ export function CollisionPanel({
           <span data-kind="near-miss">Near-miss {counts.nearMisses}</span>
         </div>
         <output aria-label="Mount contact status" role="status">
-          Mount Contact: {displayedMountContact === null
+          Mount Contact: {configuredMountPairKey === null
             ? 'Incomplete'
-            : `Configured ${displayedMountContact.state}`}
+            : evaluatedMountContact === null
+              ? 'Configured unavailable'
+              : `Configured ${evaluatedMountContact.state} (${validationReport === null ? 'Live' : 'Job'})`}
         </output>
         {latestTelemetry === null ? null : (
           <output
@@ -711,23 +736,25 @@ export function CollisionPanel({
             <code>{selectedFinding.pairKey}</code>
             <span>Approximate Clearance</span>
             <output>{clearanceText(selectedFinding.separationM)}</output>
-            <button
-              aria-label={`Ignore ${selectedFinding.firstEntityId} and ${selectedFinding.secondEntityId}`}
-              disabled={policy.ignoredPairKeys.includes(selectedFinding.pairKey)}
-              onClick={() => ignorePair(selectedFinding.pairKey)}
-              type="button"
-            >
-              Ignore Pair
-            </button>
+            {selectedFinding.pairKey === configuredMountPairKey ? null : (
+              <button
+                aria-label={`Ignore ${selectedFinding.firstEntityId} and ${selectedFinding.secondEntityId}`}
+                disabled={userIgnoredPairKeys.includes(selectedFinding.pairKey)}
+                onClick={() => ignorePair(selectedFinding.pairKey)}
+                type="button"
+              >
+                Ignore Pair
+              </button>
+            )}
           </article>
         )}
       </div>
 
-      {policy.ignoredPairKeys.length === 0 ? null : (
+      {userIgnoredPairKeys.length === 0 ? null : (
         <div className="collision-ignored-pairs">
           <strong>Ignored pairs</strong>
           <ul aria-label="Ignored collision pairs">
-            {policy.ignoredPairKeys.map((ignoredPair) => (
+            {userIgnoredPairKeys.map((ignoredPair) => (
               <li key={ignoredPair}>
                 <code>{ignoredPair}</code>
                 <button
@@ -774,8 +801,8 @@ export function CollisionPanel({
                 encodeCollisionReportJson(navigationFindings, {
                   sourceTruncated: validationReport?.truncated ?? false,
                   sampleCount: validationReport?.sampleCount ?? null,
-                  mountContact: displayedMountContact,
-                  ignoredPairKeys: policy.ignoredPairKeys,
+                  mountContact: evaluatedMountContact,
+                  ignoredPairKeys: userIgnoredPairKeys,
                 }),
               )
             }

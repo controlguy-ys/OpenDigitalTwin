@@ -103,7 +103,10 @@ function canonicalPoseDurationMs(
   ))
 }
 
-function v3CollisionFixture(source: Uint8Array): Buffer {
+function v3CollisionFixture(
+  source: Uint8Array,
+  fixturePositionM: readonly [number, number, number] = [0, 0, 1.15],
+): Buffer {
   const entries = unzipSync(source)
   const manifest = jsonEntry<Record<string, unknown>>(entries, 'manifest.json')
   const sources = jsonEntry<Record<string, unknown>[]>(entries, 'robot/sources/index.json')
@@ -178,7 +181,7 @@ function v3CollisionFixture(source: Uint8Array): Buffer {
         name: 'Collision Fixture',
         parentId: null,
         localPose: {
-          positionM: [0, 0, 1.15],
+          positionM: [...fixturePositionM],
           quaternion: [0, 0, 0, 1],
         },
         visible: true,
@@ -513,20 +516,6 @@ async function selectCollisionFixture(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Select Collision Fixture' }).click()
 }
 
-async function applyFixturePosition(
-  page: Page,
-  positionMm: readonly [number, number, number],
-): Promise<void> {
-  const inspector = page.getByRole('complementary', { name: 'Inspector' })
-  await inspector.getByLabel('Local X (mm)').fill(String(positionMm[0]))
-  await inspector.getByLabel('Local Y (mm)').fill(String(positionMm[1]))
-  await inspector.getByLabel('Local Z (mm)').fill(String(positionMm[2]))
-  await inspector.getByRole('button', { name: 'Apply transform' }).click()
-  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue(String(positionMm[0]))
-  await expect(inspector.getByLabel('Local Y (mm)')).toHaveValue(String(positionMm[1]))
-  await expect(inspector.getByLabel('Local Z (mm)')).toHaveValue(String(positionMm[2]))
-}
-
 test('accepts V3 geometry collision and report workflows', async ({
   page,
 }) => {
@@ -544,6 +533,7 @@ test('accepts V3 geometry collision and report workflows', async ({
   ])
   const fixture = v3CollisionFixture(
     await readFile(await downloadPath(defaultDownload)),
+    [0.135, 0, 1.15],
   )
   await page.getByLabel('Import project').setInputFiles({
     name: 'geometry-collision-v3.wdtwin',
@@ -556,7 +546,7 @@ test('accepts V3 geometry collision and report workflows', async ({
   expect(migrated).toMatchObject({
     schemaVersion: 3,
     name: 'Geometry Collision Acceptance',
-    objectTransform: { position: [0, 0, 1.15] },
+    objectTransform: { position: [0.135, 0, 1.15] },
     collisionPolicy: {
       enabled: true,
       warningDistanceM: 0.02,
@@ -580,7 +570,6 @@ test('accepts V3 geometry collision and report workflows', async ({
   })
   expect(collisionReport.findings).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ kind: 'collision', pairKey: LINK00_PAIR }),
       expect.objectContaining({
         kind: 'collision',
         pairKey: 'robot-link:LINK01|workcell:workbench',
@@ -593,17 +582,16 @@ test('accepts V3 geometry collision and report workflows', async ({
 
   await selectCollisionFixture(page)
   const inspector = page.getByRole('complementary', { name: 'Inspector' })
-  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue('0')
+  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue('135')
   await expect(inspector.getByLabel('Local Z (mm)')).toHaveValue('1150')
 
   await page.getByLabel('Warning distance (mm)').fill('50')
-  await applyFixturePosition(page, [135, 0, 1_150])
   await expect(page.getByLabel('Live collision counts')).toContainText(
-    /Collision [1-9]/,
+    /Near-miss [1-9]/,
   )
   const nearReport = await downloadJsonReport(page)
   const fixtureFindingIndex = nearReport.findings.findIndex(
-    ({ pairKey }) => pairKey === LINK00_PAIR,
+    ({ kind, pairKey }) => kind === 'near-miss' && pairKey === LINK00_PAIR,
   )
   expect(fixtureFindingIndex).toBeGreaterThanOrEqual(0)
   expect(nearReport.findings).not.toContainEqual(
@@ -645,11 +633,11 @@ test('accepts V3 geometry collision and report workflows', async ({
   await expect(page.getByRole('list', { name: 'Ignored collision pairs' }))
     .not.toBeVisible()
   await expect(page.getByLabel('Live collision counts')).toContainText(
-    /Collision [1-9]/,
+    /Near-miss [1-9]/,
   )
   const restoredReport = await downloadJsonReport(page)
   const restoredRow = restoredReport.findings.find(
-    ({ pairKey }) => pairKey === LINK00_PAIR,
+    ({ kind, pairKey }) => kind === 'near-miss' && pairKey === LINK00_PAIR,
   )
   expect(restoredRow).toBeDefined()
   expect(await downloadCsvReport(page)).toContain(

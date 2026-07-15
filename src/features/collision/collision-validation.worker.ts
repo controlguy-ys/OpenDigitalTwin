@@ -99,9 +99,7 @@ export async function runCollisionValidation(
   const sampled = sampleJointSequence(request.sequence, request.mode)
   const { samples } = sampled
   const findings = [] as CollisionValidationResult['findings'][number][]
-  let mountContact: MountContactState | null = request.mountContactPairKey === null
-    ? null
-    : Object.freeze({ pairKey: request.mountContactPairKey, state: 'clear' })
+  let mountContact: MountContactState | null = null
   let findingsTruncated = false
   const isCancelled = controls.isCancelled ?? (() => false)
   const yieldControl = controls.yieldControl ?? defaultYieldControl

@@ -160,6 +160,9 @@ export function queryGeometryCollisionsWithTelemetry(
     }
     entitiesById.set(entity.id, entity)
   }
+  const mountPairIds = options.mountContactPairKey?.split('|') ?? []
+  const mountPairIsActive = mountPairIds.length === 2 &&
+    mountPairIds.every((id) => entitiesById.has(id))
   const worldObbs = entities.flatMap((entity) =>
     entity.boxes.map((box) => worldObbFromBox(entity, box)),
   )
@@ -174,7 +177,10 @@ export function queryGeometryCollisionsWithTelemetry(
     const firstEntity = entitiesById.get(firstObb.entityId)!
     const secondEntity = entitiesById.get(secondObb.entityId)!
     const key = pairKey(firstEntity.id, secondEntity.id)
-    if (ignored.has(key) || !pairEnabledByCategory(firstEntity, secondEntity, policy)) {
+    if (
+      (ignored.has(key) && (!mountPairIsActive || key !== options.mountContactPairKey)) ||
+      !pairEnabledByCategory(firstEntity, secondEntity, policy)
+    ) {
       continue
     }
     narrowPhaseTestCount += 1
@@ -190,9 +196,6 @@ export function queryGeometryCollisionsWithTelemetry(
       findingsByPair.set(key, finding)
     }
   }
-  const mountPairIds = options.mountContactPairKey?.split('|') ?? []
-  const mountPairIsActive = mountPairIds.length === 2 &&
-    mountPairIds.every((id) => entitiesById.has(id))
   const mountFinding = mountPairIsActive
     ? findingsByPair.get(options.mountContactPairKey!)
     : undefined

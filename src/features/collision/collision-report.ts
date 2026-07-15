@@ -87,7 +87,9 @@ export function encodeCollisionReportJson(
       clearanceLabel: 'Approximate Clearance',
       mountContactPairKey: metadata.mountContact?.pairKey ?? null,
       mountContactState: metadata.mountContact?.state ?? null,
-      ignoredPairKeys: [...(metadata.ignoredPairKeys ?? [])].sort(),
+      ignoredPairKeys: [...(metadata.ignoredPairKeys ?? [])]
+        .filter((pairKey) => pairKey !== metadata.mountContact?.pairKey)
+        .sort(),
       summary: {
         totalFindings: findings.length,
         exportedFindings: rows.length,

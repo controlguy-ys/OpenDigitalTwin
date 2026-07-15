@@ -26,6 +26,7 @@ export interface CollisionValidationReport {
   readonly revision: string
   readonly sampleCount: number
   readonly findings: readonly CollisionFinding[]
+  readonly mountContact: MountContactState | null
   readonly truncated: boolean
 }
 
@@ -123,6 +124,9 @@ function ownedValidationReport(
     revision: report.revision,
     sampleCount: report.sampleCount,
     findings: Object.freeze(report.findings.map(validateCollisionFinding)),
+    mountContact: report.mountContact === null
+      ? null
+      : Object.freeze({ ...report.mountContact }),
     truncated: report.truncated,
   })
 }

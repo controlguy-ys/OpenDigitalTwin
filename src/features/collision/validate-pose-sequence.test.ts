@@ -256,6 +256,16 @@ function validationRequest(
 }
 
 describe('runCollisionValidation', () => {
+  it('leaves configured mount contact unavailable when collision policy is disabled', async () => {
+    const request = validationRequest([pose('start', 0), pose('end', 0)])
+    const result = await runCollisionValidation({
+      ...request,
+      policy: { ...request.policy, enabled: false },
+    })
+
+    expect(result?.mountContact).toBeNull()
+  })
+
   it('keeps the Project V3 absolute Robot root aligned with a held/static probe', async () => {
     const baseRequest = validationRequest([
       pose('start', -249.75, 2_775),
