@@ -15,11 +15,15 @@ vi.mock('../features/scene/scene-runtime-selector', async (importOriginal) => ({
 
 vi.mock('../features/scene/SceneCanvas', () => ({
   SceneCanvas: ({ onContextMenu }: {
-    onContextMenu?: (entityId: 'object:cup-1' | null) => void
+    onContextMenu?: (
+      entityId: 'object:cup-1' | 'robot:active' | null,
+      position: { x: number; y: number },
+    ) => void
   }) => (
     <div>
-      <button onClick={() => onContextMenu?.(null)} type="button">Empty viewport context</button>
-      <button onClick={() => onContextMenu?.('object:cup-1')} type="button">Entity viewport context</button>
+      <button onClick={() => onContextMenu?.(null, { x: 0, y: 0 })} type="button">Empty viewport context</button>
+      <button onClick={() => onContextMenu?.('object:cup-1', { x: 0, y: 0 })} type="button">Entity viewport context</button>
+      <button onClick={() => onContextMenu?.('robot:active', { x: 0, y: 0 })} type="button">Robot viewport context</button>
     </div>
   ),
 }))
@@ -54,5 +58,18 @@ describe('App scene editor integration', () => {
     expect(screen.getByRole('menuitem', { name: 'Duplicate' })).toBeVisible()
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeVisible()
     expect(screen.queryByRole('menuitem', { name: 'Fit All' })).not.toBeInTheDocument()
+  })
+
+  it('opens and focuses the current Collision bottom-rail surface from Robot context', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: 'Robot viewport context' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Open Collision' }))
+
+    expect(screen.getByLabelText('Timeline and Events')).toHaveClass('is-open')
+    expect(screen.getByRole('heading', { name: 'Geometry Proxy Collision' }))
+      .toHaveFocus()
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 })

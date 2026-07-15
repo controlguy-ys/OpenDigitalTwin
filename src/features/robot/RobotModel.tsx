@@ -34,7 +34,7 @@ import {
   useCollisionStore,
 } from '../collision/collision-store'
 import type { SceneRuntimeEntityV1 } from '../scene/scene-runtime-selector'
-import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
+import type { SceneEntityContextHandler } from '../scene/scene-context-request'
 
 export const ROBOT_LINK_ASSETS = [
   { id: 'LINK00', url: '/models/robot/LINK00.glb' },
@@ -69,7 +69,7 @@ export interface RobotRigRegistration {
 }
 
 interface RobotModelProps {
-  onEntityContextMenu?: (entityId: SceneEntityIdV1) => void
+  onEntityContextMenu?: SceneEntityContextHandler
   registerRig?: (registration: RobotRigRegistration | null) => void
   sceneEntity?: SceneRuntimeEntityV1 | null
 }
@@ -373,7 +373,10 @@ export function RobotModel({
               event.stopPropagation()
               event.nativeEvent.preventDefault()
               selectRobotLink(id)
-              onEntityContextMenu?.('robot:active')
+              onEntityContextMenu?.('robot:active', {
+                x: event.nativeEvent.clientX,
+                y: event.nativeEvent.clientY,
+              })
             }}
             onPointerDown={(event: ThreeEvent<PointerEvent>) => {
               event.stopPropagation()

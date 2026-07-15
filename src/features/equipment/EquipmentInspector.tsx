@@ -6,6 +6,7 @@ import type {
 } from '../../domain/equipment/equipment'
 import type { ExternalCollisionEntityId } from '../interaction/interaction-store'
 import { equipmentRecordEntityId } from './equipment-entity-selection'
+import { EquipmentStatusEditor } from './EquipmentStatusEditor'
 
 interface EquipmentInspectorProps {
   record: EquipmentRecord
@@ -94,14 +95,10 @@ export function EquipmentInspector({
 }: EquipmentInspectorProps) {
   const entityId = equipmentRecordEntityId(record)
   const [draft, setDraft] = useState(() => draftFromRecord(record))
-  const [numericStatus, setNumericStatus] = useState(
-    String(record.numericStatus ?? 0),
-  )
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     setDraft(draftFromRecord(record))
-    setNumericStatus(String(record.numericStatus ?? 0))
   }, [record])
 
   const updateDraft = (key: keyof TransformDraft, value: string) => {
@@ -176,60 +173,17 @@ export function EquipmentInspector({
           </button>
         </div>
       </fieldset>
-      <fieldset disabled={disabled}>
-        <legend>Status overlay</legend>
-        <label>
-          Status source
-          <select
-            aria-label="Status source"
-            onChange={(event) => void onStatusSource(
-              entityId,
-              event.currentTarget.value as 'manual' | 'opcua',
-            )}
-            value={record.statusSource ?? 'manual'}
-          >
-            <option value="manual">Manual</option>
-            <option value="opcua">OPC UA</option>
-          </select>
-        </label>
-        <label>
-          Numeric status
-          <input
-            aria-label="Numeric status"
-            disabled={(record.statusSource ?? 'manual') === 'opcua'}
-            onChange={(event) => setNumericStatus(event.currentTarget.value)}
-            step="any"
-            type="number"
-            value={numericStatus}
-          />
-        </label>
-        <label className="equipment-overlay-toggle">
-          <input
-            aria-label="Show status overlay"
-            checked={record.statusOverlayVisible ?? true}
-            onChange={(event) => {
-              void onOverlayVisible(entityId, event.currentTarget.checked)
-            }}
-            type="checkbox"
-          />
-          Show status overlay
-        </label>
-        <button
-          disabled={(record.statusSource ?? 'manual') === 'opcua'}
-          onClick={() => {
-            const value = Number(numericStatus)
-            if (numericStatus.trim() === '' || !Number.isFinite(value)) {
-              setError('Numeric status must be a finite number.')
-              return
-            }
-            setError(null)
-            void onNumericStatus(entityId, value)
-          }}
-          type="button"
-        >
-          Apply numeric status
-        </button>
-      </fieldset>
+      <EquipmentStatusEditor
+        disabled={disabled}
+        onNumericStatus={(value) => onNumericStatus(entityId, value)}
+        onOverlayVisible={(visible) => onOverlayVisible(entityId, visible)}
+        onStatusSource={(source) => onStatusSource(entityId, source)}
+        status={{
+          numericStatus: record.numericStatus ?? 0,
+          statusOverlayVisible: record.statusOverlayVisible ?? true,
+          statusSource: record.statusSource ?? 'manual',
+        }}
+      />
       {error === null ? null : <p role="alert">{error}</p>}
       <button
         className="equipment-danger-action"

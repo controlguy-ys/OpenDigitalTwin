@@ -37,6 +37,9 @@ import { ProjectMenu } from '../features/project/ProjectMenu'
 import { CoordinateFramesDialog } from '../features/frames/CoordinateFramesDialog'
 import type { RobotRigRegistration } from '../features/robot/RobotModel'
 import { CollisionPanel } from '../features/collision/CollisionPanel'
+import { usePublishedSceneRuntime } from '../features/scene/scene-runtime-selector'
+import { deleteSceneEntitySafely } from './safe-scene-deletion'
+import type { SceneContextRequest } from '../features/scene/scene-context-request'
 
 export function App() {
   const [sceneStatus, setSceneStatus] =
@@ -47,9 +50,10 @@ export function App() {
   const [isRobotGeometryOpen, setIsRobotGeometryOpen] = useState(false)
   const [isCoordinateFramesOpen, setIsCoordinateFramesOpen] = useState(false)
   const [robotRig, setRobotRig] = useState<RobotRigRegistration | null>(null)
-  const [viewportContextEntityId, setViewportContextEntityId] = useState<
-    SceneEntityIdV1 | null | undefined
+  const [viewportContextRequest, setViewportContextRequest] = useState<
+    SceneContextRequest | undefined
   >(undefined)
+  const [collisionFocusRequest, setCollisionFocusRequest] = useState(0)
   const [sourceMode, setSourceMode] = useState<'simulation' | 'opcua'>(
     'simulation',
   )
@@ -67,6 +71,7 @@ export function App() {
     sceneEditorStore,
     (state) => state.selectedEntityId,
   )
+  const sceneRuntime = usePublishedSceneRuntime()
   const controlsDisabled = sceneStatus !== 'ready'
   const jointControlsDisabled = controlsDisabled || sourceMode === 'opcua'
   const activeJointSource =
@@ -158,12 +163,46 @@ export function App() {
     await controller.resetInteraction()
   }, [])
 
+  const handleDeleteSceneEntity = useCallback(
+    (entityId: SceneEntityIdV1) => deleteSceneEntitySafely(entityId, {
+      runtime: sceneRuntime,
+      beginRemoval: (externalId) =>
+        useInteractionStore.getState().beginEquipmentRemoval(externalId),
+      endRemoval: (externalId) =>
+        useInteractionStore.getState().endEquipmentRemoval(externalId),
+      getHeldEntityId: () => useInteractionStore.getState().heldEntityId,
+      releaseHeldEntity: async (externalId) => {
+        const controller = interactionControllerRef.current
+        if (controller === null) {
+          if (useInteractionStore.getState().heldEntityId === externalId) {
+            throw new Error('The held Entity cannot be released while the 3D scene is unavailable.')
+          }
+          return
+        }
+        await controller.releaseHeldEquipment(externalId)
+      },
+      deleteEntity: sceneCommandService.deleteEntity,
+      deleteGroupAndContents: sceneCommandService.deleteGroupAndContents,
+      clearInteractionSelection: (externalId) =>
+        useInteractionStore.getState().clearSelectionForEntity(externalId),
+      clearCollisionPairs: (externalId) => {
+        useInteractionStore.getState().clearCollisionPairsForEntity(externalId)
+      },
+      getSceneSelection: () => sceneEditorStore.getState().selectedEntityId,
+      clearSceneSelection: () => sceneEditorStore.getState().select(null),
+    }),
+    [sceneRuntime],
+  )
+
   return (
     <>
       <AppShell
         projectMenu={<ProjectMenu />}
         assetTree={
           <SceneExplorer
+            onDelete={handleDeleteSceneEntity}
+            onOpenRobotCollision={() =>
+              setCollisionFocusRequest((value) => value + 1)}
             onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
             onOpenRobotMechanics={() => setIsRobotConfigurationOpen(true)}
             onSelect={selectSceneEntity}
@@ -175,9 +214,10 @@ export function App() {
               disabled={jointControlsDisabled}
               source={simulationJointSource}
             />
-            <CollisionPanel />
+            <CollisionPanel focusRequest={collisionFocusRequest} />
           </>
         }
+        bottomRailOpenRequest={collisionFocusRequest}
         controlsDisabled={controlsDisabled}
         inspector={
           selectedSceneEntityId === null ? (
@@ -207,20 +247,26 @@ export function App() {
         viewport={
           <>
             <SceneCanvas
-              onContextMenu={setViewportContextEntityId}
+              onContextMenu={(entityId, position) => {
+                setViewportContextRequest({ entityId, position })
+              }}
               onStatusChange={setSceneStatus}
               registerRig={setRobotRig}
               registerInteractionController={(controller) => {
                 interactionControllerRef.current = controller
               }}
             />
-            {viewportContextEntityId === undefined ? null : (
+            {viewportContextRequest === undefined ? null : (
               <SceneContextMenu
-                entityId={viewportContextEntityId}
-                onClose={() => setViewportContextEntityId(undefined)}
+                entityId={viewportContextRequest.entityId}
+                onDelete={handleDeleteSceneEntity}
+                onClose={() => setViewportContextRequest(undefined)}
                 onIsolate={(entityId) => sceneEditorStore.getState().isolate(entityId)}
+                onOpenRobotCollision={() =>
+                  setCollisionFocusRequest((value) => value + 1)}
                 onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
                 onOpenRobotMechanics={() => setIsRobotConfigurationOpen(true)}
+                position={viewportContextRequest.position}
               />
             )}
           </>

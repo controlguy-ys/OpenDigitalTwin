@@ -376,13 +376,11 @@ button {
 }
 
 .scene-context-menu {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
+  position: fixed;
   z-index: 12;
   display: grid;
   min-width: 190px;
-  max-height: calc(100% - 16px);
+  max-height: calc(100vh - 16px);
   padding: 5px;
   overflow: auto;
   background: var(--color-panel);

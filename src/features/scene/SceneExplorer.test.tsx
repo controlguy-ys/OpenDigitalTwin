@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { SceneExplorer } from './SceneExplorer'
@@ -12,6 +12,7 @@ describe('SceneExplorer', () => {
     render(
       <SceneExplorer
         commands={{ setVisible }}
+        onDelete={vi.fn()}
         onIsolate={vi.fn()}
         onSelect={onSelect}
         onShowAll={vi.fn()}
@@ -41,6 +42,7 @@ describe('SceneExplorer', () => {
     const { container } = render(
       <SceneExplorer
         commands={{ setVisible: vi.fn(async () => undefined) }}
+        onDelete={vi.fn()}
         onIsolate={vi.fn()}
         onSelect={vi.fn()}
         onShowAll={onShowAll}
@@ -54,5 +56,85 @@ describe('SceneExplorer', () => {
     expect(screen.getByRole('treeitem', { name: 'Fixture Group' })).toHaveAttribute('aria-selected', 'true')
     await user.click(screen.getByRole('button', { name: 'Show All' }))
     expect(onShowAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes tree deletion through the same injected safe boundary', async () => {
+    const user = userEvent.setup()
+    const onDelete = vi.fn(async () => undefined)
+    render(
+      <SceneExplorer
+        commands={{ setVisible: vi.fn(async () => undefined) }}
+        onDelete={onDelete}
+        onIsolate={vi.fn()}
+        onSelect={vi.fn()}
+        onShowAll={vi.fn()}
+        runtime={testSceneRuntime()}
+        selectedEntityId={null}
+      />,
+    )
+
+    fireEvent.contextMenu(screen.getByRole('treeitem', { name: 'Cup' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Delete Entity' }))
+
+    expect(onDelete).toHaveBeenCalledWith('object:cup-1')
+  })
+
+  it('supports minimal tree keyboard navigation and activation', () => {
+    const onSelect = vi.fn()
+    render(
+      <SceneExplorer
+        commands={{ setVisible: vi.fn(async () => undefined) }}
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        onSelect={onSelect}
+        onShowAll={vi.fn()}
+        runtime={testSceneRuntime()}
+        selectedEntityId={null}
+      />,
+    )
+
+    const robot = screen.getByRole('treeitem', { name: 'Assembly Robot' })
+    const group = screen.getByRole('treeitem', { name: 'Fixture Group' })
+    const cup = screen.getByRole('treeitem', { name: 'Cup' })
+    const axis = screen.getByRole('treeitem', { name: 'Linear Axis' })
+    robot.focus()
+    fireEvent.keyDown(robot, { key: 'ArrowDown' })
+    expect(group).toHaveFocus()
+    fireEvent.keyDown(group, { key: 'ArrowRight' })
+    expect(cup).toHaveFocus()
+    fireEvent.keyDown(cup, { key: 'ArrowLeft' })
+    expect(group).toHaveFocus()
+    fireEvent.keyDown(group, { key: 'End' })
+    expect(axis).toHaveFocus()
+    fireEvent.keyDown(axis, { key: 'Home' })
+    expect(robot).toHaveFocus()
+    fireEvent.keyDown(robot, { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledWith('robot:active')
+  })
+
+  it('positions the context menu at the pointer and reports visibility failures', async () => {
+    const user = userEvent.setup()
+    const setVisible = vi.fn(async () => {
+      throw new Error('visibility publish failed')
+    })
+    render(
+      <SceneExplorer
+        commands={{ setVisible }}
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        onSelect={vi.fn()}
+        onShowAll={vi.fn()}
+        runtime={testSceneRuntime()}
+        selectedEntityId={null}
+      />,
+    )
+
+    const cup = screen.getByRole('treeitem', { name: 'Cup' })
+    fireEvent.contextMenu(cup, { clientX: 90, clientY: 110 })
+    expect(screen.getByRole('menu')).toHaveStyle({ left: '90px', top: '110px' })
+
+    await user.click(screen.getByRole('button', { name: 'Hide Assembly Robot' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('visibility publish failed')
   })
 })

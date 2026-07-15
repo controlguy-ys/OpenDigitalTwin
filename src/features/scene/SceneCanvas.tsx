@@ -9,10 +9,15 @@ import {
 } from '../robot/RobotModel'
 import type { InteractionRuntimeController } from '../interaction/GraspController'
 import { useInteractionStore } from '../interaction/interaction-store'
+import { sceneEditorStore } from '../project/project-store-browser'
 import { RobotStatusOverlay } from '../robot/RobotStatusOverlay'
 import { SceneErrorBoundary } from './SceneErrorBoundary'
 import { Workcell } from './Workcell'
 import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
+import type {
+  SceneContextPosition,
+  SceneEntityContextHandler,
+} from './scene-context-request'
 
 export type SceneRenderStatus = 'loading' | 'ready' | 'error'
 
@@ -22,7 +27,10 @@ export interface SceneCanvasProps {
   registerInteractionController?: (
     controller: InteractionRuntimeController | null,
   ) => void
-  onContextMenu?: (entityId: SceneEntityIdV1 | null) => void
+  onContextMenu?: (
+    entityId: SceneEntityIdV1 | null,
+    position: SceneContextPosition,
+  ) => void
 }
 
 export function SceneCanvas({
@@ -75,10 +83,10 @@ export function SceneCanvas({
     setSceneKey((key) => key + 1)
   }, [registerRig, updateStatus])
 
-  const handleEntityContextMenu = useCallback(
-    (entityId: SceneEntityIdV1) => {
+  const handleEntityContextMenu = useCallback<SceneEntityContextHandler>(
+    (entityId, position) => {
       entityContextHandledRef.current = true
-      onContextMenu?.(entityId)
+      onContextMenu?.(entityId, position)
       queueMicrotask(() => {
         entityContextHandledRef.current = false
       })
@@ -96,7 +104,7 @@ export function SceneCanvas({
           entityContextHandledRef.current = false
           return
         }
-        onContextMenu?.(null)
+        onContextMenu?.(null, { x: event.clientX, y: event.clientY })
       }}
     >
       <SceneErrorBoundary
@@ -114,6 +122,7 @@ export function SceneCanvas({
           }}
           onPointerMissed={() => {
             useInteractionStore.getState().clearSelection()
+            sceneEditorStore.getState().select(null)
           }}
           shadows
         >

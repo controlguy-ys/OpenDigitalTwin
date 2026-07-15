@@ -1,9 +1,11 @@
 import { render, screen } from '@testing-library/react'
+import { useState } from 'react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { SceneCommandService } from './scene-command-service'
 import { SceneContextMenu } from './SceneContextMenu'
 import { testSceneRuntime } from './scene-ui-test-fixtures'
+import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
 
 function commands() {
   return {
@@ -33,6 +35,7 @@ describe('SceneContextMenu', () => {
       <SceneContextMenu
         commands={service}
         entityId={null}
+        onDelete={vi.fn()}
         onIsolate={vi.fn()}
         runtime={testSceneRuntime()}
       />,
@@ -51,6 +54,7 @@ describe('SceneContextMenu', () => {
       <SceneContextMenu
         commands={commands()}
         entityId="robot:active"
+        onDelete={vi.fn()}
         onIsolate={vi.fn()}
         onOpenRobotCollision={vi.fn()}
         onOpenRobotGeometry={vi.fn()}
@@ -69,24 +73,27 @@ describe('SceneContextMenu', () => {
   it('requires confirmation before destructive Object and Group commands', async () => {
     const user = userEvent.setup()
     const service = commands()
+    const onDelete = vi.fn(async () => undefined)
     const view = render(
       <SceneContextMenu
         commands={service}
         entityId="object:cup-1"
+        onDelete={onDelete}
         onIsolate={vi.fn()}
         runtime={testSceneRuntime()}
       />,
     )
     await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
-    expect(service.deleteEntity).not.toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: 'Delete Entity?' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Delete Entity' }))
-    expect(service.deleteEntity).toHaveBeenCalledWith('object:cup-1')
+    expect(onDelete).toHaveBeenCalledWith('object:cup-1')
 
     view.rerender(
       <SceneContextMenu
         commands={service}
         entityId="group:fixture"
+        onDelete={onDelete}
         onIsolate={vi.fn()}
         runtime={testSceneRuntime()}
       />,
@@ -98,6 +105,40 @@ describe('SceneContextMenu', () => {
     expect(service.ungroup).toHaveBeenCalledWith('group:fixture')
   })
 
+  it('delegates Object and Group deletion to the injected safe boundary', async () => {
+    const user = userEvent.setup()
+    const service = commands()
+    const onDelete = vi.fn(async () => undefined)
+    const view = render(
+      <SceneContextMenu
+        commands={service}
+        entityId="object:cup-1"
+        onDelete={onDelete}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Delete Entity' }))
+    expect(onDelete).toHaveBeenCalledWith('object:cup-1')
+    expect(service.deleteEntity).not.toHaveBeenCalled()
+
+    view.rerender(
+      <SceneContextMenu
+        commands={service}
+        entityId="group:fixture"
+        onDelete={onDelete}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+    await user.click(screen.getByRole('menuitem', { name: 'Delete Group and Contents' }))
+    await user.click(screen.getByRole('button', { name: 'Delete Group and Contents' }))
+    expect(onDelete).toHaveBeenLastCalledWith('group:fixture')
+    expect(service.deleteGroupAndContents).not.toHaveBeenCalled()
+  })
+
   it('confirms and persists OPC UA-to-Manual ownership before grouping', async () => {
     const user = userEvent.setup()
     const service = commands()
@@ -105,6 +146,7 @@ describe('SceneContextMenu', () => {
       <SceneContextMenu
         commands={service}
         entityId="object:live-part"
+        onDelete={vi.fn()}
         onIsolate={vi.fn()}
         runtime={testSceneRuntime()}
       />,
@@ -122,5 +164,161 @@ describe('SceneContextMenu', () => {
     expect(service.setTransformSource.mock.invocationCallOrder[0]).toBeLessThan(
       service.reparent.mock.invocationCallOrder[0]!,
     )
+  })
+
+  it('hides mutation commands rejected for the active Axis carriage', () => {
+    const runtime = testSceneRuntime([
+      {
+        kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+        direction: 'x', minPositionM: -1, maxPositionM: 1, homePositionM: 0,
+        currentPositionM: 0, carriageEntityId: 'object:cup-1', robotEntityId: null,
+      },
+      {
+        kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: 'linear-axis:active',
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+        target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+      },
+      {
+        kind: 'group', id: 'group:fixture', name: 'Fixture', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+      },
+    ] satisfies readonly SceneEntityV1[])
+    const view = render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={runtime}
+      />,
+    )
+
+    expect(screen.queryByRole('menuitem', { name: 'Move to group' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Delete' })).not.toBeInTheDocument()
+
+    const groupRuntime = testSceneRuntime([
+      {
+        kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+        direction: 'x', minPositionM: -1, maxPositionM: 1, homePositionM: 0,
+        currentPositionM: 0, carriageEntityId: 'group:fixture', robotEntityId: null,
+      },
+      {
+        kind: 'group', id: 'group:fixture', name: 'Fixture', parentId: 'linear-axis:active',
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+      },
+      {
+        kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: 'group:fixture',
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+        target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+      },
+    ] satisfies readonly SceneEntityV1[])
+    view.rerender(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="group:fixture"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={groupRuntime}
+      />,
+    )
+    expect(screen.queryByRole('menuitem', { name: 'Ungroup' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Delete Group and Contents' }))
+      .not.toBeInTheDocument()
+  })
+
+  it('positions at the pointer, focuses the first item, roves, and returns focus on Escape', async () => {
+    const user = userEvent.setup()
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(true)} type="button">Open menu</button>
+          {open ? (
+            <SceneContextMenu
+              commands={commands()}
+              entityId={null}
+              onClose={() => setOpen(false)}
+              onDelete={vi.fn()}
+              onIsolate={vi.fn()}
+              position={{ x: 120, y: 240 }}
+              runtime={testSceneRuntime()}
+            />
+          ) : null}
+        </>
+      )
+    }
+    render(<Harness />)
+
+    const trigger = screen.getByRole('button', { name: 'Open menu' })
+    await user.click(trigger)
+    const first = screen.getByRole('menuitem', { name: 'Create Group' })
+    expect(first).toHaveFocus()
+    expect(screen.getByRole('menu')).toHaveStyle({ left: '120px', top: '240px' })
+    await user.keyboard('{ArrowDown}')
+    expect(screen.getByRole('menuitem', { name: 'Create Box' })).toHaveFocus()
+    await user.keyboard('{End}')
+    expect(screen.getByRole('menuitem', { name: 'Create Cylinder' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('traps confirmation focus and returns it to the invoking menu item on Escape', async () => {
+    const user = userEvent.setup()
+    render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    const deleteItem = screen.getByRole('menuitem', { name: 'Delete' })
+    await user.click(deleteItem)
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    const confirm = screen.getByRole('button', { name: 'Delete Entity' })
+    expect(cancel).toHaveFocus()
+    await user.keyboard('{Shift>}{Tab}{/Shift}')
+    expect(confirm).toHaveFocus()
+    await user.keyboard('{Tab}')
+    expect(cancel).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(deleteItem).toHaveFocus()
+  })
+
+  it('focuses and dismisses the group chooser as a modal dialog', async () => {
+    const user = userEvent.setup()
+    const runtime = testSceneRuntime([
+      {
+        kind: 'group', id: 'group:fixture', name: 'Fixture', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+      },
+      {
+        kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+        target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+      },
+    ] satisfies readonly SceneEntityV1[])
+    render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={runtime}
+      />,
+    )
+
+    const moveItem = screen.getByRole('menuitem', { name: 'Move to group' })
+    await user.click(moveItem)
+    expect(screen.getByRole('button', { name: 'Move to Fixture' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Choose group' })).not.toBeInTheDocument()
+    expect(moveItem).toHaveFocus()
   })
 })

@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { SceneEntityIdV1, ScenePoseV1 } from '../../domain/project/scene-state-v1'
-import { sceneCommandService } from '../project/project-store-browser'
+import type { WorkcellProjectSnapshotV3 } from '../../domain/project/project-v3'
+import {
+  projectMutationService,
+  sceneCommandService,
+} from '../project/project-store-browser'
+import {
+  EquipmentStatusEditor,
+  type EquipmentStatusEditorValue,
+} from '../equipment/EquipmentStatusEditor'
 import type { SceneCommandService } from './scene-command-service'
 import {
   usePublishedSceneRuntime,
@@ -23,8 +31,36 @@ interface TransformDraft {
 export interface SceneEntityInspectorProps {
   readonly entityId: SceneEntityIdV1
   readonly runtime?: SceneRuntimeProjectionV1
-  readonly commands?: Pick<SceneCommandService, 'setLocalPose'>
+  readonly commands?: Pick<SceneCommandService, 'setLocalPose'> & Partial<Pick<
+    SceneCommandService,
+    'updateBuiltInEquipment' | 'updateObjectInstance'
+  >>
   readonly disabled?: boolean
+  readonly status?: EquipmentStatusEditorValue | null
+}
+
+function statusFromProject(
+  snapshot: WorkcellProjectSnapshotV3 | null,
+  entityId: SceneEntityIdV1,
+): EquipmentStatusEditorValue | null {
+  if (snapshot === null) return null
+  if (entityId.startsWith('object:')) {
+    const record = snapshot.objectInstances.find(({ id }) => `object:${id}` === entityId)
+    return record === undefined ? null : {
+      numericStatus: record.manualNumericStatus,
+      statusSource: record.statusSource,
+      statusOverlayVisible: record.statusOverlayVisible,
+    }
+  }
+  if (entityId.startsWith('equipment:')) {
+    const record = snapshot.builtInEquipment.find(({ id }) => `equipment:${id}` === entityId)
+    return record === undefined ? null : {
+      numericStatus: record.manualNumericStatus,
+      statusSource: record.statusSource,
+      statusOverlayVisible: record.statusOverlayVisible,
+    }
+  }
+  return null
 }
 
 function displayNumber(value: number): string {
@@ -80,10 +116,19 @@ export function SceneEntityInspector({
   runtime: runtimeOverride,
   commands = sceneCommandService,
   disabled = false,
+  status: statusOverride,
 }: SceneEntityInspectorProps) {
   const publishedRuntime = usePublishedSceneRuntime()
   const runtime = runtimeOverride ?? publishedRuntime
   const entity = runtime.byId.get(entityId)
+  const snapshot = useSyncExternalStore(
+    projectMutationService.subscribe,
+    () => projectMutationService.readPublished()?.snapshot ?? null,
+    () => projectMutationService.readPublished()?.snapshot ?? null,
+  )
+  const status = statusOverride === undefined
+    ? statusFromProject(snapshot, entityId)
+    : statusOverride
   const [draft, setDraft] = useState<TransformDraft>(() => draftFromPose(
     entity?.localPose ?? { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
   ))
@@ -105,6 +150,20 @@ export function SceneEntityInspector({
   const opcUaOwned = entity.source.kind === 'object' && entity.source.transformSource === 'opcua'
   const localDisabled = disabled || opcUaOwned
   const worldDraft = draftFromPose(entity.worldPose)
+  const updateStatus = (
+    update: Readonly<{
+      numericStatus?: number
+      statusSource?: 'manual' | 'opcua'
+      statusOverlayVisible?: boolean
+    }>,
+  ): Promise<void> => {
+    if (entityId.startsWith('object:')) {
+      return commands.updateObjectInstance?.(entityId as `object:${string}`, update)
+        ?? Promise.reject(new Error('Object status command is unavailable.'))
+    }
+    return commands.updateBuiltInEquipment?.(entityId as `equipment:${string}`, update)
+      ?? Promise.reject(new Error('Equipment status command is unavailable.'))
+  }
 
   return (
     <section className="scene-entity-inspector">
@@ -172,6 +231,15 @@ export function SceneEntityInspector({
           ))}
         </div>
       </fieldset>
+      {status === null || entity.source.kind !== 'object' ? null : (
+        <EquipmentStatusEditor
+          disabled={disabled}
+          onNumericStatus={(numericStatus) => updateStatus({ numericStatus })}
+          onOverlayVisible={(statusOverlayVisible) => updateStatus({ statusOverlayVisible })}
+          onStatusSource={(statusSource) => updateStatus({ statusSource })}
+          status={status}
+        />
+      )}
       {error === null ? null : <p role="alert">{error}</p>}
     </section>
   )

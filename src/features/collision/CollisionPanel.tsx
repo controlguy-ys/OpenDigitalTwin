@@ -126,6 +126,7 @@ export interface CollisionPanelValidationRuntime {
 
 export interface CollisionPanelProps {
   readonly validationRuntime?: CollisionPanelValidationRuntime
+  readonly focusRequest?: number
 }
 
 function rootPose(
@@ -362,7 +363,10 @@ function clearanceText(separationM: number): string {
   return `${(separationM * 1_000).toFixed(3)} mm`
 }
 
-export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) {
+export function CollisionPanel({
+  validationRuntime,
+  focusRequest = 0,
+}: CollisionPanelProps = {}) {
   const policy = useCollisionStore((state) => state.policy)
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const currentFindings = useCollisionStore((state) => state.currentFindings)
@@ -416,6 +420,11 @@ export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) 
     readonly totalSamples: number
   } | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+
+  useEffect(() => {
+    if (focusRequest > 0) headingRef.current?.focus()
+  }, [focusRequest])
 
   useEffect(() => {
     if (previousRevisionRef.current === activeValidationRuntime.revision) return
@@ -515,7 +524,9 @@ export function CollisionPanel({ validationRuntime }: CollisionPanelProps = {}) 
   return (
     <section aria-labelledby="collision-panel-heading" className="collision-panel">
       <header className="collision-panel-header">
-        <h2 id="collision-panel-heading">Geometry Proxy Collision</h2>
+        <h2 id="collision-panel-heading" ref={headingRef} tabIndex={-1}>
+          Geometry Proxy Collision
+        </h2>
         <div aria-label="Live collision counts" className="collision-counts">
           <span data-kind="collision">Collision {counts.collisions}</span>
           <span data-kind="near-miss">Near-miss {counts.nearMisses}</span>

@@ -244,3 +244,62 @@ application functional while Task 4 repository publication remains out of scope:
 
 - No Task 4 or later scene-editor capability, PLC transfer, deployment, or live OPC UA
   write is included.
+
+---
+
+## Review Follow-up: Scene Hierarchy Hardening
+
+### Outcome
+
+- Restored Object and built-in Equipment numeric status, status-source, and overlay
+  controls in the shared Inspector. The controls reuse one status editor and route
+  through the V3 `updateObjectInstance` and `updateBuiltInEquipment` commands without
+  restoring legacy transform or delete authority.
+- Added one application-owned safe deletion boundary for Explorer and viewport
+  deletes. It releases held entities, locks external group descendants, executes the
+  canonical delete command, clears interaction/scene/collision selection, and always
+  releases acquired locks.
+- Prevented OPC-UA-owned Objects from exposing manual transform gizmos or grasp
+  eligibility until ownership is switched to Manual.
+- Routed held-object and held-group-child context requests through the same menu path,
+  and made a background pointer miss clear both interaction and Scene selection.
+- Hid invalid move/delete/ungroup actions for the active Linear Axis carriage and made
+  Robot `Open Collision` open and focus the production collision panel.
+- Added pointer-accurate menu placement, Robot-action menu closure, tree keyboard
+  navigation, menu/dialog focus handling and return, and surfaced visibility-command
+  failures to the user.
+
+### RED-to-GREEN evidence
+
+- Status/deletion RED: 2 files failed because Object/Equipment status controls and the
+  safe deletion boundary were absent. GREEN: 3 files, 10 tests passed.
+- Explorer/context deletion RED: 2 callback-routing failures. GREEN: 4 files, 12
+  tests passed.
+- OPC-UA/background RED: missing manual-gizmo and grasp-eligibility filters plus stale
+  Scene selection after a background miss. GREEN: 4 files, 10 tests passed.
+- Held/Axis/collision RED: missing held context dispatch, exposed Axis carriage
+  mutations, and no production Collision action. Pointer RED additionally proved that
+  canvas coordinates were not forwarded. GREEN: 5 files, 26 tests passed.
+- Accessibility RED: 4 failures covering tree navigation, menu pointer placement,
+  initial menu focus, and confirmation focus. The group-carriage regression separately
+  failed on an exposed `Ungroup` action. The final dialog audit added one RED for the
+  group chooser's missing initial focus and Escape return. GREEN: 4 files, 19 tests
+  passed.
+
+### Verification
+
+- Review-focused matrix: 34 files, 178 tests passed in 40.11 seconds.
+- Full serial Vitest (`npx vitest run --maxWorkers=1`): 100 files, 822 tests passed in
+  270.35 seconds. After the final group-dialog focus regression, the fresh full serial
+  run passed 100 files and 823 tests in 266.58 seconds.
+- Lint (`npm run lint`): exit 0 with zero warnings.
+- Production build (`npm run build`): exit 0 (`tsc -b` and Vite production bundle).
+  Vite reported only the existing OCCT browser-externalization and large-chunk
+  advisories; there were no TypeScript or build errors.
+- Working-tree whitespace check (`git diff --check`): passed before staging.
+
+### Scope boundary
+
+- The follow-up is limited to the reviewed Scene hierarchy/status/interaction
+  hardening. It does not add PLC transfer, deployment, live OPC UA writes, or broader
+  scene-editor redesign.

@@ -6,8 +6,10 @@ import type {
 } from '../../domain/project/project'
 import {
   collisionEntityToGraspParticipantId,
+  runtimeGraspEligibleParticipants,
   runtimeGraspParticipants,
 } from './grasp-participants'
+import { testSceneRuntime } from '../scene/scene-ui-test-fixtures'
 
 const legacy: EquipmentRecord = {
   id: 'shared-01',
@@ -83,5 +85,18 @@ describe('runtime grasp participants', () => {
     )
     expect(collisionEntityToGraspParticipantId('robot-link:LINK01')).toBeNull()
     expect(collisionEntityToGraspParticipantId('shared-01')).toBeNull()
+  })
+
+  it('excludes OPC UA transform-owned Objects from grasp eligibility', () => {
+    const manualInstance = { ...instance, id: 'cup-1' }
+    const opcUaInstance = { ...instance, id: 'live-part' }
+    const participants = runtimeGraspEligibleParticipants(
+      [],
+      [asset],
+      [manualInstance, opcUaInstance],
+      testSceneRuntime(),
+    )
+
+    expect(participants.map(({ entityId }) => entityId)).toEqual(['object:cup-1'])
   })
 })

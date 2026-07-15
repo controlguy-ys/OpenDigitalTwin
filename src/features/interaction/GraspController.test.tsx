@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { GeometryCollisionEntity } from '../../domain/collision/collision'
 import {
+  dispatchHeldEntityContextMenu,
   isHeldSceneEntityVisible,
   resolveGeometryGraspTarget,
 } from './GraspController'
+import { useInteractionStore } from './interaction-store'
 
 function entity(
   id: string,
@@ -60,5 +62,25 @@ describe('GraspController geometry target resolution', () => {
       { byId } as never,
       'object:missing',
     )).toBe(true)
+  })
+
+  it('routes held Object context through its canonical Scene target', () => {
+    const onEntityContextMenu = vi.fn()
+    useInteractionStore.getState().resetInteraction()
+
+    dispatchHeldEntityContextMenu(
+      'object:held-cup',
+      { x: 25, y: 40 },
+      onEntityContextMenu,
+    )
+
+    expect(useInteractionStore.getState().selection).toMatchObject({
+      kind: 'equipment',
+      entityId: 'object:held-cup',
+    })
+    expect(onEntityContextMenu).toHaveBeenCalledWith(
+      'object:held-cup',
+      { x: 25, y: 40 },
+    )
   })
 })

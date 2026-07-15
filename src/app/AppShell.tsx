@@ -1,5 +1,5 @@
 import { ChevronDown, PanelLeft, PanelRight } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { JointQuality } from '../domain/robot/joint-frame'
 
 type JointSourceMode = 'simulation' | 'opcua'
@@ -10,6 +10,7 @@ interface AppShellProps {
   assetTree?: ReactNode
   inspector?: ReactNode
   bottomRail?: ReactNode
+  bottomRailOpenRequest?: number
   controlsDisabled?: boolean
   viewportBusy?: boolean
   sourceQuality?: JointQuality
@@ -28,6 +29,7 @@ export function AppShell({
   assetTree,
   inspector,
   bottomRail,
+  bottomRailOpenRequest = 0,
   controlsDisabled = false,
   viewportBusy = controlsDisabled,
   sourceQuality = 'GOOD',
@@ -42,6 +44,10 @@ export function AppShell({
   const [isAssetRailOpen, setIsAssetRailOpen] = useState(false)
   const [isInspectorOpen, setIsInspectorOpen] = useState(false)
   const [isBottomRailOpen, setIsBottomRailOpen] = useState(false)
+
+  useEffect(() => {
+    if (bottomRailOpenRequest > 0) setIsBottomRailOpen(true)
+  }, [bottomRailOpenRequest])
 
   return (
     <div

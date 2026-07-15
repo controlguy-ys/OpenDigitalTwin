@@ -7,6 +7,7 @@ import {
   type ObjectAssetSceneReadModelV3,
 } from '../objects/object-equipment-adapter'
 import type { ExternalCollisionEntityId } from './interaction-store'
+import type { SceneRuntimeProjectionV1 } from '../scene/scene-runtime-selector'
 
 export interface RuntimeGraspParticipant {
   readonly entityId: ExternalCollisionEntityId
@@ -41,4 +42,18 @@ export function runtimeGraspParticipants(
       record,
     })),
   ]
+}
+
+export function runtimeGraspEligibleParticipants(
+  equipmentRecords: readonly EquipmentRecord[],
+  assets: readonly ObjectAssetSceneReadModelV3[],
+  instances: readonly ObjectInstanceRecordV1[],
+  sceneRuntime: Pick<SceneRuntimeProjectionV1, 'byId'>,
+): RuntimeGraspParticipant[] {
+  return runtimeGraspParticipants(equipmentRecords, assets, instances).filter(
+    ({ entityId }) => {
+      const source = sceneRuntime.byId.get(entityId)?.source
+      return source?.kind !== 'object' || source.transformSource === 'manual'
+    },
+  )
 }

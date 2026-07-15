@@ -64,4 +64,47 @@ describe('SceneEntityInspector', () => {
     expect(screen.getByLabelText('Local X (mm)')).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Apply transform' })).toBeDisabled()
   })
+
+  it.each([
+    ['object:cup-1', 'updateObjectInstance'],
+    ['equipment:workbench', 'updateBuiltInEquipment'],
+  ] as const)(
+    'preserves status-only editing for %s through the Project V3 command',
+    async (entityId, expectedCommand) => {
+      const user = userEvent.setup()
+      const updateObjectInstance = vi.fn(async () => undefined)
+      const updateBuiltInEquipment = vi.fn(async () => undefined)
+      render(
+        <SceneEntityInspector
+          commands={{
+            setLocalPose: vi.fn(async () => undefined),
+            updateBuiltInEquipment,
+            updateObjectInstance,
+          }}
+          entityId={entityId}
+          runtime={testSceneRuntime()}
+          status={{
+            numericStatus: 7,
+            statusOverlayVisible: true,
+            statusSource: 'manual',
+          }}
+        />,
+      )
+
+      await user.selectOptions(screen.getByLabelText('Status source'), 'opcua')
+      await user.clear(screen.getByLabelText('Numeric status'))
+      await user.type(screen.getByLabelText('Numeric status'), '42.5')
+      await user.click(screen.getByRole('button', { name: 'Apply numeric status' }))
+      await user.click(screen.getByLabelText('Show status overlay'))
+
+      const owner = expectedCommand === 'updateObjectInstance'
+        ? updateObjectInstance
+        : updateBuiltInEquipment
+      expect(owner).toHaveBeenCalledWith(entityId, { statusSource: 'opcua' })
+      expect(owner).toHaveBeenCalledWith(entityId, { numericStatus: 42.5 })
+      expect(owner).toHaveBeenCalledWith(entityId, { statusOverlayVisible: false })
+      expect(updateObjectInstance.mock.calls.length + updateBuiltInEquipment.mock.calls.length)
+        .toBe(3)
+    },
+  )
 })

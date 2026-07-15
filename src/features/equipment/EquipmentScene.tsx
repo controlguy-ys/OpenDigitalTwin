@@ -35,7 +35,7 @@ import {
 import type { OutlineState } from '../interaction/outline-state'
 import type { SceneRuntimeProjectionV1 } from '../scene/scene-runtime-selector'
 import { sceneEditorStore } from '../project/project-store-browser'
-import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
+import type { SceneEntityContextHandler } from '../scene/scene-context-request'
 
 interface EquipmentInstanceProps {
   entityId: ExternalCollisionEntityId
@@ -44,7 +44,8 @@ interface EquipmentInstanceProps {
     Map<ExternalCollisionEntityId, Object3D>
   >
   onDraggingChange(dragging: boolean): void
-  onEntityContextMenu?: (entityId: SceneEntityIdV1) => void
+  onEntityContextMenu?: SceneEntityContextHandler
+  transformManuallyOwned: boolean
 }
 
 export function isExternalCollisionRegistrationActive(
@@ -60,6 +61,14 @@ export function isExternalCollisionRegistrationActive(
     !hiddenEntityIds.includes(entityId) &&
     !(entityId === heldEntityId && hiddenEntityIds.includes('robot'))
   )
+}
+
+export function isSceneTransformManuallyOwned(
+  runtime: Pick<SceneRuntimeProjectionV1, 'byId'>,
+  entityId: ExternalCollisionEntityId,
+): boolean {
+  const source = runtime.byId.get(entityId)?.source
+  return source?.kind !== 'object' || source.transformSource === 'manual'
 }
 
 export function EquipmentVisual({ record }: { record: EquipmentRecord }) {
@@ -120,6 +129,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
   equipmentObjectsRef,
   onDraggingChange,
   onEntityContextMenu,
+  transformManuallyOwned,
 }: EquipmentInstanceProps) {
   const objectRef = useRef<Group>(null)
   const selection = useInteractionStore((state) => state.selection)
@@ -167,7 +177,10 @@ const EquipmentInstance = memo(function EquipmentInstance({
           event.stopPropagation()
           event.nativeEvent.preventDefault()
           selectEquipment(entityId)
-          onEntityContextMenu?.(entityId)
+          onEntityContextMenu?.(entityId, {
+            x: event.nativeEvent.clientX,
+            y: event.nativeEvent.clientY,
+          })
         }}
         onPointerDown={(event: ThreeEvent<PointerEvent>) => {
           event.stopPropagation()
@@ -190,7 +203,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
           <EquipmentOutline outlineState={outlineState} record={record} />
         )}
       </group>
-      {selected ? (
+      {selected && transformManuallyOwned ? (
         <EquipmentTransformControls
           commitTransform={
             commitSceneTransform
@@ -257,7 +270,7 @@ export interface EquipmentSceneProps {
     Map<ExternalCollisionEntityId, Object3D>
   >
   onDraggingChange?(dragging: boolean): void
-  onEntityContextMenu?(entityId: SceneEntityIdV1): void
+  onEntityContextMenu?: SceneEntityContextHandler
   sceneRuntime?: SceneRuntimeProjectionV1
 }
 
@@ -381,6 +394,10 @@ export function EquipmentScene({
               ? {}
               : { onEntityContextMenu })}
             record={record}
+            transformManuallyOwned={
+              sceneRuntime === undefined ||
+              isSceneTransformManuallyOwned(sceneRuntime, entityId)
+            }
           />
         ))}
     </group>

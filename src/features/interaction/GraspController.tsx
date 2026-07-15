@@ -44,6 +44,7 @@ import type { OutlineState } from './outline-state'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { worldTransformToMcpLocal } from '../frames/frame-runtime'
 import {
+  runtimeGraspEligibleParticipants,
   runtimeGraspParticipants,
 } from './grasp-participants'
 import {
@@ -54,6 +55,10 @@ import {
   createGeometryGraspSensorEntity,
   findGraspCandidates,
 } from './geometry-grasp-sensor'
+import type {
+  SceneContextPosition,
+  SceneEntityContextHandler,
+} from '../scene/scene-context-request'
 
 export interface InteractionRuntimeController {
   releaseHeldEquipment(id?: string): Promise<void>
@@ -69,6 +74,16 @@ export interface GraspControllerProps {
   registerController?:
     | ((controller: InteractionRuntimeController | null) => void)
     | undefined
+  onEntityContextMenu?: SceneEntityContextHandler
+}
+
+export function dispatchHeldEntityContextMenu(
+  entityId: ExternalCollisionEntityId,
+  position: SceneContextPosition,
+  onEntityContextMenu?: SceneEntityContextHandler,
+): void {
+  useInteractionStore.getState().selectEquipment(entityId)
+  onEntityContextMenu?.(entityId, position)
 }
 
 export function resolveGeometryGraspTarget(
@@ -95,14 +110,25 @@ export function GraspController({
   equipmentObjectsRef,
   workbenchTopZ,
   registerController,
+  onEntityContextMenu,
 }: GraspControllerProps) {
   const gripperOpen = useRobotStore((state) => state.gripperOpen)
   const records = useEquipmentStore((state) => state.records)
   const objectAssets = useObjectAssetStore((state) => state.assets)
   const objectInstances = useObjectAssetStore((state) => state.instances)
+  const sceneRuntime = usePublishedSceneRuntime()
   const participants = useMemo(
     () => runtimeGraspParticipants(records, objectAssets, objectInstances),
     [objectAssets, objectInstances, records],
+  )
+  const graspEligibleParticipants = useMemo(
+    () => runtimeGraspEligibleParticipants(
+      records,
+      objectAssets,
+      objectInstances,
+      sceneRuntime,
+    ),
+    [objectAssets, objectInstances, records, sceneRuntime],
   )
   const participantsById = useMemo(
     () =>
@@ -112,7 +138,6 @@ export function GraspController({
     [participants],
   )
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
-  const sceneRuntime = usePublishedSceneRuntime()
   const gripOffset = useInteractionStore((state) => state.gripOffset)
   const selection = useInteractionStore((state) => state.selection)
   const heldOutlineSelector = useMemo(
@@ -216,7 +241,7 @@ export function GraspController({
     const sensorEntity = createGeometryGraspSensorEntity(rig.tcpFrame)
     const candidates = snapshotGeometryEntities().entities
     const graspableEntityIds = new Set(
-      participants
+      graspEligibleParticipants
         .filter(({ record }) => record.graspable)
         .map(({ entityId }) => entityId),
     )
@@ -257,8 +282,8 @@ export function GraspController({
   }, [
     equipmentObjectsRef,
     getToolWorld,
+    graspEligibleParticipants,
     participantsById,
-    participants,
     rig.tcpFrame,
   ])
 
@@ -325,6 +350,18 @@ export function GraspController({
         : createPortal(
             <group
               name={`${heldRecord.id}-held`}
+              onContextMenu={(event: ThreeEvent<MouseEvent>) => {
+                event.stopPropagation()
+                event.nativeEvent.preventDefault()
+                dispatchHeldEntityContextMenu(
+                  heldEntityId!,
+                  {
+                    x: event.nativeEvent.clientX,
+                    y: event.nativeEvent.clientY,
+                  },
+                  onEntityContextMenu,
+                )
+              }}
               onPointerDown={(event: ThreeEvent<PointerEvent>) => {
                 event.stopPropagation()
                 useInteractionStore.getState().selectEquipment(heldEntityId!)

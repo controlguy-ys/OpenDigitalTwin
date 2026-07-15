@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { isExternalCollisionRegistrationActive } from './EquipmentScene'
+import {
+  isExternalCollisionRegistrationActive,
+  isSceneTransformManuallyOwned,
+} from './EquipmentScene'
+import { testSceneRuntime } from '../scene/scene-ui-test-fixtures'
 
 describe('external collision registration visibility', () => {
   it('deactivates only the held Entity when the Robot root is hidden', () => {
@@ -51,5 +55,12 @@ describe('external collision registration visibility', () => {
         ['equipment:machine-01'],
       ),
     ).toBe(false)
+  })
+
+  it('allows the transform gizmo only for Manual-owned Scene Entities', () => {
+    const runtime = testSceneRuntime()
+
+    expect(isSceneTransformManuallyOwned(runtime, 'object:cup-1')).toBe(true)
+    expect(isSceneTransformManuallyOwned(runtime, 'object:live-part')).toBe(false)
   })
 })
