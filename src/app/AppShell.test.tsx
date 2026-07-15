@@ -179,6 +179,50 @@ describe('AppShell', () => {
     expect(openMechanics).toHaveBeenCalledOnce()
   })
 
+  it('uses roving focus for Robot Inspector tabs', async () => {
+    const user = userEvent.setup()
+    render(
+      <RobotTargetInspector
+        onOpenFrames={vi.fn()}
+        onOpenGeometry={vi.fn()}
+        onOpenMechanics={vi.fn()}
+        transform={<div>Transform editor</div>}
+      />,
+    )
+    const transform = screen.getByRole('tab', { name: 'Transform' })
+    const frames = screen.getByRole('tab', { name: 'Frames' })
+
+    transform.focus()
+    await user.keyboard('{ArrowLeft}')
+    expect(frames).toHaveFocus()
+    expect(frames).toHaveAttribute('aria-selected', 'true')
+    await user.keyboard('{Home}')
+    expect(transform).toHaveFocus()
+  })
+
+  it('keeps every top-bar function reachable through the narrow-width controls disclosure', async () => {
+    const user = userEvent.setup()
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 })
+    render(
+      <AppShell
+        projectMenu={<button type="button">Project</button>}
+        viewport={<div>3D viewport</div>}
+      />,
+    )
+
+    const disclosure = screen.getByRole('button', { name: 'Top bar controls' })
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    await user.click(disclosure)
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+    const toolbar = screen.getByRole('toolbar', { name: 'Top bar controls' })
+    expect(toolbar).toHaveClass('is-open')
+    expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Project' }))
+    expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Add' }))
+    expect(toolbar).toContainElement(screen.getByRole('combobox', { name: 'Joint source' }))
+    expect(toolbar).toContainElement(screen.getByRole('combobox', { name: 'Theme' }))
+    expect(document.documentElement).toHaveStyle({ overflow: 'hidden' })
+  })
+
   it('wires the top-bar action to the accessible import dialog', async () => {
     const user = userEvent.setup()
     render(<App />)

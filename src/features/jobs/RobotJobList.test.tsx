@@ -83,3 +83,40 @@ it('offers Rename, Duplicate, and confirmed Delete from a Job context menu', asy
   prompt.mockRestore()
   confirm.mockRestore()
 })
+
+it('enforces the numeric 32 Job limit across create and duplicate commands', async () => {
+  const user = userEvent.setup()
+  const fullSimulation: ProjectSimulationStateV3 = {
+    activeJobId: 'job-1',
+    jobs: Array.from({ length: 32 }, (_, index) => ({
+      id: `job-${index + 1}`,
+      name: `Job ${index + 1}`,
+      revision: 1,
+      poses: [],
+    })),
+  }
+  render(<RobotJobList commands={commands()} simulation={fullSimulation} />)
+
+  expect(screen.getByRole('button', { name: '+ New Job' })).toBeDisabled()
+  expect(screen.getByText(/32 Job limit/i)).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Job 1 commands' }))
+  expect(screen.getByRole('menuitem', { name: 'Duplicate' })).toBeDisabled()
+})
+
+it('implements tree navigation plus keyboard context menu open and Escape focus return', async () => {
+  const user = userEvent.setup()
+  render(<RobotJobList commands={commands()} simulation={simulation} />)
+  const first = screen.getByRole('treeitem', { name: 'Pick Cups, 0 Poses' })
+  const second = screen.getByRole('treeitem', { name: 'Pack Cups, 1 Pose' })
+
+  first.focus()
+  await user.keyboard('{ArrowDown}')
+  expect(second).toHaveFocus()
+  await user.keyboard('{Home}')
+  expect(first).toHaveFocus()
+  await user.keyboard('{Shift>}{F10}{/Shift}')
+  expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus()
+  await user.keyboard('{Escape}')
+  expect(first).toHaveFocus()
+  expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+})

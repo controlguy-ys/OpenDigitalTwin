@@ -85,97 +85,36 @@ describe('robot store', () => {
     expect(useRobotStore.getState().setJoint).toBe(setJoint)
   })
 
-  it('saves immutable pose snapshots and clears them on reset', () => {
-    const store = useRobotStore.getState()
-    store.setJoint(0, 45)
-    store.savePose()
-    useRobotStore.getState().setJoint(0, 90)
-    useRobotStore.getState().savePose()
+  it('exposes only a non-durable published pose projection and resets playback on publication', () => {
+    const beforeRevision = useRobotStore.getState().playbackResetRevision
+    const state = useRobotStore.getState() as unknown as Record<string, unknown>
 
-    expect(useRobotStore.getState().keyframes).toEqual([
-      {
-        id: 'pose-1',
-        name: 'Pose 1',
-        anglesDeg: [45, 0, 0, 0, 0, 0],
-        durationMs: 250,
-        easing: 'easeInOut',
-        speedPercentToNext: 100,
-      },
-      {
-        id: 'pose-2',
-        name: 'Pose 2',
-        anglesDeg: [90, 0, 0, 0, 0, 0],
-        durationMs: 1000,
-        easing: 'easeInOut',
-        speedPercentToNext: 100,
-      },
-    ])
+    for (const legacyAction of [
+      'savePose',
+      'hydrateKeyframes',
+      'clearKeyframes',
+      'replaceKeyframes',
+      'moveKeyframe',
+      'deleteKeyframe',
+      'setKeyframeSpeed',
+    ]) {
+      expect(state[legacyAction]).toBeUndefined()
+    }
 
-    useRobotStore.getState().reset()
-    expect(useRobotStore.getState().keyframes).toEqual([])
-  })
+    useRobotStore.getState().replacePublishedKeyframes([{
+      id: 'project-pose',
+      name: 'Project Pose',
+      anglesDeg: [1, 2, 3, 4, 5, 6],
+      durationMs: 1_000,
+      easing: 'linear',
+      speedPercentToNext: 100,
+    }])
 
-  it('reorders and deletes poses by stable id', () => {
-    const store = useRobotStore.getState()
-    store.savePose()
-    store.setJoint(0, 10)
-    useRobotStore.getState().savePose()
-    useRobotStore.getState().setJoint(0, 20)
-    useRobotStore.getState().savePose()
-
-    useRobotStore.getState().moveKeyframe('pose-3', -1)
-    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
-      'pose-1',
-      'pose-3',
-      'pose-2',
-    ])
-
-    useRobotStore.getState().deleteKeyframe('pose-1')
-    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
-      'pose-3',
-      'pose-2',
-    ])
-  })
-
-  it('clamps pose speed and updates its outgoing transition duration', () => {
-    useRobotStore.getState().savePose()
-    useRobotStore.getState().setJoint(0, 90)
-    useRobotStore.getState().savePose()
-
-    useRobotStore.getState().setKeyframeSpeed('pose-1', 50)
-    expect(useRobotStore.getState().keyframes[0]).toMatchObject({
-      speedPercentToNext: 50,
-      durationMs: 1000,
+    expect(useRobotStore.getState()).toMatchObject({
+      playbackResetRevision: beforeRevision + 1,
+      playing: false,
     })
-
-    useRobotStore.getState().setKeyframeSpeed('pose-1', 0)
-    expect(useRobotStore.getState().keyframes[0]).toMatchObject({
-      speedPercentToNext: 1,
-      durationMs: 50000,
-    })
-  })
-
-  it('hydrates the edited pose order and speed from browser storage', () => {
-    useRobotStore.getState().savePose()
-    useRobotStore.getState().setJoint(0, 20)
-    useRobotStore.getState().savePose()
-    useRobotStore.getState().setKeyframeSpeed('pose-1', 25)
-    useRobotStore.getState().moveKeyframe('pose-2', -1)
-
-    useRobotStore.getState().reset()
-    useRobotStore.getState().hydrateKeyframes()
-
-    expect(useRobotStore.getState().keyframes.map((pose) => pose.id)).toEqual([
-      'pose-2',
-      'pose-1',
-    ])
-    expect(useRobotStore.getState().keyframes[1]).toMatchObject({
-      speedPercentToNext: 25,
-    })
-    expect(useRobotStore.getState().keyframes[1]?.durationMs).toBeCloseTo(
-      444.444,
-      2,
-    )
+    expect(localStorage.length).toBe(0)
   })
 
   it('projects published Project Job poses without creating legacy browser durability', () => {
@@ -189,7 +128,7 @@ describe('robot store', () => {
     }])
 
     expect(useRobotStore.getState().keyframes.map(({ id }) => id)).toEqual(['project-pose'])
-    expect(localStorage.getItem('robot-sim.pose-sequence.v1')).toBeNull()
+    expect(localStorage.length).toBe(0)
   })
 
   it('distinguishes a stop-time reset from a resumable pause', () => {

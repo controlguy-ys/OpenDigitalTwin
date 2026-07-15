@@ -20,6 +20,7 @@ export interface JointInspectorProps {
   onReset?: () => void | Promise<void>
   canSavePose?: boolean
   onSavePose?: () => void | Promise<void>
+  savePoseUnavailableReason?: string | undefined
 }
 
 export function JointInspector({
@@ -28,6 +29,7 @@ export function JointInspector({
   onReset,
   canSavePose = true,
   onSavePose,
+  savePoseUnavailableReason = 'Create a Job in Robot Jobs and select it to save a Pose.',
 }: JointInspectorProps) {
   const j1 = useRobotStore(jointAngleSelectors[0])
   const j2 = useRobotStore(jointAngleSelectors[1])
@@ -36,12 +38,13 @@ export function JointInspector({
   const j5 = useRobotStore(jointAngleSelectors[4])
   const j6 = useRobotStore(jointAngleSelectors[5])
   const stopPlayback = useRobotStore((state) => state.stopPlayback)
-  const savePose = useRobotStore((state) => state.savePose)
   const setGripperOpen = useRobotStore((state) => state.setGripperOpen)
   const anglesDeg = [j1, j2, j3, j4, j5, j6] as const
   const [drafts, setDrafts] = useState(() => anglesDeg.map(String))
   const [focusedDraftIndex, setFocusedDraftIndex] = useState<number | null>(null)
   const [dirtyDraftIndex, setDirtyDraftIndex] = useState<number | null>(null)
+  const [savePosePending, setSavePosePending] = useState(false)
+  const [savePoseError, setSavePoseError] = useState<string | null>(null)
   const configuration = useRobotConfigurationStore((state) => state.configuration)
   const definition = useMemo(
     () => robotConfigurationToDefinition(configuration),
@@ -108,6 +111,23 @@ export function JointInspector({
     }
 
     resyncDraft(jointIndex)
+  }
+
+  const poseSaveEnabled = canSavePose && onSavePose !== undefined
+
+  const saveProjectPose = async () => {
+    if (!poseSaveEnabled || savePosePending) return
+    setSavePosePending(true)
+    setSavePoseError(null)
+    try {
+      await onSavePose()
+    } catch (error) {
+      setSavePoseError(
+        error instanceof Error ? error.message : 'Unable to save the Pose. Refresh and retry.',
+      )
+    } finally {
+      setSavePosePending(false)
+    }
   }
 
   return (
@@ -206,20 +226,20 @@ export function JointInspector({
           Reset
         </button>
         <button
-          disabled={disabled || !canSavePose}
+          disabled={disabled || !poseSaveEnabled || savePosePending}
           onClick={() => {
-            const result = onSavePose?.()
-            if (onSavePose === undefined) savePose()
-            else if (result instanceof Promise) void result.catch(() => undefined)
+            void saveProjectPose()
           }}
           type="button"
         >
           <Save aria-hidden="true" size={16} strokeWidth={1.75} />
           Save Pose
         </button>
-        {canSavePose ? null : (
-          <p className="save-pose-hint">Create a Job in Robot Jobs to save a Pose.</p>
+        {poseSaveEnabled ? null : (
+          <p className="save-pose-hint">{savePoseUnavailableReason}</p>
         )}
+        {savePosePending ? <p aria-live="polite" role="status">Saving Pose…</p> : null}
+        {savePoseError === null ? null : <p role="alert">{savePoseError}</p>}
         <button
           disabled={disabled}
           onClick={() => {

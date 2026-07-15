@@ -74,3 +74,50 @@ The pre-existing unstaged `.superpowers/sdd/task-4-brief.md` change was treated 
 - No viewport spatial controls, TCP marker, camera overlay, Linear Axis, mount-contact, or other Task 5+ implementation.
 - No PLC/PVI/OPC UA live writes, transfer, deploy, or restart.
 - No push or merge.
+
+## Review Fix Wave (2026-07-15)
+
+### Outcome
+
+- Removed the reachable legacy Pose sequence authority completely. The robot store now exposes only a non-durable Project publication projection for Timeline playback; it has no Pose save, hydration, clear, replace, reorder, delete, speed, or localStorage persistence API.
+- Every published active-Job sequence increments `playbackResetRevision`, stops playback, and deterministically resets Timeline elapsed position, including switches between equal nonempty Pose sequences.
+- Joint Inspector Save Pose now requires the Project V3 callback, disables without it or at known limits, prevents duplicate pending saves, and announces authoritative rejection text through an accessible alert.
+- Timeline speed, move, and delete commands now share an awaited pending/error boundary, disable duplicate/conflicting actions while pending, and announce conflict/limit/publication failures.
+- Added a narrow-screen Top bar controls disclosure containing Project, quality, Joint source, Add, and Theme functions in a viewport-bounded vertical overlay. The document remains fixed and the solution does not depend on top-bar horizontal scrolling.
+- Added roving keyboard models to both tab composites and tree/context-menu keyboard navigation with Escape focus return.
+- Added numeric UI/service coverage for 32 Jobs, 256 Poses per Job, and 2048 Poses per Project.
+
+### RED Evidence
+
+1. Initial review RED:
+
+   `npm run test:run -- src/features/joints/robot-store.test.ts src/features/joints/JointInspector.test.tsx src/features/ui/Timeline.test.tsx src/features/ui/BottomWorkspace.test.tsx src/features/jobs/RobotJobList.test.tsx src/app/AppShell.test.tsx`
+
+   Result: 6 files failed; 9 tests failed and 47 passed in 10.50s. Expected failures proved the legacy store APIs, resumable cursor after a Job publication, silent/untracked command failures, missing numeric UI gate, clipped narrow controls, and missing composite keyboard models.
+
+2. Numeric Job command RED:
+
+   `npm run test:run -- src/features/jobs/RobotJobList.test.tsx src/features/jobs/job-command-service.test.ts`
+
+   Result: 1 file failed and 1 passed; 1 test failed and 8 passed. Duplicate remained enabled at the 32-Job limit.
+
+3. Production type gate RED:
+
+   `npm run build`
+
+   Result: failed on `exactOptionalPropertyTypes` for the unavailable-reason prop and the six-angle playback projection tuple. Both were narrowed without runtime behavior changes.
+
+### GREEN Evidence
+
+- Review behavior slice: 6 files / 52 tests passed in 10.56s.
+- Numeric Job/Pose limits: 2 files / 9 tests passed in 5.65s.
+- Required focused suite: 16 files / 91 tests passed in 20.90s.
+- Fresh full serial suite after the final type narrowing: 104 files / 859 tests passed in 289.26s.
+- `npm run lint`: PASS, exit 0.
+- `npm run build`: PASS, exit 0; only the existing dependency externalization and chunk-size advisories remained.
+- `rg -n -F 'robot-sim.pose-sequence.v1' src`: no matches.
+
+### Scope Boundary
+
+- Project V3 remains the sole durable Job/Pose authority and each Job command still submits one Project recipe.
+- No Task 5+ feature, legacy compatibility mode, PLC/PVI/OPC UA write, transfer, deploy, restart, push, or merge was added.

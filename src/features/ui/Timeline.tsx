@@ -71,6 +71,8 @@ export function Timeline({
   const elapsedMsRef = useRef(0)
   const snapshotRef = useRef<readonly RobotKeyframe[]>([])
   const [positionMs, setPositionMs] = useState(0)
+  const [pendingCommand, setPendingCommand] = useState<string | null>(null)
+  const [commandError, setCommandError] = useState<string | null>(null)
 
   const cancelScheduledFrame = useCallback(() => {
     generationRef.current += 1
@@ -214,6 +216,28 @@ export function Timeline({
     setPositionMs(0)
   }
 
+  const runPoseCommand = async (
+    commandKey: string,
+    operation: () => Promise<void>,
+  ) => {
+    if (pendingCommand !== null) return
+    setPendingCommand(commandKey)
+    setCommandError(null)
+    try {
+      await operation()
+    } catch (error) {
+      setCommandError(
+        error instanceof Error
+          ? error.message
+          : 'Pose command failed. Refresh the Project and retry.',
+      )
+    } finally {
+      setPendingCommand(null)
+    }
+  }
+
+  const poseCommandsDisabled = disabled || playing || pendingCommand !== null
+
   return (
     <div className="timeline">
       <div className="timeline-header">
@@ -257,16 +281,14 @@ export function Timeline({
                 Speed
                 <input
                   aria-label={`${keyframe.name} speed to next pose`}
-                  disabled={disabled || playing || index === keyframes.length - 1}
+                  disabled={poseCommandsDisabled || index === keyframes.length - 1}
                   max={100}
                   min={1}
                   onChange={(event) => {
                     if (activeJobId !== null) {
-                      void commands.setPoseSpeed(
-                        activeJobId,
-                        keyframe.id,
-                        Number(event.currentTarget.value),
-                      )
+                      const speedPercent = Number(event.currentTarget.value)
+                      void runPoseCommand(`speed:${keyframe.id}`, () =>
+                        commands.setPoseSpeed(activeJobId, keyframe.id, speedPercent))
                     }
                   }}
                   type="number"
@@ -277,10 +299,11 @@ export function Timeline({
               <div className="timeline-pose-actions">
                 <button
                   aria-label={`Move ${keyframe.name} up`}
-                  disabled={disabled || playing || index === 0}
+                  disabled={poseCommandsDisabled || index === 0}
                   onClick={() => {
                     if (activeJobId !== null) {
-                      void commands.movePose(activeJobId, keyframe.id, index - 1)
+                      void runPoseCommand(`move:${keyframe.id}`, () =>
+                        commands.movePose(activeJobId, keyframe.id, index - 1))
                     }
                   }}
                   type="button"
@@ -289,10 +312,11 @@ export function Timeline({
                 </button>
                 <button
                   aria-label={`Move ${keyframe.name} down`}
-                  disabled={disabled || playing || index === keyframes.length - 1}
+                  disabled={poseCommandsDisabled || index === keyframes.length - 1}
                   onClick={() => {
                     if (activeJobId !== null) {
-                      void commands.movePose(activeJobId, keyframe.id, index + 1)
+                      void runPoseCommand(`move:${keyframe.id}`, () =>
+                        commands.movePose(activeJobId, keyframe.id, index + 1))
                     }
                   }}
                   type="button"
@@ -301,10 +325,11 @@ export function Timeline({
                 </button>
                 <button
                   aria-label={`Delete ${keyframe.name}`}
-                  disabled={disabled || playing}
+                  disabled={poseCommandsDisabled}
                   onClick={() => {
                     if (activeJobId !== null) {
-                      void commands.deletePose(activeJobId, keyframe.id)
+                      void runPoseCommand(`delete:${keyframe.id}`, () =>
+                        commands.deletePose(activeJobId, keyframe.id))
                     }
                   }}
                   type="button"
@@ -316,6 +341,8 @@ export function Timeline({
           ))}
         </ol>
       </div>
+      {pendingCommand === null ? null : <p aria-live="polite" role="status">Updating Pose…</p>}
+      {commandError === null ? null : <p role="alert">{commandError}</p>}
     </div>
   )
 }

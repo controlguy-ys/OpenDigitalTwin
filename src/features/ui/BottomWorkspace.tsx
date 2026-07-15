@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 export type BottomWorkspaceTab = 'timeline' | 'collision'
 
@@ -26,6 +26,8 @@ export function BottomWorkspace({
   collisionOpenRequest = 0,
 }: BottomWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<BottomWorkspaceTab>(readTab)
+  const timelineTabRef = useRef<HTMLButtonElement>(null)
+  const collisionTabRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (collisionOpenRequest <= 0) return
@@ -46,6 +48,26 @@ export function BottomWorkspace({
     }
   }
 
+  const selectAndFocus = (tab: BottomWorkspaceTab) => {
+    selectTab(tab)
+    const target = tab === 'timeline' ? timelineTabRef.current : collisionTabRef.current
+    target?.focus()
+  }
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    let next: BottomWorkspaceTab | null = null
+    if (event.key === 'Home') next = 'timeline'
+    else if (event.key === 'End') next = 'collision'
+    else if (event.key === 'ArrowRight') {
+      next = activeTab === 'timeline' ? 'collision' : 'timeline'
+    } else if (event.key === 'ArrowLeft') {
+      next = activeTab === 'timeline' ? 'collision' : 'timeline'
+    }
+    if (next === null) return
+    event.preventDefault()
+    selectAndFocus(next)
+  }
+
   return (
     <div className="bottom-workspace">
       <div aria-label="Bottom workspace" className="bottom-workspace-tabs" role="tablist">
@@ -53,8 +75,11 @@ export function BottomWorkspace({
           aria-controls="timeline-workspace-panel"
           aria-selected={activeTab === 'timeline'}
           id="timeline-workspace-tab"
+          onKeyDown={handleTabKeyDown}
           onClick={() => selectTab('timeline')}
+          ref={timelineTabRef}
           role="tab"
+          tabIndex={activeTab === 'timeline' ? 0 : -1}
           type="button"
         >
           Timeline
@@ -63,8 +88,11 @@ export function BottomWorkspace({
           aria-controls="collision-workspace-panel"
           aria-selected={activeTab === 'collision'}
           id="collision-workspace-tab"
+          onKeyDown={handleTabKeyDown}
           onClick={() => selectTab('collision')}
+          ref={collisionTabRef}
           role="tab"
+          tabIndex={activeTab === 'collision' ? 0 : -1}
           type="button"
         >
           Collision <span className="bottom-workspace-badge">{collisionCount}</span>

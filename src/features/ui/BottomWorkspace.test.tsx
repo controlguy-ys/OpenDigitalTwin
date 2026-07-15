@@ -24,3 +24,23 @@ it('shows only one bottom workspace panel at a time and persists its active tab'
   expect(screen.queryByRole('tabpanel', { name: 'Timeline' })).not.toBeInTheDocument()
   expect(localStorage.getItem('robotsim.bottomWorkspaceTab')).toBe('collision')
 })
+
+it('uses roving focus and standard horizontal tab keyboard navigation', async () => {
+  const user = userEvent.setup()
+  render(<BottomWorkspace collision="Collision" timeline="Timeline" />)
+  const timeline = screen.getByRole('tab', { name: 'Timeline' })
+  const collision = screen.getByRole('tab', { name: 'Collision 0' })
+
+  expect(timeline).toHaveAttribute('tabindex', '0')
+  expect(collision).toHaveAttribute('tabindex', '-1')
+  timeline.focus()
+  await user.keyboard('{ArrowRight}')
+  expect(collision).toHaveFocus()
+  expect(collision).toHaveAttribute('aria-selected', 'true')
+  await user.keyboard('{Home}')
+  expect(timeline).toHaveFocus()
+  await user.keyboard('{End}')
+  expect(collision).toHaveFocus()
+  await user.keyboard('{ArrowRight}')
+  expect(timeline).toHaveFocus()
+})

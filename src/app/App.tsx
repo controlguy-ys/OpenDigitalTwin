@@ -44,8 +44,10 @@ import { usePublishedSceneRuntime } from '../features/scene/scene-runtime-select
 import { useCollisionStore } from '../features/collision/collision-store'
 import { deleteSceneEntitySafely } from './safe-scene-deletion'
 import type { SceneContextRequest } from '../features/scene/scene-context-request'
+import { MAX_POSES_PER_JOB, MAX_PROJECT_POSES } from '../domain/project/simulation-job-v1'
 
 type RobotInspectorTab = 'Transform' | 'Mechanics' | 'Geometry' | 'Frames'
+const ROBOT_INSPECTOR_TABS = ['Transform', 'Mechanics', 'Geometry', 'Frames'] as const
 
 export interface RobotTargetInspectorProps {
   readonly transform: ReactNode
@@ -61,23 +63,47 @@ export function RobotTargetInspector({
   onOpenFrames,
 }: RobotTargetInspectorProps) {
   const [tab, setTab] = useState<RobotInspectorTab>('Transform')
+  const tabRefs = useRef(new Map<RobotInspectorTab, HTMLButtonElement>())
   const openEditor = tab === 'Mechanics'
     ? onOpenMechanics
     : tab === 'Geometry'
       ? onOpenGeometry
       : onOpenFrames
 
+  const selectAndFocusTab = (nextTab: RobotInspectorTab) => {
+    setTab(nextTab)
+    tabRefs.current.get(nextTab)?.focus()
+  }
+
   return (
     <div className="robot-target-inspector">
       <div aria-label="Robot Inspector editors" role="tablist">
-        {(['Transform', 'Mechanics', 'Geometry', 'Frames'] as const).map((candidate) => (
+        {ROBOT_INSPECTOR_TABS.map((candidate, index) => (
           <button
             aria-controls={`robot-${candidate.toLowerCase()}-panel`}
             aria-selected={tab === candidate}
             id={`robot-${candidate.toLowerCase()}-tab`}
             key={candidate}
+            onKeyDown={(event) => {
+              let nextIndex: number | null = null
+              if (event.key === 'Home') nextIndex = 0
+              else if (event.key === 'End') nextIndex = ROBOT_INSPECTOR_TABS.length - 1
+              else if (event.key === 'ArrowRight') {
+                nextIndex = (index + 1) % ROBOT_INSPECTOR_TABS.length
+              } else if (event.key === 'ArrowLeft') {
+                nextIndex = (index - 1 + ROBOT_INSPECTOR_TABS.length) % ROBOT_INSPECTOR_TABS.length
+              }
+              if (nextIndex === null) return
+              event.preventDefault()
+              selectAndFocusTab(ROBOT_INSPECTOR_TABS[nextIndex]!)
+            }}
             onClick={() => setTab(candidate)}
+            ref={(node) => {
+              if (node === null) tabRefs.current.delete(candidate)
+              else tabRefs.current.set(candidate, node)
+            }}
             role="tab"
+            tabIndex={tab === candidate ? 0 : -1}
             type="button"
           >
             {candidate}
@@ -133,6 +159,17 @@ export function App() {
   const activeJob = activeSnapshot?.simulation.jobs.find(
     ({ id }) => id === activeSnapshot.simulation.activeJobId,
   )
+  const totalPoseCount = activeSnapshot?.simulation.jobs.reduce(
+    (count, job) => count + job.poses.length,
+    0,
+  ) ?? 0
+  const savePoseUnavailableReason = activeJob === undefined
+    ? 'Create a Job in Robot Jobs and select it to save a Pose.'
+    : activeJob.poses.length >= MAX_POSES_PER_JOB
+      ? `This Job reached the ${MAX_POSES_PER_JOB} Pose limit.`
+      : totalPoseCount >= MAX_PROJECT_POSES
+        ? `This Project reached the ${MAX_PROJECT_POSES} Pose limit.`
+        : null
   const collisionCount = useCollisionStore((state) =>
     state.validationReport?.findings.length ?? state.currentFindings.length)
   const controlsDisabled = sceneStatus !== 'ready'
@@ -288,7 +325,7 @@ export function App() {
         inspector={
           selectedSceneEntityId === null ? (
             <JointInspector
-              canSavePose={activeJob !== undefined}
+              canSavePose={savePoseUnavailableReason === null}
               disabled={jointControlsDisabled}
               onReset={handleResetInteraction}
               onSavePose={async () => {
@@ -296,6 +333,7 @@ export function App() {
                   `Pose ${(activeJob?.poses.length ?? 0) + 1}`,
                 )
               }}
+              savePoseUnavailableReason={savePoseUnavailableReason ?? undefined}
               source={simulationJointSource}
             />
           ) : selectedSceneEntityId === 'robot:active' ? (

@@ -122,4 +122,40 @@ describe('JobCommandService', () => {
     )
     expect(replaceFromActive).not.toHaveBeenCalled()
   })
+
+  it('enforces the numeric 256 per-Job and 2048 per-Project Pose limits', async () => {
+    snapshot = { ...snapshot, simulation: {
+      activeJobId: 'job-a',
+      jobs: [{
+        id: 'job-a',
+        name: 'Full Job',
+        revision: 1,
+        poses: Array.from({ length: 256 }, (_, index) => pose(`pose-${index}`, index)),
+      }],
+    } }
+    let currentHarness = harness()
+    await expect(currentHarness.service.saveCurrentPose('Overflow')).rejects.toThrow(
+      'JOB_POSE_LIMIT_EXCEEDED',
+    )
+    expect(recipeCount).toBe(1)
+
+    snapshot = { ...snapshot, simulation: {
+      activeJobId: 'job-0',
+      jobs: Array.from({ length: 8 }, (_, jobIndex) => ({
+        id: `job-${jobIndex}`,
+        name: `Job ${jobIndex}`,
+        revision: 1,
+        poses: Array.from(
+          { length: 256 },
+          (_, poseIndex) => pose(`pose-${jobIndex}-${poseIndex}`, poseIndex),
+        ),
+      })),
+    } }
+    recipeCount = 0
+    currentHarness = harness()
+    await expect(currentHarness.service.saveCurrentPose('Overflow')).rejects.toThrow(
+      'PROJECT_POSE_LIMIT_EXCEEDED',
+    )
+    expect(recipeCount).toBe(1)
+  })
 })

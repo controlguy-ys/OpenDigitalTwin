@@ -60,6 +60,18 @@ button {
   border-bottom: 1px solid var(--color-border);
 }
 
+.top-bar-controls {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.top-bar-disclosure {
+  display: none;
+}
+
 .project-menu {
   align-items: center;
   display: flex;
@@ -134,7 +146,7 @@ button {
   border-radius: var(--radius);
 }
 
-.top-bar > .add-menu {
+.top-bar-controls > .add-menu {
   margin-left: auto;
 }
 
@@ -1820,11 +1832,68 @@ button {
   }
 
   .top-bar {
-    gap: clamp(8px, 4vw, 28px);
+    justify-content: space-between;
+    gap: 8px;
+    overflow: visible;
   }
 
-  .top-bar button {
-    width: 136px;
+  .top-bar .top-bar-disclosure {
+    display: block;
+    width: auto;
+    min-width: 88px;
+    margin-left: auto;
+  }
+
+  .top-bar-controls {
+    position: fixed;
+    top: 48px;
+    right: 8px;
+    z-index: 30;
+    display: none;
+    width: min(320px, calc(100vw - 16px));
+    max-height: calc(100dvh - 64px);
+    padding: 10px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    background: var(--color-panel);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
+  }
+
+  .top-bar-controls.is-open {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .top-bar-controls > *,
+  .top-bar-controls .project-menu {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .top-bar-controls .project-menu {
+    flex-wrap: wrap;
+  }
+
+  .top-bar-controls > .add-menu {
+    margin-left: 0;
+  }
+
+  .top-bar-controls .joint-source-select,
+  .top-bar-controls .theme-select {
+    justify-content: space-between;
+  }
+
+  .top-bar-controls .add-menu > button,
+  .top-bar-controls .joint-source-select select,
+  .top-bar-controls .theme-select select {
+    width: 100%;
+  }
+
+  .top-bar-controls .add-menu > [role='menu'] {
+    position: static;
+    margin-top: 4px;
   }
 
   .app-shell::before,

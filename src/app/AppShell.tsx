@@ -98,6 +98,7 @@ export function AppShell({
   const [splitPercent, setSplitPercent] = useState(() => clampSplit(browserNumber(SIDEBAR_SPLIT_KEY, 60)))
   const [draggingSplit, setDraggingSplit] = useState(false)
   const [isAddOpen, setIsAddOpen] = useState(false)
+  const [isCompactControlsOpen, setIsCompactControlsOpen] = useState(false)
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference)
   const assetRailRef = useRef<HTMLElement>(null)
 
@@ -171,59 +172,76 @@ export function AppShell({
     >
       <header className="top-bar">
         <strong>RobotSim</strong>
-        {projectMenu}
-        <span>SIMULATION</span>
-        <span className="source-quality" data-quality={sourceQuality}>
-          {sourceQuality}
-        </span>
-        <label className="joint-source-select">
-          <span>Joint source</span>
-          <select
-            aria-label="Joint source"
-            onChange={(event) =>
-              onSourceModeChange?.(event.currentTarget.value as JointSourceMode)
-            }
-            value={sourceMode}
-          >
-            <option value="simulation">Simulation</option>
-            <option value="opcua">OPC UA</option>
-          </select>
-        </label>
-        <div className="add-menu">
-          <button
-            aria-expanded={isAddOpen}
-            aria-haspopup="menu"
-            onClick={() => setIsAddOpen((open) => !open)}
-            type="button"
-          >
-            Add
-          </button>
-          {isAddOpen ? (
-            <div aria-label="Add" role="menu">
-              <button onClick={() => runAddCommand(onOpenStepImport)} role="menuitem" type="button">Import STEP</button>
-              <button onClick={() => runAddCommand(onOpenRobotImport)} role="menuitem" type="button">Import Robot</button>
-              <button onClick={() => runAddCommand(onCreateBox)} role="menuitem" type="button">Box</button>
-              <button onClick={() => runAddCommand(onCreateCylinder)} role="menuitem" type="button">Cylinder</button>
-              <button onClick={() => runAddCommand(onCreateGroup)} role="menuitem" type="button">Group</button>
-            </div>
-          ) : null}
+        <button
+          aria-controls="top-bar-controls"
+          aria-expanded={isCompactControlsOpen}
+          aria-label="Top bar controls"
+          className="top-bar-disclosure"
+          onClick={() => setIsCompactControlsOpen((open) => !open)}
+          type="button"
+        >
+          Controls
+        </button>
+        <div
+          aria-label="Top bar controls"
+          className={`top-bar-controls${isCompactControlsOpen ? ' is-open' : ''}`}
+          id="top-bar-controls"
+          role="toolbar"
+        >
+          {projectMenu}
+          <span>SIMULATION</span>
+          <span className="source-quality" data-quality={sourceQuality}>
+            {sourceQuality}
+          </span>
+          <label className="joint-source-select">
+            <span>Joint source</span>
+            <select
+              aria-label="Joint source"
+              onChange={(event) =>
+                onSourceModeChange?.(event.currentTarget.value as JointSourceMode)
+              }
+              value={sourceMode}
+            >
+              <option value="simulation">Simulation</option>
+              <option value="opcua">OPC UA</option>
+            </select>
+          </label>
+          <div className="add-menu">
+            <button
+              aria-expanded={isAddOpen}
+              aria-haspopup="menu"
+              onClick={() => setIsAddOpen((open) => !open)}
+              type="button"
+            >
+              Add
+            </button>
+            {isAddOpen ? (
+              <div aria-label="Add" role="menu">
+                <button onClick={() => runAddCommand(onOpenStepImport)} role="menuitem" type="button">Import STEP</button>
+                <button onClick={() => runAddCommand(onOpenRobotImport)} role="menuitem" type="button">Import Robot</button>
+                <button onClick={() => runAddCommand(onCreateBox)} role="menuitem" type="button">Box</button>
+                <button onClick={() => runAddCommand(onCreateCylinder)} role="menuitem" type="button">Cylinder</button>
+                <button onClick={() => runAddCommand(onCreateGroup)} role="menuitem" type="button">Group</button>
+              </div>
+            ) : null}
+          </div>
+          <label className="theme-select">
+            <span>Theme</span>
+            <select
+              aria-label="Theme"
+              onChange={(event) => {
+                const preference = event.currentTarget.value as ThemePreference
+                setTheme(preference)
+                writeThemePreference(preference)
+              }}
+              value={theme}
+            >
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
         </div>
-        <label className="theme-select">
-          <span>Theme</span>
-          <select
-            aria-label="Theme"
-            onChange={(event) => {
-              const preference = event.currentTarget.value as ThemePreference
-              setTheme(preference)
-              writeThemePreference(preference)
-            }}
-            value={theme}
-          >
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
       </header>
       <button
         aria-controls="scene-assets-panel"

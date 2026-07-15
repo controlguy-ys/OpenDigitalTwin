@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SimulationJointSource } from '../joints/SimulationJointSource'
@@ -177,7 +177,7 @@ describe('Timeline', () => {
     await user.click(screen.getByRole('button', { name: 'Play' }))
     runNextFrame(0)
     act(() => {
-      useRobotStore.getState().clearKeyframes()
+      useRobotStore.setState({ keyframes: [] })
     })
 
     expect(useRobotStore.getState().playing).toBe(true)
@@ -269,5 +269,51 @@ describe('Timeline', () => {
 
     await user.click(screen.getByRole('button', { name: 'Delete Pose 2' }))
     expect(commands.deletePose).toHaveBeenCalledWith('job-a', 'end')
+  })
+
+  it('resets a partial playback cursor when a nonempty Job publication replaces it', async () => {
+    const user = userEvent.setup()
+    const source = new SimulationJointSource()
+    source.subscribe((frame) => useRobotStore.getState().applyFrame(frame))
+    render(<Timeline activeJobId="job-a" source={source} />)
+
+    await user.click(screen.getByRole('button', { name: 'Play' }))
+    runNextFrame(0)
+    runNextFrame(500)
+    await user.click(screen.getByRole('button', { name: 'Pause' }))
+    expect(useRobotStore.getState().anglesDeg[0]).toBe(50)
+
+    act(() => {
+      useRobotStore.getState().replacePublishedKeyframes([START, END])
+    })
+    await user.click(screen.getByRole('button', { name: 'Play' }))
+    runNextFrame(1_000)
+
+    expect(useRobotStore.getState().anglesDeg[0]).toBe(0)
+  })
+
+  it('awaits pose commands, prevents duplicate actions, and announces rejections', async () => {
+    const user = userEvent.setup()
+    let rejectDelete!: (error: Error) => void
+    const commands = {
+      movePose: vi.fn(async () => undefined),
+      setPoseSpeed: vi.fn(async () => undefined),
+      deletePose: vi.fn(() => new Promise<void>((_resolve, reject) => {
+        rejectDelete = reject
+      })),
+    } as unknown as JobCommandService
+    render(<Timeline activeJobId="job-a" commands={commands} />)
+
+    const deletePose = screen.getByRole('button', { name: 'Delete Pose 2' })
+    await user.click(deletePose)
+    expect(deletePose).toBeDisabled()
+    await user.click(deletePose)
+    expect(commands.deletePose).toHaveBeenCalledTimes(1)
+
+    rejectDelete(new Error('PROJECT_CONFLICT: Refresh and retry.'))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'PROJECT_CONFLICT: Refresh and retry.',
+    )
+    await waitFor(() => expect(deletePose).toBeEnabled())
   })
 })

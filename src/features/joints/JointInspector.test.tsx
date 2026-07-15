@@ -161,7 +161,10 @@ describe('JointInspector', () => {
     useRobotStore.getState().setJoint(0, 90)
     useRobotStore.getState().setPlaying(true)
     useRobotStore.getState().setGripperOpen(false)
-    useRobotStore.getState().savePose()
+    useRobotStore.setState({ keyframes: [{
+      id: 'project-pose', name: 'Project Pose', anglesDeg: [90, 0, 0, 0, 0, 0],
+      durationMs: 1_000, easing: 'linear', speedPercentToNext: 100,
+    }] })
 
     render(<JointInspector source={source} />)
     await user.click(screen.getByRole('button', { name: 'Home' }))
@@ -208,7 +211,10 @@ describe('JointInspector', () => {
       useInteractionStore.getState().resetInteraction()
     })
     useRobotStore.getState().setGripperOpen(false)
-    useRobotStore.getState().savePose()
+    useRobotStore.setState({ keyframes: [{
+      id: 'project-pose', name: 'Project Pose', anglesDeg: [0, 0, 0, 0, 0, 0],
+      durationMs: 1_000, easing: 'linear', speedPercentToNext: 100,
+    }] })
     useInteractionStore.getState().enterGraspCandidate('cup-01')
     useInteractionStore.getState().holdEquipment('cup-01', {
       position: [0, 0, 0],
@@ -246,21 +252,37 @@ describe('JointInspector', () => {
     unsubscribe()
   })
 
-  it('saves poses and opens or closes the gripper', async () => {
+  it('opens and closes the gripper without a legacy Pose fallback', async () => {
     const user = userEvent.setup()
     useRobotStore.getState().setJoint(5, 30)
     render(<JointInspector />)
 
-    await user.click(screen.getByRole('button', { name: 'Save Pose' }))
-    expect(useRobotStore.getState().keyframes).toHaveLength(1)
-    expect(useRobotStore.getState().keyframes[0]?.anglesDeg).toEqual([
-      0, 0, 0, 0, 0, 30,
-    ])
+    expect(screen.getByRole('button', { name: 'Save Pose' })).toBeDisabled()
+    expect(useRobotStore.getState().keyframes).toHaveLength(0)
 
     await user.click(screen.getByRole('button', { name: 'Close Gripper' }))
     expect(useRobotStore.getState().gripperOpen).toBe(false)
     await user.click(screen.getByRole('button', { name: 'Open Gripper' }))
     expect(useRobotStore.getState().gripperOpen).toBe(true)
+  })
+
+  it('requires the Project V3 save callback and surfaces an authoritative rejection', async () => {
+    const user = userEvent.setup()
+    const { rerender } = render(<JointInspector />)
+
+    expect(screen.getByRole('button', { name: 'Save Pose' })).toBeDisabled()
+    expect(screen.getByText(/create a Job/i)).toBeVisible()
+
+    const onSavePose = vi.fn(async () => {
+      throw new Error('JOB_POSE_LIMIT_EXCEEDED: A Job cannot exceed 256 Poses.')
+    })
+    rerender(<JointInspector canSavePose onSavePose={onSavePose} />)
+    await user.click(screen.getByRole('button', { name: 'Save Pose' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'JOB_POSE_LIMIT_EXCEEDED: A Job cannot exceed 256 Poses.',
+    )
+    expect(onSavePose).toHaveBeenCalledTimes(1)
   })
 
   it('disables every scene-dependent inspector control', () => {
