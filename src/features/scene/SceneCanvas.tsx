@@ -1,5 +1,5 @@
 import { Canvas, useLoader } from '@react-three/fiber'
-import { Suspense, useCallback, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Vector3 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import {
@@ -41,6 +41,7 @@ const NOOP_VIEWPORT_ACTIONS: ViewportOverlayCameraCommands = {
 export type SceneRenderStatus = 'loading' | 'ready' | 'error'
 
 export interface SceneCanvasProps {
+  cameraCommandRequest?: Readonly<{ id: number; command: 'fit-all' | 'focus-selection' }>
   onStatusChange?: (status: SceneRenderStatus) => void
   registerRig?: (registration: RobotRigRegistration | null) => void
   registerInteractionController?: (
@@ -63,6 +64,7 @@ export function recordCameraDiagnosticIfEnabled(
 }
 
 export function SceneCanvas({
+  cameraCommandRequest,
   onStatusChange,
   registerRig,
   registerInteractionController,
@@ -94,6 +96,12 @@ export function SceneCanvas({
       setStandardView: (view) => { viewportController.actions.setStandardView(view); record() },
     }
   }, [viewportController])
+
+  useEffect(() => {
+    if (cameraCommandRequest === undefined || viewportController === null) return
+    if (cameraCommandRequest.command === 'fit-all') overlayActions.fitAll()
+    else overlayActions.focusSelection()
+  }, [cameraCommandRequest, overlayActions, viewportController])
 
   const updateStatus = useCallback(
     (nextStatus: SceneRenderStatus) => {

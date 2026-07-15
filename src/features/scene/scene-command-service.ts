@@ -10,6 +10,7 @@ import {
 } from '../../domain/project/project-v3'
 import type {
   LinearAxisConfigurationV1,
+  RobotMountContactV1,
   SceneEntityIdV1,
   SceneEntityV1,
   ScenePoseV1,
@@ -59,6 +60,7 @@ export interface SceneCommandService {
   attachRobotToLinearAxis(): Promise<void>
   detachRobotFromLinearAxis(): Promise<void>
   deleteLinearAxis(): Promise<void>
+  setRobotMountContact(configuration: RobotMountContactV1 | null): Promise<void>
   importStepObject(input: ImportStepObjectInputV1): Promise<`object:${string}`>
   createGroup(name: string): Promise<`group:${string}`>
   createBox(input: CreateBoxObjectInputV1): Promise<`object:${string}`>
@@ -308,7 +310,7 @@ function assertObjectInstanceCapacity(
 ): void {
   if (current.objectInstances.length < MAX_OBJECT_INSTANCES) return
   throw new Error(
-    `MAX_OBJECT_INSTANCES is ${MAX_OBJECT_INSTANCES}; current usage is ${current.objectInstances.length}.`,
+    `MAX_OBJECT_INSTANCES is ${MAX_OBJECT_INSTANCES}; current usage is ${current.objectInstances.length} of ${MAX_OBJECT_INSTANCES}.`,
   )
 }
 
@@ -320,7 +322,7 @@ function assertStepAssetCapacity(
   ).length
   if (stepAssetCount < MAX_STEP_OBJECT_ASSETS) return
   throw new Error(
-    `MAX_STEP_OBJECT_ASSETS is ${MAX_STEP_OBJECT_ASSETS}; current usage is ${stepAssetCount}.`,
+    `MAX_STEP_OBJECT_ASSETS is ${MAX_STEP_OBJECT_ASSETS}; current usage is ${stepAssetCount} of ${MAX_STEP_OBJECT_ASSETS}.`,
   )
 }
 
@@ -524,6 +526,22 @@ export function createSceneCommandService(
           },
         }
       })
+    },
+
+    async setRobotMountContact(configuration) {
+      await mutate((current) => ({
+        ...current,
+        scene: {
+          ...current.scene,
+          robotMountContact: configuration === null
+            ? null
+            : {
+                baseLinkId: configuration.baseLinkId,
+                mountSurfaceCollisionEntityId:
+                  configuration.mountSurfaceCollisionEntityId,
+              },
+        },
+      }))
     },
 
     async importStepObject(input) {

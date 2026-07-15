@@ -9,7 +9,7 @@ type ProjectSnapshot = {
   manifest: { name: string }
   robot: { sources: Array<{ sha256: string }>; links: Array<Record<string, unknown>> }
   scene: {
-    robotMountContact: { baseLinkId: string; mountSurfaceCollisionEntityId: string | null }
+    robotMountContact: { baseLinkId: string; mountSurfaceCollisionEntityId: string | null } | null
     entities: Array<Record<string, any>>
   }
   objectAssets: Array<Record<string, unknown>>
@@ -126,42 +126,11 @@ function reusableWorkcellFixture(source: Uint8Array): Buffer {
     ({ kind }) => kind === 'robot',
   )
   if (robot === undefined) throw new Error('Default project has no Robot Scene Entity.')
-  const robotWorldPosition = robot.localPose.positionM as [number, number, number]
-  const axisPositionM = 0.5
   putJson(entries, 'scene/state.json', {
     ...scene,
-    robotMountContact: {
-      baseLinkId: 'LINK00',
-      mountSurfaceCollisionEntityId: 'workcell:workbench',
-    },
+    robotMountContact: null,
     entities: [
-      {
-        kind: 'linear-axis',
-        id: 'linear-axis:active',
-        name: 'Robot Track',
-        parentId: null,
-        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
-        visible: true,
-        direction: 'x',
-        minPositionM: 0,
-        maxPositionM: 1,
-        homePositionM: 0,
-        currentPositionM: axisPositionM,
-        carriageEntityId: null,
-        robotEntityId: 'robot:active',
-      },
-      {
-        ...robot,
-        parentId: 'linear-axis:active',
-        localPose: {
-          ...robot.localPose,
-          positionM: [
-            robotWorldPosition[0] - axisPositionM,
-            robotWorldPosition[1],
-            robotWorldPosition[2],
-          ],
-        },
-      },
+      robot,
       {
         kind: 'group',
         id: 'group:fixture-a',
@@ -342,6 +311,33 @@ test('builds, saves, reloads, and edits a reusable workcell', async ({ page }) =
   await openDrawer(page, 'Scene Assets drawer')
   await openDrawer(page, 'Inspector drawer')
 
+  await page.getByRole('button', { name: 'Add', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Linear Axis' }).click()
+  await expect.poll(async () => (await snapshot(page)).scene.entities.find(
+    ({ id }) => id === 'linear-axis:active',
+  )?.direction ?? null)
+    .toBe('x')
+  await page.getByLabel('Axis position (mm)').fill('500')
+  await page.getByRole('button', { name: 'Apply position' }).click()
+  await expect.poll(async () => entity(await snapshot(page), 'linear-axis:active').currentPositionM)
+    .toBe(0.5)
+
+  const robotTreeItem = page.locator('[data-scene-entity-id="robot:active"]')
+  await robotTreeItem.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Attach to Linear Axis' }).click()
+  await expect.poll(async () => entity(await snapshot(page), 'robot:active').parentId)
+    .toBe('linear-axis:active')
+
+  await robotTreeItem.locator(':scope > .scene-tree-row button').first().click()
+  await expect(page.getByLabel('Mount collision surface')).toContainText('workcell:workbench')
+  await page.getByLabel('Robot base Link').selectOption('LINK00')
+  await page.getByLabel('Mount collision surface').selectOption('workcell:workbench')
+  await page.getByRole('button', { name: 'Save mount contact' }).click()
+  await expect.poll(async () => (await snapshot(page)).scene.robotMountContact).toEqual({
+    baseLinkId: 'LINK00',
+    mountSurfaceCollisionEntityId: 'workcell:workbench',
+  })
+
   await expect(page.getByRole('button', { name: '+ New Job' })).toBeVisible()
   await expect(page.getByRole('treeitem', { name: 'Pick Cycle, 3 Poses' }))
     .toHaveAttribute('aria-selected', 'true')
@@ -351,8 +347,6 @@ test('builds, saves, reloads, and edits a reusable workcell', async ({ page }) =
     await expect(page.getByLabel(`Pose ${index + 1} speed to next pose`))
       .toHaveValue(String(speed))
   }
-  const jointOneInput = page.getByRole('spinbutton', { name: 'J1' })
-  await expect(jointOneInput).toBeVisible()
   const jointBeforeHome = await page.getByTestId('robot-joint-diagnostic').textContent()
 
   const cupTreeItem = page.getByRole('treeitem', { name: 'Cup', exact: true })
@@ -385,7 +379,7 @@ test('builds, saves, reloads, and edits a reusable workcell', async ({ page }) =
   await expect.poll(async () => entity(await snapshot(page), 'object:cup').localPose.positionM[0])
     .toBeCloseTo(0.45)
 
-  await page.getByRole('button', { name: 'Select Robot Track' }).click()
+  await page.getByRole('button', { name: 'Select Linear Axis' }).click()
   const mountedWorld = worldPosition(await snapshot(page), 'robot:active')
   await page.getByRole('button', { name: 'Detach Robot' }).click()
   await expect.poll(async () => entity(await snapshot(page), 'robot:active').parentId).toBeNull()

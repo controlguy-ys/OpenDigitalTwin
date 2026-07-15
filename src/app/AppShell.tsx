@@ -66,6 +66,7 @@ interface AppShellProps {
   inspector?: ReactNode
   bottomRail?: ReactNode
   bottomRailOpenRequest?: number
+  inspectorOpenRequest?: number
   controlsDisabled?: boolean
   viewportBusy?: boolean
   sourceQuality?: JointQuality
@@ -74,6 +75,8 @@ interface AppShellProps {
   onCreateBox?: () => void
   onCreateCylinder?: () => void
   onCreateGroup?: () => void
+  onCreateLinearAxis?: () => void
+  linearAxisAvailable?: boolean
   sourceMode?: JointSourceMode
   onSourceModeChange?: (mode: JointSourceMode) => void
 }
@@ -86,6 +89,7 @@ export function AppShell({
   inspector,
   bottomRail,
   bottomRailOpenRequest = 0,
+  inspectorOpenRequest = 0,
   controlsDisabled = false,
   viewportBusy = controlsDisabled,
   sourceQuality = 'GOOD',
@@ -94,6 +98,8 @@ export function AppShell({
   onCreateBox,
   onCreateCylinder,
   onCreateGroup,
+  onCreateLinearAxis,
+  linearAxisAvailable = true,
   sourceMode = 'simulation',
   onSourceModeChange,
 }: AppShellProps) {
@@ -135,6 +141,12 @@ export function AppShell({
     setIsBottomRailOpen(true)
     persistPreference(BOTTOM_DRAWER_KEY, 'true')
   }, [bottomRailOpenRequest])
+
+  useEffect(() => {
+    if (inspectorOpenRequest <= 0) return
+    setIsInspectorOpen(true)
+    persistPreference(INSPECTOR_DRAWER_KEY, 'true')
+  }, [inspectorOpenRequest])
 
   useEffect(() => {
     applyThemePreference(theme)
@@ -242,6 +254,12 @@ export function AppShell({
                 <button onClick={() => runAddCommand(onCreateBox)} role="menuitem" type="button">Box</button>
                 <button onClick={() => runAddCommand(onCreateCylinder)} role="menuitem" type="button">Cylinder</button>
                 <button onClick={() => runAddCommand(onCreateGroup)} role="menuitem" type="button">Group</button>
+                <button
+                  disabled={!linearAxisAvailable}
+                  onClick={() => runAddCommand(onCreateLinearAxis)}
+                  role="menuitem"
+                  type="button"
+                >Linear Axis</button>
               </div>
             ) : null}
           </div>

@@ -664,6 +664,32 @@ describe('SceneCommandService', () => {
     expect(harness.replaceFromActive).toHaveBeenCalledTimes(2)
   })
 
+  it('publishes Robot mount-contact configuration and its explicit incomplete and clear states', async () => {
+    const harness = mutationHarness(projection([robot()]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.setRobotMountContact({
+      baseLinkId: 'LINK01',
+      mountSurfaceCollisionEntityId: 'workcell:workbench',
+    })
+    expect(harness.active().scene.robotMountContact).toEqual({
+      baseLinkId: 'LINK01',
+      mountSurfaceCollisionEntityId: 'workcell:workbench',
+    })
+
+    await commands.setRobotMountContact({
+      baseLinkId: 'LINK00',
+      mountSurfaceCollisionEntityId: null,
+    })
+    expect(harness.active().scene.robotMountContact).toEqual({
+      baseLinkId: 'LINK00',
+      mountSurfaceCollisionEntityId: null,
+    })
+
+    await commands.setRobotMountContact(null)
+    expect(harness.active().scene.robotMountContact).toBeNull()
+  })
+
   it('rejects an out-of-range position without clamping and moves Home through one recipe', async () => {
     const harness = mutationHarness(projection([robot(), linearAxis()]))
     const commands = createSceneCommandService({ mutationService: harness.mutationService })

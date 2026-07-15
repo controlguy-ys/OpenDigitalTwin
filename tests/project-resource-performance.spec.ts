@@ -241,10 +241,6 @@ function installStepWorkerProbe(page: Page): Promise<void> {
 test('emits non-blocking 80 percent warnings for Instances and STEP Assets', async ({ page }) => {
   test.setTimeout(300_000)
   await installStepWorkerProbe(page)
-  const warnings: string[] = []
-  page.on('console', (message) => {
-    if (message.type() === 'warning') warnings.push(message.text())
-  })
   await importFixture(page, {
     name: 'Resource Warning', instanceCount: 204, stepAssetCount: 51,
   })
@@ -255,7 +251,8 @@ test('emits non-blocking 80 percent warnings for Instances and STEP Assets', asy
   await page.getByRole('button', { name: 'Add', exact: true }).click()
   await page.getByRole('menuitem', { name: 'Box' }).click()
   await expect.poll(async () => (await activeRevision(page)).instanceCount).toBe(205)
-  expect(warnings).toContain('OBJECT_INSTANCE_WARNING: 205 of 256')
+  await expect(page.getByText('OBJECT_INSTANCE_WARNING: 205 of 256', { exact: true }))
+    .toBeVisible()
 
   await page.getByRole('button', { name: 'Add', exact: true }).click()
   await page.getByRole('menuitem', { name: 'Import STEP' }).click()
@@ -267,9 +264,14 @@ test('emits non-blocking 80 percent warnings for Instances and STEP Assets', asy
   await expect(page.getByRole('button', { name: 'Add to scene' })).toBeEnabled()
   await page.getByRole('button', { name: 'Add to scene' }).click()
   await expect.poll(async () => (await activeRevision(page)).stepAssetCount).toBe(52)
-  expect(warnings).toContain('STEP_ASSET_WARNING: 52 of 64')
+  await expect(page.getByText('STEP_ASSET_WARNING: 52 of 64', { exact: true }))
+    .toBeVisible()
   expect(await page.evaluate(() => (window as any).__stepParseRequests))
     .toBeGreaterThan(parseRequestsBeforeImport)
+  const archiveEntries = unzipSync(await exportProject(page))
+  const persistedText = Object.values(archiveEntries).map((bytes) => decoder.decode(bytes)).join('\n')
+  expect(persistedText).not.toContain('OBJECT_INSTANCE_WARNING')
+  expect(persistedText).not.toContain('STEP_ASSET_WARNING')
 })
 
 test('blocks a 65th STEP Asset before parsing or revising the project', async ({ page }) => {

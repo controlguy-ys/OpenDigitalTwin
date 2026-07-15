@@ -9,6 +9,7 @@ import { App, LinearAxisTargetInspector } from './App'
 import { ManualLinearAxisSource } from '../features/scene/linear-axis-source'
 import type { LinearAxisSourceV1 } from '../features/scene/linear-axis-source'
 import type { LinearAxisCommittedStateV1 } from '../features/scene/linear-axis-source'
+import { operationFeedbackStore } from '../features/ui/OperationFeedback'
 
 const runtime = testSceneRuntime(TEST_SCENE_ENTITIES)
 let publishedRuntime = runtime
@@ -68,6 +69,7 @@ describe('App scene editor integration', () => {
     canvasLifecycle.throwOnRender = false
     useInteractionStore.getState().resetInteraction()
     sceneEditorStore.setState({ selectedEntityId: 'robot:active' })
+    operationFeedbackStore.getState().clear()
   })
 
   it('mounts the bounded Scene Explorer and uses the common Inspector for Robot base pose', () => {
@@ -102,6 +104,17 @@ describe('App scene editor integration', () => {
     expect(screen.getByRole('spinbutton', { name: 'Axis position (mm)' })).toHaveValue(0)
     expect(screen.getByRole('button', { name: 'Move Home' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Attach Robot' })).toBeVisible()
+  })
+
+  it('enables the reachable Linear Axis Add command when no Axis exists', async () => {
+    const user = userEvent.setup()
+    publishedRuntime = testSceneRuntime(
+      TEST_SCENE_ENTITIES.filter(({ kind }) => kind !== 'linear-axis'),
+    )
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    expect(screen.getByRole('menuitem', { name: 'Linear Axis' })).toBeEnabled()
   })
 
   it('shares one stable Manual Axis source between renderer and Inspector commands', async () => {
@@ -211,9 +224,8 @@ describe('App scene editor integration', () => {
 
     await user.click(screen.getByRole('button', { name: 'Empty viewport context' }))
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
-      'Create Group', 'Create Box', 'Create Cylinder',
+      'Create Group', 'Create Box', 'Create Cylinder', 'Fit All',
     ])
-    expect(screen.queryByRole('menuitem', { name: 'Fit All' })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Entity viewport context' }))
     const entityMenu = screen.getByRole('menu', { name: 'Cup commands' })

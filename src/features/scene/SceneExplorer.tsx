@@ -25,6 +25,9 @@ export interface SceneExplorerProps {
   readonly onOpenRobotMechanics?: () => void
   readonly onOpenRobotGeometry?: () => void
   readonly onOpenRobotCollision?: () => void
+  readonly onFitAll?: () => void
+  readonly onFocus?: (entityId: SceneEntityIdV1) => void
+  readonly onOpenAxisSettings?: () => void
 }
 
 function orderedTreeEntities(
@@ -154,6 +157,9 @@ export function SceneExplorer({
   onOpenRobotMechanics,
   onOpenRobotGeometry,
   onOpenRobotCollision,
+  onFitAll,
+  onFocus,
+  onOpenAxisSettings,
 }: SceneExplorerProps) {
   const publishedRuntime = usePublishedSceneRuntime()
   const storeSelection = useStore(sceneEditorStore, (state) => state.selectedEntityId)
@@ -287,12 +293,15 @@ export function SceneExplorer({
         <SceneContextMenu
           entityId={contextRequest.entityId}
           onDelete={onDelete}
+          {...(onFitAll === undefined ? {} : { onFitAll })}
+          {...(onFocus === undefined ? {} : { onFocus })}
           onClose={() => setContextRequest(undefined)}
           onIsolate={isolate}
           position={contextRequest.position}
           {...(onOpenRobotCollision === undefined ? {} : { onOpenRobotCollision })}
           {...(onOpenRobotGeometry === undefined ? {} : { onOpenRobotGeometry })}
           {...(onOpenRobotMechanics === undefined ? {} : { onOpenRobotMechanics })}
+          {...(onOpenAxisSettings === undefined ? {} : { onOpenAxisSettings })}
           runtime={runtime}
         />
       )}

@@ -5,51 +5,100 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { SceneCommandService } from './scene-command-service'
 import { SceneContextMenu } from './SceneContextMenu'
-import { testSceneRuntime } from './scene-ui-test-fixtures'
+import {
+  TEST_IDENTITY_POSE,
+  TEST_SCENE_ENTITIES,
+  testSceneRuntime,
+} from './scene-ui-test-fixtures'
 import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
 
 afterEach(() => vi.restoreAllMocks())
 
 function commands() {
   return {
+    attachRobotToLinearAxis: vi.fn(async () => undefined),
     createBox: vi.fn(async () => 'object:box-1' as const),
     createCylinder: vi.fn(async () => 'object:cylinder-1' as const),
     createGroup: vi.fn(async () => 'group:new' as const),
+    deleteLinearAxis: vi.fn(async () => undefined),
+    detachRobotFromLinearAxis: vi.fn(async () => undefined),
     deleteEntity: vi.fn(async () => undefined),
     deleteGroupAndContents: vi.fn(async () => undefined),
     duplicateObject: vi.fn(async () => 'object:copy' as const),
+    moveLinearAxisHome: vi.fn(async () => undefined),
     rename: vi.fn(async () => undefined),
     reparent: vi.fn(async () => undefined),
+    setLinearAxisCarriage: vi.fn(async () => undefined),
     setLocalPose: vi.fn(async () => undefined),
     setTransformSource: vi.fn(async () => undefined),
     setVisible: vi.fn(async () => undefined),
     ungroup: vi.fn(async () => undefined),
   } satisfies Pick<SceneCommandService,
-    | 'createBox' | 'createCylinder' | 'createGroup' | 'deleteEntity'
+    | 'attachRobotToLinearAxis' | 'createBox' | 'createCylinder' | 'createGroup'
+    | 'deleteEntity' | 'deleteLinearAxis' | 'detachRobotFromLinearAxis'
     | 'deleteGroupAndContents' | 'duplicateObject' | 'rename' | 'reparent'
-    | 'setLocalPose' | 'setTransformSource' | 'setVisible' | 'ungroup'>
+    | 'moveLinearAxisHome' | 'setLinearAxisCarriage' | 'setLocalPose'
+    | 'setTransformSource' | 'setVisible' | 'ungroup'>
 }
 
 describe('SceneContextMenu', () => {
-  it('keeps the empty viewport menu limited to commands implemented in Task 3', async () => {
+  it('renders the exact empty viewport command matrix including camera-only Fit All', async () => {
     const user = userEvent.setup()
     const service = commands()
+    const onFitAll = vi.fn()
     render(
       <SceneContextMenu
         commands={service}
         entityId={null}
         onDelete={vi.fn()}
+        onFitAll={onFitAll}
         onIsolate={vi.fn()}
         runtime={testSceneRuntime()}
       />,
     )
 
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
-      'Create Group', 'Create Box', 'Create Cylinder',
+      'Create Group', 'Create Box', 'Create Cylinder', 'Fit All',
     ])
-    expect(screen.queryByRole('menuitem', { name: 'Fit All' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('menuitem', { name: 'Fit All' }))
+    expect(onFitAll).toHaveBeenCalledOnce()
     await user.click(screen.getByRole('menuitem', { name: 'Create Box' }))
     expect(service.createBox).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders the exact Robot, Object, Group, and detached Axis command matrices', () => {
+    const common = {
+      commands: commands(), onDelete: vi.fn(), onFocus: vi.fn(), onIsolate: vi.fn(),
+      onOpenAxisSettings: vi.fn(), onOpenRobotCollision: vi.fn(),
+      onOpenRobotGeometry: vi.fn(), onOpenRobotMechanics: vi.fn(),
+    }
+    const runtime = testSceneRuntime([
+      ...TEST_SCENE_ENTITIES,
+      {
+        kind: 'group', id: 'group:other', name: 'Other', parentId: null,
+        localPose: TEST_IDENTITY_POSE, visible: true,
+      },
+    ])
+    const view = render(<SceneContextMenu {...common} entityId="robot:active" runtime={runtime} />)
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Focus', 'Copy Base Transform', 'Paste Base Transform', 'Reset Base Transform', 'Attach to Linear Axis',
+      'Hide', 'Isolate', 'Open Mechanics', 'Open Geometry', 'Open Collision',
+    ])
+    view.rerender(<SceneContextMenu {...common} entityId="object:cup-1" runtime={runtime} />)
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Focus', 'Rename', 'Duplicate', 'Copy Transform', 'Paste Transform', 'Reset Transform',
+      'Move to group', 'Set as Carriage', 'Hide', 'Isolate', 'Delete',
+    ])
+    view.rerender(<SceneContextMenu {...common} entityId="group:fixture" runtime={runtime} />)
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Focus Children', 'Rename', 'Copy Transform', 'Paste Transform', 'Reset Transform', 'Ungroup',
+      'Set as Carriage', 'Hide', 'Isolate', 'Delete Group and Contents',
+    ])
+    view.rerender(<SceneContextMenu {...common} entityId="linear-axis:active" runtime={runtime} />)
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Focus', 'Rename', 'Open Axis Settings', 'Move Home', 'Set Carriage',
+      'Attach Robot', 'Hide', 'Isolate', 'Delete Linear Axis',
+    ])
   })
 
   it('falls back to inline overlay rendering when no document portal target exists', () => {
@@ -69,12 +118,16 @@ describe('SceneContextMenu', () => {
     }
   })
 
-  it('filters Robot commands and exposes only existing dedicated surfaces', () => {
+  it('invokes Robot Focus and attach commands from the dedicated menu surface', async () => {
+    const user = userEvent.setup()
+    const service = commands()
+    const onFocus = vi.fn()
     render(
       <SceneContextMenu
-        commands={commands()}
+        commands={service}
         entityId="robot:active"
         onDelete={vi.fn()}
+        onFocus={onFocus}
         onIsolate={vi.fn()}
         onOpenRobotCollision={vi.fn()}
         onOpenRobotGeometry={vi.fn()}
@@ -83,11 +136,11 @@ describe('SceneContextMenu', () => {
       />,
     )
 
-    expect(screen.getByRole('menuitem', { name: 'Copy Base Transform' })).toBeVisible()
-    expect(screen.getByRole('menuitem', { name: 'Open Mechanics' })).toBeVisible()
-    expect(screen.queryByRole('menuitem', { name: /Attach/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('menuitem', { name: 'Focus' }))
+    expect(onFocus).toHaveBeenCalledWith('robot:active')
+    await user.click(screen.getByRole('menuitem', { name: 'Attach to Linear Axis' }))
+    expect(service.attachRobotToLinearAxis).toHaveBeenCalledOnce()
     expect(screen.queryByRole('menuitem', { name: /Delete/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('menuitem', { name: /Focus/ })).not.toBeInTheDocument()
   })
 
   it('requires confirmation before destructive Object and Group commands', async () => {
@@ -210,8 +263,8 @@ describe('SceneContextMenu', () => {
       />,
     )
 
-    expect(screen.queryByRole('menuitem', { name: 'Paste Transform' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('menuitem', { name: 'Reset Transform' })).not.toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Paste Transform' })).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: 'Reset Transform' })).toBeDisabled()
     expect(service.setLocalPose).not.toHaveBeenCalled()
   })
 
@@ -308,7 +361,7 @@ describe('SceneContextMenu', () => {
     await user.keyboard('{ArrowDown}')
     expect(screen.getByRole('menuitem', { name: 'Create Box' })).toHaveFocus()
     await user.keyboard('{End}')
-    expect(screen.getByRole('menuitem', { name: 'Create Cylinder' })).toHaveFocus()
+    expect(screen.getByRole('menuitem', { name: 'Fit All' })).toHaveFocus()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
@@ -361,6 +414,29 @@ describe('SceneContextMenu', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Hide' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('expanded detail')
     expect(screen.getByRole('menu')).toHaveStyle({ top: `${window.innerHeight - 220}px` })
+  })
+
+  it('keeps an exact Duplicate resource rejection visible in the menu', async () => {
+    const user = userEvent.setup()
+    const service = commands()
+    service.duplicateObject.mockRejectedValue(new Error(
+      'MAX_OBJECT_INSTANCES is 256; current usage is 256 of 256.',
+    ))
+    render(
+      <SceneContextMenu
+        commands={service}
+        entityId="object:cup-1"
+        onDelete={vi.fn()}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime()}
+      />,
+    )
+
+    await user.click(screen.getByRole('menuitem', { name: 'Duplicate' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'MAX_OBJECT_INSTANCES is 256; current usage is 256 of 256.',
+    )
+    expect(screen.getByRole('menu')).toBeVisible()
   })
 
   it('remeasures clamp bounds when ownership changes available commands', () => {

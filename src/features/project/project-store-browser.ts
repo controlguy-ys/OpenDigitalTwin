@@ -15,6 +15,7 @@ import { createProjectStore, type ProjectStoreState } from './project-store'
 import { createSceneCommandService } from '../scene/scene-command-service'
 import { createSceneEditorStore } from '../scene/scene-editor-store'
 import { useInteractionStore } from '../interaction/interaction-store'
+import { operationFeedbackStore } from '../ui/OperationFeedback'
 
 const hashService = createProjectHashService({ subtle: crypto.subtle })
 const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
@@ -72,6 +73,7 @@ export const sceneCommandService = createSceneCommandService({
     }
   },
   onWarning: (warning) => {
+    operationFeedbackStore.getState().publishResourceWarning(warning)
     console.warn(`${warning.code}: ${warning.current} of ${warning.limit}`)
   },
 })

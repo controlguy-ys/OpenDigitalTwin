@@ -10,16 +10,22 @@ import {
 import type { SceneContextPosition } from './scene-context-request'
 
 type ContextCommands = Pick<SceneCommandService,
+  | 'attachRobotToLinearAxis'
   | 'createBox' | 'createCylinder' | 'createGroup'
+  | 'deleteLinearAxis' | 'detachRobotFromLinearAxis'
   | 'duplicateObject' | 'rename' | 'reparent'
+  | 'moveLinearAxisHome' | 'setLinearAxisCarriage'
   | 'setLocalPose' | 'setTransformSource' | 'setVisible' | 'ungroup'>
 
 type PendingAction =
   | 'delete-entity'
   | 'delete-group'
+  | 'delete-axis'
   | 'ungroup'
   | 'switch-transform-source'
+  | 'switch-transform-source-carriage'
   | 'choose-group'
+  | 'choose-carriage'
   | null
 
 export interface SceneContextMenuProps {
@@ -27,11 +33,14 @@ export interface SceneContextMenuProps {
   readonly runtime?: SceneRuntimeProjectionV1
   readonly commands?: ContextCommands
   readonly onDelete: (entityId: SceneEntityIdV1) => void | Promise<void>
+  readonly onFitAll?: () => void
+  readonly onFocus?: (entityId: SceneEntityIdV1) => void
   readonly onIsolate: (entityId: SceneEntityIdV1) => void
   readonly onClose?: () => void
   readonly onOpenRobotMechanics?: () => void
   readonly onOpenRobotGeometry?: () => void
   readonly onOpenRobotCollision?: () => void
+  readonly onOpenAxisSettings?: () => void
   readonly position?: SceneContextPosition
 }
 
@@ -54,11 +63,12 @@ function useModalBackgroundInert(): void {
   }, [])
 }
 
-function MenuItem({ children, onClick }: Readonly<{
+function MenuItem({ children, disabled = false, onClick }: Readonly<{
   children: string
+  disabled?: boolean
   onClick: () => unknown | Promise<unknown>
 }>) {
-  return <button onClick={onClick} role="menuitem" tabIndex={-1} type="button">{children}</button>
+  return <button disabled={disabled} onClick={onClick} role="menuitem" tabIndex={-1} type="button">{children}</button>
 }
 
 function ConfirmationDialog({
@@ -193,16 +203,46 @@ function GroupChoiceDialog({
   )
 }
 
+function CarriageChoiceDialog({
+  candidates,
+  onCancel,
+  onChoose,
+}: Readonly<{
+  candidates: readonly Readonly<{ entityId: SceneEntityIdV1; name: string }>[]
+  onCancel: () => void
+  onChoose: (entityId: SceneEntityIdV1) => Promise<boolean>
+}>) {
+  useModalBackgroundInert()
+  return (
+    <div className="scene-modal-backdrop" data-testid="scene-modal-backdrop">
+      <div aria-label="Choose carriage" aria-modal="true" className="scene-confirmation" role="dialog">
+        <p>Set Linear Axis carriage:</p>
+        {candidates.map((candidate) => (
+          <button
+            key={candidate.entityId}
+            onClick={() => void onChoose(candidate.entityId)}
+            type="button"
+          >Set {candidate.name} as carriage</button>
+        ))}
+        <button onClick={onCancel} type="button">Cancel</button>
+      </div>
+    </div>
+  )
+}
+
 export function SceneContextMenu({
   entityId,
   runtime: runtimeOverride,
   commands = sceneCommandService,
   onDelete,
+  onFitAll,
+  onFocus,
   onIsolate,
   onClose,
   onOpenRobotMechanics,
   onOpenRobotGeometry,
   onOpenRobotCollision,
+  onOpenAxisSettings,
   position = { x: 0, y: 0 },
 }: SceneContextMenuProps) {
   const publishedRuntime = usePublishedSceneRuntime()
@@ -210,6 +250,7 @@ export function SceneContextMenu({
   const entity = entityId === null ? undefined : runtime.byId.get(entityId)
   const [pending, setPending] = useState<PendingAction>(null)
   const [error, setError] = useState<string | null>(null)
+  const [carriageCandidateId, setCarriageCandidateId] = useState<SceneEntityIdV1 | null>(null)
   const [menuPosition, setMenuPosition] = useState(position)
   const menuRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef(
@@ -230,9 +271,16 @@ export function SceneContextMenu({
     entity?.source.kind === 'object' && entity.source.transformSource === 'opcua'
   )
   const modalOpen = pending !== null
+  const axis = runtime.linearAxis?.source.kind === 'linear-axis'
+    ? runtime.linearAxis.source
+    : null
+  const carriageCandidates = [...runtime.groups, ...runtime.objects].map((candidate) => ({
+    entityId: candidate.entityId,
+    name: candidate.name,
+  }))
 
   const focusMenuItem = (index: number) => {
-    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
+    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])]
     if (items.length === 0) return
     const bounded = Math.max(0, Math.min(index, items.length - 1))
     items.forEach((item, itemIndex) => {
@@ -296,6 +344,16 @@ export function SceneContextMenu({
     else setPending('choose-group')
   }
 
+  const setAsCarriage = (candidateId: SceneEntityIdV1) => {
+    const candidate = runtime.byId.get(candidateId)
+    if (candidate?.source.kind === 'object' && candidate.source.transformSource === 'opcua') {
+      setCarriageCandidateId(candidateId)
+      setPending('switch-transform-source-carriage')
+      return
+    }
+    void run(() => commands.setLinearAxisCarriage(candidateId))
+  }
+
   const transformItems = entity === undefined || entity.kind === 'linear-axis' ? null : (
     <>
       <MenuItem onClick={() => {
@@ -306,16 +364,20 @@ export function SceneContextMenu({
       }}>
         {entity.kind === 'robot' ? 'Copy Base Transform' : 'Copy Transform'}
       </MenuItem>
-      {transformClipboard === null || !manualTransformWritable ? null : (
-        <MenuItem onClick={() => run(() => commands.setLocalPose(entity.entityId, transformClipboard!))}>
-          {entity.kind === 'robot' ? 'Paste Base Transform' : 'Paste Transform'}
-        </MenuItem>
-      )}
-      {manualTransformWritable ? (
-        <MenuItem onClick={() => run(() => commands.setLocalPose(entity.entityId, IDENTITY_POSE))}>
-          {entity.kind === 'robot' ? 'Reset Base Transform' : 'Reset Transform'}
-        </MenuItem>
-      ) : null}
+      <MenuItem
+        disabled={transformClipboard === null || !manualTransformWritable}
+        onClick={() => transformClipboard === null
+          ? undefined
+          : run(() => commands.setLocalPose(entity.entityId, transformClipboard!))}
+      >
+        {entity.kind === 'robot' ? 'Paste Base Transform' : 'Paste Transform'}
+      </MenuItem>
+      <MenuItem
+        disabled={!manualTransformWritable}
+        onClick={() => run(() => commands.setLocalPose(entity.entityId, IDENTITY_POSE))}
+      >
+        {entity.kind === 'robot' ? 'Reset Base Transform' : 'Reset Transform'}
+      </MenuItem>
     </>
   )
 
@@ -332,7 +394,7 @@ export function SceneContextMenu({
           event.stopPropagation()
         }}
         onKeyDown={(event) => {
-          const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
+          const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])]
           const current = items.indexOf(document.activeElement as HTMLElement)
           if (event.key === 'Escape') {
             event.preventDefault()
@@ -364,9 +426,13 @@ export function SceneContextMenu({
             <MenuItem onClick={() => run(() => commands.createCylinder({
               name: 'Cylinder', radiusM: 0.05, heightM: 0.1, color: '#94A3B8',
             }))}>Create Cylinder</MenuItem>
+            <MenuItem onClick={() => { onFitAll?.(); closeMenu() }}>Fit All</MenuItem>
           </>
         ) : (
           <>
+            <MenuItem onClick={() => { onFocus?.(entity.entityId); closeMenu() }}>
+              {entity.kind === 'group' ? 'Focus Children' : 'Focus'}
+            </MenuItem>
             {entity.kind === 'robot' || entity.kind === 'linear-axis' ? null : (
               <MenuItem onClick={() => run(rename)}>Rename</MenuItem>
             )}
@@ -375,6 +441,15 @@ export function SceneContextMenu({
               <MenuItem onClick={() => run(() => commands.duplicateObject(entity.entityId))}>Duplicate</MenuItem>
             ) : null}
             {transformItems}
+            {entity.kind === 'robot' && axis !== null ? (
+              <MenuItem onClick={() => run(
+                axis.robotEntityId === entity.entityId
+                  ? commands.detachRobotFromLinearAxis
+                  : commands.attachRobotToLinearAxis,
+              )}>{axis.robotEntityId === entity.entityId
+                  ? 'Detach from Linear Axis'
+                  : 'Attach to Linear Axis'}</MenuItem>
+            ) : null}
             {entity.kind === 'object' && groups.length > 0 && !activeAxisCarriage ? (
               <MenuItem onClick={moveToGroup}>Move to group</MenuItem>
             ) : null}
@@ -384,6 +459,30 @@ export function SceneContextMenu({
                 if (hasChildren) setPending('ungroup')
                 else void run(() => commands.ungroup(entity.source.id as `group:${string}`))
               }}>Ungroup</MenuItem>
+            ) : null}
+            {(entity.kind === 'object' || entity.kind === 'group') &&
+              axis !== null && !activeAxisCarriage ? (
+                <MenuItem onClick={() => setAsCarriage(entity.entityId)}>Set as Carriage</MenuItem>
+              ) : null}
+            {entity.kind === 'linear-axis' ? (
+              <>
+                <MenuItem onClick={() => { onOpenAxisSettings?.(); closeMenu() }}>
+                  Open Axis Settings
+                </MenuItem>
+                <MenuItem onClick={() => run(commands.moveLinearAxisHome)}>Move Home</MenuItem>
+                {axis?.carriageEntityId === null ? (
+                  <MenuItem onClick={() => setPending('choose-carriage')}>Set Carriage</MenuItem>
+                ) : (
+                  <MenuItem onClick={() => run(() => commands.setLinearAxisCarriage(null))}>
+                    Clear Carriage
+                  </MenuItem>
+                )}
+                <MenuItem onClick={() => run(
+                  axis?.robotEntityId === null
+                    ? commands.attachRobotToLinearAxis
+                    : commands.detachRobotFromLinearAxis,
+                )}>{axis?.robotEntityId === null ? 'Attach Robot' : 'Detach Robot'}</MenuItem>
+              </>
             ) : null}
             <MenuItem onClick={() => run(() => commands.setVisible(
               entity.entityId,
@@ -396,6 +495,10 @@ export function SceneContextMenu({
             {entity.source.kind === 'group' && !activeAxisCarriage ? (
               <MenuItem onClick={() => setPending('delete-group')}>Delete Group and Contents</MenuItem>
             ) : null}
+            {entity.kind === 'linear-axis' && axis?.carriageEntityId === null &&
+              axis.robotEntityId === null ? (
+                <MenuItem onClick={() => setPending('delete-axis')}>Delete Linear Axis</MenuItem>
+              ) : null}
             {entity.kind === 'robot' && onOpenRobotMechanics !== undefined ? (
               <MenuItem onClick={() => {
                 onClose?.()
@@ -442,6 +545,18 @@ export function SceneContextMenu({
           }}
         />
       ) : null}
+      {pending === 'delete-axis' && entity?.kind === 'linear-axis' ? (
+        <ConfirmationDialog
+          confirmLabel="Delete Linear Axis"
+          label="Delete Linear Axis?"
+          onCancel={() => setPending(null)}
+          onConfirm={async () => {
+            const succeeded = await run(commands.deleteLinearAxis)
+            setPending(null)
+            return succeeded
+          }}
+        />
+      ) : null}
       {pending === 'ungroup' && entity?.source.kind === 'group' ? (
         <ConfirmationDialog
           confirmLabel="Ungroup Children"
@@ -476,6 +591,32 @@ export function SceneContextMenu({
           }}
         />
       ) : null}
+      {pending === 'switch-transform-source-carriage' && carriageCandidateId !== null ? (
+        <ConfirmationDialog
+          confirmLabel="Switch to Manual"
+          label="Switch transform source?"
+          onCancel={() => { setPending(null); setCarriageCandidateId(null) }}
+          onConfirm={async () => {
+            const candidate = runtime.byId.get(carriageCandidateId)
+            if (candidate?.source.kind !== 'object') return false
+            try {
+              await commands.setTransformSource(
+                candidate.source.id as `object:${string}` | `equipment:${string}`,
+                'manual',
+              )
+              await commands.setLinearAxisCarriage(carriageCandidateId)
+              setPending(null)
+              setCarriageCandidateId(null)
+              closeMenu()
+              return true
+            } catch (nextError) {
+              setError(nextError instanceof Error ? nextError.message : 'Scene command failed.')
+              setPending(null)
+              return false
+            }
+          }}
+        />
+      ) : null}
       {pending === 'choose-group' && entity?.source.kind === 'object' ? (
         <GroupChoiceDialog
           entityName={entity.name}
@@ -486,6 +627,13 @@ export function SceneContextMenu({
             setPending(null)
             return succeeded
           }}
+        />
+      ) : null}
+      {pending === 'choose-carriage' && entity?.kind === 'linear-axis' ? (
+        <CarriageChoiceDialog
+          candidates={carriageCandidates}
+          onCancel={() => setPending(null)}
+          onChoose={(candidateId) => run(() => commands.setLinearAxisCarriage(candidateId))}
         />
       ) : null}
     </>

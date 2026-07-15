@@ -101,6 +101,22 @@ describe('AppShell', () => {
     expect(screen.queryByRole('button', { name: 'Coordinate Frames' })).not.toBeInTheDocument()
   })
 
+  it('creates the single manual Linear Axis from the reachable Add menu', async () => {
+    const user = userEvent.setup()
+    const onCreateLinearAxis = vi.fn()
+    render(
+      <AppShell
+        onCreateLinearAxis={onCreateLinearAxis}
+        viewport={<div>3D viewport</div>}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Linear Axis' }))
+
+    expect(onCreateLinearAxis).toHaveBeenCalledOnce()
+  })
+
   it('keeps the document fixed while named work areas own scrolling', () => {
     render(
       <AppShell

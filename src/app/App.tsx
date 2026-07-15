@@ -32,6 +32,7 @@ import type { LinearAxisCommittedStateV1 } from '../features/scene/linear-axis-s
 import { linearAxisConfigurationIdentity } from '../features/scene/LinearAxisRuntime'
 import { SceneExplorer } from '../features/scene/SceneExplorer'
 import { SceneContextMenu } from '../features/scene/SceneContextMenu'
+import { RobotMountContactEditor } from '../features/scene/RobotMountContactEditor'
 import { Timeline } from '../features/ui/Timeline'
 import { BottomWorkspace } from '../features/ui/BottomWorkspace'
 import { RobotJobList } from '../features/jobs/RobotJobList'
@@ -63,6 +64,11 @@ import {
   MAX_OBJECT_INSTANCES,
   MAX_STEP_OBJECT_ASSETS,
 } from '../domain/project/project-v3'
+import {
+  OperationFeedback,
+  operationFeedbackStore,
+  runOperationWithFeedback,
+} from '../features/ui/OperationFeedback'
 
 type RobotInspectorTab = 'Transform' | 'Mechanics' | 'Geometry' | 'Frames'
 const ROBOT_INSPECTOR_TABS = ['Transform', 'Mechanics', 'Geometry', 'Frames'] as const
@@ -72,6 +78,7 @@ export interface RobotTargetInspectorProps {
   readonly onOpenMechanics: () => void
   readonly onOpenGeometry: () => void
   readonly onOpenFrames: () => void
+  readonly mountContact?: ReactNode
 }
 
 export function RobotTargetInspector({
@@ -79,6 +86,7 @@ export function RobotTargetInspector({
   onOpenMechanics,
   onOpenGeometry,
   onOpenFrames,
+  mountContact,
 }: RobotTargetInspectorProps) {
   const [tab, setTab] = useState<RobotInspectorTab>('Transform')
   const tabRefs = useRef(new Map<RobotInspectorTab, HTMLButtonElement>())
@@ -134,7 +142,7 @@ export function RobotTargetInspector({
         id={`robot-${tab.toLowerCase()}-panel`}
         role="tabpanel"
       >
-        {tab === 'Transform' ? transform : (
+        {tab === 'Transform' ? <>{transform}{mountContact}</> : (
           <button onClick={openEditor} type="button">Open {tab} editor</button>
         )}
       </section>
@@ -189,6 +197,10 @@ export function App() {
     SceneContextRequest | undefined
   >(undefined)
   const [collisionFocusRequest, setCollisionFocusRequest] = useState(0)
+  const [inspectorOpenRequest, setInspectorOpenRequest] = useState(0)
+  const [cameraCommandRequest, setCameraCommandRequest] = useState<
+    Readonly<{ id: number; command: 'fit-all' | 'focus-selection' }> | undefined
+  >(undefined)
   const [sourceMode, setSourceMode] = useState<'simulation' | 'opcua'>(
     'simulation',
   )
@@ -282,6 +294,24 @@ export function App() {
       useInteractionStore.getState().clearSelection()
     }
   }, [selectEquipment])
+  const focusSceneEntity = useCallback((entityId: SceneEntityIdV1) => {
+    selectSceneEntity(entityId)
+    setCameraCommandRequest((current) => ({
+      id: (current?.id ?? 0) + 1,
+      command: 'focus-selection',
+    }))
+  }, [selectSceneEntity])
+  const fitAllSceneEntities = useCallback(() => {
+    setCameraCommandRequest((current) => ({
+      id: (current?.id ?? 0) + 1,
+      command: 'fit-all',
+    }))
+  }, [])
+  const runCreateSceneEntity = useCallback(async (
+    command: () => Promise<SceneEntityIdV1>,
+  ) => {
+    await runOperationWithFeedback(command, selectSceneEntity)
+  }, [selectSceneEntity])
 
   useEffect(() => {
     let active = true
@@ -340,7 +370,7 @@ export function App() {
       if (activeJointSource === simulationJointSource) {
         simulationJointSource.setAngles(useRobotStore.getState().anglesDeg)
       }
-    }).catch(() => undefined)
+    }).catch((error) => operationFeedbackStore.getState().publishError(error))
 
     return () => {
       unsubscribe()
@@ -406,6 +436,7 @@ export function App() {
           </output>
         </>
       ) : null}
+      <OperationFeedback />
       <AppShell
         projectMenu={<ProjectMenu />}
         assetTree={
@@ -415,6 +446,12 @@ export function App() {
               setCollisionFocusRequest((value) => value + 1)}
             onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
             onOpenRobotMechanics={() => setIsRobotConfigurationOpen(true)}
+            onFitAll={fitAllSceneEntities}
+            onFocus={focusSceneEntity}
+            onOpenAxisSettings={() => {
+              selectSceneEntity('linear-axis:active')
+              setInspectorOpenRequest((value) => value + 1)
+            }}
             onSelect={selectSceneEntity}
           />
         }
@@ -431,6 +468,7 @@ export function App() {
           />
         }
         bottomRailOpenRequest={collisionFocusRequest}
+        inspectorOpenRequest={inspectorOpenRequest}
         controlsDisabled={controlsDisabled}
         inspector={
           selectedSceneEntityId === null ? (
@@ -447,7 +485,13 @@ export function App() {
               source={simulationJointSource}
             />
           ) : selectedSceneEntityId === 'robot:active' ? (
-            <RobotTargetInspector
+          <RobotTargetInspector
+              mountContact={(
+                <RobotMountContactEditor
+                  configuration={activeSnapshot?.scene.robotMountContact ?? null}
+                  disabled={controlsDisabled}
+                />
+              )}
               onOpenFrames={() => setIsCoordinateFramesOpen(true)}
               onOpenGeometry={() => setIsRobotGeometryOpen(true)}
               onOpenMechanics={() => setIsRobotConfigurationOpen(true)}
@@ -475,17 +519,28 @@ export function App() {
         onOpenStepImport={() => setIsImportOpen(true)}
         onOpenRobotImport={() => setIsRobotImportOpen(true)}
         onCreateBox={() => {
-          void sceneCommandService.createBox({
+          void runCreateSceneEntity(() => sceneCommandService.createBox({
             name: 'Box', dimensionsM: [0.1, 0.1, 0.1], color: '#38BDF8',
-          }).then(selectSceneEntity).catch(() => undefined)
+          }))
         }}
         onCreateCylinder={() => {
-          void sceneCommandService.createCylinder({
+          void runCreateSceneEntity(() => sceneCommandService.createCylinder({
             name: 'Cylinder', radiusM: 0.05, heightM: 0.1, color: '#38BDF8',
-          }).then(selectSceneEntity).catch(() => undefined)
+          }))
         }}
         onCreateGroup={() => {
-          void sceneCommandService.createGroup('Group').then(selectSceneEntity).catch(() => undefined)
+          void runCreateSceneEntity(() => sceneCommandService.createGroup('Group'))
+        }}
+        linearAxisAvailable={axisRuntime === null}
+        onCreateLinearAxis={() => {
+          void runCreateSceneEntity(async () => {
+            await sceneCommandService.createLinearAxis({
+            direction: 'x', minPositionM: 0, maxPositionM: 2,
+            homePositionM: 0, currentPositionM: 0,
+            carriageEntityId: null, robotEntityId: null,
+            })
+            return 'linear-axis:active'
+          })
         }}
         onSourceModeChange={(mode) => {
           useRobotStore.getState().stopPlayback()
@@ -496,6 +551,7 @@ export function App() {
         viewport={
           <>
             <SceneCanvas
+              {...(cameraCommandRequest === undefined ? {} : { cameraCommandRequest })}
               linearAxisCommittedState={linearAxisCommittedState}
               linearAxisSource={linearAxisSource}
               onContextMenu={(entityId, position) => {
@@ -511,12 +567,18 @@ export function App() {
               <SceneContextMenu
                 entityId={viewportContextRequest.entityId}
                 onDelete={handleDeleteSceneEntity}
+                onFitAll={fitAllSceneEntities}
+                onFocus={focusSceneEntity}
                 onClose={() => setViewportContextRequest(undefined)}
                 onIsolate={(entityId) => sceneEditorStore.getState().isolate(entityId)}
                 onOpenRobotCollision={() =>
                   setCollisionFocusRequest((value) => value + 1)}
                 onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
                 onOpenRobotMechanics={() => setIsRobotConfigurationOpen(true)}
+                onOpenAxisSettings={() => {
+                  selectSceneEntity('linear-axis:active')
+                  setInspectorOpenRequest((value) => value + 1)
+                }}
                 position={viewportContextRequest.position}
               />
             )}
