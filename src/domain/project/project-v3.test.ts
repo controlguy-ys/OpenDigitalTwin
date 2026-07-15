@@ -1417,5 +1417,10 @@ describe('Workcell Project V3 contract', () => {
     expect(() => validateWorkcellProjectSnapshotV3(projectCounts(64, 256))).not.toThrow()
     expect(() => validateWorkcellProjectSnapshotV3(projectCounts(65, 256))).toThrow('MAX_STEP_OBJECT_ASSETS')
     expect(() => validateWorkcellProjectSnapshotV3(projectCounts(64, 257))).toThrow('MAX_OBJECT_INSTANCES')
+
+    const duplicateAtBoundary = projectCounts(65, 256)
+    duplicateAtBoundary.objectAssets[64] = stepAsset('step-0')
+    expect(() => validateWorkcellProjectSnapshotV3(duplicateAtBoundary))
+      .toThrow(/duplicate id step-0/i)
   })
 })

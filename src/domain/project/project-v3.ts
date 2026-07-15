@@ -1182,10 +1182,6 @@ function validateAssets(
     )
     const sourceKind = base.sourceKind
     if (sourceKind === 'step') {
-      stepAssetCount += 1
-      if (stepAssetCount > MAX_STEP_OBJECT_ASSETS) {
-        fail(`MAX_STEP_OBJECT_ASSETS is ${MAX_STEP_OBJECT_ASSETS}.`)
-      }
       const asset = closedRecord(value, label, [
         'id',
         'name',
@@ -1284,6 +1280,12 @@ function validateAssets(
     const id = identifier(asset.id, `${label}.id`)
     if (assetIds.has(id)) fail(`objectAssets contains duplicate id ${id}.`)
     assetIds.add(id)
+    if (sourceKind === 'step') {
+      stepAssetCount += 1
+      if (stepAssetCount > MAX_STEP_OBJECT_ASSETS) {
+        fail(`MAX_STEP_OBJECT_ASSETS is ${MAX_STEP_OBJECT_ASSETS}.`)
+      }
+    }
     const statistics = validateAssetGeometry(asset, label, normalize)
     assetTriangles.set(id, statistics.triangles)
     collisionBoxes += arrayValue(asset.collisionBoxes, `${label}.collisionBoxes`).length

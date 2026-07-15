@@ -20,6 +20,11 @@ export const EQUIPMENT_PERSISTENCE_WARNING =
 export const EQUIPMENT_CORRUPT_ROW_WARNING =
   'Some saved equipment data was corrupt and was skipped. Re-import the affected equipment.'
 
+declare const equipmentRuntimeCheckpointBrand: unique symbol
+export type EquipmentRuntimeCheckpoint = Readonly<{
+  [equipmentRuntimeCheckpointBrand]: true
+}>
+
 const IDENTITY_TRANSFORM = {
   quaternion: [0, 0, 0, 1] as [number, number, number, number],
   scale: [1, 1, 1] as [number, number, number],
@@ -74,6 +79,8 @@ export interface EquipmentStoreState {
   records: readonly EquipmentRecord[]
   persistenceStatus: EquipmentPersistenceStatus
   warnings: readonly string[]
+  captureRuntimeCheckpoint(): EquipmentRuntimeCheckpoint
+  restoreRuntimeCheckpoint(checkpoint: EquipmentRuntimeCheckpoint): void
   replaceRuntimeRecords(records: readonly EquipmentRecord[]): void
   hydrate(): Promise<void>
   upsertEquipment(record: EquipmentRecord): Promise<void>
@@ -148,6 +155,22 @@ function withEquipmentTransform(
   return nextRecord
 }
 
+function cloneTransform(transform: SerializableTransform): SerializableTransform {
+  return {
+    position: [...transform.position],
+    quaternion: [...transform.quaternion],
+    scale: [...transform.scale],
+  }
+}
+
+function cloneTransformMap(
+  transforms: ReadonlyMap<string, SerializableTransform>,
+): Map<string, SerializableTransform> {
+  return new Map(
+    [...transforms].map(([id, transform]) => [id, cloneTransform(transform)]),
+  )
+}
+
 interface PersistedRecordMergeResult {
   records: EquipmentRecord[]
   corruptRecordCount: number
@@ -193,6 +216,11 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
   const pendingTransformPreviews = new Map<string, SerializableTransform>()
   const committedTransforms = new Map<string, SerializableTransform>()
   const deletedEquipmentIds = new Set<string>()
+  const runtimeCheckpoints = new WeakMap<EquipmentRuntimeCheckpoint, {
+    records: readonly EquipmentRecord[]
+    pendingTransformPreviews: ReadonlyMap<string, SerializableTransform>
+    committedTransforms: ReadonlyMap<string, SerializableTransform>
+  }>()
 
   const rememberCommittedTransforms = (records: readonly EquipmentRecord[]) => {
     committedTransforms.clear()
@@ -325,6 +353,30 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
       records: builtInRecords(),
       persistenceStatus: 'idle',
       warnings: [],
+      captureRuntimeCheckpoint: () => {
+        const checkpoint = Object.freeze({}) as EquipmentRuntimeCheckpoint
+        runtimeCheckpoints.set(checkpoint, {
+          records: get().records.map(cloneEquipmentRecord),
+          pendingTransformPreviews: cloneTransformMap(pendingTransformPreviews),
+          committedTransforms: cloneTransformMap(committedTransforms),
+        })
+        return checkpoint
+      },
+      restoreRuntimeCheckpoint: (checkpoint) => {
+        const restored = runtimeCheckpoints.get(checkpoint)
+        if (restored === undefined) {
+          throw new Error('Invalid Equipment runtime checkpoint; no changes were applied.')
+        }
+        pendingTransformPreviews.clear()
+        for (const [id, transform] of restored.pendingTransformPreviews) {
+          pendingTransformPreviews.set(id, cloneTransform(transform))
+        }
+        committedTransforms.clear()
+        for (const [id, transform] of restored.committedTransforms) {
+          committedTransforms.set(id, cloneTransform(transform))
+        }
+        set({ records: restored.records.map(cloneEquipmentRecord) })
+      },
       replaceRuntimeRecords: (records) => {
         const nextRecords = records.map((record) => {
           if (!isEquipmentRecord(record)) {

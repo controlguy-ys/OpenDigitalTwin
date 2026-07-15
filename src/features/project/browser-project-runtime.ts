@@ -570,6 +570,7 @@ export function createBrowserProjectRuntime(
         equipment: useEquipmentStore.getState(),
         interaction: useInteractionStore.getState(),
       }
+      const equipmentCheckpoint = previousStores.equipment.captureRuntimeCheckpoint()
       const publication = beginReadModelPublication(notificationSources)
       let previousRobotAssets: ReadonlyMap<RobotLinkGeometryRecordV2['linkId'], ImportedThreeAsset> | undefined
       let previousObjectAssets: ReadonlyMap<string, ImportedThreeAsset> | undefined
@@ -630,7 +631,7 @@ export function createBrowserProjectRuntime(
         useRobotStore.setState(previousStores.robot, true)
         useCoordinateFrameStore.setState(previousStores.frames, true)
         useCollisionStore.setState(previousStores.collision, true)
-        useEquipmentStore.getState().replaceRuntimeRecords(previousStores.equipment.records)
+        useEquipmentStore.getState().restoreRuntimeCheckpoint(equipmentCheckpoint)
         useInteractionStore.setState(previousStores.interaction, true)
         if (previousRobotAssets !== undefined) {
           robotGeometryRepository.exchange(previousRobotAssets)
@@ -663,7 +664,7 @@ export function createBrowserProjectRuntime(
           useRobotStore.setState(previousStores.robot, true)
           useCoordinateFrameStore.setState(previousStores.frames, true)
           useCollisionStore.setState(previousStores.collision, true)
-          useEquipmentStore.getState().replaceRuntimeRecords(previousStores.equipment.records)
+          useEquipmentStore.getState().restoreRuntimeCheckpoint(equipmentCheckpoint)
           useInteractionStore.setState(previousStores.interaction, true)
           robotGeometryRepository.exchange(previousRobotAssets!)
           importedGeometryRepository.exchangeAll(previousObjectAssets!)

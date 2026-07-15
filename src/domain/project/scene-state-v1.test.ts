@@ -64,6 +64,40 @@ describe('ProjectSceneStateV1 validation', () => {
     expect(getterCalls).toBe(0)
   })
 
+  it('rejects own and inherited Entity getters before reading kind', () => {
+    let ownGetterCalls = 0
+    const ownGetter = { ...robot() }
+    Object.defineProperty(ownGetter, 'kind', {
+      get: () => {
+        ownGetterCalls += 1
+        return 'robot'
+      },
+      enumerable: true,
+    })
+    expect(() => validateProjectSceneState(scene(
+      ownGetter as unknown as SceneEntityV1,
+    ))).toThrow(/SCENE_.*data/i)
+    expect(ownGetterCalls).toBe(0)
+
+    let inheritedGetterCalls = 0
+    const inheritedGetter = Object.create({
+      get kind() {
+        inheritedGetterCalls += 1
+        return 'robot'
+      },
+    })
+    const inheritedFields = { ...robot() } as Record<string, unknown>
+    delete inheritedFields.kind
+    Object.defineProperties(
+      inheritedGetter,
+      Object.getOwnPropertyDescriptors(inheritedFields),
+    )
+    expect(() => validateProjectSceneState(scene(
+      inheritedGetter as SceneEntityV1,
+    ))).toThrow(/SCENE_.*plain/i)
+    expect(inheritedGetterCalls).toBe(0)
+  })
+
   it('rejects nested groups, cycles, a second robot, and a second linear axis', () => {
     expect(() => validateProjectSceneState(scene(group('group:a'), group('group:b', 'group:a'))))
       .toThrow('SCENE_GROUP_NESTING')

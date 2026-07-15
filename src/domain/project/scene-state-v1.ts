@@ -68,11 +68,7 @@ function sceneFail(code: string, detail: string): never {
   throw new Error(`${code}: ${detail}`)
 }
 
-function record(
-  value: unknown,
-  label: string,
-  required: readonly string[],
-): Record<string, unknown> {
+function plainDataRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return sceneFail('SCENE_RECORD_INVALID', `${label} must be an object.`)
   }
@@ -81,20 +77,31 @@ function record(
   }
   const keys = Reflect.ownKeys(value)
   for (const key of keys) {
-    if (typeof key !== 'string' || !required.includes(key)) {
-      return sceneFail('SCENE_UNKNOWN_FIELD', `${label} contains an unknown field.`)
-    }
     const descriptor = Object.getOwnPropertyDescriptor(value, key)
     if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
-      return sceneFail('SCENE_RECORD_INVALID', `${label}.${key} must be enumerable data.`)
-    }
-  }
-  for (const key of required) {
-    if (!Object.hasOwn(value, key)) {
-      return sceneFail('SCENE_REQUIRED_FIELD', `${label}.${key} is required.`)
+      return sceneFail('SCENE_RECORD_INVALID', `${label}.${String(key)} must be enumerable data.`)
     }
   }
   return value as Record<string, unknown>
+}
+
+function record(
+  value: unknown,
+  label: string,
+  required: readonly string[],
+): Record<string, unknown> {
+  const source = plainDataRecord(value, label)
+  for (const key of Reflect.ownKeys(source)) {
+    if (typeof key !== 'string' || !required.includes(key)) {
+      return sceneFail('SCENE_UNKNOWN_FIELD', `${label} contains an unknown field.`)
+    }
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(source, key)) {
+      return sceneFail('SCENE_REQUIRED_FIELD', `${label}.${key} is required.`)
+    }
+  }
+  return source
 }
 
 function finite(value: unknown, label: string): number {
@@ -219,24 +226,22 @@ function baseEntity(
 
 function validateEntity(value: unknown, index: number): SceneEntityV1 {
   const label = `scene.entities[${index}]`
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return sceneFail('SCENE_ENTITY_INVALID', `${label} must be an object.`)
-  }
-  const kind = (value as { kind?: unknown }).kind
+  const entity = plainDataRecord(value, label)
+  const kind = entity.kind
   const common = ['kind', 'id', 'name', 'parentId', 'localPose', 'visible'] as const
   if (kind === 'robot') {
-    const source = record(value, label, common)
+    const source = record(entity, label, common)
     if (source.id !== 'robot:active') return sceneFail('SCENE_ID_KIND_MISMATCH', `${label}.id is invalid.`)
     return { kind, id: 'robot:active', ...baseEntity(source, label) }
   }
   if (kind === 'group') {
-    const source = record(value, label, common)
+    const source = record(entity, label, common)
     const id = entityId(source.id, `${label}.id`)
     if (!id.startsWith('group:')) return sceneFail('SCENE_ID_KIND_MISMATCH', `${label}.id is invalid.`)
     return { kind, id: id as `group:${string}`, ...baseEntity(source, label) }
   }
   if (kind === 'object') {
-    const source = record(value, label, [...common, 'target', 'transformSource'])
+    const source = record(entity, label, [...common, 'target', 'transformSource'])
     const id = entityId(source.id, `${label}.id`)
     if (!id.startsWith('object:') && !id.startsWith('equipment:')) {
       return sceneFail('SCENE_ID_KIND_MISMATCH', `${label}.id is invalid.`)
@@ -262,7 +267,7 @@ function validateEntity(value: unknown, index: number): SceneEntityV1 {
     }
   }
   if (kind === 'linear-axis') {
-    const source = record(value, label, [
+    const source = record(entity, label, [
       ...common, 'direction', 'minPositionM', 'maxPositionM', 'homePositionM',
       'currentPositionM', 'carriageEntityId', 'robotEntityId',
     ])

@@ -443,6 +443,73 @@ describe('browser project collision policy bridge', () => {
     expect(publishedSignature(runtime)).toBe(before)
   })
 
+  it('restores an active Equipment transform transaction after failed publication', async () => {
+    await useEquipmentStore.getState().hydrate()
+    const originalCheckpoint = useEquipmentStore.getState().captureRuntimeCheckpoint()
+    try {
+      const runtime = createBrowserProjectRuntime({
+        loadRobotGeometry: async () => LINK_IDS.map(robotLink),
+        prepareRobotAssets: async () => new Map(),
+      })
+      const first = structuredClone(await runtime.createNew()) as any
+      first.builtInEquipment = [{
+        id: 'cup-01', name: 'Transactional Cup', kind: 'cup', status: 'RUNNING',
+        manualNumericStatus: 0, statusSource: 'manual', statusOverlayVisible: true,
+        graspable: true, collisionHalfExtents: [0.055, 0.055, 0.075],
+        stackLightAnchor: null,
+      }]
+      first.scene.entities.push({
+        kind: 'object', id: 'equipment:cup-01', name: 'Transactional Cup', parentId: null,
+        localPose: { positionM: [1, 2, 3], quaternion: [0, 0, 0, 1] },
+        visible: true, target: { kind: 'built-in-equipment', id: 'cup-01' },
+        transformSource: 'manual',
+      })
+      const firstResources = await runtime.prepare(first, 'revision-a')
+      publishRuntime(runtime, {
+        revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources,
+      })
+
+      const preview = {
+        position: [4, 5, 6] as [number, number, number],
+        quaternion: [0, 0, 0, 1] as [number, number, number, number],
+        scale: [1, 1, 1] as [number, number, number],
+      }
+      useEquipmentStore.getState().previewEquipmentTransform('cup-01', preview)
+      const next = withPrimitiveAssets(first)
+      const nextResources = await runtime.prepare(next, 'revision-b')
+      const observations: string[] = []
+      const unsubscribe = useEquipmentStore.subscribe(() => {
+        observations.push(publishedSignature(runtime))
+      })
+      vi.spyOn(importedGeometryRepository, 'exchangeAll').mockImplementationOnce(() => {
+        throw new Error('object repository publish failed')
+      })
+
+      expect(() => runtime.apply({
+        revisionId: 'revision-b', snapshot: next, generation: 2, resources: nextResources,
+      })).toThrow('object repository publish failed')
+      unsubscribe()
+
+      expect(observations).toEqual([])
+      expect(useEquipmentStore.getState().records[0]?.transform).toEqual(preview)
+      const restoredPreviewCheckpoint = useEquipmentStore.getState().captureRuntimeCheckpoint()
+
+      useEquipmentStore.getState().cancelEquipmentTransform('cup-01')
+      expect(useEquipmentStore.getState().records[0]?.transform.position).toEqual([1, 2, 3])
+
+      useEquipmentStore.getState().restoreRuntimeCheckpoint(restoredPreviewCheckpoint)
+      await useEquipmentStore.getState().commitEquipmentTransform('cup-01')
+      useEquipmentStore.getState().previewEquipmentTransform('cup-01', {
+        ...preview,
+        position: [7, 8, 9],
+      })
+      useEquipmentStore.getState().cancelEquipmentTransform('cup-01')
+      expect(useEquipmentStore.getState().records[0]?.transform).toEqual(preview)
+    } finally {
+      useEquipmentStore.getState().restoreRuntimeCheckpoint(originalCheckpoint)
+    }
+  })
+
   it('keeps the new bundle authoritative when disposal of replaced resources fails', async () => {
     const oldDispose = vi.fn()
       .mockImplementationOnce(() => { throw new Error('old cleanup failed') })
