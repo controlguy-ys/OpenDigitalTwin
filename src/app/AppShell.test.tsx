@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { simulationJointSource } from '../features/joints/SimulationJointSource'
 import { useRobotStore } from '../features/joints/robot-store'
 import { App, RobotTargetInspector } from './App'
@@ -27,6 +27,10 @@ describe('AppShell', () => {
   beforeEach(() => {
     localStorage.clear()
     useRobotStore.getState().reset()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('renders the five industrial workstation regions', () => {
@@ -200,26 +204,50 @@ describe('AppShell', () => {
     expect(transform).toHaveFocus()
   })
 
-  it('keeps every top-bar function reachable through the narrow-width controls disclosure', async () => {
+  it('selects the compact disclosure at exactly 960px and reveals every long-project control', async () => {
     const user = userEvent.setup()
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 })
+    const matchMedia = vi.fn((query: string) => ({
+      matches: query === '(max-width: 1199px)',
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+    vi.stubGlobal('matchMedia', matchMedia)
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 960 })
     render(
       <AppShell
-        projectMenu={<button type="button">Project</button>}
+        projectMenu={(
+          <div aria-label="Project controls" className="project-menu">
+            <span className="project-name">
+              Extremely Long Manufacturing Workcell Project Name That Must Be Bounded
+            </span>
+            <button type="button">Project</button>
+          </div>
+        )}
+        sourceQuality="UNCERTAIN"
         viewport={<div>3D viewport</div>}
       />,
     )
 
     const disclosure = screen.getByRole('button', { name: 'Top bar controls' })
     expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('toolbar', { name: 'Top bar controls' })).not.toBeInTheDocument()
     await user.click(disclosure)
     expect(disclosure).toHaveAttribute('aria-expanded', 'true')
     const toolbar = screen.getByRole('toolbar', { name: 'Top bar controls' })
     expect(toolbar).toHaveClass('is-open')
+    expect(disclosure.closest('.app-shell')).toHaveClass('is-compact-topbar')
+    expect(matchMedia).toHaveBeenCalledWith('(max-width: 1199px)')
     expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Project' }))
     expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Add' }))
     expect(toolbar).toContainElement(screen.getByRole('combobox', { name: 'Joint source' }))
     expect(toolbar).toContainElement(screen.getByRole('combobox', { name: 'Theme' }))
+    expect(toolbar).toHaveTextContent('UNCERTAIN')
+    expect(toolbar.querySelector('.project-name')).toHaveTextContent('Extremely Long')
     expect(document.documentElement).toHaveStyle({ overflow: 'hidden' })
   })
 

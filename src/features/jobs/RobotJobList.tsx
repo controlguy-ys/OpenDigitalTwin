@@ -49,6 +49,8 @@ export function RobotJobList({
   const rowRefs = useRef(new Map<string, HTMLButtonElement>())
   const menuItemRefs = useRef<HTMLButtonElement[]>([])
   const contextReturnFocusRef = useRef<HTMLElement | null>(null)
+  const newJobRef = useRef<HTMLButtonElement>(null)
+  const restoreFocusAfterRemovalRef = useRef(false)
 
   const run = (operation: () => Promise<unknown>) => {
     setError(null)
@@ -59,11 +61,33 @@ export function RobotJobList({
 
   const contextJob = simulation.jobs.find(({ id }) => id === contextJobId)
   const jobLimitReached = simulation.jobs.length >= MAX_JOBS
+  const reconciledFocusedJobId = simulation.jobs.some(({ id }) => id === focusedJobId)
+    ? focusedJobId
+    : simulation.jobs.some(({ id }) => id === simulation.activeJobId)
+      ? simulation.activeJobId
+      : simulation.jobs[0]?.id ?? null
 
   useEffect(() => {
     if (contextJob === undefined) return
     menuItemRefs.current[0]?.focus()
   }, [contextJob])
+
+  useEffect(() => {
+    const focusedJobDisappeared = focusedJobId !== null &&
+      !simulation.jobs.some(({ id }) => id === focusedJobId)
+    if (focusedJobId !== reconciledFocusedJobId) {
+      setFocusedJobId(reconciledFocusedJobId)
+    }
+
+    const returnTargetWasRemoved = contextReturnFocusRef.current !== null &&
+      !contextReturnFocusRef.current.isConnected
+    if (!focusedJobDisappeared &&
+      !(restoreFocusAfterRemovalRef.current && returnTargetWasRemoved)) return
+
+    if (reconciledFocusedJobId === null) newJobRef.current?.focus()
+    else rowRefs.current.get(reconciledFocusedJobId)?.focus()
+    restoreFocusAfterRemovalRef.current = false
+  }, [focusedJobId, reconciledFocusedJobId, simulation.jobs])
 
   const openContextMenu = (jobId: string, returnFocus: HTMLElement) => {
     contextReturnFocusRef.current = returnFocus
@@ -105,16 +129,19 @@ export function RobotJobList({
       closeContextMenu()
       return
     }
-    const currentIndex = menuItemRefs.current.indexOf(document.activeElement as HTMLButtonElement)
+    const enabledItems = menuItemRefs.current.filter((item) =>
+      item.isConnected && !item.disabled)
+    if (enabledItems.length === 0) return
+    const currentIndex = enabledItems.indexOf(document.activeElement as HTMLButtonElement)
     let nextIndex: number | null = null
-    if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % menuItemRefs.current.length
+    if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % enabledItems.length
     else if (event.key === 'ArrowUp') {
-      nextIndex = (currentIndex - 1 + menuItemRefs.current.length) % menuItemRefs.current.length
+      nextIndex = (currentIndex - 1 + enabledItems.length) % enabledItems.length
     } else if (event.key === 'Home') nextIndex = 0
-    else if (event.key === 'End') nextIndex = menuItemRefs.current.length - 1
+    else if (event.key === 'End') nextIndex = enabledItems.length - 1
     if (nextIndex === null) return
     event.preventDefault()
-    menuItemRefs.current[nextIndex]?.focus()
+    enabledItems[nextIndex]?.focus()
   }
 
   return (
@@ -124,6 +151,7 @@ export function RobotJobList({
         <button
           disabled={jobLimitReached}
           onClick={() => run(() => commands.createJob(`Job ${simulation.jobs.length + 1}`))}
+          ref={newJobRef}
           type="button"
         >
           <Plus aria-hidden="true" size={14} />
@@ -157,7 +185,7 @@ export function RobotJobList({
                       else rowRefs.current.set(job.id, node)
                     }}
                     role="treeitem"
-                    tabIndex={focusedJobId === job.id ? 0 : -1}
+                    tabIndex={reconciledFocusedJobId === job.id ? 0 : -1}
                     type="button"
                   >
                     <span>{job.name}</span>
@@ -215,9 +243,19 @@ export function RobotJobList({
           </button>
           <button
             onClick={() => {
+              restoreFocusAfterRemovalRef.current = true
               closeContextMenu()
               if (window.confirm(`Delete Job "${contextJob.name}"?`)) {
-                run(() => commands.deleteJob(contextJob.id))
+                run(async () => {
+                  try {
+                    await commands.deleteJob(contextJob.id)
+                  } catch (error) {
+                    restoreFocusAfterRemovalRef.current = false
+                    throw error
+                  }
+                })
+              } else {
+                restoreFocusAfterRemovalRef.current = false
               }
             }}
             role="menuitem"

@@ -285,6 +285,26 @@ describe('JointInspector', () => {
     expect(onSavePose).toHaveBeenCalledTimes(1)
   })
 
+  it('announces a pending Project save and blocks duplicate Pose submissions', async () => {
+    const user = userEvent.setup()
+    let finishSave!: () => void
+    const onSavePose = vi.fn(() => new Promise<void>((resolve) => {
+      finishSave = resolve
+    }))
+    render(<JointInspector canSavePose onSavePose={onSavePose} />)
+
+    const save = screen.getByRole('button', { name: 'Save Pose' })
+    await user.click(save)
+    expect(screen.getByRole('status')).toHaveTextContent('Saving Pose')
+    expect(save).toBeDisabled()
+    await user.click(save)
+    expect(onSavePose).toHaveBeenCalledTimes(1)
+
+    finishSave()
+    await waitFor(() => expect(save).toBeEnabled())
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
   it('disables every scene-dependent inspector control', () => {
     render(<JointInspector disabled />)
 

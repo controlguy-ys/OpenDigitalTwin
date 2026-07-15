@@ -72,6 +72,74 @@ button {
   display: none;
 }
 
+.top-bar-controls[hidden] {
+  display: none;
+}
+
+.app-shell.is-compact-topbar .top-bar {
+  justify-content: space-between;
+  gap: 8px;
+  overflow: visible;
+}
+
+.app-shell.is-compact-topbar .top-bar-disclosure {
+  display: block;
+  width: auto;
+  min-width: 88px;
+  margin-left: auto;
+}
+
+.app-shell.is-compact-topbar .top-bar-controls {
+  position: fixed;
+  top: 48px;
+  right: 8px;
+  z-index: 30;
+  width: min(320px, calc(100vw - 16px));
+  max-height: calc(100dvh - 64px);
+  padding: 10px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
+}
+
+.app-shell.is-compact-topbar .top-bar-controls.is-open {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.app-shell.is-compact-topbar .top-bar-controls > *,
+.app-shell.is-compact-topbar .top-bar-controls .project-menu {
+  width: 100%;
+  min-width: 0;
+}
+
+.app-shell.is-compact-topbar .top-bar-controls .project-menu {
+  flex-wrap: wrap;
+}
+
+.app-shell.is-compact-topbar .top-bar-controls > .add-menu {
+  margin-left: 0;
+}
+
+.app-shell.is-compact-topbar .top-bar-controls .joint-source-select,
+.app-shell.is-compact-topbar .top-bar-controls .theme-select {
+  justify-content: space-between;
+}
+
+.app-shell.is-compact-topbar .top-bar-controls .add-menu > button,
+.app-shell.is-compact-topbar .top-bar-controls .joint-source-select select,
+.app-shell.is-compact-topbar .top-bar-controls .theme-select select {
+  width: 100%;
+}
+
+.app-shell.is-compact-topbar .top-bar-controls .add-menu > [role='menu'] {
+  position: static;
+  margin-top: 4px;
+}
+
 .project-menu {
   align-items: center;
   display: flex;
@@ -1829,71 +1897,6 @@ button {
       'bottom bottom bottom';
     grid-template-columns: 48px minmax(0, 1fr) 48px;
     grid-template-rows: 48px minmax(0, 1fr) 64px;
-  }
-
-  .top-bar {
-    justify-content: space-between;
-    gap: 8px;
-    overflow: visible;
-  }
-
-  .top-bar .top-bar-disclosure {
-    display: block;
-    width: auto;
-    min-width: 88px;
-    margin-left: auto;
-  }
-
-  .top-bar-controls {
-    position: fixed;
-    top: 48px;
-    right: 8px;
-    z-index: 30;
-    display: none;
-    width: min(320px, calc(100vw - 16px));
-    max-height: calc(100dvh - 64px);
-    padding: 10px;
-    overflow-x: hidden;
-    overflow-y: auto;
-    background: var(--color-panel);
-    border: 1px solid var(--color-border);
-    box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
-  }
-
-  .top-bar-controls.is-open {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
-  }
-
-  .top-bar-controls > *,
-  .top-bar-controls .project-menu {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .top-bar-controls .project-menu {
-    flex-wrap: wrap;
-  }
-
-  .top-bar-controls > .add-menu {
-    margin-left: 0;
-  }
-
-  .top-bar-controls .joint-source-select,
-  .top-bar-controls .theme-select {
-    justify-content: space-between;
-  }
-
-  .top-bar-controls .add-menu > button,
-  .top-bar-controls .joint-source-select select,
-  .top-bar-controls .theme-select select {
-    width: 100%;
-  }
-
-  .top-bar-controls .add-menu > [role='menu'] {
-    position: static;
-    margin-top: 4px;
   }
 
   .app-shell::before,

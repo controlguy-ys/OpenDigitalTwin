@@ -121,3 +121,41 @@ The pre-existing unstaged `.superpowers/sdd/task-4-brief.md` change was treated 
 
 - Project V3 remains the sole durable Job/Pose authority and each Job command still submits one Project recipe.
 - No Task 5+ feature, legacy compatibility mode, PLC/PVI/OPC UA write, transfer, deploy, restart, push, or merge was added.
+
+## Second Review Fix Wave (2026-07-15)
+
+### Outcome
+
+- Replaced the late CSS-only 959.98px Top bar breakpoint with a deterministic component-selected compact mode at `(max-width: 1199px)`. At exactly 960px the disclosure is present, the closed toolbar is removed from the accessibility tree with `hidden`, and opening it exposes Project, quality, Joint source, Add, and Theme controls without document or Top bar horizontal scrolling.
+- Kept the expanded >=1200px layout on a bounded width budget: the Project name remains capped and ellipsized, while the compact overlay is viewport-bounded and vertically scrollable.
+- Reconciled Robot Jobs roving focus synchronously to an existing active/first Job, or to New Job when empty. Focus follows a replacement Job after the focused ID disappears and recovers to a surviving target when a menu launcher is deleted.
+- Menu Arrow/Home/End navigation now filters disconnected and native-disabled items, so the disabled Duplicate command at 32 Jobs is never focused.
+- Added behavior coverage proving Save Pose announces its pending state, disables the trigger, and submits only once until the Project command settles.
+
+### RED Evidence
+
+1. Exact 960 compact contract:
+
+   `npm run test:run -- src/app/AppShell.test.tsx`
+
+   Result: 1 test failed and 16 passed. At the 960 compact contract the closed toolbar was still accessible because mode selection and `hidden` were absent.
+
+2. Dynamic Robot Jobs focus:
+
+   `npm run test:run -- src/app/AppShell.test.tsx src/features/jobs/RobotJobList.test.tsx src/features/joints/JointInspector.test.tsx`
+
+   Result after correcting the test environment: Robot Jobs had three expected failures. ArrowDown stalled on disabled Duplicate, zero-to-first/Project replacement left a tree item at `tabIndex=-1`, and deleting a menu launcher lost focus to the document body.
+
+### GREEN Evidence
+
+- Review behavior slice: 3 files / 34 tests passed in 7.70s.
+- Required focused suite: 16 files / 94 tests passed in 20.68s.
+- Fresh full serial suite: 104 files / 862 tests passed in 284.92s.
+- `npm run lint`: PASS, exit 0.
+- `npm run build`: PASS, exit 0; only the existing dependency externalization and chunk-size advisories remained.
+- Browser-plugin smoke attempt: Chrome connected and a 960x800 viewport override was applied, but local navigation was blocked by `net::ERR_BLOCKED_BY_CLIENT`; the viewport override and tab session were reset. The deterministic component/DOM/CSS contract is the responsive evidence for this wave.
+
+### Scope Boundary
+
+- All previous Project V3 authority, atomic Job command, limit, playback, shell, and accessibility closures remain in force.
+- No alternate browser harness, Task 5+, Legacy, PLC write, transfer, deploy, push, or merge was added.

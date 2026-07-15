@@ -21,6 +21,11 @@ const SIDEBAR_SPLIT_KEY = 'robotsim.sidebarSplitPercent'
 const ASSET_DRAWER_KEY = 'robotsim.assetDrawerOpen'
 const INSPECTOR_DRAWER_KEY = 'robotsim.inspectorDrawerOpen'
 const BOTTOM_DRAWER_KEY = 'robotsim.bottomDrawerOpen'
+const COMPACT_TOP_BAR_QUERY = '(max-width: 1199px)'
+
+function compactTopBarPreference(): boolean {
+  return globalThis.matchMedia?.(COMPACT_TOP_BAR_QUERY).matches ?? false
+}
 
 function browserNumber(key: string, fallback: number): number {
   try {
@@ -99,8 +104,20 @@ export function AppShell({
   const [draggingSplit, setDraggingSplit] = useState(false)
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [isCompactControlsOpen, setIsCompactControlsOpen] = useState(false)
+  const [isCompactTopBar, setIsCompactTopBar] = useState(compactTopBarPreference)
   const [theme, setTheme] = useState<ThemePreference>(readThemePreference)
   const assetRailRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    if (globalThis.matchMedia === undefined) return
+    const media = globalThis.matchMedia(COMPACT_TOP_BAR_QUERY)
+    const updateMode = () => {
+      setIsCompactTopBar(media.matches)
+      if (!media.matches) setIsCompactControlsOpen(false)
+    }
+    media.addEventListener?.('change', updateMode)
+    return () => media.removeEventListener?.('change', updateMode)
+  }, [])
 
   useEffect(() => {
     const previousRootOverflow = document.documentElement.style.overflow
@@ -162,7 +179,7 @@ export function AppShell({
 
   return (
     <div
-      className="app-shell"
+      className={`app-shell${isCompactTopBar ? ' is-compact-topbar' : ''}`}
       data-controls-disabled={String(controlsDisabled)}
       style={{
         '--sidebar-split-percent': splitPercent,
@@ -172,19 +189,22 @@ export function AppShell({
     >
       <header className="top-bar">
         <strong>RobotSim</strong>
-        <button
-          aria-controls="top-bar-controls"
-          aria-expanded={isCompactControlsOpen}
-          aria-label="Top bar controls"
-          className="top-bar-disclosure"
-          onClick={() => setIsCompactControlsOpen((open) => !open)}
-          type="button"
-        >
-          Controls
-        </button>
+        {isCompactTopBar ? (
+          <button
+            aria-controls="top-bar-controls"
+            aria-expanded={isCompactControlsOpen}
+            aria-label="Top bar controls"
+            className="top-bar-disclosure"
+            onClick={() => setIsCompactControlsOpen((open) => !open)}
+            type="button"
+          >
+            Controls
+          </button>
+        ) : null}
         <div
           aria-label="Top bar controls"
           className={`top-bar-controls${isCompactControlsOpen ? ' is-open' : ''}`}
+          hidden={isCompactTopBar && !isCompactControlsOpen}
           id="top-bar-controls"
           role="toolbar"
         >

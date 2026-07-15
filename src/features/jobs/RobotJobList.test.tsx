@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
 import type { ProjectSimulationStateV3 } from '../../domain/project/simulation-job-v1'
@@ -101,6 +101,59 @@ it('enforces the numeric 32 Job limit across create and duplicate commands', asy
   expect(screen.getByText(/32 Job limit/i)).toBeVisible()
   await user.click(screen.getByRole('button', { name: 'Job 1 commands' }))
   expect(screen.getByRole('menuitem', { name: 'Duplicate' })).toBeDisabled()
+  await user.keyboard('{ArrowDown}')
+  expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus()
+})
+
+it('reconciles roving focus for the first Job, deletion, and Project replacement', async () => {
+  const empty: ProjectSimulationStateV3 = { activeJobId: null, jobs: [] }
+  const user = userEvent.setup()
+  const view = render(<RobotJobList commands={commands()} simulation={empty} />)
+  const newJob = screen.getByRole('button', { name: '+ New Job' })
+  newJob.focus()
+
+  const firstOnly: ProjectSimulationStateV3 = {
+    activeJobId: 'job-first',
+    jobs: [{ id: 'job-first', name: 'First', revision: 1, poses: [] }],
+  }
+  view.rerender(<RobotJobList commands={commands()} simulation={firstOnly} />)
+  const first = screen.getByRole('treeitem', { name: 'First, 0 Poses' })
+  expect(first).toHaveAttribute('tabindex', '0')
+  first.focus()
+
+  const replacement: ProjectSimulationStateV3 = {
+    activeJobId: null,
+    jobs: [{ id: 'job-replacement', name: 'Replacement', revision: 1, poses: [] }],
+  }
+  view.rerender(<RobotJobList commands={commands()} simulation={replacement} />)
+  const replacementItem = screen.getByRole('treeitem', { name: 'Replacement, 0 Poses' })
+  await waitFor(() => expect(replacementItem).toHaveFocus())
+  expect(replacementItem).toHaveAttribute('tabindex', '0')
+
+  view.rerender(<RobotJobList commands={commands()} simulation={empty} />)
+  await waitFor(() => expect(newJob).toHaveFocus())
+  await user.tab()
+})
+
+it('returns focus to a surviving Job when a menu launcher is deleted', async () => {
+  const user = userEvent.setup()
+  const jobCommands = commands()
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  const view = render(<RobotJobList commands={jobCommands} simulation={simulation} />)
+
+  await user.click(screen.getByRole('button', { name: 'Pack Cups commands' }))
+  await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+  view.rerender(
+    <RobotJobList
+      commands={jobCommands}
+      simulation={{ activeJobId: 'job-pick-cups', jobs: [simulation.jobs[0]!] }}
+    />,
+  )
+
+  await waitFor(() => {
+    expect(screen.getByRole('treeitem', { name: 'Pick Cups, 0 Poses' })).toHaveFocus()
+  })
+  confirm.mockRestore()
 })
 
 it('implements tree navigation plus keyboard context menu open and Escape focus return', async () => {
