@@ -116,3 +116,29 @@ it('preserves canonical V2 Compound Boxes for static and held Object registratio
     boxes: asset.collisionBoxes,
   })
 })
+
+it('preserves a non-graspable V3 Object Instance in its Equipment read model', () => {
+  const asset = {
+    id: 'box-asset',
+    name: 'Guarded Box',
+    colliderCenter: [0, 0, 0] as const,
+    collisionHalfExtents: [0.5, 0.5, 0.5] as const,
+  }
+  const instance: ObjectInstanceRecordV1 & { readonly graspable: boolean } = {
+    id: 'guarded-box-01',
+    assetId: asset.id,
+    name: 'Guarded Box 01',
+    transform: {
+      position: [0, 0, 0],
+      quaternion: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    },
+    numericStatus: 0,
+    statusSource: 'manual',
+    statusOverlayVisible: false,
+    visible: true,
+    graspable: false,
+  }
+
+  expect(objectInstanceToEquipmentRecord(instance, asset).graspable).toBe(false)
+})

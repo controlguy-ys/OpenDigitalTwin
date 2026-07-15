@@ -172,6 +172,9 @@ export function createProjectMutationService(
             const hydrated = await repository.readRevision(pointer.revisionId)
             if (hydrated === null) throw new Error('Publishing Project revision is missing.')
             const publicSnapshot = materializeHydratedProjectSnapshotV1(hydrated)
+            await repository.finalizePublication(pointer.commitToken)
+            const active = await repository.adoptHydratedRevision(hydrated)
+            activeProjection = cloneProjection(active.projection)
             generation += 1
             await coordinator.restorePublished({
               revisionId: pointer.revisionId,
@@ -179,9 +182,6 @@ export function createProjectMutationService(
               generation,
             })
             runtimePublished = true
-            await repository.finalizePublication(pointer.commitToken)
-            const active = await repository.adoptHydratedRevision(hydrated)
-            activeProjection = cloneProjection(active.projection)
             try { await repository.garbageCollect() } catch { /* retry-only */ }
             notify()
             return

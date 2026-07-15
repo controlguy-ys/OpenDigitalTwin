@@ -15,9 +15,13 @@ export interface ObjectAssetSceneReadModelV3 {
   readonly collisionBoxes?: readonly CollisionBox[] | undefined
 }
 
+export type ObjectInstanceSceneReadModelV3 = ObjectInstanceRecordV1 & {
+  readonly graspable?: boolean
+}
+
 export function objectInstanceToGeometryEntity(
   asset: ObjectAssetSceneReadModelV3,
-  instance: ObjectInstanceRecordV1,
+  instance: ObjectInstanceSceneReadModelV3,
   object: Object3D | null,
   held = false,
   colliderRevision = 0,
@@ -41,7 +45,7 @@ export function objectInstanceToGeometryEntity(
 }
 
 export function objectInstanceToEquipmentRecord(
-  instance: ObjectInstanceRecordV1,
+  instance: ObjectInstanceSceneReadModelV3,
   asset: ObjectAssetSceneReadModelV3,
 ): EquipmentRecord {
   return {
@@ -58,7 +62,7 @@ export function objectInstanceToEquipmentRecord(
       quaternion: [...instance.transform.quaternion],
       scale: [...instance.transform.scale],
     },
-    graspable: true,
+    graspable: instance.graspable ?? true,
     collisionHalfExtents: [...asset.collisionHalfExtents],
     collisionCenter: [...asset.colliderCenter],
     stackLightAnchor: null,
@@ -67,7 +71,7 @@ export function objectInstanceToEquipmentRecord(
 
 export function objectRecords(
   assets: readonly ObjectAssetSceneReadModelV3[],
-  instances: readonly ObjectInstanceRecordV1[],
+  instances: readonly ObjectInstanceSceneReadModelV3[],
 ): EquipmentRecord[] {
   const assetsById = new Map(assets.map((asset) => [asset.id, asset]))
   return instances.flatMap((instance) => {

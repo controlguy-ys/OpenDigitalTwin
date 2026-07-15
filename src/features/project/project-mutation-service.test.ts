@@ -15,10 +15,14 @@ import {
 } from './project-mutation-service'
 import {
   createProjectPublicationCoordinator,
+  type AppliedProjectRuntimePublicationV1,
   type ProjectRuntimeV3,
 } from './project-publication-coordinator'
 import { createProjectRevisionFoundation } from './project-revision-repository'
 import { repositoryProjectFixture } from './project-revision-repository.test-support'
+import { createBrowserProjectRuntime } from './browser-project-runtime'
+import { useCollisionStore } from '../collision/collision-store'
+import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
 
 const databases: ProjectDatabase[] = []
 
@@ -34,6 +38,10 @@ function deferred() {
   let release!: () => void
   const promise = new Promise<void>((resolve) => { release = resolve })
   return { promise, release }
+}
+
+function publication(): AppliedProjectRuntimePublicationV1 {
+  return { commit: vi.fn(), rollback: vi.fn(), cleanup: vi.fn() }
 }
 
 it('publishes one validated V3 candidate before observers see it', async () => {
@@ -57,7 +65,7 @@ it('publishes one validated V3 candidate before observers see it', async () => {
       if (prepareCount === 2) await barrier.promise
       return { snapshot }
     }),
-    publish: vi.fn(),
+    apply: vi.fn(() => publication()),
     dispose: vi.fn(),
   }
   let commitIndex = 0
@@ -88,8 +96,81 @@ it('publishes one validated V3 candidate before observers see it', async () => {
   barrier.release()
   await pending
   expect(service.readPublished()?.snapshot.manifest.name).toBe('Cell B')
-  expect(runtime.publish).toHaveBeenCalledTimes(2)
+  expect(runtime.apply).toHaveBeenCalledTimes(2)
   expect((await foundation.repository.readPointer())?.state).toBe('stable')
+})
+
+it('flushes feature subscribers only after the mutation service exposes the matching bundle', async () => {
+  const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })
+  const revisionIdentityHasher = createProjectRevisionIdentityHasher(hashService)
+  const database = new ProjectDatabase(`mutation-subscriber-${crypto.randomUUID()}`)
+  databases.push(database)
+  const foundation = createProjectRevisionFoundation({
+    database,
+    revisionIdentityHasher,
+    sourceHashService: hashService,
+    sourceStagingOptions: {
+      sourceDigest: createProjectSourceDigest(hashService),
+    },
+  })
+  const runtime = createBrowserProjectRuntime({
+    prepareRobotAssets: async () => new Map(),
+  })
+  let commitIndex = 0
+  const coordinator = createProjectPublicationCoordinator({
+    repository: foundation.repository,
+    runtime,
+    createCommitToken: () => `subscriber-commit-${++commitIndex}`,
+  })
+  const service = createProjectMutationService({
+    repository: foundation.repository,
+    sourceStaging: foundation.sourceStaging,
+    coordinator,
+  })
+  const projectA = await repositoryProjectFixture({ name: 'Cell A' })
+  const staged = await stageProjectSourcesV3(
+    projectA,
+    foundation.sourceStaging,
+    revisionIdentityHasher,
+  )
+  await service.replacePreparedUntrusted({ ...staged, warnings: [] })
+  const observations: Array<{
+    storeName: string
+    storeWarningDistanceM: number
+    publishedName: string | undefined
+    publishedWarningDistanceM: number | undefined
+  }> = []
+  const observe = () => {
+    const authoritative = service.readPublished()?.snapshot
+    observations.push({
+      storeName: useRobotConfigurationStore.getState().configuration.name,
+      storeWarningDistanceM: useCollisionStore.getState().policy.warningDistanceM,
+      publishedName: authoritative?.robot.name,
+      publishedWarningDistanceM: authoritative?.collisionPolicy.warningDistanceM,
+    })
+  }
+  const unsubscribes = [
+    useRobotConfigurationStore.subscribe(observe),
+    useCollisionStore.subscribe(observe),
+  ]
+  try {
+    await service.replaceFromActive((current) => ({
+      ...current,
+      robot: { ...current.robot, name: 'Robot B' },
+      collisionPolicy: {
+        ...current.collisionPolicy,
+        warningDistanceM: 0.2,
+      },
+    }))
+  } finally {
+    for (const unsubscribe of unsubscribes) unsubscribe()
+  }
+
+  expect(observations).toHaveLength(2)
+  expect(observations.every((observation) =>
+    observation.storeName === observation.publishedName &&
+    observation.storeWarningDistanceM === observation.publishedWarningDistanceM,
+  )).toBe(true)
 })
 
 it('freezes the active recipe projection and revokes prepared sources when the recipe rejects', async () => {
@@ -107,7 +188,7 @@ it('freezes the active recipe projection and revokes prepared sources when the r
   })
   const runtime: ProjectRuntimeV3<{ snapshot: WorkcellProjectSnapshotV3 }> = {
     prepare: vi.fn(async (snapshot) => ({ snapshot })),
-    publish: vi.fn(),
+    apply: vi.fn(() => publication()),
     dispose: vi.fn(),
   }
   let commitIndex = 0
@@ -187,7 +268,7 @@ it('recovers a committed publishing revision after a simulated browser crash', a
   })
   const runtime: ProjectRuntimeV3<{ snapshot: WorkcellProjectSnapshotV3 }> = {
     prepare: vi.fn(async (snapshot) => ({ snapshot })),
-    publish: vi.fn(),
+    apply: vi.fn(() => publication()),
     dispose: vi.fn(),
   }
   const coordinator = createProjectPublicationCoordinator({
@@ -205,6 +286,6 @@ it('recovers a committed publishing revision after a simulated browser crash', a
 
   expect(service.isRecoveryRequired()).toBe(false)
   expect(service.readPublished()?.snapshot.manifest.name).toBe('Recovered Cell')
-  expect(runtime.publish).toHaveBeenCalledOnce()
+  expect(runtime.apply).toHaveBeenCalledOnce()
   expect((await recoveredFoundation.repository.readPointer())?.state).toBe('stable')
 })

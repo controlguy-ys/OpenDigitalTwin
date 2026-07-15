@@ -283,7 +283,7 @@ function heldWorkerFixture(source: Uint8Array): Buffer {
     statusSource: 'manual',
     statusOverlayVisible: true,
     visible: true,
-    graspable: false,
+    graspable: true,
   }
   const instances = [
     fixture,
@@ -293,6 +293,7 @@ function heldWorkerFixture(source: Uint8Array): Buffer {
       name: `Collision Worker Load ${index + 1}`,
       manualNumericStatus: 0,
       statusOverlayVisible: false,
+      graspable: false,
     })),
   ]
   putJson(entries, 'objects/instances.json', instances)

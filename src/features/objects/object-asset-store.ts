@@ -31,10 +31,13 @@ export const OBJECT_ASSET_PERSISTENCE_WARNING =
   'Object Asset storage is unavailable; changes will remain in memory for this session.'
 
 export type ObjectAssetReadModelV3 = ObjectAssetRecordV2 | ObjectAssetRecordV3
+export type ObjectInstanceReadModelV3 = ObjectInstanceRecordV1 & {
+  readonly graspable?: boolean
+}
 
 export interface ObjectAssetStoreState {
   assets: readonly ObjectAssetReadModelV3[]
-  instances: readonly ObjectInstanceRecordV1[]
+  instances: readonly ObjectInstanceReadModelV3[]
   persistenceStatus: ObjectAssetPersistenceStatus
   warnings: readonly string[]
   hydrate(): Promise<void>

@@ -2,15 +2,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RobotLinkGeometryRecordV2 } from '../../domain/project/project'
 import type { WorkcellProjectSnapshotV3 } from '../../domain/project/project-v3'
 import type { RobotLinkId } from '../../domain/robot/crb15000'
+import { DEFAULT_COLLISION_POLICY } from '../../domain/collision/collision'
+import { Group } from 'three'
 import { useCollisionStore } from '../collision/collision-store'
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { importedGeometryRepository } from '../import/imported-geometry-repository'
+import type { ImportedThreeAsset } from '../import/occt-to-three'
 import { useRobotStore } from '../joints/robot-store'
 import { useObjectAssetStore } from '../objects/object-asset-store'
 import { useRobotConfigurationStore } from '../robot/robot-configuration-store'
 import { robotGeometryRepository } from '../robot/robot-geometry-repository'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
-import { createBrowserProjectRuntime } from './browser-project-runtime'
+import {
+  createBrowserProjectRuntime,
+  type BrowserProjectRuntimeBundleV1,
+} from './browser-project-runtime'
 
 const LINK_IDS = [
   'LINK00',
@@ -137,6 +143,20 @@ function withPrimitiveAssets(
   return next
 }
 
+function geometryAsset(dispose = vi.fn()): ImportedThreeAsset {
+  return {
+    group: new Group(),
+    colliderCenter: [0, 0, 0],
+    bounds: {
+      min: [-0.1, -0.1, -0.1],
+      max: [0.1, 0.1, 0.1],
+      size: [0.2, 0.2, 0.2],
+      center: [0, 0, 0],
+    },
+    dispose,
+  }
+}
+
 function publishedSignature(runtime: ReturnType<typeof createBrowserProjectRuntime>) {
   return JSON.stringify({
     revisionId: runtime.activeRevisionId(),
@@ -152,6 +172,15 @@ function publishedSignature(runtime: ReturnType<typeof createBrowserProjectRunti
   })
 }
 
+function publishRuntime(
+  runtime: ReturnType<typeof createBrowserProjectRuntime>,
+  bundle: BrowserProjectRuntimeBundleV1,
+): void {
+  const publication = runtime.apply(bundle)
+  publication.commit()
+  publication.cleanup()
+}
+
 describe('browser project collision policy bridge', () => {
   it('creates a native V3 project with the canonical collision policy', async () => {
     useRobotGeometryStore.setState({ links: LINK_IDS.map(robotLink) })
@@ -160,6 +189,18 @@ describe('browser project collision policy bridge', () => {
     useCollisionStore
       .getState()
       .ignorePair('robot-link:LINK03|object:cup-01')
+    useCoordinateFrameStore.getState().replaceFrames({
+      mcp: {
+        position: [1, 2, 3],
+        quaternion: [0, 0, 1, 0],
+        scale: [1, 1, 1],
+      },
+      tcp: {
+        position: [4, 5, 6],
+        quaternion: [0, 1, 0, 0],
+        scale: [1, 1, 1],
+      },
+    })
 
     const browserProjectRuntime = createBrowserProjectRuntime({
       loadRobotGeometry: async () => LINK_IDS.map(robotLink),
@@ -172,12 +213,19 @@ describe('browser project collision policy bridge', () => {
     expect(new Set(
       captured.robot.links.map((link) => link.sourceRefs[0]?.sourceAssetId),
     )).toEqual(new Set([captured.robot.sources[0]?.id]))
-    expect(captured.collisionPolicy).toEqual({
-      enabled: false,
-      warningDistanceM: 0.125,
-      ignoredPairKeys: ['object:cup-01|robot-link:LINK03'],
-      enabledRobotSelfPairs: [],
+    expect(captured.frames).toEqual({
+      mcp: {
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
+      tcp: {
+        position: [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+        scale: [1, 1, 1],
+      },
     })
+    expect(captured.collisionPolicy).toEqual(DEFAULT_COLLISION_POLICY)
   })
 
   it('restores the persisted collision policy without staging STEP geometry', async () => {
@@ -191,7 +239,16 @@ describe('browser project collision policy bridge', () => {
       loadRobotGeometry: async () => LINK_IDS.map(robotLink),
       prepareRobotAssets: async () => new Map(),
     })
-    const captured = await browserProjectRuntime.createNew()
+    const created = await browserProjectRuntime.createNew()
+    const captured: WorkcellProjectSnapshotV3 = {
+      ...created,
+      collisionPolicy: {
+        enabled: false,
+        warningDistanceM: 0.125,
+        ignoredPairKeys: ['object:cup-01|robot-link:LINK03'],
+        enabledRobotSelfPairs: [],
+      },
+    }
 
     useCollisionStore.getState().setCollisionEnabled(true)
     useCollisionStore.getState().setWarningDistanceM(0.001)
@@ -211,7 +268,7 @@ describe('browser project collision policy bridge', () => {
     )
 
     const prepared = await browserProjectRuntime.prepare(captured, 'revision-test')
-    browserProjectRuntime.publish({
+    publishRuntime(browserProjectRuntime, {
       revisionId: 'revision-test',
       snapshot: captured,
       generation: 1,
@@ -243,7 +300,7 @@ describe('browser project collision policy bridge', () => {
       sourceRefs.every(({ nodeName }) => !nodeName.includes('legacy')),
     )).toBe(true)
     const resources = await runtime.prepare(snapshot, 'primitive-revision')
-    runtime.publish({
+    publishRuntime(runtime, {
       revisionId: 'primitive-revision',
       snapshot,
       generation: 1,
@@ -254,6 +311,9 @@ describe('browser project collision policy bridge', () => {
       'box-asset',
       'cylinder-asset',
     ])
+    expect(useObjectAssetStore.getState().instances.map((instance) =>
+      (instance as typeof instance & { graspable?: boolean }).graspable,
+    )).toEqual([false, false])
     expect(importedGeometryRepository.get('box-asset')?.group.children).toHaveLength(1)
     expect(importedGeometryRepository.get('cylinder-asset')?.group.children).toHaveLength(1)
   })
@@ -265,7 +325,7 @@ describe('browser project collision policy bridge', () => {
     })
     const first = await runtime.createNew()
     const firstResources = await runtime.prepare(first, 'revision-a')
-    runtime.publish({ revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources })
+    publishRuntime(runtime, { revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources })
     const next = withPrimitiveAssets(first)
     const nextResources = await runtime.prepare(next, 'revision-b')
     const observations: string[] = []
@@ -281,7 +341,7 @@ describe('browser project collision policy bridge', () => {
       importedGeometryRepository.subscribe(observe),
     ]
 
-    runtime.publish({ revisionId: 'revision-b', snapshot: next, generation: 2, resources: nextResources })
+    publishRuntime(runtime, { revisionId: 'revision-b', snapshot: next, generation: 2, resources: nextResources })
     const complete = publishedSignature(runtime)
     for (const unsubscribe of unsubscribes) unsubscribe()
 
@@ -296,7 +356,7 @@ describe('browser project collision policy bridge', () => {
     })
     const first = await runtime.createNew()
     const firstResources = await runtime.prepare(first, 'revision-a')
-    runtime.publish({ revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources })
+    publishRuntime(runtime, { revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources })
     const before = publishedSignature(runtime)
     const next = withPrimitiveAssets(first)
     const nextResources = await runtime.prepare(next, 'revision-b')
@@ -316,7 +376,7 @@ describe('browser project collision policy bridge', () => {
       throw new Error('object repository publish failed')
     })
 
-    expect(() => runtime.publish({
+    expect(() => runtime.apply({
       revisionId: 'revision-b',
       snapshot: next,
       generation: 2,
@@ -326,5 +386,63 @@ describe('browser project collision policy bridge', () => {
 
     expect(observations).toEqual([])
     expect(publishedSignature(runtime)).toBe(before)
+  })
+
+  it('keeps the new bundle authoritative when disposal of replaced resources fails', async () => {
+    const oldDispose = vi.fn()
+      .mockImplementationOnce(() => { throw new Error('old cleanup failed') })
+      .mockImplementation(() => undefined)
+    const newDispose = vi.fn()
+    let preparation = 0
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map(robotLink),
+      prepareRobotAssets: async () => new Map([['LINK00', geometryAsset(
+        preparation++ === 0 ? oldDispose : newDispose,
+      )]]),
+    })
+    const first = await runtime.createNew()
+    const firstResources = await runtime.prepare(first, 'revision-a')
+    publishRuntime(runtime, { revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources })
+    const next = withPrimitiveAssets(first)
+    const nextResources = await runtime.prepare(next, 'revision-b')
+
+    expect(() => publishRuntime(runtime, {
+      revisionId: 'revision-b',
+      snapshot: next,
+      generation: 2,
+      resources: nextResources,
+    })).not.toThrow()
+    expect(runtime.activeRevisionId()).toBe('revision-b')
+    expect(useRobotConfigurationStore.getState().configuration.name).toBe('Primitive Robot')
+    expect(newDispose).not.toHaveBeenCalled()
+
+    const diagnostic = runtime.readCleanupDiagnostics()[0]
+    expect(diagnostic?.message).toContain('old cleanup failed')
+    expect(runtime.retryCleanup(diagnostic!.token)).toBe(true)
+    expect(runtime.readCleanupDiagnostics()).toEqual([])
+  })
+
+  it('bounds retained cleanup diagnostics when repeated old-resource disposal fails', async () => {
+    let preparation = 0
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map(robotLink),
+      prepareRobotAssets: async () => new Map([['LINK00', geometryAsset(
+        preparation++ < 9
+          ? vi.fn(() => { throw new Error('persistent cleanup failure') })
+          : vi.fn(),
+      )]]),
+    })
+    const snapshot = await runtime.createNew()
+
+    for (let index = 0; index < 10; index += 1) {
+      const revisionId = `revision-${index}`
+      const resources = await runtime.prepare(snapshot, revisionId)
+      publishRuntime(runtime, { revisionId, snapshot, generation: index + 1, resources })
+    }
+
+    const diagnostics = runtime.readCleanupDiagnostics()
+    expect(diagnostics).toHaveLength(8)
+    expect(new Set(diagnostics.map(({ token }) => token)).size).toBe(8)
+    expect(diagnostics.every(({ attempts }) => attempts === 1)).toBe(true)
   })
 })

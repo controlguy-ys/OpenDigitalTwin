@@ -38,6 +38,7 @@ import { robotGeometryRepository } from '../robot/robot-geometry-repository'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
 import { restoreRobotGeometryRecords } from '../robot/robot-step-import'
 import type {
+  AppliedProjectRuntimePublicationV1,
   PreparedProjectRuntimeBundleV1,
   ProjectRuntimeV3,
 } from './project-publication-coordinator'
@@ -62,6 +63,15 @@ export interface BrowserProjectRuntime
   extends ProjectRuntimeV3<BrowserProjectRuntimeResources> {
   createNew(): Promise<WorkcellProjectSnapshotV3>
   activeRevisionId(): string | null
+  readCleanupDiagnostics(): readonly BrowserRuntimeCleanupDiagnosticV1[]
+  retryCleanup(token: string): boolean
+}
+
+export interface BrowserRuntimeCleanupDiagnosticV1 {
+  readonly token: string
+  readonly revisionId: string
+  readonly message: string
+  readonly attempts: number
 }
 
 export interface BrowserProjectRuntimeOptions {
@@ -141,7 +151,7 @@ function projectRobotReadModels(snapshot: WorkcellProjectSnapshotV3): RobotLinkG
 
 function projectObjectReadModels(snapshot: WorkcellProjectSnapshotV3): {
   readonly assets: WorkcellProjectSnapshotV3['objectAssets']
-  readonly instances: ObjectInstanceRecordV1[]
+  readonly instances: Array<ObjectInstanceRecordV1 & { readonly graspable: boolean }>
 } {
   const assets = snapshot.objectAssets
   const assetIds = new Set(assets.map(({ id }) => id))
@@ -156,6 +166,7 @@ function projectObjectReadModels(snapshot: WorkcellProjectSnapshotV3): {
         transforms.get(`object:${instance.id}`)?.manualTransform ?? identityTransform(),
       ),
       numericStatus: instance.manualNumericStatus,
+      graspable: instance.graspable,
       statusSource: instance.statusSource,
       statusOverlayVisible: instance.statusOverlayVisible,
       visible: instance.visible,
@@ -246,15 +257,6 @@ function beginReadModelPublication(sources: readonly NotificationSource[]) {
   })
 }
 
-function disposeReplacedAssets<Key>(
-  previous: ReadonlyMap<Key, ImportedThreeAsset>,
-  next: ReadonlyMap<Key, ImportedThreeAsset>,
-): void {
-  for (const [key, asset] of previous) {
-    if (next.get(key) !== asset) asset.dispose()
-  }
-}
-
 function disposePreparedResources(resources: BrowserProjectRuntimeResources): void {
   for (const asset of resources.robotAssets.values()) asset.dispose()
   for (const [id, asset] of resources.objectAssets) {
@@ -276,6 +278,34 @@ export function createBrowserProjectRuntime(
   const idFactory = options.idFactory ?? (() => createPortableId())
   let active: BrowserProjectRuntimeBundleV1 | null = null
   const resourceOwnership = new WeakMap<object, 'prepared' | 'published' | 'released'>()
+  const cleanupRetries = new Map<string, {
+    diagnostic: BrowserRuntimeCleanupDiagnosticV1
+    cleanup: () => void
+  }>()
+  let cleanupSequence = 0
+  const queueCleanup = (
+    revisionId: string,
+    label: string,
+    cleanup: () => void,
+  ): void => {
+    try {
+      cleanup()
+    } catch (error) {
+      const token = `runtime-cleanup-${++cleanupSequence}`
+      if (cleanupRetries.size >= 8) {
+        cleanupRetries.delete(cleanupRetries.keys().next().value!)
+      }
+      cleanupRetries.set(token, {
+        cleanup,
+        diagnostic: Object.freeze({
+          token,
+          revisionId,
+          message: `${label}: ${error instanceof Error ? error.message : 'Cleanup failed.'}`,
+          attempts: 1,
+        }),
+      })
+    }
+  }
   const notificationSources = [
     useRobotGeometryStore,
     useObjectAssetStore,
@@ -366,16 +396,7 @@ export function createBrowserProjectRuntime(
             configurationRevision: '1',
           },
         },
-        frames: {
-          mcp: {
-            ...mutableTransform(useCoordinateFrameStore.getState().frames.mcp),
-            scale: [1, 1, 1],
-          },
-          tcp: {
-            ...mutableTransform(useCoordinateFrameStore.getState().frames.tcp),
-            scale: [1, 1, 1],
-          },
-        },
+        frames: { mcp: identityTransform(), tcp: identityTransform() },
         simulation: { activeJobId: null, jobs: [] },
         objectAssets: [],
         objectInstances: [],
@@ -383,11 +404,10 @@ export function createBrowserProjectRuntime(
         externalEntities: [],
         opcUa: DEFAULT_OPC_UA,
         collisionPolicy: {
-          enabled: useCollisionStore.getState().policy.enabled ?? DEFAULT_COLLISION_POLICY.enabled,
-          warningDistanceM: useCollisionStore.getState().policy.warningDistanceM ??
-            DEFAULT_COLLISION_POLICY.warningDistanceM,
-          ignoredPairKeys: [...useCollisionStore.getState().policy.ignoredPairKeys],
-          enabledRobotSelfPairs: [...useCollisionStore.getState().policy.enabledRobotSelfPairs],
+          enabled: DEFAULT_COLLISION_POLICY.enabled,
+          warningDistanceM: DEFAULT_COLLISION_POLICY.warningDistanceM,
+          ignoredPairKeys: [...DEFAULT_COLLISION_POLICY.ignoredPairKeys],
+          enabledRobotSelfPairs: [...DEFAULT_COLLISION_POLICY.enabledRobotSelfPairs],
         },
       }
       return snapshot
@@ -435,7 +455,7 @@ export function createBrowserProjectRuntime(
       }
     },
 
-    publish(bundle) {
+    apply(bundle): AppliedProjectRuntimePublicationV1 {
       const resources = bundle.resources
       if (resourceOwnership.get(resources) !== 'prepared') {
         throw new Error('PROJECT_RUNTIME_BUNDLE_INVALID: Runtime bundle is not prepared.')
@@ -490,12 +510,6 @@ export function createBrowserProjectRuntime(
         useCollisionStore.getState().setValidationReport(null)
         previousRobotAssets = robotGeometryRepository.exchange(resources.robotAssets)
         previousObjectAssets = importedGeometryRepository.exchangeAll(resources.objectAssets)
-        if (active !== null) resourceOwnership.set(active.resources, 'released')
-        resourceOwnership.set(resources, 'published')
-        active = bundle
-        publication.commit()
-        disposeReplacedAssets(previousRobotAssets, resources.robotAssets)
-        disposeReplacedAssets(previousObjectAssets, resources.objectAssets)
       } catch (error) {
         useRobotGeometryStore.setState(previousStores.robotGeometry, true)
         useObjectAssetStore.setState(previousStores.objects, true)
@@ -514,6 +528,45 @@ export function createBrowserProjectRuntime(
         resourceOwnership.set(resources, 'released')
         throw error
       }
+      const previous = active
+      let closed: 'open' | 'committed' | 'rolled-back' | 'cleaned' = 'open'
+      return Object.freeze({
+        commit() {
+          if (closed !== 'open') return
+          closed = 'committed'
+          if (previous !== null) resourceOwnership.set(previous.resources, 'released')
+          resourceOwnership.set(resources, 'published')
+          active = bundle
+          publication.commit()
+        },
+        rollback() {
+          if (closed !== 'open') return
+          closed = 'rolled-back'
+          useRobotGeometryStore.setState(previousStores.robotGeometry, true)
+          useObjectAssetStore.setState(previousStores.objects, true)
+          useRobotConfigurationStore.setState(previousStores.configuration, true)
+          useRobotStore.setState(previousStores.robot, true)
+          useCoordinateFrameStore.setState(previousStores.frames, true)
+          useCollisionStore.setState(previousStores.collision, true)
+          robotGeometryRepository.exchange(previousRobotAssets!)
+          importedGeometryRepository.exchangeAll(previousObjectAssets!)
+          publication.rollback()
+          disposePreparedResources(resources)
+          resourceOwnership.set(resources, 'released')
+        },
+        cleanup() {
+          if (closed !== 'committed' || previous === null) return
+          closed = 'cleaned'
+          for (const [linkId, asset] of previousRobotAssets!) {
+            if (resources.robotAssets.get(linkId) === asset) continue
+            queueCleanup(previous.revisionId, `Robot geometry ${linkId}`, () => asset.dispose())
+          }
+          for (const [assetId, asset] of previousObjectAssets!) {
+            if (resources.objectAssets.get(assetId) === asset) continue
+            queueCleanup(previous.revisionId, `Object geometry ${assetId}`, () => asset.dispose())
+          }
+        },
+      })
     },
 
     dispose(bundle) {
@@ -527,6 +580,28 @@ export function createBrowserProjectRuntime(
 
     activeRevisionId() {
       return active?.revisionId ?? null
+    },
+
+    readCleanupDiagnostics() {
+      return Object.freeze([...cleanupRetries.values()].map(({ diagnostic }) => diagnostic))
+    },
+
+    retryCleanup(token) {
+      const pending = cleanupRetries.get(token)
+      if (pending === undefined) return false
+      try {
+        pending.cleanup()
+        cleanupRetries.delete(token)
+        return true
+      } catch (error) {
+        pending.diagnostic = Object.freeze({
+          ...pending.diagnostic,
+          message: pending.diagnostic.message.split(': ')[0] + ': ' +
+            (error instanceof Error ? error.message : 'Cleanup failed.'),
+          attempts: pending.diagnostic.attempts + 1,
+        })
+        return false
+      }
     },
   }
   return Object.freeze(runtime)

@@ -15,12 +15,23 @@ export interface PreparedProjectRuntimeBundleV1<RuntimeResources>
   readonly resources: RuntimeResources
 }
 
+export interface AppliedProjectRuntimePublicationV1 {
+  /** Installs the applied bundle and releases notifications; implementations must not throw. */
+  commit(): void
+  /** Restores the previous complete runtime without releasing queued notifications. */
+  rollback(): void
+  /** Best-effort cleanup after the new bundle is already authoritative. */
+  cleanup(): void
+}
+
 export interface ProjectRuntimeV3<RuntimeResources> {
   prepare(
     snapshot: WorkcellProjectSnapshotV3,
     revisionId: string,
   ): Promise<RuntimeResources>
-  publish(bundle: PreparedProjectRuntimeBundleV1<RuntimeResources>): void
+  apply(
+    bundle: PreparedProjectRuntimeBundleV1<RuntimeResources>,
+  ): AppliedProjectRuntimePublicationV1
   dispose(bundle: PreparedProjectRuntimeBundleV1<RuntimeResources>): void
 }
 
@@ -106,7 +117,8 @@ export function createProjectPublicationCoordinator<RuntimeResources>(
         const revisionId = revision.storedRevision.revisionId
         let next: PreparedProjectRuntimeBundleV1<RuntimeResources> | undefined
         let pointerPublished = false
-        let runtimePublicationStarted = false
+        let runtimeApplyStarted = false
+        let application: AppliedProjectRuntimePublicationV1 | undefined
         const token = createCommitToken()
         try {
           const snapshot = repository.materializePreparedRuntime(revision)
@@ -123,27 +135,13 @@ export function createProjectPublicationCoordinator<RuntimeResources>(
             token,
           )
           pointerPublished = true
-          runtimePublicationStarted = true
-          runtime.publish(next)
+          runtimeApplyStarted = true
+          application = runtime.apply(next)
           await repository.finalizePublication(token)
           await repository.activatePreparedSources(revision, token)
-          const previous = published
-          published = next
-          if (previous !== null) {
-            try {
-              runtime.dispose(previous)
-            } catch {
-              // The new stable revision remains authoritative; cleanup is retry-only.
-            }
-          }
-          try {
-            await repository.garbageCollect()
-          } catch {
-            // Durable cleanup is retry-only after a successful publication.
-          }
-          return publicBundle(next)
         } catch (error) {
-          if (runtimePublicationStarted) {
+          if (runtimeApplyStarted) {
+            try { application?.rollback() } catch { /* Recovery remains required. */ }
             enterRecovery(error)
           } else if (pointerPublished) {
             try {
@@ -152,7 +150,7 @@ export function createProjectPublicationCoordinator<RuntimeResources>(
               enterRecovery(compensationError)
             }
           }
-          if (next !== undefined && !runtimePublicationStarted) {
+          if (next !== undefined && !pointerPublished) {
             try {
               runtime.dispose(next)
             } catch {
@@ -168,6 +166,16 @@ export function createProjectPublicationCoordinator<RuntimeResources>(
           }
           throw error
         }
+        // These adjacent synchronous statements are the authoritative switch.
+        published = next!
+        application!.commit()
+        try { application!.cleanup() } catch { /* Runtime cleanup is retry-only. */ }
+        try {
+          await repository.garbageCollect()
+        } catch {
+          // Durable cleanup is retry-only after a successful publication.
+        }
+        return publicBundle(next!)
       })
     },
 
@@ -176,21 +184,17 @@ export function createProjectPublicationCoordinator<RuntimeResources>(
         requireEditable()
         const resources = await runtime.prepare(request.snapshot, request.revisionId)
         const next = Object.freeze({ ...request, resources })
+        let application: AppliedProjectRuntimePublicationV1
         try {
-          runtime.publish(next)
+          application = runtime.apply(next)
         } catch (error) {
           enterRecovery(error)
           throw error
         }
-        const previous = published
+        // Restore has no pending durable work; publish and flush in one turn.
         published = next
-        if (previous !== null) {
-          try {
-            runtime.dispose(previous)
-          } catch {
-            // Hydrated publication succeeds independently from stale cleanup.
-          }
-        }
+        application.commit()
+        try { application.cleanup() } catch { /* Runtime cleanup is retry-only. */ }
         return publicBundle(next)
       })
     },
