@@ -2,6 +2,7 @@ import Dexie from 'dexie'
 import { afterEach, expect, it, vi } from 'vitest'
 import {
   stageProjectSourcesV3,
+  type PreparedProjectSourceGroupV1,
   type WorkcellProjectSnapshotV3,
 } from '../../domain/project/project-v3'
 import {
@@ -43,6 +44,73 @@ function deferred() {
 function publication(): AppliedProjectRuntimePublicationV1 {
   return { commit: vi.fn(), rollback: vi.fn(), cleanup: vi.fn() }
 }
+
+function earlyFailureMutationHarness(recoveryRequired: boolean) {
+  const revoke = vi.fn()
+  const createCandidate = vi.fn((candidate) => candidate)
+  const replace = vi.fn(async () => undefined)
+  const readPublished = vi.fn(() => null)
+  const service = createProjectMutationService({
+    repository: { createCandidate } as never,
+    sourceStaging: { revoke } as never,
+    coordinator: {
+      replace,
+      readPublished,
+      isRecoveryRequired: () => recoveryRequired,
+    } as never,
+  })
+  const preparedSource = Object.freeze({ kind: 'prepared-step-source' }) as never
+  const preparedSources: readonly PreparedProjectSourceGroupV1[] = [{
+    ownerKeys: ['object-asset:step-review'],
+    preparedSource,
+  }]
+  return { service, revoke, createCandidate, replace, preparedSource, preparedSources }
+}
+
+it('revokes a prepared STEP source when recovery blocks the mutation before recipe execution', async () => {
+  const harness = earlyFailureMutationHarness(true)
+
+  await expect(harness.service.replaceFromActive(
+    (current) => current,
+    harness.preparedSources,
+  )).rejects.toThrow('PROJECT_RECOVERY_REQUIRED')
+
+  expect(harness.revoke).toHaveBeenCalledOnce()
+  expect(harness.revoke).toHaveBeenCalledWith(harness.preparedSource)
+  expect(harness.createCandidate).not.toHaveBeenCalled()
+})
+
+it('revokes a prepared STEP source when no active Project exists before recipe execution', async () => {
+  const harness = earlyFailureMutationHarness(false)
+
+  await expect(harness.service.replaceFromActive(
+    (current) => current,
+    harness.preparedSources,
+  )).rejects.toThrow('PROJECT_ACTIVE_REVISION_MISSING')
+
+  expect(harness.revoke).toHaveBeenCalledOnce()
+  expect(harness.revoke).toHaveBeenCalledWith(harness.preparedSource)
+  expect(harness.createCandidate).not.toHaveBeenCalled()
+})
+
+it('revokes a prepared STEP source when the coordinator has no published bundle', async () => {
+  const harness = earlyFailureMutationHarness(false)
+  await harness.service.replacePreparedUntrusted({
+    projection: { manifest: { name: 'seed' } } as never,
+    preparedSourceGroups: [],
+    warnings: [],
+  })
+  harness.revoke.mockClear()
+
+  await expect(harness.service.replaceFromActive(
+    (current) => current,
+    harness.preparedSources,
+  )).rejects.toThrow('PROJECT_ACTIVE_REVISION_MISSING')
+
+  expect(harness.replace).toHaveBeenCalledOnce()
+  expect(harness.revoke).toHaveBeenCalledOnce()
+  expect(harness.revoke).toHaveBeenCalledWith(harness.preparedSource)
+})
 
 it('publishes one validated V3 candidate before observers see it', async () => {
   const hashService = createProjectHashService({ subtle: globalThis.crypto.subtle })

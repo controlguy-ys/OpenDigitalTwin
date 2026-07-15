@@ -108,4 +108,45 @@ describe('scene runtime selector', () => {
     expect(runtime.byId.get('object:cup-1')?.worldPose.positionM).toEqual([4, 5, 6])
     expect(project.scene.entities[0]?.localPose.positionM).toEqual([0, 0, 0])
   })
+
+  it.each([
+    ['Group', {
+      parent: {
+        kind: 'group', id: 'group:fixture', name: 'Fixture', parentId: null,
+        localPose: { ...IDENTITY_POSE, positionM: [10, 0, 0] }, visible: true,
+      } satisfies SceneEntityV1,
+      expectedLocal: [10, 0, 0],
+    }],
+    ['moving Linear Axis', {
+      parent: {
+        kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+        localPose: { ...IDENTITY_POSE, positionM: [10, 0, 0] }, visible: true,
+        direction: 'x', minPositionM: -10, maxPositionM: 10,
+        homePositionM: 0, currentPositionM: 2,
+        carriageEntityId: 'object:cup-1', robotEntityId: null,
+      } satisfies SceneEntityV1,
+      expectedLocal: [8, 0, 0],
+    }],
+  ])('projects an MCP-world draft through the actual %s parent', (_label, fixture) => {
+    const object: SceneEntityV1 = {
+      kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: fixture.parent.id,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+    }
+    const project = snapshot([fixture.parent, object])
+
+    const runtime = selectSceneRuntime(project, {
+      isolatedEntityId: null,
+      draftPose: {
+        entityId: 'object:cup-1',
+        pose: { positionM: [20, 0, 0], quaternion: [0, 0, 0, 1] },
+      },
+    })
+
+    expect(runtime.byId.get('object:cup-1')).toMatchObject({
+      localPose: { positionM: fixture.expectedLocal },
+      worldPose: { positionM: [20, 0, 0] },
+    })
+    expect(project.scene.entities[1]?.localPose.positionM).toEqual([0, 0, 0])
+  })
 })

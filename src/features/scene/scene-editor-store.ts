@@ -24,7 +24,7 @@ export interface SceneEditorState {
 
 export interface SceneEditorStoreOptions {
   readonly mutationService: Pick<ProjectMutationService, 'readPublished' | 'subscribe'>
-  readonly setLocalPose: (entityId: SceneEntityIdV1, pose: ScenePoseV1) => Promise<void>
+  readonly setWorldPose: (entityId: SceneEntityIdV1, pose: ScenePoseV1) => Promise<void>
 }
 
 export type SceneEditorStore = StoreApi<SceneEditorState> & {
@@ -55,16 +55,23 @@ export function createSceneEditorStore(
         set({ draftPose: null })
         return
       }
-      await options.setLocalPose(draft.entityId, draft.pose)
+      await options.setWorldPose(draft.entityId, draft.pose)
       if (get().draftPose === draft) set({ draftPose: null })
     },
     cancelDraft: () => set({ draftPose: null }),
   }))
   const unsubscribe = options.mutationService.subscribe(() => {
-    const nextGeneration = options.mutationService.readPublished()?.generation ?? 0
+    const published = options.mutationService.readPublished()
+    const nextGeneration = published?.generation ?? 0
     if (nextGeneration === generation) return
     generation = nextGeneration
-    store.setState({ draftPose: null })
+    const isolatedEntityId = store.getState().isolatedEntityId
+    const isolateStillExists = isolatedEntityId === null ||
+      published?.snapshot.scene.entities.some(({ id }) => id === isolatedEntityId) === true
+    store.setState({
+      draftPose: null,
+      ...(isolateStillExists ? {} : { isolatedEntityId: null }),
+    })
   })
   return Object.assign(store, { dispose: unsubscribe })
 }

@@ -88,6 +88,28 @@ export function worldPoseForEntity(
   return poseForMatrix(worldMatrix(entities, entity), false)
 }
 
+export function setSceneEntityWorldPose(
+  scene: ProjectSceneStateV1,
+  entityId: SceneEntityIdV1,
+  worldPose: ScenePoseV1,
+): ProjectSceneStateV1 {
+  const validated = validateProjectSceneState(scene)
+  const entities = sceneMap(validated)
+  const entity = entities.get(entityId)
+  if (entity === undefined) throw new Error(`SCENE_ENTITY_MISSING: ${entityId} does not exist.`)
+  const localMatrix = new Matrix4()
+    .copy(parentAnchorWorld(entities, entity.parentId))
+    .invert()
+    .multiply(matrixForPose(worldPose))
+  const localPose = poseForMatrix(localMatrix, true)
+  return validateProjectSceneState({
+    entities: validated.entities.map((entry) => entry.id === entityId
+      ? { ...entry, localPose } as SceneEntityV1
+      : entry),
+    robotMountContact: validated.robotMountContact,
+  })
+}
+
 function parentAnchorWorld(
   entities: ReadonlyMap<SceneEntityIdV1, SceneEntityV1>,
   parentId: SceneEntityIdV1 | null,

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { GeometryCollisionEntity } from '../../domain/collision/collision'
-import { resolveGeometryGraspTarget } from './GraspController'
+import {
+  isHeldSceneEntityVisible,
+  resolveGeometryGraspTarget,
+} from './GraspController'
 
 function entity(
   id: string,
@@ -42,5 +45,20 @@ describe('GraspController geometry target resolution', () => {
         new Set(['equipment:shared-01', 'object:shared-01']),
       ),
     ).toBe('equipment:shared-01')
+  })
+
+  it('suppresses held rendering and its overlay when Scene visibility or isolation is ineffective', () => {
+    const byId = new Map([
+      ['object:held-cup', { entityId: 'object:held-cup', effectiveVisible: false }],
+    ])
+
+    expect(isHeldSceneEntityVisible(
+      { byId } as never,
+      'object:held-cup',
+    )).toBe(false)
+    expect(isHeldSceneEntityVisible(
+      { byId } as never,
+      'object:missing',
+    )).toBe(true)
   })
 })

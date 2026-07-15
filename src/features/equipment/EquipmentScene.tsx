@@ -126,14 +126,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
   )
   const collisionOutline = useCollisionStore(collisionOutlineSelector)
   const selectEquipment = useInteractionStore((state) => state.selectEquipment)
-  const previewTransform = useEquipmentStore(
-    (state) => state.previewEquipmentTransform,
-  )
-  const commitTransform = useEquipmentStore(
-    (state) => state.commitEquipmentTransform,
-  )
-  const previewObjectTransform = useCallback((id: string, transform: EquipmentRecord['transform']) => {
-    const entityId = `object:${id}` as const
+  const previewSceneTransform = useCallback((_id: string, transform: EquipmentRecord['transform']) => {
     const pose = {
       positionM: [...transform.position] as [number, number, number],
       quaternion: [...transform.quaternion] as [number, number, number, number],
@@ -141,8 +134,8 @@ const EquipmentInstance = memo(function EquipmentInstance({
     const editor = sceneEditorStore.getState()
     if (editor.draftPose?.entityId === entityId) editor.updateDraft(pose)
     else editor.beginDraft(entityId, pose)
-  }, [])
-  const commitObjectTransform = useCallback(async (_id: string) => {
+  }, [entityId])
+  const commitSceneTransform = useCallback(async (_id: string) => {
     await sceneEditorStore.getState().applyDraft()
   }, [])
   const selected =
@@ -191,13 +184,13 @@ const EquipmentInstance = memo(function EquipmentInstance({
       {selected ? (
         <EquipmentTransformControls
           commitTransform={
-            record.assetId === undefined ? commitTransform : commitObjectTransform
+            commitSceneTransform
           }
           equipmentId={record.id}
           objectRef={objectRef}
           onDraggingChange={onDraggingChange}
           previewTransform={
-            record.assetId === undefined ? previewTransform : previewObjectTransform
+            previewSceneTransform
           }
         />
       ) : null}

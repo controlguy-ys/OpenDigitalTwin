@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ObjectAssetRecordV2, ObjectInstanceRecordV1 } from '../../domain/project/project'
+import {
+  validateWorkcellProjectSnapshotV3,
+  type WorkcellProjectSnapshotV3,
+} from '../../domain/project/project-v3'
 import type { SceneEntityV1 } from '../../domain/project/scene-state-v1'
+import { worldPoseForEntity } from '../../domain/scene/scene-transform'
 import type { StoredWorkcellProjectSnapshotProjectionV3 } from '../project/project-db'
 import type { ProjectMutationService } from '../project/project-mutation-service'
+import { repositoryProjectFixture } from '../project/project-revision-repository.test-support'
 import { createSceneCommandService } from './scene-command-service'
 
 const IDENTITY_POSE = {
@@ -163,6 +169,38 @@ describe('SceneCommandService', () => {
     expect(harness.active().objectAssets.map(({ id }) => id)).toEqual(['asset-cup', 'asset-unused'])
   })
 
+  it.each([
+    'object:cup-1',
+    'object:cup-1/default',
+  ])('clears robot mount contact when deleting its referenced Entity or collision id (%s)', async (mountReference) => {
+    const instance = objectInstance()
+    const object: SceneEntityV1 = {
+      kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+    }
+    const current = projection([robot(), object]) as unknown as {
+      scene: { robotMountContact: unknown }
+      objectAssets: unknown[]
+      objectInstances: unknown[]
+    }
+    current.scene.robotMountContact = {
+      baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: mountReference,
+    }
+    current.objectAssets = [{
+      ...stepAsset(), sourceKind: 'step', sourceSha256: 'a'.repeat(64),
+    }]
+    current.objectInstances = [instance]
+    const harness = mutationHarness(current as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.deleteEntity('object:cup-1')
+
+    expect(harness.active().scene.robotMountContact).toMatchObject({
+      mountSurfaceCollisionEntityId: null,
+    })
+  })
+
   it('rejects Robot deletion and an Axis carriage Group before publication', async () => {
     const carriage: SceneEntityV1 = {
       kind: 'group', id: 'group:carriage', name: 'Carriage', parentId: 'linear-axis:active',
@@ -206,6 +244,61 @@ describe('SceneCommandService', () => {
     expect(harness.active().scene.entities.map(({ id }) => id)).toEqual([
       'robot:active', 'object:box-1', 'object:cylinder-1',
     ])
+  })
+
+  it('creates Cylinder metadata accepted by the real V3 validator', async () => {
+    const project = await repositoryProjectFixture()
+    const harness = mutationHarness(project as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const commands = createSceneCommandService({
+      mutationService: harness.mutationService,
+      createId: () => 'validated-cylinder',
+    })
+
+    await commands.createCylinder({
+      name: 'Validated Post', radiusM: 0.1, heightM: 0.8, color: '#112233',
+    })
+
+    expect(() => validateWorkcellProjectSnapshotV3(
+      harness.active() as unknown as WorkcellProjectSnapshotV3,
+    )).not.toThrow()
+    expect(harness.active().objectAssets.at(-1)?.statistics.vertices).toBe(196)
+  })
+
+  it.each([
+    ['Group', {
+      parent: {
+        kind: 'group', id: 'group:fixture', name: 'Fixture', parentId: null,
+        localPose: { ...IDENTITY_POSE, positionM: [10, 0, 0] }, visible: true,
+      } satisfies SceneEntityV1,
+      expectedLocalPosition: [10, 0, 0],
+    }],
+    ['moving Linear Axis', {
+      parent: {
+        kind: 'linear-axis', id: 'linear-axis:active', name: 'Axis', parentId: null,
+        localPose: { ...IDENTITY_POSE, positionM: [10, 0, 0] }, visible: true,
+        direction: 'x', minPositionM: -10, maxPositionM: 10,
+        homePositionM: 0, currentPositionM: 2,
+        carriageEntityId: 'object:cup-1', robotEntityId: null,
+      } satisfies SceneEntityV1,
+      expectedLocalPosition: [8, 0, 0],
+    }],
+  ])('converts an MCP-world edit through the actual %s parent before storing local pose', async (_label, fixture) => {
+    const child: SceneEntityV1 = {
+      kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: fixture.parent.id,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+    }
+    const harness = mutationHarness(projection([robot(), fixture.parent, child]))
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.setWorldPose('object:cup-1', {
+      positionM: [20, 0, 0], quaternion: [0, 0, 0, 1],
+    })
+
+    expect(harness.active().scene.entities.find(({ id }) => id === 'object:cup-1')?.localPose.positionM)
+      .toEqual(fixture.expectedLocalPosition)
+    expect(worldPoseForEntity(harness.active().scene, 'object:cup-1').positionM)
+      .toEqual([20, 0, 0])
   })
 
   it('reparents and ungroups direct members without changing World pose or child visibility', async () => {
@@ -275,6 +368,89 @@ describe('SceneCommandService', () => {
     })
   })
 
+  it('duplicates an OPC UA-backed Object as a validator-clean Manual fallback without copying bindings', async () => {
+    const baseProject = await repositoryProjectFixture({
+      objectStepAssets: [{ id: 'asset-cup', bytes: [9, 8, 7] }],
+    })
+    const project: WorkcellProjectSnapshotV3 = {
+      ...baseProject,
+      objectInstances: [...baseProject.objectInstances, {
+        id: 'cup-1', assetId: 'asset-cup', name: 'OPC Cup', manualNumericStatus: 17,
+        statusSource: 'opcua', statusOverlayVisible: false, scale: [1, 1, 1], graspable: true,
+      }],
+      scene: { ...baseProject.scene, entities: [...baseProject.scene.entities, {
+        kind: 'object', id: 'object:cup-1', name: 'OPC Cup', parentId: null,
+        localPose: { positionM: [3, 4, 5], quaternion: [0, 0, 0, 1] }, visible: true,
+        target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'opcua',
+      }] },
+      opcUa: {
+        ...baseProject.opcUa,
+        numericStatusBindings: [...baseProject.opcUa.numericStatusBindings, {
+          entityId: 'object:cup-1', nodeId: 'ns=2;s=Cup.Status', scale: 1, offset: 0,
+        }],
+        equipmentTransforms: [...baseProject.opcUa.equipmentTransforms, {
+          entityId: 'object:cup-1', gatewayId: 'gateway-1', gatewayProfileId: 'profile-1',
+          gatewayProfileRevision: 'b'.repeat(64), mode: 'absolute', referenceFrameId: 'mcp',
+          smoothing: { mode: 'two-cycle', cycles: 2 },
+        }],
+      },
+    }
+    expect(() => validateWorkcellProjectSnapshotV3(project)).not.toThrow()
+    const harness = mutationHarness(project as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const commands = createSceneCommandService({
+      mutationService: harness.mutationService,
+      createId: () => 'cup-copy',
+    })
+
+    await commands.duplicateObject('object:cup-1')
+
+    const candidate = harness.active() as unknown as WorkcellProjectSnapshotV3
+    expect(candidate.objectInstances.find(({ id }) => id === 'cup-copy')).toMatchObject({
+      manualNumericStatus: 17,
+      statusSource: 'manual',
+      statusOverlayVisible: false,
+    })
+    expect(candidate.scene.entities.find(({ id }) => id === 'object:cup-copy')).toMatchObject({
+      localPose: { positionM: [3, 4, 5] },
+      transformSource: 'manual',
+    })
+    expect(candidate.opcUa.numericStatusBindings).toHaveLength(1)
+    expect(candidate.opcUa.equipmentTransforms).toHaveLength(1)
+    expect(() => validateWorkcellProjectSnapshotV3(candidate)).not.toThrow()
+  })
+
+  it('does not emit the STEP threshold warning for primitives or duplicates that add no STEP Asset', async () => {
+    const instance = objectInstance()
+    const object: SceneEntityV1 = {
+      kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'object-instance', id: 'cup-1' }, transformSource: 'manual',
+    }
+    const current = projection([robot(), object]) as unknown as {
+      objectAssets: unknown[]
+      objectInstances: unknown[]
+    }
+    current.objectAssets = Array.from({ length: 52 }, (_, index) => ({
+      ...stepAsset(), id: `step-${index}`, sourceKind: 'step', sourceSha256: `${index}`.padStart(64, '0'),
+    }))
+    current.objectInstances = [instance]
+    const harness = mutationHarness(current as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const ids = ['box-1', 'cup-copy']
+    const onWarning = vi.fn()
+    const commands = createSceneCommandService({
+      mutationService: harness.mutationService,
+      createId: () => ids.shift()!,
+      onWarning,
+    })
+
+    await commands.createBox({ name: 'Guard', dimensionsM: [1, 1, 1], color: '#AABBCC' })
+    await commands.duplicateObject('object:cup-1')
+
+    expect(onWarning).not.toHaveBeenCalledWith(expect.objectContaining({
+      code: 'STEP_ASSET_WARNING',
+    }))
+  })
+
   it('rechecks an Axis carriage Group inside the queued recipe when published state changes after invocation', async () => {
     const group: SceneEntityV1 = {
       kind: 'group', id: 'group:carriage', name: 'Carriage', parentId: null,
@@ -336,5 +512,48 @@ describe('SceneCommandService', () => {
       statusSource: 'opcua',
       statusOverlayVisible: false,
     })
+  })
+
+  it('updates and deletes built-in Equipment through Project V3 recipes and clears mount contact', async () => {
+    const equipment: SceneEntityV1 = {
+      kind: 'object', id: 'equipment:cup-01', name: 'Cup', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+      target: { kind: 'built-in-equipment', id: 'cup-01' }, transformSource: 'manual',
+    }
+    const current = projection([robot(), equipment]) as unknown as {
+      scene: StoredWorkcellProjectSnapshotProjectionV3['scene']
+      builtInEquipment: unknown[]
+      opcUa: { numericStatusBindings: unknown[]; equipmentTransforms: unknown[] }
+    }
+    ;(current.scene as { robotMountContact: unknown }).robotMountContact = {
+      baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: 'equipment:cup-01',
+    }
+    current.builtInEquipment = [{
+      id: 'cup-01', name: 'Cup', kind: 'cup', status: 'RUNNING',
+      manualNumericStatus: 0, statusSource: 'manual', statusOverlayVisible: true,
+      graspable: true, collisionHalfExtents: [0.055, 0.055, 0.075], stackLightAnchor: null,
+    }]
+    current.opcUa.numericStatusBindings = [{
+      entityId: 'equipment:cup-01', nodeId: 'ns=2;s=Cup', scale: 1, offset: 0,
+    }]
+    current.opcUa.equipmentTransforms = [{ entityId: 'equipment:cup-01' }]
+    const harness = mutationHarness(current as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.updateBuiltInEquipment('equipment:cup-01', {
+      numericStatus: 9, statusSource: 'opcua', statusOverlayVisible: false,
+    })
+    expect(harness.active().builtInEquipment[0]).toMatchObject({
+      manualNumericStatus: 9, statusSource: 'opcua', statusOverlayVisible: false,
+    })
+
+    await commands.deleteEntity('equipment:cup-01')
+
+    expect(harness.replaceFromActive).toHaveBeenCalledTimes(2)
+    expect(harness.active().builtInEquipment).toEqual([])
+    expect(harness.active().scene.robotMountContact).toMatchObject({
+      mountSurfaceCollisionEntityId: null,
+    })
+    expect(JSON.stringify(harness.active().opcUa)).not.toContain('equipment:cup-01')
   })
 })

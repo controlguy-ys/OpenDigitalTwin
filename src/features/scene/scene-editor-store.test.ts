@@ -16,7 +16,7 @@ describe('SceneEditorStore', () => {
     } as unknown as ProjectMutationService
     const store = createSceneEditorStore({
       mutationService,
-      setLocalPose: vi.fn(async () => undefined),
+      setWorldPose: vi.fn(async () => undefined),
     })
 
     store.getState().select('object:cup-1')
@@ -31,30 +31,45 @@ describe('SceneEditorStore', () => {
 
   it('applies a draft once, cancels without publication, and drops a stale draft on generation change', async () => {
     let generation = 7
+    let sceneEntityIds = ['object:cup-1']
     let notify: () => void = () => undefined
     const mutationService = {
-      readPublished: vi.fn(() => ({ generation })),
+      readPublished: vi.fn(() => ({
+        generation,
+        snapshot: {
+          scene: {
+            entities: sceneEntityIds.map((id) => ({ id })),
+          },
+        },
+      })),
       subscribe: vi.fn((listener: () => void) => {
         notify = listener
         return () => undefined
       }),
     } as unknown as ProjectMutationService
-    const setLocalPose = vi.fn(async () => undefined)
-    const store = createSceneEditorStore({ mutationService, setLocalPose })
+    const setWorldPose = vi.fn(async () => undefined)
+    const store = createSceneEditorStore({ mutationService, setWorldPose })
 
     store.getState().beginDraft('object:cup-1', FIRST_POSE)
     await store.getState().applyDraft()
-    expect(setLocalPose).toHaveBeenCalledOnce()
-    expect(setLocalPose).toHaveBeenCalledWith('object:cup-1', FIRST_POSE)
+    expect(setWorldPose).toHaveBeenCalledOnce()
+    expect(setWorldPose).toHaveBeenCalledWith('object:cup-1', FIRST_POSE)
     expect(store.getState().draftPose).toBeNull()
 
     store.getState().beginDraft('object:cup-1', FIRST_POSE)
     store.getState().cancelDraft()
-    expect(setLocalPose).toHaveBeenCalledOnce()
+    expect(setWorldPose).toHaveBeenCalledOnce()
 
     store.getState().beginDraft('object:cup-1', FIRST_POSE)
+    store.getState().isolate('object:cup-1')
     generation = 8
     notify()
     expect(store.getState().draftPose).toBeNull()
+    expect(store.getState().isolatedEntityId).toBe('object:cup-1')
+
+    sceneEntityIds = []
+    generation = 9
+    notify()
+    expect(store.getState().isolatedEntityId).toBeNull()
   })
 })

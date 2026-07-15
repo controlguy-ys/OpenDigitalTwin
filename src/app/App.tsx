@@ -6,7 +6,6 @@ import { useInteractionStore } from '../features/interaction/interaction-store'
 import type { InteractionRuntimeController } from '../features/interaction/GraspController'
 import { ImportStepDialog } from '../features/import/ImportStepDialog'
 import { stepImportClient } from '../features/import/StepImportClient'
-import { deleteImportedEquipment } from '../features/import/imported-equipment-actions'
 import { importedGeometryRepository } from '../features/import/imported-geometry-repository'
 import { JointInspector } from '../features/joints/JointInspector'
 import { simulationJointSource } from '../features/joints/SimulationJointSource'
@@ -64,48 +63,33 @@ export function App() {
   const hydrateObjectAssets = useObjectAssetStore((state) => state.hydrate)
   const hydrateRobotGeometry = useRobotGeometryStore((state) => state.hydrate)
   const hydrateProject = useProjectStore((state) => state.hydrate)
-  const previewObjectTransform = useCallback((id: string, transform: {
+  const previewSceneTransform = useCallback((entityId: ExternalCollisionEntityId, transform: {
     position: [number, number, number]
     quaternion: [number, number, number, number]
   }) => {
-    const entityId = `object:${id}` as const
     const pose = { positionM: [...transform.position] as const, quaternion: [...transform.quaternion] as const }
     const editor = sceneEditorStore.getState()
     if (editor.draftPose?.entityId === entityId) editor.updateDraft(pose)
     else editor.beginDraft(entityId, pose)
   }, [])
-  const commitObjectTransform = useCallback(async (_id: string) => {
+  const previewObjectTransform = useCallback((id: string, transform: Parameters<typeof previewSceneTransform>[1]) => {
+    previewSceneTransform(`object:${id}`, transform)
+  }, [previewSceneTransform])
+  const previewEquipmentTransform = useCallback((id: string, transform: Parameters<typeof previewSceneTransform>[1]) => {
+    previewSceneTransform(`equipment:${id}`, transform)
+  }, [previewSceneTransform])
+  const commitSceneTransform = useCallback(async (_id: string) => {
     await sceneEditorStore.getState().applyDraft()
   }, [])
-  const cancelObjectTransform = useCallback((_id: string) => {
+  const cancelSceneTransform = useCallback((_id: string) => {
     sceneEditorStore.getState().cancelDraft()
   }, [])
   const allEquipmentRecords = useMemo(
     () => [...equipmentRecords, ...objectRecords(objectAssets, objectInstances)],
     [equipmentRecords, objectAssets, objectInstances],
   )
-  const removeEquipment = useEquipmentStore((state) => state.removeEquipment)
-  const previewEquipmentTransform = useEquipmentStore(
-    (state) => state.previewEquipmentTransform,
-  )
-  const commitEquipmentTransform = useEquipmentStore(
-    (state) => state.commitEquipmentTransform,
-  )
-  const cancelEquipmentTransform = useEquipmentStore(
-    (state) => state.cancelEquipmentTransform,
-  )
-  const setEquipmentNumericStatus = useEquipmentStore(
-    (state) => state.setEquipmentNumericStatus,
-  )
-  const setEquipmentStatusOverlayVisible = useEquipmentStore(
-    (state) => state.setEquipmentStatusOverlayVisible,
-  )
-  const setEquipmentStatusSource = useEquipmentStore(
-    (state) => state.setEquipmentStatusSource,
-  )
   const selection = useInteractionStore((state) => state.selection)
   const selectEquipment = useInteractionStore((state) => state.selectEquipment)
-  const clearSelection = useInteractionStore((state) => state.clearSelection)
   const controlsDisabled = sceneStatus !== 'ready'
   const jointControlsDisabled = controlsDisabled || sourceMode === 'opcua'
   const activeJointSource =
@@ -196,46 +180,25 @@ export function App() {
           }
         },
         removeEquipment: async (id) => {
-          await deleteImportedEquipment(id, {
-            beginEquipmentRemoval: () =>
-              useInteractionStore
-                .getState()
-                .beginEquipmentRemoval(entityId),
-            endEquipmentRemoval: () => {
-              useInteractionStore.getState().endEquipmentRemoval(entityId)
-            },
-            releaseHeldEquipment: async (equipmentId) => {
-              const controller = interactionControllerRef.current
-              const heldEntityId = useInteractionStore.getState().heldEntityId
-              if (controller === null) {
-                if (heldEntityId === entityId) {
-                  throw new Error(
-                    'The held equipment cannot be released while the 3D scene is unavailable.',
-                  )
-                }
-                return
-              }
-              await controller.releaseHeldEquipment(
-                `equipment:${equipmentId}`,
+          useInteractionStore.getState().beginEquipmentRemoval(entityId)
+          try {
+            const controller = interactionControllerRef.current
+            const heldEntityId = useInteractionStore.getState().heldEntityId
+            if (controller === null && heldEntityId === entityId) {
+              throw new Error(
+                'The held equipment cannot be released while the 3D scene is unavailable.',
               )
-            },
-            removeEquipment,
-            invalidateGeometry: (equipmentId) => {
-              importedGeometryRepository.invalidate(equipmentId)
-            },
-            getSelectedEquipmentId: () => {
-              const currentSelection = useInteractionStore.getState().selection
-              return currentSelection?.kind === 'equipment' &&
-                currentSelection.entityId === entityId
-                ? id
-                : null
-            },
-            clearSelection,
-          })
+            }
+            await controller?.releaseHeldEquipment(`equipment:${id}`)
+            await sceneCommandService.deleteEntity(`equipment:${id}`)
+            useInteractionStore.getState().clearSelectionForEntity(entityId)
+          } finally {
+            useInteractionStore.getState().endEquipmentRemoval(entityId)
+          }
         },
       })
     },
-    [clearSelection, removeEquipment],
+    [],
   )
 
   const updateObjectField = useCallback(
@@ -255,30 +218,49 @@ export function App() {
     [],
   )
 
+  const updateEquipmentField = useCallback(
+    async (id: string, update: Record<string, unknown>) => {
+      await sceneCommandService.updateBuiltInEquipment(`equipment:${id}`, {
+        ...(typeof update.numericStatus === 'number'
+          ? { numericStatus: update.numericStatus }
+          : {}),
+        ...(update.statusSource === 'manual' || update.statusSource === 'opcua'
+          ? { statusSource: update.statusSource }
+          : {}),
+        ...(typeof update.statusOverlayVisible === 'boolean'
+          ? { statusOverlayVisible: update.statusOverlayVisible }
+          : {}),
+      })
+    },
+    [],
+  )
+
   const externalEntityMutations = useMemo(
     () =>
       createCanonicalExternalEntityMutations({
         previewEquipment: previewEquipmentTransform,
         previewObject: previewObjectTransform,
-        commitEquipment: commitEquipmentTransform,
-        commitObject: commitObjectTransform,
-        cancelEquipment: cancelEquipmentTransform,
-        cancelObject: cancelObjectTransform,
-        setEquipmentNumericStatus,
-        setEquipmentOverlayVisible: setEquipmentStatusOverlayVisible,
-        setEquipmentStatusSource,
+        commitEquipment: commitSceneTransform,
+        commitObject: commitSceneTransform,
+        cancelEquipment: cancelSceneTransform,
+        cancelObject: cancelSceneTransform,
+        setEquipmentNumericStatus: (id, value) => updateEquipmentField(id, {
+          numericStatus: value, statusSource: 'manual',
+        }),
+        setEquipmentOverlayVisible: (id, visible) => updateEquipmentField(id, {
+          statusOverlayVisible: visible,
+        }),
+        setEquipmentStatusSource: (id, source) => updateEquipmentField(id, {
+          statusSource: source,
+        }),
         updateObject: updateObjectField,
       }),
     [
-      cancelEquipmentTransform,
-      cancelObjectTransform,
-      commitEquipmentTransform,
-      commitObjectTransform,
+      cancelSceneTransform,
+      commitSceneTransform,
       previewEquipmentTransform,
       previewObjectTransform,
-      setEquipmentNumericStatus,
-      setEquipmentStatusOverlayVisible,
-      setEquipmentStatusSource,
+      updateEquipmentField,
       updateObjectField,
     ],
   )

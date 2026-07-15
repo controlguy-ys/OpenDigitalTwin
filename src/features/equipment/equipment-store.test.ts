@@ -85,6 +85,31 @@ describe('built-in equipment', () => {
       warnings: [],
     })
   })
+
+  it('keeps the browser Equipment store as a publication-only read model', async () => {
+    const database = createDatabase('published-read-model')
+    const store = createEquipmentStore(database, { mode: 'published-read-model' })
+    await store.getState().hydrate()
+    const replacement = [{ ...BUILT_IN_EQUIPMENT[0]!, name: 'Published Cup' }]
+
+    store.getState().replaceRuntimeRecords(replacement)
+
+    expect(store.getState().records).toMatchObject([{ name: 'Published Cup' }])
+    expect(await database.equipment.count()).toBe(0)
+    expect(() => store.getState().previewEquipmentTransform('cup-01', replacement[0]!.transform))
+      .toThrow('PROJECT_V3_COMMAND_REQUIRED')
+    await expect(store.getState().commitEquipmentTransform('cup-01'))
+      .rejects.toThrow('PROJECT_V3_COMMAND_REQUIRED')
+    await expect(store.getState().setEquipmentNumericStatus('cup-01', 4))
+      .rejects.toThrow('PROJECT_V3_COMMAND_REQUIRED')
+    await expect(store.getState().setEquipmentStatusSource('cup-01', 'opcua'))
+      .rejects.toThrow('PROJECT_V3_COMMAND_REQUIRED')
+    await expect(store.getState().setEquipmentStatusOverlayVisible('cup-01', false))
+      .rejects.toThrow('PROJECT_V3_COMMAND_REQUIRED')
+    await expect(store.getState().removeEquipment('cup-01'))
+      .rejects.toThrow('PROJECT_V3_COMMAND_REQUIRED')
+    expect(store.getState().records).toMatchObject([{ name: 'Published Cup' }])
+  })
 })
 
 describe('equipment persistence', () => {

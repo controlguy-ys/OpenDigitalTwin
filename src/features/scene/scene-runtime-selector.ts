@@ -4,7 +4,10 @@ import type {
   SceneEntityV1,
   ScenePoseV1,
 } from '../../domain/project/scene-state-v1'
-import { worldPoseForEntity } from '../../domain/scene/scene-transform'
+import {
+  setSceneEntityWorldPose,
+  worldPoseForEntity,
+} from '../../domain/scene/scene-transform'
 import { useSyncExternalStore } from 'react'
 import {
   projectMutationService,
@@ -73,13 +76,11 @@ export function selectSceneRuntime(
 ): SceneRuntimeProjectionV1 {
   const projectedScene = editor.draftPose === null || editor.draftPose === undefined
     ? snapshot.scene
-    : {
-        ...snapshot.scene,
-        entities: snapshot.scene.entities.map((entity) =>
-          entity.id === editor.draftPose?.entityId
-            ? { ...entity, localPose: editor.draftPose.pose } as SceneEntityV1
-            : entity),
-      }
+    : setSceneEntityWorldPose(
+        snapshot.scene,
+        editor.draftPose.entityId,
+        editor.draftPose.pose,
+      )
   const sceneEntities = new Map(projectedScene.entities.map((entity) => [entity.id, entity]))
   const entities = projectedScene.entities.map((entity): SceneRuntimeEntityV1 => {
     const hierarchyVisible = entity.visible && ancestors(sceneEntities, entity)

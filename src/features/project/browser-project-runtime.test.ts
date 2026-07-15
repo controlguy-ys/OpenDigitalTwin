@@ -446,7 +446,7 @@ describe('browser project collision policy bridge', () => {
     expect(publishedSignature(runtime)).toBe(before)
   })
 
-  it('restores an active Equipment transform transaction after failed publication', async () => {
+  it('restores the published Equipment read model after failed publication', async () => {
     await useEquipmentStore.getState().hydrate()
     const originalCheckpoint = useEquipmentStore.getState().captureRuntimeCheckpoint()
     try {
@@ -472,13 +472,19 @@ describe('browser project collision policy bridge', () => {
         revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources,
       })
 
-      const preview = {
-        position: [4, 5, 6] as [number, number, number],
-        quaternion: [0, 0, 0, 1] as [number, number, number, number],
-        scale: [1, 1, 1] as [number, number, number],
+      const nextBase = withPrimitiveAssets(first)
+      const next = {
+        ...nextBase,
+        scene: {
+          ...nextBase.scene,
+          entities: nextBase.scene.entities.map((entity) => entity.id === 'equipment:cup-01'
+            ? {
+                ...entity,
+                localPose: { ...entity.localPose, positionM: [4, 5, 6] as const },
+              }
+            : entity),
+        },
       }
-      useEquipmentStore.getState().previewEquipmentTransform('cup-01', preview)
-      const next = withPrimitiveAssets(first)
       const nextResources = await runtime.prepare(next, 'revision-b')
       const observations: string[] = []
       const unsubscribe = useEquipmentStore.subscribe(() => {
@@ -494,20 +500,7 @@ describe('browser project collision policy bridge', () => {
       unsubscribe()
 
       expect(observations).toEqual([])
-      expect(useEquipmentStore.getState().records[0]?.transform).toEqual(preview)
-      const restoredPreviewCheckpoint = useEquipmentStore.getState().captureRuntimeCheckpoint()
-
-      useEquipmentStore.getState().cancelEquipmentTransform('cup-01')
       expect(useEquipmentStore.getState().records[0]?.transform.position).toEqual([1, 2, 3])
-
-      useEquipmentStore.getState().restoreRuntimeCheckpoint(restoredPreviewCheckpoint)
-      await useEquipmentStore.getState().commitEquipmentTransform('cup-01')
-      useEquipmentStore.getState().previewEquipmentTransform('cup-01', {
-        ...preview,
-        position: [7, 8, 9],
-      })
-      useEquipmentStore.getState().cancelEquipmentTransform('cup-01')
-      expect(useEquipmentStore.getState().records[0]?.transform).toEqual(preview)
     } finally {
       useEquipmentStore.getState().restoreRuntimeCheckpoint(originalCheckpoint)
     }

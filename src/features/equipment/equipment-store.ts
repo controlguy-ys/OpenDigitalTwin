@@ -210,7 +210,20 @@ function appendWarning(
   return warnings.includes(warning) ? warnings : [...warnings, warning]
 }
 
-function createEquipmentStateCreator(database: EquipmentDatabase) {
+export interface EquipmentStoreOptions {
+  readonly mode?: 'durable-cache' | 'published-read-model'
+}
+
+function createEquipmentStateCreator(
+  database: EquipmentDatabase,
+  options: EquipmentStoreOptions = {},
+) {
+  const publishedReadModel = options.mode === 'published-read-model'
+  const requireProjectCommand = (): void => {
+    if (publishedReadModel) {
+      throw new Error('PROJECT_V3_COMMAND_REQUIRED: Mutate durable Equipment state through SceneCommandService.')
+    }
+  }
   let hydrated = false
   let hydrationPromise: Promise<void> | null = null
   const pendingTransformPreviews = new Map<string, SerializableTransform>()
@@ -258,6 +271,12 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
 
       if (hydrationPromise !== null) {
         return hydrationPromise
+      }
+
+      if (publishedReadModel) {
+        hydrated = true
+        set({ persistenceStatus: 'memory-only', warnings: [] })
+        return Promise.resolve()
       }
 
       set({ persistenceStatus: 'loading' })
@@ -390,6 +409,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
       },
       hydrate,
       upsertEquipment: async (record) => {
+        requireProjectCommand()
         if (!isEquipmentRecord(record)) {
           throw new Error('Invalid equipment record; no changes were saved.')
         }
@@ -418,6 +438,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
         await persistDeletedEquipmentIds()
       },
       previewEquipmentTransform: (id, transform) => {
+        requireProjectCommand()
         const currentRecord = get().records.find((record) => record.id === id)
         if (currentRecord === undefined) {
           return
@@ -431,6 +452,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
         }))
       },
       commitEquipmentTransform: async (id) => {
+        requireProjectCommand()
         await hydrate()
         const currentRecord = get().records.find((record) => record.id === id)
           if (currentRecord !== undefined) {
@@ -447,6 +469,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           }
         },
         cancelEquipmentTransform: (id) => {
+          requireProjectCommand()
           const committed = committedTransforms.get(id)
           if (committed === undefined) {
             return
@@ -461,6 +484,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           }))
         },
         setEquipmentStatus: async (id, status) => {
+        requireProjectCommand()
         await hydrate()
         const currentRecord = get().records.find((record) => record.id === id)
         if (currentRecord === undefined) {
@@ -479,6 +503,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           await persistRecord(nextRecord)
         },
         setEquipmentNumericStatus: async (id, value) => {
+          requireProjectCommand()
           if (!Number.isFinite(value)) {
             throw new Error('Equipment numeric status must be finite.')
           }
@@ -500,6 +525,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           await persistRecord(nextRecord)
         },
         setEquipmentStatusSource: async (id, source) => {
+          requireProjectCommand()
           await hydrate()
           const currentRecord = get().records.find((record) => record.id === id)
           if (currentRecord === undefined) return
@@ -527,6 +553,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           }))
         },
         setEquipmentStatusOverlayVisible: async (id, visible) => {
+          requireProjectCommand()
           await hydrate()
           const currentRecord = get().records.find((record) => record.id === id)
           if (currentRecord === undefined) {
@@ -544,6 +571,7 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
           await persistRecord(nextRecord)
         },
         removeEquipment: async (id) => {
+        requireProjectCommand()
         await hydrate()
           pendingTransformPreviews.delete(id)
           committedTransforms.delete(id)
@@ -566,12 +594,15 @@ function createEquipmentStateCreator(database: EquipmentDatabase) {
   }
 }
 
-export function createEquipmentStore(database: EquipmentDatabase) {
+export function createEquipmentStore(
+  database: EquipmentDatabase,
+  options: EquipmentStoreOptions = {},
+) {
   return createStore<EquipmentStoreState>()(
-    createEquipmentStateCreator(database),
+    createEquipmentStateCreator(database, options),
   )
 }
 
 export const useEquipmentStore = create<EquipmentStoreState>()(
-  createEquipmentStateCreator(equipmentDb),
+  createEquipmentStateCreator(equipmentDb, { mode: 'published-read-model' }),
 )

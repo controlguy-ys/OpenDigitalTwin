@@ -76,7 +76,7 @@ export const sceneCommandService = createSceneCommandService({
 
 export const sceneEditorStore = createSceneEditorStore({
   mutationService: projectMutationService,
-  setLocalPose: sceneCommandService.setLocalPose,
+  setWorldPose: sceneCommandService.setWorldPose,
 })
 
 export function useProjectStore<T>(selector: (state: ProjectStoreState) => T): T {

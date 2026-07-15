@@ -101,21 +101,21 @@ export function createProjectMutationService(
   const service: ProjectMutationService = {
     replaceFromActive(recipe, preparedSources = []) {
       return enqueue(async () => {
-        requireEditable()
-        if (activeProjection === null) {
-          throw Object.assign(
-            new Error('PROJECT_ACTIVE_REVISION_MISSING: No published Project is active.'),
-            { code: 'PROJECT_ACTIVE_REVISION_MISSING' },
-          )
-        }
-        const previous = coordinator.readPublished()
-        if (previous === null) {
-          throw Object.assign(
-            new Error('PROJECT_ACTIVE_REVISION_MISSING: No published Project bundle is active.'),
-            { code: 'PROJECT_ACTIVE_REVISION_MISSING' },
-          )
-        }
         try {
+          requireEditable()
+          if (activeProjection === null) {
+            throw Object.assign(
+              new Error('PROJECT_ACTIVE_REVISION_MISSING: No published Project is active.'),
+              { code: 'PROJECT_ACTIVE_REVISION_MISSING' },
+            )
+          }
+          const previous = coordinator.readPublished()
+          if (previous === null) {
+            throw Object.assign(
+              new Error('PROJECT_ACTIVE_REVISION_MISSING: No published Project bundle is active.'),
+              { code: 'PROJECT_ACTIVE_REVISION_MISSING' },
+            )
+          }
           const nextProjection = recipe(cloneFrozenProjection(activeProjection))
           const candidate = repository.createCandidate({
             projection: nextProjection,

@@ -9,7 +9,10 @@ import type {
   SceneEntityV1,
   ScenePoseV1,
 } from '../../domain/project/scene-state-v1'
-import { reparentSceneEntityPreservingWorld } from '../../domain/scene/scene-transform'
+import {
+  reparentSceneEntityPreservingWorld,
+  setSceneEntityWorldPose,
+} from '../../domain/scene/scene-transform'
 import type { StoredWorkcellProjectSnapshotProjectionV3 } from '../project/project-db'
 import type { ProjectMutationService } from '../project/project-mutation-service'
 
@@ -52,12 +55,21 @@ export interface SceneCommandService {
   rename(entityId: SceneEntityIdV1, name: string): Promise<void>
   setVisible(entityId: SceneEntityIdV1, visible: boolean): Promise<void>
   setLocalPose(entityId: SceneEntityIdV1, pose: ScenePoseV1): Promise<void>
+  setWorldPose(entityId: SceneEntityIdV1, pose: ScenePoseV1): Promise<void>
   reparent(entityId: SceneEntityIdV1, parentId: SceneEntityIdV1 | null): Promise<void>
   ungroup(groupId: `group:${string}`): Promise<void>
   deleteGroupAndContents(groupId: `group:${string}`, confirmed?: boolean): Promise<void>
   deleteEntity(entityId: SceneEntityIdV1): Promise<void>
   updateObjectInstance(
     entityId: `object:${string}`,
+    update: Readonly<{
+      numericStatus?: number
+      statusSource?: 'manual' | 'opcua'
+      statusOverlayVisible?: boolean
+    }>,
+  ): Promise<void>
+  updateBuiltInEquipment(
+    entityId: `equipment:${string}`,
     update: Readonly<{
       numericStatus?: number
       statusSource?: 'manual' | 'opcua'
@@ -117,6 +129,12 @@ function collisionPairReferences(pair: string, entityId: string): boolean {
   return pair.split('|').includes(entityId)
 }
 
+function mountContactReferencesEntity(reference: string | null, entityId: string): boolean {
+  return reference === entityId ||
+    reference?.startsWith(`${entityId}/`) === true ||
+    reference?.startsWith(`${entityId}\u0000`) === true
+}
+
 function assertDeletable(
   current: StoredWorkcellProjectSnapshotProjectionV3,
   entityId: SceneEntityIdV1,
@@ -167,6 +185,16 @@ function deleteEntities(
     scene: {
       ...current.scene,
       entities: current.scene.entities.filter(({ id }) => !entityIds.has(id)),
+      robotMountContact: current.scene.robotMountContact === null ||
+        ![...entityIds].some((id) => mountContactReferencesEntity(
+          current.scene.robotMountContact?.mountSurfaceCollisionEntityId ?? null,
+          id,
+        ))
+        ? current.scene.robotMountContact
+        : {
+            ...current.scene.robotMountContact,
+            mountSurfaceCollisionEntityId: null,
+          },
     },
     objectInstances,
     objectAssets: current.objectAssets.filter(({ id }) =>
@@ -189,13 +217,12 @@ function deleteEntities(
 
 function thresholdWarnings(
   options: SceneCommandServiceOptions,
-  stepAssetCount: number,
-  instanceCount: number,
+  counts: Readonly<{ stepAssetCount?: number; instanceCount?: number }>,
 ): void {
-  if (stepAssetCount === 52) {
+  if (counts.stepAssetCount === 52) {
     options.onWarning?.({ code: 'STEP_ASSET_WARNING', current: 52, limit: 64 })
   }
-  if (instanceCount === 205) {
+  if (counts.instanceCount === 205) {
     options.onWarning?.({ code: 'OBJECT_INSTANCE_WARNING', current: 205, limit: 256 })
   }
 }
@@ -236,8 +263,7 @@ export function createSceneCommandService(
       }
       thresholdWarnings(
         options,
-        current.objectAssets.filter((asset) => asset.sourceKind === 'step').length,
-        current.objectInstances.length + 1,
+        { instanceCount: current.objectInstances.length + 1 },
       )
       const geometry = {
         id: assetId,
@@ -245,12 +271,12 @@ export function createSceneCommandService(
         colliderCenter: [0, 0, 0] as const,
         collisionHalfExtents: halfExtents,
         collisionBoxes: [{
-          id: 'default', center: [0, 0, 0] as const,
+          id: 'primitive-body', center: [0, 0, 0] as const,
           halfExtents, quaternion: [0, 0, 0, 1] as const,
         }],
         statistics: kind === 'box'
           ? { vertices: 24, triangles: 12, meshes: 1, materials: 1 }
-          : { vertices: 130, triangles: 128, meshes: 1, materials: 1 },
+          : { vertices: 196, triangles: 128, meshes: 1, materials: 1 },
       }
       const asset: ByteFreeObjectAssetRecordV3 = kind === 'box'
         ? {
@@ -308,7 +334,7 @@ export function createSceneCommandService(
         }
         const stepAssetCount = current.objectAssets.filter((asset) => asset.sourceKind === 'step').length + 1
         const instanceCount = current.objectInstances.length + 1
-        thresholdWarnings(options, stepAssetCount, instanceCount)
+        thresholdWarnings(options, { stepAssetCount, instanceCount })
         const { sourceBytes: _sourceBytes, ...asset } = input.asset
         const nextAsset: ByteFreeObjectAssetRecordV3 = {
           ...asset,
@@ -398,15 +424,20 @@ export function createSceneCommandService(
         }
         thresholdWarnings(
           options,
-          active.objectAssets.filter((asset) => asset.sourceKind === 'step').length,
-          active.objectInstances.length + 1,
+          { instanceCount: active.objectInstances.length + 1 },
         )
         return {
           ...active,
-          objectInstances: [...active.objectInstances, { ...instance, id: instanceId, name: `${instance.name} Copy` }],
+          objectInstances: [...active.objectInstances, {
+            ...instance,
+            id: instanceId,
+            name: `${instance.name} Copy`,
+            statusSource: 'manual',
+          }],
           scene: { ...active.scene, entities: [...active.scene.entities, {
             ...entity, id: duplicateId, name: `${entity.name} Copy`,
             target: { kind: 'object-instance' as const, id: instanceId },
+            transformSource: 'manual',
           }] },
         }
       })
@@ -423,6 +454,13 @@ export function createSceneCommandService(
 
     async setLocalPose(entityId, pose) {
       await mutate((current) => replaceEntity(current, entityId, (entity) => ({ ...entity, localPose: pose })))
+    },
+
+    async setWorldPose(entityId, pose) {
+      await mutate((current) => ({
+        ...current,
+        scene: setSceneEntityWorldPose(current.scene, entityId, pose),
+      }))
     },
 
     async reparent(entityId, parentId) {
@@ -506,6 +544,33 @@ export function createSceneCommandService(
           ...current,
           objectInstances: current.objectInstances.map((instance, candidateIndex) =>
             candidateIndex === index ? next : instance),
+        }
+      })
+    },
+
+    async updateBuiltInEquipment(entityId, update) {
+      await mutate((current) => {
+        const entity = entityIn(current, entityId)
+        if (entity.kind !== 'object' || entity.target.kind !== 'built-in-equipment') {
+          throw new Error('SCENE_BUILT_IN_EQUIPMENT_REQUIRED: Built-in Equipment Entity is required.')
+        }
+        const index = current.builtInEquipment.findIndex(({ id }) => id === entity.target.id)
+        if (index < 0) throw new Error('SCENE_TARGET_MISSING: Built-in Equipment is missing.')
+        const previous = current.builtInEquipment[index]!
+        const next = {
+          ...previous,
+          ...(update.numericStatus === undefined
+            ? {}
+            : { manualNumericStatus: update.numericStatus }),
+          ...(update.statusSource === undefined ? {} : { statusSource: update.statusSource }),
+          ...(update.statusOverlayVisible === undefined
+            ? {}
+            : { statusOverlayVisible: update.statusOverlayVisible }),
+        }
+        return {
+          ...current,
+          builtInEquipment: current.builtInEquipment.map((record, candidateIndex) =>
+            candidateIndex === index ? next : record),
         }
       })
     },

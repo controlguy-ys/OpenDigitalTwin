@@ -15,9 +15,14 @@ import {
   EquipmentOutline,
   EquipmentVisual,
 } from '../equipment/EquipmentScene'
+import { EquipmentStatusOverlay } from '../equipment/EquipmentStatusOverlay'
 import { useEquipmentStore } from '../equipment/equipment-store'
 import { useObjectAssetStore } from '../objects/object-asset-store'
 import { sceneEditorStore } from '../project/project-store-browser'
+import {
+  usePublishedSceneRuntime,
+  type SceneRuntimeProjectionV1,
+} from '../scene/scene-runtime-selector'
 import { useRobotStore } from '../joints/robot-store'
 import type { RobotRigRegistration } from '../robot/RobotModel'
 import {
@@ -78,6 +83,13 @@ export function resolveGeometryGraspTarget(
   )
 }
 
+export function isHeldSceneEntityVisible(
+  sceneRuntime: Pick<SceneRuntimeProjectionV1, 'byId'>,
+  entityId: ExternalCollisionEntityId,
+): boolean {
+  return sceneRuntime.byId.get(entityId)?.effectiveVisible !== false
+}
+
 export function GraspController({
   rig,
   equipmentObjectsRef,
@@ -100,6 +112,7 @@ export function GraspController({
     [participants],
   )
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
+  const sceneRuntime = usePublishedSceneRuntime()
   const gripOffset = useInteractionStore((state) => state.gripOffset)
   const selection = useInteractionStore((state) => state.selection)
   const heldOutlineSelector = useMemo(
@@ -143,30 +156,20 @@ export function GraspController({
       },
       previewTransform: (entityId, transform) => {
         const canonicalId = entityId as ExternalCollisionEntityId
-        const localId = externalCollisionEntityLocalId(canonicalId)
-        if (canonicalId.startsWith('object:')) {
-          const editor = sceneEditorStore.getState()
-          const pose = {
-            positionM: [...transform.position] as [number, number, number],
-            quaternion: [...transform.quaternion] as [number, number, number, number],
-          }
-          if (editor.draftPose?.entityId === canonicalId) editor.updateDraft(pose)
-          else editor.beginDraft(canonicalId, pose)
-        } else {
-          useEquipmentStore
-            .getState()
-            .previewEquipmentTransform(localId, transform)
+        const editor = sceneEditorStore.getState()
+        const pose = {
+          positionM: [...transform.position] as [number, number, number],
+          quaternion: [...transform.quaternion] as [number, number, number, number],
         }
+        if (editor.draftPose?.entityId === canonicalId) editor.updateDraft(pose)
+        else editor.beginDraft(canonicalId, pose)
       },
       clearHeld: (entityId) => {
         useInteractionStore.getState().releaseHeldEquipment(entityId)
       },
       commitTransform: (entityId) => {
-        const canonicalId = entityId as ExternalCollisionEntityId
-        const localId = externalCollisionEntityLocalId(canonicalId)
-        return canonicalId.startsWith('object:')
-          ? sceneEditorStore.getState().applyDraft()
-          : useEquipmentStore.getState().commitEquipmentTransform(localId)
+        void entityId
+        return sceneEditorStore.getState().applyDraft()
       },
       resetInteraction: () => {
         useInteractionStore.getState().resetInteraction()
@@ -287,6 +290,8 @@ export function GraspController({
     heldEntityId === null
       ? undefined
       : participantsById.get(heldEntityId)?.record
+  const heldSceneVisible = heldEntityId === null ||
+    isHeldSceneEntityVisible(sceneRuntime, heldEntityId)
   const heldSelected =
     heldRecord !== undefined &&
     selection?.kind === 'equipment' &&
@@ -314,6 +319,7 @@ export function GraspController({
     <>
       {heldRecord === undefined ||
       gripOffset === null ||
+      !heldSceneVisible ||
       hiddenEntityIds.includes(heldRecord.id)
         ? null
         : createPortal(
@@ -334,6 +340,7 @@ export function GraspController({
               }}
             >
               <EquipmentVisual record={heldRecord} />
+              <EquipmentStatusOverlay record={heldRecord} />
               {heldOutlineState === null ? null : (
                 <EquipmentOutline
                   outlineState={heldOutlineState}
