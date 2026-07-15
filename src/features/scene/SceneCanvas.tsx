@@ -13,6 +13,7 @@ import { sceneEditorStore } from '../project/project-store-browser'
 import { RobotStatusOverlay } from '../robot/RobotStatusOverlay'
 import { SceneErrorBoundary } from './SceneErrorBoundary'
 import { Workcell } from './Workcell'
+import type { ViewportRuntimeController } from './Workcell'
 import type { SceneEntityIdV1 } from '../../domain/project/scene-state-v1'
 import type {
   SceneContextPosition,
@@ -22,6 +23,15 @@ import type {
   CommittedLinearAxisSourceV1,
   LinearAxisCommittedStateV1,
 } from './linear-axis-source'
+import { ViewportOverlay, type ViewportOverlayCameraCommands } from '../viewport/ViewportOverlay'
+import { viewportPreferenceStore } from '../viewport/viewport-preference-store'
+
+const NOOP_VIEWPORT_ACTIONS: ViewportOverlayCameraCommands = {
+  home: () => undefined,
+  fitAll: () => undefined,
+  focusSelection: () => undefined,
+  setStandardView: () => undefined,
+}
 
 export type SceneRenderStatus = 'loading' | 'ready' | 'error'
 
@@ -50,6 +60,7 @@ export function SceneCanvas({
   const [sceneKey, setSceneKey] = useState(0)
   const [status, setStatus] = useState<SceneRenderStatus>('loading')
   const entityContextHandledRef = useRef(false)
+  const [viewportController, setViewportController] = useState<ViewportRuntimeController | null>(null)
 
   const updateStatus = useCallback(
     (nextStatus: SceneRenderStatus) => {
@@ -122,11 +133,15 @@ export function SceneCanvas({
         onRetry={handleRetry}
       >
         <Canvas
-          camera={{ position: [2.2, 1.8, 1.7], fov: 42 }}
+          camera={{
+            position: [...viewportPreferenceStore.getState().cameraState.position],
+            fov: 42,
+            zoom: viewportPreferenceStore.getState().cameraState.zoom,
+          }}
           dpr={[1, 2]}
           onCreated={({ camera }) => {
             camera.up.set(0, 0, 1)
-            camera.lookAt(0.15, 0, 1.55)
+            camera.lookAt(...viewportPreferenceStore.getState().cameraState.target)
           }}
           onPointerMissed={() => {
             useInteractionStore.getState().clearSelection()
@@ -141,10 +156,18 @@ export function SceneCanvas({
               onEntityContextMenu={handleEntityContextMenu}
               registerInteractionController={registerInteractionController}
               registerRig={handleRigRegistration}
+              registerViewportController={setViewportController}
             />
           </Suspense>
         </Canvas>
       </SceneErrorBoundary>
+      <ViewportOverlay
+        actions={viewportController?.actions ?? NOOP_VIEWPORT_ACTIONS}
+        canFocusSelection={viewportController?.canFocusSelection ?? false}
+        {...(viewportController === null
+          ? {}
+          : { robotRevision: viewportController.robotRevision })}
+      />
       <RobotStatusOverlay visible={status === 'loading'} />
     </div>
   )

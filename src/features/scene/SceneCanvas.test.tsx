@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useInteractionStore } from '../interaction/interaction-store'
 import { sceneEditorStore } from '../project/project-store-browser'
@@ -8,6 +8,7 @@ import type { CommittedLinearAxisSourceV1 } from './linear-axis-source'
 import type { LinearAxisCommittedStateV1 } from './linear-axis-source'
 
 const observedWorkcellProps = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }))
+const cameraCalls = vi.hoisted(() => ({ home: vi.fn(), fitAll: vi.fn(), focusSelection: vi.fn(), setStandardView: vi.fn() }))
 
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({
@@ -33,8 +34,12 @@ vi.mock('./Workcell', () => ({
     ) => void
     linearAxisSource?: unknown
     linearAxisCommittedState?: unknown
+    registerViewportController?: (controller: unknown) => void
   }) => {
     observedWorkcellProps.current = props
+    useEffect(() => {
+      props.registerViewportController?.({ actions: cameraCalls, canFocusSelection: false, robotRevision: 0 })
+    }, [props.registerViewportController])
     return (
     <button
       data-testid="rendered-entity"
@@ -52,7 +57,17 @@ vi.mock('./SceneErrorBoundary', () => ({
 vi.mock('../robot/RobotStatusOverlay', () => ({ RobotStatusOverlay: () => null }))
 
 describe('SceneCanvas viewport context boundary', () => {
-  beforeEach(() => useInteractionStore.getState().resetInteraction())
+  beforeEach(() => {
+    useInteractionStore.getState().resetInteraction()
+    cameraCalls.home.mockClear()
+  })
+
+  it('composes camera controls outside the project mutation boundary', () => {
+    render(<SceneCanvas />)
+    fireEvent.click(screen.getByRole('button', { name: 'Home View' }))
+    expect(cameraCalls.home).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: 'Focus Selection' })).toBeDisabled()
+  })
 
   it('targets the actual rendered Entity and never reuses stale selection for the background', () => {
     const onContextMenu = vi.fn()

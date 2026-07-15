@@ -36,6 +36,7 @@ import type { OutlineState } from '../interaction/outline-state'
 import type { SceneRuntimeProjectionV1 } from '../scene/scene-runtime-selector'
 import { sceneEditorStore } from '../project/project-store-browser'
 import type { SceneEntityContextHandler } from '../scene/scene-context-request'
+import { useViewportPreferenceStore } from '../viewport/viewport-preference-store'
 
 interface EquipmentInstanceProps {
   entityId: ExternalCollisionEntityId
@@ -46,6 +47,7 @@ interface EquipmentInstanceProps {
   onDraggingChange(dragging: boolean): void
   onEntityContextMenu?: SceneEntityContextHandler
   transformManuallyOwned: boolean
+  gizmoSpace: 'world' | 'local'
 }
 
 export function isExternalCollisionRegistrationActive(
@@ -130,6 +132,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
   onDraggingChange,
   onEntityContextMenu,
   transformManuallyOwned,
+  gizmoSpace,
 }: EquipmentInstanceProps) {
   const objectRef = useRef<Group>(null)
   const selection = useInteractionStore((state) => state.selection)
@@ -211,6 +214,7 @@ const EquipmentInstance = memo(function EquipmentInstance({
           entityId={entityId}
           objectRef={objectRef}
           onDraggingChange={onDraggingChange}
+          space={gizmoSpace}
           previewTransform={
             previewSceneTransform
           }
@@ -308,6 +312,7 @@ export function EquipmentScene({
   }), [participants, sceneRuntime])
   const heldEntityId = useInteractionStore((state) => state.heldEntityId)
   const hiddenEntityIds = useInteractionStore((state) => state.hiddenEntityIds)
+  const gizmoFrame = useViewportPreferenceStore((state) => state.gizmoFrame)
   const localEquipmentObjectsRef = useRef(
     new Map<ExternalCollisionEntityId, Object3D>(),
   )
@@ -389,6 +394,7 @@ export function EquipmentScene({
             entityId={entityId}
             equipmentObjectsRef={equipmentObjectsRef}
             key={entityId}
+            gizmoSpace={gizmoFrame === 'parent' ? 'local' : 'world'}
             onDraggingChange={onDraggingChange}
             {...(onEntityContextMenu === undefined
               ? {}

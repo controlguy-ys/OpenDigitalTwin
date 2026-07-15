@@ -10,6 +10,7 @@ export interface EquipmentTransformControlsProps {
   previewTransform(id: string, transform: SerializableTransform): void
   commitTransform(id: string): Promise<void>
   onDraggingChange(dragging: boolean): void
+  space?: 'world' | 'local'
 }
 
 export function readObjectTransform(object: Object3D): SerializableTransform {
@@ -26,6 +27,7 @@ export function EquipmentTransformControls({
   previewTransform,
   commitTransform,
   onDraggingChange,
+  space = 'world',
 }: EquipmentTransformControlsProps) {
   const onDraggingChangeRef = useRef(onDraggingChange)
   useLayoutEffect(() => {
@@ -57,7 +59,7 @@ export function EquipmentTransformControls({
         }
       }}
       size={0.8}
-      space="world"
+      space={space}
     />
   )
 }

@@ -9,12 +9,14 @@ vi.mock('@react-three/drei/core/TransformControls.js', () => ({
     onMouseDown,
     onMouseUp,
     onObjectChange,
+    space,
   }: {
     onMouseDown?: () => void
     onMouseUp?: () => void
     onObjectChange?: () => void
+    space?: string
   }) => (
-    <div>
+    <div data-testid="transform-controls" data-space={space}>
       <button aria-label="begin transform" onClick={onMouseDown} />
       <button aria-label="preview transform" onClick={onObjectChange} />
       <button aria-label="commit transform" onClick={onMouseUp} />
@@ -23,6 +25,22 @@ vi.mock('@react-three/drei/core/TransformControls.js', () => ({
 }))
 
 describe('EquipmentTransformControls', () => {
+  it('uses the selected World or Parent gizmo interpretation', () => {
+    const objectRef = createRef<Group>()
+    objectRef.current = new Group()
+    const props = {
+      commitTransform: vi.fn(async () => undefined),
+      entityId: 'object:cup-01' as const,
+      objectRef,
+      onDraggingChange: vi.fn(),
+      previewTransform: vi.fn(),
+    }
+    const view = render(<EquipmentTransformControls {...props} space="world" />)
+    expect(screen.getByTestId('transform-controls')).toHaveAttribute('data-space', 'world')
+    view.rerender(<EquipmentTransformControls {...props} space="local" />)
+    expect(screen.getByTestId('transform-controls')).toHaveAttribute('data-space', 'local')
+  })
+
   it('does not fire drag cleanup when a parent rerender supplies a new callback', () => {
     const objectRef = createRef<Group>()
     objectRef.current = new Group()
