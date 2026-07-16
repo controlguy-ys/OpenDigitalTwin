@@ -113,9 +113,14 @@ export function reparentFramePreservingWorldV4(
   const nextLocalPose = nextParentWorld === null
     ? cloneNormalizedTransform(currentWorld, '$.localPose')
     : relativeRigidTransformV4(nextParentWorld, currentWorld)
-  const candidate = nodes.map((node) => node.frameId === frameId
-    ? { ...node, parentFrameId: nextParentFrameId, localPose: nextLocalPose }
-    : node)
+  const candidate = nodes.map((node, index) => ({
+    ...node,
+    parentFrameId: node.frameId === frameId ? nextParentFrameId : node.parentFrameId,
+    localPose: cloneNormalizedTransform(
+      node.frameId === frameId ? nextLocalPose : node.localPose,
+      `$.frames[${index}].localPose`,
+    ),
+  }))
 
   resolveWorldFrameMapV4(candidate)
   return candidate

@@ -121,6 +121,43 @@ describe('reparentFramePreservingWorldV4', () => {
     expectTransformClose(resolveWorldFrameMapV4(candidate).get('payload%3A'), before!)
   })
 
+  it('returns an owned normalized graph for every node after reparenting', () => {
+    const sourcePosition: [number, number, number] = [1, 2, 3]
+    const sourceQuaternion: [number, number, number, number] = [0, 0, 0, 2]
+    const untouched = {
+      frameId: 'anchor',
+      parentFrameId: null as string | null,
+      localPose: pose(sourcePosition, sourceQuaternion),
+    }
+    const graph = [
+      untouched,
+      node('payload', null, pose([5, 2, 3])),
+    ]
+
+    const candidate = reparentFramePreservingWorldV4(graph, 'payload', 'anchor')
+    const candidateAnchor = candidate.find(({ frameId }) => frameId === 'anchor')
+
+    expect(candidateAnchor).not.toBe(untouched)
+    expect(candidateAnchor?.localPose.positionM).not.toBe(sourcePosition)
+    expect(candidateAnchor?.localPose.quaternion).not.toBe(sourceQuaternion)
+    expect(candidateAnchor).toEqual({
+      frameId: 'anchor',
+      parentFrameId: null,
+      localPose: pose([1, 2, 3]),
+    })
+
+    untouched.frameId = 'mutated-anchor'
+    untouched.parentFrameId = 'payload'
+    sourcePosition[0] = 99
+    sourceQuaternion[3] = 99
+
+    expect(candidateAnchor).toEqual({
+      frameId: 'anchor',
+      parentFrameId: null,
+      localPose: pose([1, 2, 3]),
+    })
+  })
+
   it('rejects unknown targets and a reparent below the target subtree', () => {
     const graph = [
       node('root', null),
