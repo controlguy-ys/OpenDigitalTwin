@@ -436,6 +436,25 @@ describe('JobCommandServiceV4', () => {
     expect(harness.mutations.active.jobs[0]?.name).toBe('A')
   })
 
+  it.each(['toString', 'constructor', '__proto__'])(
+    'rejects absent prototype-looking Robot ID %s at the runtime edit boundary',
+    async (robotId) => {
+      const source = makeMinimalWorkcellProjectV4()
+      const project = {
+        ...source,
+        robots: source.robots.map((robot) => ({ ...robot, id: robotId })),
+      }
+      const harness = commandHarness(project)
+      harness.jobs.getState().replaceProject(makeMinimalWorkcellProjectV4())
+
+      await rejectOne(
+        harness,
+        () => harness.service.createJob(robotId, 'Prototype Robot Job'),
+        'ROBOT_INSTANCE_NOT_FOUND',
+      )
+    },
+  )
+
   const runningCommands = [
     ['create', (service: JobCommandServiceV4) => service.createJob('robot-1', 'Blocked')],
     ['rename', (service: JobCommandServiceV4) => service.renameJob('job-a', 'Blocked')],

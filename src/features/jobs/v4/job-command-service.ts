@@ -101,14 +101,15 @@ export function createJobCommandServiceV4(
 ): JobCommandServiceV4 {
   const assertEditable = (project: WorkcellProjectV4, robotId: string): void => {
     requireRobot(project, robotId)
-    const runtime = options.jobs.getState().byRobotId[robotId]
-    if (runtime === undefined) {
+    const byRobotId = options.jobs.getState().byRobotId
+    if (!Object.hasOwn(byRobotId, robotId)) {
       commandFailure(
         'ROBOT_INSTANCE_NOT_FOUND',
         `$.robots.${robotId}`,
         `Robot Instance ${robotId} is not published in the Job runtime.`,
       )
     }
+    const runtime = byRobotId[robotId]!
     if (runtime.state === 'RUNNING') {
       commandFailure(
         'ROBOT_JOB_EDIT_WHILE_RUNNING',

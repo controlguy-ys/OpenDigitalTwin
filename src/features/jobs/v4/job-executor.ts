@@ -109,6 +109,17 @@ export function createRobotJobExecutorV4(
     Array<(result: RobotJobTerminalResultV4) => void>
   >()
   let latestAcceptedSimulationMs: number | null = null
+  let resetInProgress = false
+
+  const assertRuntimeMutable = (): void => {
+    if (resetInProgress) {
+      executorFailure(
+        'JOB_RUNTIME_RESET_IN_PROGRESS',
+        '$.jobRuntime',
+        'Job runtime mutation is disabled while reset is publishing.',
+      )
+    }
+  }
 
   const assertSimulationTime = (simulationMs: number): void => {
     if (!Number.isFinite(simulationMs) || simulationMs < 0) {
@@ -128,20 +139,22 @@ export function createRobotJobExecutorV4(
   }
 
   const requireRuntimeState = (robotId: string): RobotJobRuntimeStateV4 => {
-    const state = dependencies.jobs.getState().byRobotId[robotId]
-    if (state === undefined) {
+    const byRobotId = dependencies.jobs.getState().byRobotId
+    if (!Object.hasOwn(byRobotId, robotId)) {
       executorFailure(
         'ROBOT_INSTANCE_NOT_FOUND',
         `$.robots.${robotId}`,
         `Robot Instance ${robotId} is not published in the Job runtime.`,
       )
     }
-    return state
+    return byRobotId[robotId]!
   }
 
   const isAuthoritative = (session: ActiveJobSessionV4): boolean => {
     if (sessions.get(session.robotId) !== session) return false
-    const state = dependencies.jobs.getState().byRobotId[session.robotId]
+    const byRobotId = dependencies.jobs.getState().byRobotId
+    if (!Object.hasOwn(byRobotId, session.robotId)) return false
+    const state = byRobotId[session.robotId]!
     return state?.state === 'RUNNING' && state.runId === session.runId
   }
 
@@ -177,6 +190,18 @@ export function createRobotJobExecutorV4(
       failureCode,
       message,
     })
+    const capturedChain = chains.get(session.robotId)
+    if (sessions.get(session.robotId) === session) sessions.delete(session.robotId)
+    if (
+      capturedChain !== undefined
+      && chains.get(session.robotId) === capturedChain
+    ) {
+      chains.delete(session.robotId)
+    }
+    terminalResults.set(session.runId, result)
+    const waiters = terminalWaiters.get(session.runId) ?? []
+    terminalWaiters.delete(session.runId)
+    waiters.forEach((resolve) => resolve(result))
     dependencies.jobs.getState().setRobotState({
       robotId: session.robotId,
       jobId: session.jobId,
@@ -188,11 +213,6 @@ export function createRobotJobExecutorV4(
       failureCode,
       message,
     })
-    if (sessions.get(session.robotId) === session) sessions.delete(session.robotId)
-    terminalResults.set(session.runId, result)
-    const waiters = terminalWaiters.get(session.runId) ?? []
-    terminalWaiters.delete(session.runId)
-    waiters.forEach((resolve) => resolve(result))
     return result
   }
 
@@ -330,6 +350,7 @@ export function createRobotJobExecutorV4(
 
   const executor: RobotJobExecutorV4 = {
     startJob(jobId, simulationMs) {
+      assertRuntimeMutable()
       assertSimulationTime(simulationMs)
       const project = validateWorkcellProjectV4(dependencies.readProject())
       const job = project.jobs.find((candidate) => candidate.id === jobId)
@@ -409,6 +430,7 @@ export function createRobotJobExecutorV4(
     },
 
     async advanceAll(simulationMs) {
+      assertRuntimeMutable()
       assertSimulationTime(simulationMs)
       latestAcceptedSimulationMs = simulationMs
       const active = [...sessions.values()]
@@ -416,12 +438,11 @@ export function createRobotJobExecutorV4(
     },
 
     cancelRobotJob(robotId, reason) {
+      assertRuntimeMutable()
       const session = sessions.get(robotId)
       if (session === undefined || !isAuthoritative(session)) return
-      const priorChain = chains.get(robotId)
       const completedAt = latestAcceptedSimulationMs ?? session.startedAtSimulationMs
       publishTerminal(session, 'CANCELLED', completedAt, null, reason)
-      if (chains.get(robotId) === priorChain) chains.delete(robotId)
     },
 
     readState(robotId) {
@@ -442,16 +463,38 @@ export function createRobotJobExecutorV4(
     },
 
     reset() {
+      assertRuntimeMutable()
       const project = validateWorkcellProjectV4(dependencies.readProject())
       const active = [...sessions.values()]
-      for (const session of active) {
-        const completedAt = latestAcceptedSimulationMs ?? session.startedAtSimulationMs
-        publishTerminal(session, 'CANCELLED', completedAt, null, 'Job runtime reset.')
+      const completedAt = latestAcceptedSimulationMs ?? 0
+      let publicationError: unknown
+      const retainUnexpectedPublicationError = (error: unknown): void => {
+        const code = error !== null && typeof error === 'object' && 'code' in error
+          ? error.code
+          : undefined
+        if (code !== 'JOB_RUNTIME_RESET_IN_PROGRESS') publicationError ??= error
       }
-      sessions.clear()
-      chains.clear()
-      dependencies.jobs.getState().reset(project)
-      latestAcceptedSimulationMs = null
+      resetInProgress = true
+      try {
+        for (const session of active) {
+          try {
+            publishTerminal(session, 'CANCELLED', completedAt, null, 'Job runtime reset.')
+          } catch (error) {
+            retainUnexpectedPublicationError(error)
+          }
+        }
+        sessions.clear()
+        chains.clear()
+        try {
+          dependencies.jobs.getState().reset(project)
+        } catch (error) {
+          retainUnexpectedPublicationError(error)
+        }
+        latestAcceptedSimulationMs = null
+      } finally {
+        resetInProgress = false
+      }
+      if (publicationError !== undefined) throw publicationError
     },
   }
 

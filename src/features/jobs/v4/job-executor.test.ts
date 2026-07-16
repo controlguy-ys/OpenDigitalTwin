@@ -438,6 +438,65 @@ describe('RobotJobExecutorV4', () => {
     expect(executor.readState('robot-A').state).toBe('SUCCEEDED')
   })
 
+  it('detaches a blocked old Action before a cancellation subscriber advances its replacement run', async () => {
+    const oldGate = deferred<void>()
+    let oldActionCalls = 0
+    let newActionCalls = 0
+    const project = projectForJobs([
+      { id: 'old-job', robotId: 'robot-A', steps: [action('old-action')] },
+      { id: 'new-job', robotId: 'robot-A', steps: [action('new-action')] },
+    ], [
+      robotAction('old-action', 'robot-A'),
+      robotAction('new-action', 'robot-A'),
+    ])
+    const { executor, jobs } = harness(project, {
+      execute: async (actionId) => {
+        if (actionId === 'old-action') {
+          oldActionCalls += 1
+          await oldGate.promise
+        } else {
+          newActionCalls += 1
+        }
+      },
+    }, ['old-run', 'new-run'])
+    const { runId: oldRunId } = executor.startJob('old-job', 0)
+    const oldWaiter = executor.waitForTerminal(oldRunId)
+    const oldAdvance = executor.advanceAll(10)
+    await Promise.resolve()
+    expect(oldActionCalls).toBe(1)
+
+    let replacementAdvance: Promise<void> | undefined
+    let startedReplacement = false
+    const unsubscribe = jobs.subscribe((state) => {
+      const robot = state.byRobotId['robot-A']
+      if (!startedReplacement && robot?.runId === oldRunId && robot.state === 'CANCELLED') {
+        startedReplacement = true
+        executor.startJob('new-job', 10)
+        replacementAdvance = executor.advanceAll(10)
+      }
+    })
+
+    executor.cancelRobotJob('robot-A', 'replace blocked run')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(newActionCalls).toBe(1)
+    await replacementAdvance
+    expect(await oldWaiter).toMatchObject({ runId: oldRunId, state: 'CANCELLED' })
+    expect(executor.readState('robot-A')).toMatchObject({
+      runId: 'new-run',
+      state: 'SUCCEEDED',
+    })
+
+    oldGate.resolve(undefined)
+    await oldAdvance
+    unsubscribe()
+    expect(executor.readState('robot-A')).toMatchObject({
+      runId: 'new-run',
+      state: 'SUCCEEDED',
+    })
+  })
+
   it('reset settles active runs, resets the store, clears the clock, and makes late work inert', async () => {
     const gate = deferred<void>()
     const project = projectForJobs([{
@@ -461,6 +520,108 @@ describe('RobotJobExecutorV4', () => {
     expect(robots.getState().robots['robot-A']?.jointValues).toEqual({ 'axis.A': 33 })
   })
 
+  it('guards the whole reset transaction and publishes one completion time before notifications', async () => {
+    const gateA = deferred<void>()
+    const gateB = deferred<void>()
+    const project = projectForJobs([
+      { id: 'old-a', robotId: 'robot-A', steps: [action('hold-a')] },
+      { id: 'old-b', robotId: 'robot-B', steps: [action('hold-b')] },
+      { id: 'new-a', robotId: 'robot-A', steps: [] },
+    ], [
+      robotAction('hold-a', 'robot-A'),
+      robotAction('hold-b', 'robot-B'),
+    ])
+    const { executor, jobs } = harness(project, {
+      execute: async (actionId) => actionId === 'hold-a' ? gateA.promise : gateB.promise,
+    }, ['old-run-a', 'old-run-b', 'new-run-a'])
+    const { runId: runA } = executor.startJob('old-a', 0)
+    const { runId: runB } = executor.startJob('old-b', 0)
+    const waiterA = executor.waitForTerminal(runA)
+    const waiterB = executor.waitForTerminal(runB)
+    const oldAdvance = executor.advanceAll(10)
+    await Promise.resolve()
+
+    let attemptedStart = false
+    let reentrantAdvance: Promise<void> | undefined
+    let reentrantCancelCode: string | undefined
+    const unsubscribe = jobs.subscribe((state) => {
+      const robot = state.byRobotId['robot-A']
+      if (!attemptedStart && robot?.runId === runA && robot.state === 'CANCELLED') {
+        attemptedStart = true
+        expectProjectError(
+          () => executor.startJob('new-a', 10),
+          'JOB_RUNTIME_RESET_IN_PROGRESS',
+        )
+        reentrantAdvance = executor.advanceAll(20)
+        try {
+          executor.cancelRobotJob('robot-B', 'reentrant cancel')
+        } catch (error) {
+          reentrantCancelCode = (error as ProjectV4Error).code
+        }
+      }
+    })
+
+    executor.reset()
+
+    await expect(reentrantAdvance).rejects.toMatchObject({
+      code: 'JOB_RUNTIME_RESET_IN_PROGRESS',
+    })
+    expect(reentrantCancelCode).toBe('JOB_RUNTIME_RESET_IN_PROGRESS')
+    expect(await waiterA).toMatchObject({ state: 'CANCELLED', completedAtSimulationMs: 10 })
+    expect(await waiterB).toMatchObject({ state: 'CANCELLED', completedAtSimulationMs: 10 })
+    expect(executor.readState('robot-A').state).toBe('IDLE')
+    expect(executor.readState('robot-B').state).toBe('IDLE')
+
+    executor.startJob('new-a', 1)
+    await executor.advanceAll(1)
+    expect(executor.readState('robot-A')).toMatchObject({
+      runId: 'new-run-a',
+      state: 'SUCCEEDED',
+    })
+
+    gateA.resolve(undefined)
+    gateB.resolve(undefined)
+    await oldAdvance
+    unsubscribe()
+    expect(executor.readState('robot-A')).toMatchObject({
+      runId: 'new-run-a',
+      state: 'SUCCEEDED',
+    })
+  })
+
+  it('finishes reset when a terminal subscriber does not catch the reset guard', async () => {
+    const project = projectForJobs([
+      { id: 'old-a', robotId: 'robot-A', steps: [] },
+      { id: 'old-b', robotId: 'robot-B', steps: [] },
+      { id: 'new-a', robotId: 'robot-A', steps: [] },
+    ])
+    const { executor, jobs } = harness(project, undefined, [
+      'old-run-a',
+      'old-run-b',
+      'new-run-a',
+    ])
+    const { runId: runA } = executor.startJob('old-a', 0)
+    const { runId: runB } = executor.startJob('old-b', 0)
+    const waiterA = executor.waitForTerminal(runA)
+    const waiterB = executor.waitForTerminal(runB)
+    let attemptedStart = false
+    const unsubscribe = jobs.subscribe((state) => {
+      const robot = state.byRobotId['robot-A']
+      if (!attemptedStart && robot?.runId === runA && robot.state === 'CANCELLED') {
+        attemptedStart = true
+        executor.startJob('new-a', 0)
+      }
+    })
+
+    expect(() => executor.reset()).not.toThrow()
+
+    expect(await waiterA).toMatchObject({ runId: runA, state: 'CANCELLED' })
+    expect(await waiterB).toMatchObject({ runId: runB, state: 'CANCELLED' })
+    expect(executor.readState('robot-A').state).toBe('IDLE')
+    expect(executor.readState('robot-B').state).toBe('IDLE')
+    unsubscribe()
+  })
+
   it('rejects a run-ID collision before changing Robot state', () => {
     const project = projectForJobs([
       { id: 'first', robotId: 'robot-A', steps: [] },
@@ -482,6 +643,15 @@ describe('RobotJobExecutorV4', () => {
 
     expectProjectError(() => executor.startJob('same-job', 0), 'JOB_RUN_ID_COLLISION')
   })
+
+  it.each(['toString', 'constructor', '__proto__'])(
+    'rejects absent prototype-looking Robot ID %s at the runtime read boundary',
+    (robotId) => {
+      const { executor } = harness(projectForJobs([]))
+
+      expectProjectError(() => executor.readState(robotId), 'ROBOT_INSTANCE_NOT_FOUND')
+    },
+  )
 
   it('does not let an old terminal notification delete a reentrantly started run', async () => {
     const project = projectForJobs([
