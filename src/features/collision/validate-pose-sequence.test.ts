@@ -1,16 +1,35 @@
 import { describe, expect, it } from 'vitest'
+import type { RobotDefinitionV4 } from '../../core/project-v4/types'
+import {
+  canonicalCollisionPairKeyV4,
+  robotAdjacencyPairKeysV4,
+  robotLinkCollisionIdV4,
+  spatialEntityCollisionIdV4,
+} from '../../core/robot-runtime/collision-identity'
+import { computeSerialRobotPoseV4 } from '../../core/robot-runtime/serial-kinematics'
+import type { CollisionPolicyV4 } from '../../domain/collision/collision'
+import { queryGeometryCollisionsV4 } from '../../domain/collision/query-collision'
 import type { JointAnglesDeg } from '../../domain/robot/joint-frame'
 import { CRB15000_DEFINITION, type RobotLinkId } from '../../domain/robot/crb15000'
 import type { RobotKeyframe, RobotKeyframeEasing } from '../joints/keyframes'
 import {
   MAX_COLLISION_VALIDATION_FINDINGS,
+  collisionPolicyFromWireV4,
+  collisionPolicyToWireV4,
+  type CollisionValidationRequestV4,
   type CollisionValidationRequest,
   type CollisionValidationWorkerEvent,
 } from './collision-validation-protocol'
 import {
   createCollisionValidationWorkerHandler,
   runCollisionValidation,
+  runCollisionValidationV4,
 } from './collision-validation.worker'
+import {
+  robotLinkCollisionProxiesV4,
+  visibleCollisionEntitiesV4,
+  type CollisionGeometryProxyV4,
+} from './scene-entity-adapter'
 import { sampleJointSequence } from './validate-pose-sequence'
 
 function pose(
@@ -524,5 +543,257 @@ describe('runCollisionValidation', () => {
       requestId: request.requestId,
       revision: request.revision,
     })
+  })
+})
+
+const IDENTITY_V4 = {
+  positionM: [0, 0, 0],
+  quaternion: [0, 0, 0, 1],
+} as const
+
+function workerDefinitionV4(
+  id: string,
+  jointTypes: readonly ('revolute' | 'prismatic')[],
+): RobotDefinitionV4 {
+  return {
+    id,
+    name: id,
+    manufacturer: 'Test',
+    model: 'Variable',
+    assetReferenceIds: [`${id}-asset`],
+    sourceConventions: {
+      [`${id}-asset`]: {
+        linearUnit: 'meter', sourceToMeters: 1,
+        orientation: { mode: 'up-axis', upAxis: 'z' },
+      },
+    },
+    links: Array.from({ length: jointTypes.length + 1 }, (_, index) => ({
+      id: `link-${index}`,
+      name: `${id} Link ${index}`,
+      geometryOccurrences: index === 0 ? [{
+        occurrenceKey: `${id}-geometry`,
+        assetReferenceId: `${id}-asset`,
+        linkLocalPose: IDENTITY_V4,
+        statistics: { vertices: 0, triangles: 0, meshes: 0, materials: 0 },
+        collisionBoxes: [{
+          id: 'main', centerM: [0, 0, 0] as const,
+          halfExtentsM: [0.2, 0.2, 0.2] as const,
+          quaternion: [0, 0, 0, 1] as const,
+        }],
+      }] : [],
+    })),
+    joints: jointTypes.map((type, index) => ({
+      id: `joint-${index}`,
+      type,
+      parentLinkId: `link-${index}`,
+      childLinkId: `link-${index + 1}`,
+      origin: IDENTITY_V4,
+      axis: type === 'revolute' ? [0, 0, 1] as const : [1, 0, 0] as const,
+      min: type === 'revolute' ? -180 : 0,
+      max: type === 'revolute' ? 180 : 1,
+      home: 0,
+      zeroOffset: 0,
+      direction: 1 as const,
+      maximumVelocity: type === 'revolute' ? 90 : 1,
+    })),
+    frames: [],
+    excludedGeometryOccurrenceKeys: [],
+  }
+}
+
+const WORKER_DEFINITION_A = workerDefinitionV4('definition-a', ['revolute'])
+const WORKER_DEFINITION_B = workerDefinitionV4(
+  'definition-b',
+  ['revolute', 'prismatic'],
+)
+
+function workerPolicyV4(): CollisionPolicyV4 {
+  return {
+    enabled: true,
+    nearMissMarginM: 0,
+    excludedPairKeys: new Set([
+      ...robotAdjacencyPairKeysV4('robot-a', WORKER_DEFINITION_A),
+      ...robotAdjacencyPairKeysV4('robot-b', WORKER_DEFINITION_B),
+    ]),
+    intentionalMountPairKeys: new Set(),
+    ignoredContactPairKeys: new Set(),
+  }
+}
+
+function workerRequestV4(
+  visibleA = true,
+  visibleB = true,
+): CollisionValidationRequestV4 {
+  return {
+    requestId: 'worker-v4',
+    revision: 'revision-v4',
+    mode: 'validate',
+    definitions: [WORKER_DEFINITION_A, WORKER_DEFINITION_B],
+    robotPlacements: [
+      { robotId: 'robot-a', worldBasePose: IDENTITY_V4, effectiveVisible: visibleA },
+      { robotId: 'robot-b', worldBasePose: IDENTITY_V4, effectiveVisible: visibleB },
+    ],
+    sequence: [
+      {
+        sampleIndex: 0,
+        timeMs: 0,
+        robots: [
+          { robotId: 'robot-b', definitionId: 'definition-b', jointValues: {
+            'joint-0': 0, 'joint-1': 0,
+          } },
+          { robotId: 'robot-a', definitionId: 'definition-a', jointValues: {
+            'joint-0': 0,
+          } },
+        ],
+      },
+      {
+        sampleIndex: 1,
+        timeMs: 100,
+        robots: [
+          { robotId: 'robot-a', definitionId: 'definition-a', jointValues: {
+            'joint-0': 10,
+          } },
+          { robotId: 'robot-b', definitionId: 'definition-b', jointValues: {
+            'joint-0': 10, 'joint-1': 0.2,
+          } },
+        ],
+      },
+    ],
+    staticProxies: [],
+    policy: collisionPolicyToWireV4(workerPolicyV4()),
+  }
+}
+
+function staticProxyV4(id: string, effectiveVisible = true): CollisionGeometryProxyV4 {
+  return {
+    effectiveVisible,
+    entity: {
+      id: spatialEntityCollisionIdV4(id),
+      name: id,
+      category: 'spatial-entity',
+      worldMatrix: [
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+      ],
+      boxes: [{
+        id: 'main', center: [0, 0, 0], halfExtents: [0.1, 0.1, 0.1],
+        quaternion: [0, 0, 0, 1],
+      }],
+    },
+  }
+}
+
+describe('runCollisionValidationV4', () => {
+  it('matches the direct heterogeneous-Robot query with stable sample metadata', async () => {
+    const request = workerRequestV4()
+    const firstSample = request.sequence[0]!
+    const definitionById = new Map(request.definitions.map((value) => [value.id, value]))
+    const placementById = new Map(request.robotPlacements.map((value) => [value.robotId, value]))
+    const proxies = firstSample.robots.flatMap((state) => {
+      const definition = definitionById.get(state.definitionId)!
+      const placement = placementById.get(state.robotId)!
+      const pose = computeSerialRobotPoseV4(
+        definition,
+        state.jointValues,
+        placement.worldBasePose,
+      )
+      return robotLinkCollisionProxiesV4({
+        robotId: state.robotId,
+        definition,
+        linkWorldPoses: pose.linkWorldPoses,
+        effectiveVisible: placement.effectiveVisible,
+      })
+    })
+    const direct = queryGeometryCollisionsV4(
+      visibleCollisionEntitiesV4(proxies),
+      collisionPolicyFromWireV4(request.policy),
+      { sampleIndex: 0, timeMs: 0 },
+    )
+    const result = await runCollisionValidationV4(request)
+
+    expect(result?.findings.filter(({ sampleIndex }) => sampleIndex === 0)).toEqual(direct)
+    expect(result?.findings).toContainEqual(expect.objectContaining({
+      pairKey: canonicalCollisionPairKeyV4(
+        robotLinkCollisionIdV4('robot-a', 'link-0'),
+        robotLinkCollisionIdV4('robot-b', 'link-0'),
+      ),
+      sampleIndex: 0,
+      timeMs: 0,
+    }))
+    expect(result).toMatchObject({ sampleCount: 2, durationMs: 100, truncated: false })
+  })
+
+  it('removes hidden Robots and hidden static proxies before broad phase', async () => {
+    const hiddenRobot = await runCollisionValidationV4(workerRequestV4(true, false))
+    const base = workerRequestV4(false, false)
+    const hiddenStatic = await runCollisionValidationV4({
+      ...base,
+      staticProxies: [staticProxyV4('first', true), staticProxyV4('second', false)],
+    })
+
+    expect(hiddenRobot?.findings).toEqual([])
+    expect(hiddenStatic?.findings).toEqual([])
+  })
+
+  it('caps more than 10,000 worker findings without changing geometric results', async () => {
+    const base = workerRequestV4(false, false)
+    const result = await runCollisionValidationV4({
+      ...base,
+      sequence: [base.sequence[0]!],
+      staticProxies: Array.from({ length: 142 }, (_, index) =>
+        staticProxyV4(`entity-${index}`),
+      ),
+    })
+
+    expect(result?.findings).toHaveLength(MAX_COLLISION_VALIDATION_FINDINGS)
+    expect(result?.truncated).toBe(true)
+    expect(result?.findings.every(({ sampleIndex, timeMs }) =>
+      sampleIndex === 0 && timeMs === 0,
+    )).toBe(true)
+  })
+
+  it('is deterministic under repeated requests and Robot input permutation', async () => {
+    const request = workerRequestV4()
+    const permuted: CollisionValidationRequestV4 = {
+      ...request,
+      definitions: [...request.definitions].reverse(),
+      robotPlacements: [...request.robotPlacements].reverse(),
+      sequence: request.sequence.map((sample) => ({
+        ...sample,
+        robots: [...sample.robots].reverse(),
+      })),
+    }
+    const first = await runCollisionValidationV4(request)
+    const repeated = await runCollisionValidationV4(request)
+    const reordered = await runCollisionValidationV4(permuted)
+
+    expect(repeated).toEqual(first)
+    expect(reordered?.findings).toEqual(first?.findings)
+  })
+
+  it('treats 0 to 180 degrees as exactly two pre-sampled states', async () => {
+    const base = workerRequestV4(false, false)
+    const robotA = base.sequence[0]!.robots.find(({ robotId }) => robotId === 'robot-a')!
+    const progress: number[] = []
+    const result = await runCollisionValidationV4({
+      ...base,
+      definitions: [WORKER_DEFINITION_A],
+      robotPlacements: [base.robotPlacements[0]!],
+      sequence: [
+        { sampleIndex: 0, timeMs: 0, robots: [robotA] },
+        {
+          sampleIndex: 1,
+          timeMs: 1_000,
+          robots: [{ ...robotA, jointValues: { 'joint-0': 180 } }],
+        },
+      ],
+    }, {
+      onProgress: ({ processedSamples }) => progress.push(processedSamples),
+    })
+
+    expect(result).toMatchObject({ sampleCount: 2, durationMs: 1_000 })
+    expect(progress).toEqual([2])
   })
 })

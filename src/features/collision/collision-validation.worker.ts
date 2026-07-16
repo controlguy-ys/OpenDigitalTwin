@@ -1,11 +1,15 @@
 /// <reference lib="webworker" />
 
 import {
+  computeSerialRobotPoseV4,
+} from '../../core/robot-runtime/serial-kinematics'
+import {
   validateGeometryCollisionEntity,
   type GeometryCollisionEntity,
 } from '../../domain/collision/collision'
 import {
   queryGeometryCollisionsWithTelemetry,
+  queryGeometryCollisionsV4,
   type MountContactState,
 } from '../../domain/collision/query-collision'
 import type { JointAnglesDeg } from '../../domain/robot/joint-frame'
@@ -16,14 +20,23 @@ import {
 } from '../../domain/robot/kinematics'
 import {
   MAX_COLLISION_VALIDATION_FINDINGS,
+  collisionPolicyFromWireV4,
   validateCollisionValidationRequest,
+  validateCollisionValidationRequestV4,
   type CollisionValidationProgress,
   type CollisionValidationRequest,
+  type CollisionValidationRequestV4,
   type CollisionValidationResult,
+  type CollisionValidationResultV4,
   type CollisionValidationWorkerCommand,
   type CollisionValidationWorkerEvent,
 } from './collision-validation-protocol'
 import { sampleJointSequence } from './validate-pose-sequence'
+import {
+  robotLinkCollisionProxiesV4,
+  visibleCollisionEntitiesV4,
+  type CollisionGeometryProxyV4,
+} from './scene-entity-adapter'
 
 const PROGRESS_INTERVAL_SAMPLES = 250
 
@@ -164,6 +177,91 @@ export async function runCollisionValidation(
     findings: Object.freeze(findings),
     mountContact,
     truncated: sampled.truncated || findingsTruncated,
+  })
+}
+
+export async function runCollisionValidationV4(
+  candidate: CollisionValidationRequestV4,
+  controls: CollisionValidationRunControls = {},
+): Promise<CollisionValidationResultV4 | null> {
+  const request = validateCollisionValidationRequestV4(candidate)
+  const definitionsById = new Map(
+    request.definitions.map((definition) => [definition.id, definition]),
+  )
+  const placementsById = new Map(
+    request.robotPlacements.map((placement) => [placement.robotId, placement]),
+  )
+  const policy = collisionPolicyFromWireV4(request.policy)
+  const staticProxies = request.staticProxies
+  const findings: CollisionValidationResultV4['findings'][number][] = []
+  let findingsTruncated = false
+  const isCancelled = controls.isCancelled ?? (() => false)
+  const yieldControl = controls.yieldControl ?? (() => Promise.resolve())
+
+  for (const sample of request.sequence) {
+    if (isCancelled()) return null
+    const dynamicProxies: CollisionGeometryProxyV4[] = []
+    for (const state of sample.robots) {
+      const definition = definitionsById.get(state.definitionId)!
+      const placement = placementsById.get(state.robotId)!
+      const pose = computeSerialRobotPoseV4(
+        definition,
+        state.jointValues,
+        placement.worldBasePose,
+      )
+      dynamicProxies.push(...robotLinkCollisionProxiesV4({
+        robotId: state.robotId,
+        definition,
+        linkWorldPoses: pose.linkWorldPoses,
+        effectiveVisible: placement.effectiveVisible,
+      }))
+    }
+    const entities = visibleCollisionEntitiesV4([
+      ...dynamicProxies,
+      ...staticProxies,
+    ])
+    const sampleFindings = queryGeometryCollisionsV4(
+      entities,
+      policy,
+      { sampleIndex: sample.sampleIndex, timeMs: sample.timeMs },
+    )
+    for (const finding of sampleFindings) {
+      if (findings.length < MAX_COLLISION_VALIDATION_FINDINGS) {
+        findings.push(finding)
+      } else {
+        findingsTruncated = true
+      }
+    }
+
+    const processedSamples = sample.sampleIndex + 1
+    if (processedSamples % PROGRESS_INTERVAL_SAMPLES === 0) {
+      controls.onProgress?.({
+        requestId: request.requestId,
+        revision: request.revision,
+        processedSamples,
+        totalSamples: request.sequence.length,
+      })
+      await yieldControl()
+      if (isCancelled()) return null
+    }
+  }
+
+  if (request.sequence.length % PROGRESS_INTERVAL_SAMPLES !== 0) {
+    controls.onProgress?.({
+      requestId: request.requestId,
+      revision: request.revision,
+      processedSamples: request.sequence.length,
+      totalSamples: request.sequence.length,
+    })
+  }
+  return Object.freeze({
+    requestId: request.requestId,
+    revision: request.revision,
+    mode: request.mode,
+    sampleCount: request.sequence.length,
+    durationMs: request.sequence.at(-1)?.timeMs ?? 0,
+    findings: Object.freeze(findings),
+    truncated: findingsTruncated,
   })
 }
 

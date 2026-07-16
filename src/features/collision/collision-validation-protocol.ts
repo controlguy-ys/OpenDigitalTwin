@@ -1,11 +1,26 @@
 import {
+  normalizeRigidTransformV4,
+  type RigidTransformV4,
+} from '../../core/project-v4/rigid-transform'
+import type { RobotDefinitionV4 } from '../../core/project-v4/types'
+import {
+  canonicalCollisionPairKeyV4,
+  type CollisionEntityIdV4,
+  type CollisionPairKeyV4,
+} from '../../core/robot-runtime/collision-identity'
+import { computeSerialRobotPoseV4 } from '../../core/robot-runtime/serial-kinematics'
+import {
   validateCollisionBox,
   validateCollisionFinding,
   validateCollisionPolicy,
+  validateCollisionPolicyV4,
   validateGeometryCollisionEntity,
+  validateGeometryCollisionEntityV4,
   type CollisionBox,
   type CollisionFinding,
+  type CollisionFindingV4,
   type CollisionPolicy,
+  type CollisionPolicyV4,
   type GeometryCollisionEntity,
 } from '../../domain/collision/collision'
 import type { SerializableTransform } from '../../domain/equipment/equipment'
@@ -17,6 +32,10 @@ import {
   MAX_COLLISION_VALIDATION_SAMPLES,
   type CollisionValidationMode,
 } from './validate-pose-sequence'
+import {
+  robotLinkCollisionProxiesV4,
+  type CollisionGeometryProxyV4,
+} from './scene-entity-adapter'
 
 export const MAX_COLLISION_VALIDATION_FINDINGS = 10_000
 
@@ -74,6 +93,53 @@ export interface CollisionValidationRequest {
   readonly staticEntities: readonly GeometryCollisionEntity[]
   readonly mountContactPairKey: string | null
   readonly policy: CollisionPolicy
+}
+
+export interface CollisionPolicyWireV4 {
+  readonly enabled: boolean
+  readonly nearMissMarginM: number
+  readonly excludedPairKeys: readonly CollisionPairKeyV4[]
+  readonly intentionalMountPairKeys: readonly CollisionPairKeyV4[]
+  readonly ignoredContactPairKeys: readonly CollisionPairKeyV4[]
+}
+
+export interface CollisionRobotJointStateV4 {
+  readonly robotId: string
+  readonly definitionId: string
+  readonly jointValues: Readonly<Record<string, number>>
+}
+
+export interface CollisionRobotPlacementV4 {
+  readonly robotId: string
+  readonly worldBasePose: RigidTransformV4
+  readonly effectiveVisible: boolean
+}
+
+export interface CollisionValidationSampleV4 {
+  readonly sampleIndex: number
+  readonly timeMs: number
+  readonly robots: readonly CollisionRobotJointStateV4[]
+}
+
+export interface CollisionValidationRequestV4 {
+  readonly requestId: string
+  readonly revision: string
+  readonly mode: CollisionValidationMode
+  readonly definitions: readonly RobotDefinitionV4[]
+  readonly robotPlacements: readonly CollisionRobotPlacementV4[]
+  readonly sequence: readonly CollisionValidationSampleV4[]
+  readonly staticProxies: readonly CollisionGeometryProxyV4[]
+  readonly policy: CollisionPolicyWireV4
+}
+
+export interface CollisionValidationResultV4 {
+  readonly requestId: string
+  readonly revision: string
+  readonly mode: CollisionValidationMode
+  readonly sampleCount: number
+  readonly durationMs: number
+  readonly findings: readonly CollisionFindingV4[]
+  readonly truncated: boolean
 }
 
 export interface CollisionValidationProgress {
@@ -178,6 +244,284 @@ function nonNegativeInteger(candidate: unknown, label: string): number {
     throw new Error(`${label} must be a non-negative integer.`)
   }
   return value
+}
+
+function v4RigidTransform(
+  candidate: unknown,
+  label: string,
+): RigidTransformV4 {
+  const value = record(candidate, label)
+  const positionM = tuple(value.positionM, 3, `${label} position`) as [number, number, number]
+  const quaternion = tuple(value.quaternion, 4, `${label} quaternion`) as [number, number, number, number]
+  return Object.freeze(normalizeRigidTransformV4({ positionM, quaternion }, label))
+}
+
+function compareStrings(first: string, second: string): number {
+  return first < second ? -1 : first > second ? 1 : 0
+}
+
+function canonicalPairKeyArrayV4(
+  candidate: unknown,
+  label: string,
+): readonly CollisionPairKeyV4[] {
+  if (!Array.isArray(candidate)) {
+    throw new Error(`${label} must be an array.`)
+  }
+  const result: CollisionPairKeyV4[] = []
+  for (const [index, entry] of candidate.entries()) {
+    const value = nonEmptyString(entry, `${label}[${index}]`)
+    const segments = value.split('|')
+    if (segments.length !== 2) {
+      throw new Error(`${label} must contain canonical collision pair keys.`)
+    }
+    const canonical = canonicalCollisionPairKeyV4(
+      segments[0] as CollisionEntityIdV4,
+      segments[1] as CollisionEntityIdV4,
+    )
+    if (canonical !== value) {
+      throw new Error(`${label} must contain canonical collision pair keys.`)
+    }
+    if (result.length > 0 && compareStrings(result.at(-1)!, canonical) >= 0) {
+      throw new Error(`${label} must be sorted and duplicate-free.`)
+    }
+    result.push(canonical)
+  }
+  return Object.freeze(result)
+}
+
+export function collisionPolicyToWireV4(
+  policyCandidate: CollisionPolicyV4,
+): CollisionPolicyWireV4 {
+  const policy = validateCollisionPolicyV4(policyCandidate)
+  const sorted = (values: ReadonlySet<CollisionPairKeyV4>) =>
+    Object.freeze([...values].sort(compareStrings))
+  return Object.freeze({
+    enabled: policy.enabled,
+    nearMissMarginM: policy.nearMissMarginM,
+    excludedPairKeys: sorted(policy.excludedPairKeys),
+    intentionalMountPairKeys: sorted(policy.intentionalMountPairKeys),
+    ignoredContactPairKeys: sorted(policy.ignoredContactPairKeys),
+  })
+}
+
+export function collisionPolicyFromWireV4(
+  candidate: unknown,
+): CollisionPolicyV4 {
+  const value = record(candidate, 'Collision policy wire V4')
+  return validateCollisionPolicyV4({
+    enabled: value.enabled as boolean,
+    nearMissMarginM: value.nearMissMarginM as number,
+    excludedPairKeys: new Set(canonicalPairKeyArrayV4(
+      value.excludedPairKeys,
+      'Excluded collision pair keys',
+    )),
+    intentionalMountPairKeys: new Set(canonicalPairKeyArrayV4(
+      value.intentionalMountPairKeys,
+      'Intentional mount collision pair keys',
+    )),
+    ignoredContactPairKeys: new Set(canonicalPairKeyArrayV4(
+      value.ignoredContactPairKeys,
+      'Ignored contact collision pair keys',
+    )),
+  })
+}
+
+function ownedDefinitionV4(
+  candidate: unknown,
+  index: number,
+): RobotDefinitionV4 {
+  const value = record(candidate, `Collision validation Definition ${index + 1}`)
+  const id = nonEmptyString(value.id, `Collision validation Definition ${index + 1} id`)
+  let cloned: RobotDefinitionV4
+  try {
+    cloned = structuredClone(candidate) as RobotDefinitionV4
+  } catch {
+    throw new Error(`Collision validation Definition ${id} must be serializable.`)
+  }
+  if (!Array.isArray(cloned.links) || !Array.isArray(cloned.joints) || !Array.isArray(cloned.frames)) {
+    throw new Error(`Collision validation Definition ${id} collections must be arrays.`)
+  }
+  const homeValues = Object.fromEntries(
+    cloned.joints.map((joint) => [joint.id, joint.home]),
+  )
+  const pose = computeSerialRobotPoseV4(cloned, homeValues)
+  robotLinkCollisionProxiesV4({
+    robotId: `definition-probe-${index}`,
+    definition: cloned,
+    linkWorldPoses: pose.linkWorldPoses,
+    effectiveVisible: true,
+  })
+  return Object.freeze(cloned)
+}
+
+function ownedRobotPlacementV4(
+  candidate: unknown,
+  index: number,
+): CollisionRobotPlacementV4 {
+  const value = record(candidate, `Collision validation Robot placement ${index + 1}`)
+  if (typeof value.effectiveVisible !== 'boolean') {
+    throw new Error('Collision validation Robot placement visibility must be boolean.')
+  }
+  return Object.freeze({
+    robotId: nonEmptyString(value.robotId, `Collision validation Robot placement ${index + 1} id`),
+    worldBasePose: v4RigidTransform(
+      value.worldBasePose,
+      `Collision validation Robot placement ${index + 1} World Base pose`,
+    ),
+    effectiveVisible: value.effectiveVisible,
+  })
+}
+
+function ownedJointValuesV4(
+  candidate: unknown,
+  definition: RobotDefinitionV4,
+  label: string,
+): Readonly<Record<string, number>> {
+  const value = record(candidate, label)
+  const keys = Object.keys(value)
+  const expected = new Set(definition.joints.map(({ id }) => id))
+  if (keys.length !== expected.size || keys.some((key) => !expected.has(key))) {
+    throw new Error(`${label} must contain the exact literal Definition Joint key set.`)
+  }
+  const entries = definition.joints.map((joint) => {
+    if (!Object.hasOwn(value, joint.id)) {
+      throw new Error(`${label} is missing Joint ${joint.id}.`)
+    }
+    const jointValue = finiteNumber(value[joint.id], `${label} Joint ${joint.id}`)
+    if (jointValue < joint.min || jointValue > joint.max) {
+      throw new Error(`${label} Joint ${joint.id} exceeds its limits.`)
+    }
+    return [joint.id, jointValue] as const
+  })
+  return Object.freeze(Object.fromEntries(entries))
+}
+
+function sameStringSet(first: ReadonlySet<string>, second: ReadonlySet<string>): boolean {
+  return first.size === second.size && [...first].every((value) => second.has(value))
+}
+
+export function validateCollisionValidationRequestV4(
+  candidate: unknown,
+): CollisionValidationRequestV4 {
+  const value = record(candidate, 'Collision validation request V4')
+  if (value.mode !== 'preview' && value.mode !== 'validate') {
+    throw new Error('Collision validation V4 mode must be preview or validate.')
+  }
+  if (!Array.isArray(value.definitions)) {
+    throw new Error('Collision validation V4 Definitions must be an array.')
+  }
+  if (!Array.isArray(value.robotPlacements)) {
+    throw new Error('Collision validation V4 Robot placements must be an array.')
+  }
+  if (!Array.isArray(value.sequence)) {
+    throw new Error('Collision validation V4 sequence must be an array.')
+  }
+  if (!Array.isArray(value.staticProxies)) {
+    throw new Error('Collision validation V4 static proxies must be an array.')
+  }
+  if (value.sequence.length > MAX_COLLISION_VALIDATION_SAMPLES) {
+    throw new Error('Collision validation V4 sequence exceeds the sample cap.')
+  }
+
+  const definitions = Object.freeze(value.definitions.map(ownedDefinitionV4))
+  const definitionsById = new Map<string, RobotDefinitionV4>()
+  for (const definition of definitions) {
+    if (definitionsById.has(definition.id)) {
+      throw new Error(`Duplicate collision validation Definition id: ${definition.id}`)
+    }
+    definitionsById.set(definition.id, definition)
+  }
+
+  const robotPlacements = Object.freeze(value.robotPlacements.map(ownedRobotPlacementV4))
+  const placementIds = new Set<string>()
+  for (const placement of robotPlacements) {
+    if (placementIds.has(placement.robotId)) {
+      throw new Error(`Duplicate collision validation Robot placement: ${placement.robotId}`)
+    }
+    placementIds.add(placement.robotId)
+  }
+
+  const definitionByRobotId = new Map<string, string>()
+  let previousTimeMs = Number.NEGATIVE_INFINITY
+  const sequence = Object.freeze(value.sequence.map((sampleCandidate, sampleIndex) => {
+    const sample = record(sampleCandidate, `Collision validation sample ${sampleIndex}`)
+    if (nonNegativeInteger(sample.sampleIndex, 'Collision validation sample index') !== sampleIndex) {
+      throw new Error('Collision validation sample indices must start at zero and be contiguous.')
+    }
+    const timeMs = finiteNumber(sample.timeMs, 'Collision validation sample time')
+    if (timeMs < 0 || timeMs < previousTimeMs) {
+      throw new Error('Collision validation sample time must be finite, non-negative, and nondecreasing.')
+    }
+    previousTimeMs = timeMs
+    if (!Array.isArray(sample.robots)) {
+      throw new Error('Collision validation sample Robots must be an array.')
+    }
+    const sampleRobotIds = new Set<string>()
+    const robots = Object.freeze(sample.robots.map((stateCandidate, robotIndex) => {
+      const state = record(
+        stateCandidate,
+        `Collision validation sample ${sampleIndex} Robot ${robotIndex + 1}`,
+      )
+      const robotId = nonEmptyString(state.robotId, 'Collision validation sample Robot id')
+      if (sampleRobotIds.has(robotId)) {
+        throw new Error(`Duplicate collision validation sample Robot id: ${robotId}`)
+      }
+      sampleRobotIds.add(robotId)
+      const definitionId = nonEmptyString(
+        state.definitionId,
+        `Collision validation sample Robot ${robotId} Definition id`,
+      )
+      const definition = definitionsById.get(definitionId)
+      if (definition === undefined) {
+        throw new Error(`Collision validation Robot ${robotId} references missing Definition ${definitionId}.`)
+      }
+      const previousDefinitionId = definitionByRobotId.get(robotId)
+      if (previousDefinitionId !== undefined && previousDefinitionId !== definitionId) {
+        throw new Error(`Collision validation Robot ${robotId} changed Definition ids.`)
+      }
+      definitionByRobotId.set(robotId, definitionId)
+      return Object.freeze({
+        robotId,
+        definitionId,
+        jointValues: ownedJointValuesV4(
+          state.jointValues,
+          definition,
+          `Collision validation sample ${sampleIndex} Robot ${robotId}`,
+        ),
+      })
+    }))
+    if (!sameStringSet(sampleRobotIds, placementIds)) {
+      throw new Error('Collision validation sample Robot set must match Robot placements.')
+    }
+    return Object.freeze({ sampleIndex, timeMs, robots })
+  }))
+
+  const staticIds = new Set<string>()
+  const staticProxies = Object.freeze(value.staticProxies.map((proxyCandidate, index) => {
+    const proxy = record(proxyCandidate, `Collision validation static proxy ${index + 1}`)
+    if (typeof proxy.effectiveVisible !== 'boolean') {
+      throw new Error('Collision validation static proxy visibility must be boolean.')
+    }
+    const entity = validateGeometryCollisionEntityV4(
+      proxy.entity as CollisionGeometryProxyV4['entity'],
+    )
+    if (staticIds.has(entity.id)) {
+      throw new Error(`Duplicate collision validation static Collision Entity id: ${entity.id}`)
+    }
+    staticIds.add(entity.id)
+    return Object.freeze({ entity, effectiveVisible: proxy.effectiveVisible })
+  }))
+
+  return Object.freeze({
+    requestId: nonEmptyString(value.requestId, 'Collision validation V4 request id'),
+    revision: nonEmptyString(value.revision, 'Collision validation V4 revision'),
+    mode: value.mode,
+    definitions,
+    robotPlacements,
+    sequence,
+    staticProxies,
+    policy: collisionPolicyToWireV4(collisionPolicyFromWireV4(value.policy)),
+  })
 }
 
 function tuple<const Length extends number>(

@@ -1,10 +1,14 @@
 import type { Object3D } from 'three'
 import type { StoreApi } from 'zustand/vanilla'
-import type { CollisionPolicy } from '../../domain/collision/collision'
+import type {
+  CollisionPolicy,
+  CollisionPolicyV4,
+} from '../../domain/collision/collision'
 import { deriveMountContactPairKey } from '../../domain/collision/mount-contact'
 import type { RobotMountContactV1 } from '../../domain/project/scene-state-v1'
 import {
   queryGeometryCollisionsWithTelemetry,
+  queryGeometryCollisionsWithTelemetryV4,
 } from '../../domain/collision/query-collision'
 import type { CollisionStoreState } from './collision-store'
 import {
@@ -12,6 +16,10 @@ import {
   snapshotGeometryEntities,
   type GeometryEntityRegistry,
 } from './geometry-entity-registry'
+import {
+  visibleCollisionEntitiesV4,
+  type CollisionGeometryProxyV4,
+} from './scene-entity-adapter'
 
 export const CURRENT_POSE_COLLISION_INTERVAL_MS = 100
 
@@ -95,6 +103,16 @@ export function queryCurrentPoseCollision(
     telemetry: query.telemetry,
     diagnostics: snapshot.diagnostics,
   })
+}
+
+export function queryCurrentPoseCollisionV4(
+  policy: CollisionPolicyV4,
+  proxies: readonly CollisionGeometryProxyV4[],
+): ReturnType<typeof queryGeometryCollisionsWithTelemetryV4> {
+  return queryGeometryCollisionsWithTelemetryV4(
+    visibleCollisionEntitiesV4(proxies),
+    policy,
+  )
 }
 
 export function publishCurrentPoseCollision(

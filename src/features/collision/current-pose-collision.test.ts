@@ -1,6 +1,10 @@
 import { Group } from 'three'
 import { describe, expect, it, vi } from 'vitest'
-import { DEFAULT_COLLISION_POLICY } from '../../domain/collision/collision'
+import {
+  DEFAULT_COLLISION_POLICY,
+  type CollisionPolicyV4,
+} from '../../domain/collision/collision'
+import { spatialEntityCollisionIdV4 } from '../../core/robot-runtime/collision-identity'
 import {
   registerGeometryEntity,
   type GeometryEntityRegistry,
@@ -9,7 +13,9 @@ import {
   CurrentPoseCollisionScheduler,
   publishCurrentPoseCollision,
   queryCurrentPoseCollision,
+  queryCurrentPoseCollisionV4,
 } from './current-pose-collision'
+import type { CollisionGeometryProxyV4 } from './scene-entity-adapter'
 import { createCollisionStore } from './collision-store'
 
 describe('current-pose collision scheduler', () => {
@@ -173,6 +179,66 @@ describe('current-pose collision scheduler', () => {
       broadPhaseCandidateCount: 0,
       narrowPhaseTestCount: 0,
       findingCount: 0,
+    })
+  })
+})
+
+const POLICY_V4: CollisionPolicyV4 = {
+  enabled: true,
+  nearMissMarginM: 0,
+  excludedPairKeys: new Set(),
+  intentionalMountPairKeys: new Set(),
+  ignoredContactPairKeys: new Set(),
+}
+
+function proxy(id: string, effectiveVisible: boolean): CollisionGeometryProxyV4 {
+  return {
+    effectiveVisible,
+    entity: {
+      id: spatialEntityCollisionIdV4(id),
+      name: id,
+      category: 'spatial-entity',
+      worldMatrix: [
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+      ],
+      boxes: [{
+        id: 'main', center: [0, 0, 0], halfExtents: [0.5, 0.5, 0.5],
+        quaternion: [0, 0, 0, 1],
+      }],
+    },
+  }
+}
+
+describe('current-pose collision v4', () => {
+  it('removes hidden proxies before broad-phase telemetry without mutation', () => {
+    const visible = proxy('visible', true)
+    const hidden = proxy('hidden', false)
+    const before = JSON.stringify([visible, hidden])
+
+    const result = queryCurrentPoseCollisionV4(POLICY_V4, [visible, hidden])
+
+    expect(result.findings).toEqual([])
+    expect(result.telemetry).toMatchObject({
+      entityCount: 1,
+      boxCount: 1,
+      broadPhaseCandidateCount: 0,
+    })
+    expect(JSON.stringify([visible, hidden])).toBe(before)
+  })
+
+  it('reports the same overlap when both proxies are visible', () => {
+    const result = queryCurrentPoseCollisionV4(POLICY_V4, [
+      proxy('first', true),
+      proxy('second', true),
+    ])
+    expect(result.findings).toHaveLength(1)
+    expect(result.telemetry).toMatchObject({
+      entityCount: 2,
+      broadPhaseCandidateCount: 1,
+      narrowPhaseTestCount: 1,
     })
   })
 })
