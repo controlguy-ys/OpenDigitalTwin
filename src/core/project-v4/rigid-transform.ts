@@ -192,8 +192,11 @@ export function quaternionToRpyDegreesV4(
 ): Vector3V4 {
   const [x, y, z, w] = normalizeQuaternionV4(quaternion, '$.quaternion')
   const sinPitch = Math.max(-1, Math.min(1, 2 * (w * y - z * x)))
+  const matrix00 = 1 - 2 * (y * y + z * z)
+  const matrix10 = 2 * (x * y + w * z)
+  const cosPitchMagnitude = Math.hypot(matrix00, matrix10)
 
-  if (Math.abs(sinPitch) >= 1 - 1e-12) {
+  if (cosPitchMagnitude <= 8 * Number.EPSILON) {
     const yaw = Math.atan2(
       -2 * (x * y - w * z),
       1 - 2 * (x * x + z * z),

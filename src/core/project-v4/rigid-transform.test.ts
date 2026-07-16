@@ -22,6 +22,17 @@ function expectNumbersClose(
   })
 }
 
+function quaternionOrientationErrorDegrees(
+  actual: readonly number[],
+  expected: readonly number[],
+): number {
+  const dot = Math.abs(actual.reduce(
+    (sum, value, index) => sum + value * (expected[index] ?? Number.NaN),
+    0,
+  ))
+  return 2 * Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI
+}
+
 describe('Project V4 rigid transforms', () => {
   it('composes RPY degrees as Rz * Ry * Rx without Three.js', () => {
     const q = rpyDegreesToQuaternionV4([10, 20, 30])
@@ -131,5 +142,20 @@ describe('Project V4 rigid transforms', () => {
 
     expectNumbersClose(rpy, expected)
     expectNumbersClose(rpyDegreesToQuaternionV4(rpy), quaternion)
+  })
+
+  it.each([
+    [[10, 89.99995, 30]],
+    [[10, -89.99995, 30]],
+  ] as const)('preserves nonsingular near-gimbal orientation for %j', (input) => {
+    const quaternion = rpyDegreesToQuaternionV4(input)
+    const recoveredQuaternion = rpyDegreesToQuaternionV4(
+      quaternionToRpyDegreesV4(quaternion),
+    )
+
+    expect(quaternionOrientationErrorDegrees(
+      recoveredQuaternion,
+      quaternion,
+    )).toBeLessThanOrEqual(1e-8)
   })
 })
