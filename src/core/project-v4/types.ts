@@ -1,5 +1,5 @@
-import { CYLINDER_RADIAL_SEGMENTS_V4 } from './limits'
-import type { QuaternionV4, RigidTransformV4, Vector3V4 } from './rigid-transform'
+import { CYLINDER_RADIAL_SEGMENTS_V4 } from './limits.js'
+import type { QuaternionV4, RigidTransformV4, Vector3V4 } from './rigid-transform.js'
 
 export type ProjectIdV4 = string
 export type RevisionIdV4 = string

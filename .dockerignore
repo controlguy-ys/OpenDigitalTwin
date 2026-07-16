@@ -3,6 +3,7 @@
 .worktrees
 node_modules
 dist
+dist-gateway
 coverage
 test-results
 playwright-report

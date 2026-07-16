@@ -1,4 +1,4 @@
-import { failProjectV4 } from './errors'
+import { failProjectV4 } from './errors.js'
 
 export type Vector3V4 = readonly [number, number, number]
 export type QuaternionV4 = readonly [number, number, number, number]

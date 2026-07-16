@@ -1,7 +1,7 @@
-import { ProjectV4Error } from '../project-v4/errors'
-import { MAX_IDENTIFIER_UTF8_BYTES_V4 } from '../project-v4/limits'
-import type { WorkcellProjectV4 } from '../project-v4/types'
-import { validateWorkcellProjectV4 } from '../project-v4/validate'
+import { ProjectV4Error } from '../project-v4/errors.js'
+import { MAX_IDENTIFIER_UTF8_BYTES_V4 } from '../project-v4/limits.js'
+import type { WorkcellProjectV4 } from '../project-v4/types.js'
+import { validateWorkcellProjectV4 } from '../project-v4/validate.js'
 
 export const RUNTIME_PROTOCOL_VERSION_V1 = 1 as const
 export const MAX_RUNTIME_STATE_VALUES_V1 = 128

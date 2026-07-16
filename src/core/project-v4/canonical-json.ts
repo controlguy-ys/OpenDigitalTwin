@@ -1,6 +1,6 @@
-import { ProjectV4Error } from './errors'
-import type { WorkcellProjectV4 } from './types'
-import { validateWorkcellProjectV4 } from './validate'
+import { ProjectV4Error } from './errors.js'
+import type { WorkcellProjectV4 } from './types.js'
+import { validateWorkcellProjectV4 } from './validate.js'
 
 function writeCanonicalJson(value: unknown): string {
   if (value === null) return 'null'
@@ -45,7 +45,9 @@ export function canonicalProjectV4Json(project: WorkcellProjectV4): string {
   return writeCanonicalJson(validateWorkcellProjectV4(project))
 }
 
-export function canonicalProjectV4Bytes(project: WorkcellProjectV4): Uint8Array {
+export function canonicalProjectV4Bytes(
+  project: WorkcellProjectV4,
+): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(canonicalProjectV4Json(project))
 }
 
@@ -65,7 +67,7 @@ export async function configRevisionForProjectV4(
 
   let digest: ArrayBuffer
   try {
-    digest = await subtle.digest('SHA-256', bytes as BufferSource)
+    digest = await subtle.digest('SHA-256', bytes)
   } catch {
     throw new ProjectV4Error(
       'PROJECT_CONFIG_REVISION_FAILED',

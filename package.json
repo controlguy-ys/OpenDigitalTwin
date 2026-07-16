@@ -11,9 +11,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:gateway": "tsc -p tsconfig.gateway.json",
     "build:e2e": "tsc -b && vite build --mode test",
     "preview": "vite preview",
     "middleware:opcua": "node middleware/opcua-connector.mjs",
+    "runtime:gateway": "node dist-gateway/middleware/runtime-gateway/main.js",
     "lint": "oxlint .",
     "test": "vitest",
     "test:run": "vitest run",

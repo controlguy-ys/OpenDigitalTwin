@@ -1,4 +1,4 @@
-import { failProjectV4 } from './errors'
+import { failProjectV4 } from './errors.js'
 import {
   BOX_PRIMITIVE_TRIANGLES_V4,
   CYLINDER_PRIMITIVE_TRIANGLES_V4,
@@ -46,8 +46,8 @@ import {
   MIN_ROBOT_LINKS_V4,
   MIN_ROBOT_STEP_SOURCES_V4,
   PROJECT_V4_SCHEMA_VERSION,
-} from './limits'
-import { normalizeRigidTransformV4 } from './rigid-transform'
+} from './limits.js'
+import { normalizeRigidTransformV4 } from './rigid-transform.js'
 import type {
   AssetReferenceV4,
   FrameDefinitionV4,
@@ -62,7 +62,7 @@ import type {
   SourceConventionV4,
   SpatialEntityV4,
   WorkcellProjectV4,
-} from './types'
+} from './types.js'
 
 type MutableRecord = Record<string, unknown>
 

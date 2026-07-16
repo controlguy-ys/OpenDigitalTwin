@@ -1,16 +1,15 @@
 {
   "compilerOptions": {
-    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.gateway.tsbuildinfo",
     "target": "ES2023",
     "lib": ["ES2023"],
-    "module": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "outDir": "dist-gateway",
     "skipLibCheck": true,
-    "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
     "isolatedModules": true,
     "moduleDetection": "force",
-    "noEmit": true,
     "erasableSyntaxOnly": true,
     "strict": true,
     "noUnusedLocals": true,
@@ -19,14 +18,16 @@
     "noUncheckedSideEffectImports": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmitOnError": true,
     "types": ["node"]
   },
   "include": [
-    "vite.config.ts",
-    "vitest.config.ts",
-    "scripts",
-    "playwright.config.ts",
-    "src/types/**/*.d.ts",
-    "middleware/runtime-gateway/**/*.test.ts"
+    "src/core/**/*.ts",
+    "middleware/runtime-gateway/**/*.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "src/core/**/test-support.ts"
   ]
 }
