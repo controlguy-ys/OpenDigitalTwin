@@ -48,6 +48,7 @@ export interface SceneRuntimeProjectionV1 {
   readonly entities: readonly SceneRuntimeEntityV1[]
   readonly byId: ReadonlyMap<SceneEntityIdV1, SceneRuntimeEntityV1>
   readonly robot: SceneRuntimeEntityV1 | null
+  readonly workbench: SceneRuntimeEntityV1 | null
   readonly objects: readonly SceneRuntimeEntityV1[]
   readonly groups: readonly SceneRuntimeEntityV1[]
   readonly linearAxis: SceneRuntimeEntityV1 | null
@@ -115,11 +116,13 @@ export function selectSceneRuntime(
   })
   const byId = new Map(entities.map((entity) => [entity.entityId, entity]))
   const robot = entities.find(({ kind }) => kind === 'robot') ?? null
+  const workbench = byId.get('workcell:workbench') ?? null
   const linearAxis = entities.find(({ kind }) => kind === 'linear-axis') ?? null
   return Object.freeze({
     entities: Object.freeze(entities),
     byId,
     robot,
+    workbench,
     objects: Object.freeze(entities.filter(({ kind }) => kind === 'object')),
     groups: Object.freeze(entities.filter(({ kind }) => kind === 'group')),
     linearAxis,
@@ -130,6 +133,7 @@ const EMPTY_RUNTIME: SceneRuntimeProjectionV1 = Object.freeze({
   entities: Object.freeze([]),
   byId: new Map(),
   robot: null,
+  workbench: null,
   objects: Object.freeze([]),
   groups: Object.freeze([]),
   linearAxis: null,

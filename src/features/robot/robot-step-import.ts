@@ -212,12 +212,18 @@ export async function restoreRobotGeometryRecords(
   convert: RobotGeometryConverter = createThreeGroupFromOcct,
 ): Promise<ReadonlyMap<RobotLinkId, ImportedThreeAsset>> {
   const assets = new Map<RobotLinkId, ImportedThreeAsset>()
+  const assetsBySource = new Map<ArrayBuffer, ImportedThreeAsset>()
   try {
     for (const record of records) {
+      const cached = assetsBySource.get(record.sourceBytes)
+      if (cached !== undefined) {
+        assets.set(record.linkId, cached)
+        continue
+      }
       const result = await client.import(record.sourceBytes)
       statistics(result)
       const detectedUnit = detectStepUnit(record.sourceBytes)
-      const asset = convert(
+      const imported = convert(
         result,
         {
           originMode: 'source',
@@ -231,6 +237,16 @@ export async function restoreRobotGeometryRecords(
           maxTriangles: MAX_ROBOT_LINK_TRIANGLES,
         },
       )
+      let disposed = false
+      const asset: ImportedThreeAsset = {
+        ...imported,
+        dispose() {
+          if (disposed) return
+          disposed = true
+          imported.dispose()
+        },
+      }
+      assetsBySource.set(record.sourceBytes, asset)
       assets.set(record.linkId, asset)
     }
     return assets

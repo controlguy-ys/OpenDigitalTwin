@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { CRB15000_DEFINITION } from '../../domain/robot/crb15000'
 import { createRobotRig } from '../../domain/robot/kinematics'
 import type { RobotLinkGeometryRecordV1 } from '../../domain/project/project'
-import { geometryEntityRegistry } from '../collision/geometry-entity-registry'
+import {
+  geometryEntityRegistry,
+  snapshotGeometryEntities,
+} from '../collision/geometry-entity-registry'
 import {
   ROBOT_LINK_ASSETS,
   applyRobotSceneRuntime,
@@ -217,7 +220,7 @@ describe('RobotModel asset registration', () => {
     )
   })
 
-  it('registers all seven live Link models with active custom colliders', () => {
+  it('registers all seven Link colliders against their adjusted visual Links', () => {
     geometryEntityRegistry.clear()
     const registration = createRobotRigRegistration(
       createRobotRig(CRB15000_DEFINITION),
@@ -246,6 +249,31 @@ describe('RobotModel asset registration', () => {
 
     cleanup()
     expect(geometryEntityRegistry.size).toBe(0)
+  })
+
+  it('applies geometry localization exactly once to source-coordinate collision Boxes', () => {
+    geometryEntityRegistry.clear()
+    const rig = createRobotRig(CRB15000_DEFINITION)
+    const registration = createRobotRigRegistration(rig, createLoadedScenes())
+    attachRobotRigRegistration(registration)
+    rig.root.position.z = 1.08
+    registration.links.LINK01.position.z = -0.338
+    rig.root.updateWorldMatrix(true, true)
+
+    const records = geometryRecords()
+    records[1]!.collisionCenter = [0, 0, 0.338]
+    const cleanup = registerRobotGeometryEntities(registration, records)
+    const link = snapshotGeometryEntities().entities.find(
+      ({ id }) => id === 'robot-link:LINK01',
+    )
+
+    expect(link?.worldMatrix[14]).toBeCloseTo(1.08)
+    expect(
+      new Vector3(...link!.boxes[0]!.center)
+        .applyMatrix4(new Matrix4().fromArray([...link!.worldMatrix])).z,
+    ).toBeCloseTo(1.418)
+    cleanup()
+    detachRobotRigRegistration(registration)
   })
 
   it('registers no Link or Tool collision participants while the Robot root is hidden', () => {

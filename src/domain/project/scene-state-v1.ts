@@ -3,6 +3,7 @@ import type { RobotLinkId } from '../robot/crb15000'
 export type SceneEntityIdV1 =
   | 'robot:active'
   | 'linear-axis:active'
+  | 'workcell:workbench'
   | `group:${string}`
   | `object:${string}`
   | `equipment:${string}`
@@ -36,6 +37,10 @@ export interface LinearAxisConfigurationV1 {
 
 export type SceneEntityV1 =
   | (SceneEntityBaseV1 & { readonly kind: 'robot'; readonly id: 'robot:active' })
+  | (SceneEntityBaseV1 & {
+      readonly kind: 'environment'
+      readonly id: 'workcell:workbench'
+    })
   | (SceneEntityBaseV1 & { readonly kind: 'group'; readonly id: `group:${string}` })
   | (SceneEntityBaseV1 & {
       readonly kind: 'object'
@@ -202,6 +207,7 @@ function entityId(value: unknown, label: string): SceneEntityIdV1 {
   if (
     id !== 'robot:active' &&
     id !== 'linear-axis:active' &&
+    id !== 'workcell:workbench' &&
     !/^(?:group|object|equipment):.+$/.test(id)
   ) {
     return sceneFail('SCENE_ID_INVALID', `${label} is not canonical.`)
@@ -233,6 +239,13 @@ function validateEntity(value: unknown, index: number): SceneEntityV1 {
     const source = record(entity, label, common)
     if (source.id !== 'robot:active') return sceneFail('SCENE_ID_KIND_MISMATCH', `${label}.id is invalid.`)
     return { kind, id: 'robot:active', ...baseEntity(source, label) }
+  }
+  if (kind === 'environment') {
+    const source = record(entity, label, common)
+    if (source.id !== 'workcell:workbench') {
+      return sceneFail('SCENE_ID_KIND_MISMATCH', `${label}.id is invalid.`)
+    }
+    return { kind, id: 'workcell:workbench', ...baseEntity(source, label) }
   }
   if (kind === 'group') {
     const source = record(entity, label, common)
@@ -362,6 +375,9 @@ export function validateProjectSceneState(value: unknown): ProjectSceneStateV1 {
     }
     if (entity.kind === 'robot' && parent !== undefined && parent.kind !== 'linear-axis') {
       return sceneFail('SCENE_ROBOT_PARENT_INVALID', 'Robot parent must be MCP or the Linear Axis.')
+    }
+    if (entity.kind === 'environment' && entity.parentId !== null) {
+      return sceneFail('SCENE_ENVIRONMENT_PARENT_INVALID', 'Environment must be MCP-relative.')
     }
     if (entity.kind === 'object' && parent !== undefined && parent.kind !== 'group' && parent.kind !== 'linear-axis') {
       return sceneFail('SCENE_OBJECT_PARENT_INVALID', 'Object parent must be MCP, a Group, or the Linear Axis.')

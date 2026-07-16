@@ -415,14 +415,24 @@ async function downloadCsvReport(page: Page): Promise<string> {
 }
 
 async function waitForImportedProject(page: Page, name: string): Promise<void> {
-  await Promise.race([
-    expect(page.getByLabel('Project controls')).toContainText(name, {
-      timeout: 180_000,
-    }),
-    page.getByRole('alert').waitFor({ state: 'visible', timeout: 180_000 }).then(async () => {
-      throw new Error(await page.getByRole('alert').innerText())
-    }),
-  ])
+  const handle = await page.waitForFunction((expectedName) => {
+    const visibleAlert = [...document.querySelectorAll<HTMLElement>('[role="alert"]')]
+      .find((element) => {
+        const style = getComputedStyle(element)
+        return element.getClientRects().length > 0 &&
+          style.display !== 'none' && style.visibility !== 'hidden'
+      })
+    if (visibleAlert !== undefined) {
+      return { kind: 'error', message: visibleAlert.innerText }
+    }
+    const controls = document.querySelector('[aria-label="Project controls"]')
+    return controls?.textContent?.includes(expectedName) === true
+      ? { kind: 'ready', message: '' }
+      : null
+  }, name, { timeout: 180_000 })
+  const result = await handle.jsonValue()
+  await handle.dispose()
+  if (result.kind === 'error') throw new Error(result.message)
 }
 
 async function openDrawer(page: Page, name: string): Promise<void> {
@@ -533,7 +543,7 @@ test('accepts V3 geometry collision and report workflows', async ({
   ])
   const fixture = v3CollisionFixture(
     await readFile(await downloadPath(defaultDownload)),
-    [0.135, 0, 1.15],
+    [0.095, 0, 1.15],
   )
   await page.getByLabel('Import project').setInputFiles({
     name: 'geometry-collision-v3.wdtwin',
@@ -546,7 +556,7 @@ test('accepts V3 geometry collision and report workflows', async ({
   expect(migrated).toMatchObject({
     schemaVersion: 3,
     name: 'Geometry Collision Acceptance',
-    objectTransform: { position: [0.135, 0, 1.15] },
+    objectTransform: { position: [0.095, 0, 1.15] },
     collisionPolicy: {
       enabled: true,
       warningDistanceM: 0.02,
@@ -572,7 +582,7 @@ test('accepts V3 geometry collision and report workflows', async ({
     expect.arrayContaining([
       expect.objectContaining({
         kind: 'collision',
-        pairKey: 'robot-link:LINK01|workcell:workbench',
+        pairKey: LINK00_PAIR,
       }),
     ]),
   )
@@ -582,9 +592,13 @@ test('accepts V3 geometry collision and report workflows', async ({
 
   await selectCollisionFixture(page)
   const inspector = page.getByRole('complementary', { name: 'Inspector' })
-  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue('135')
+  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue('95')
   await expect(inspector.getByLabel('Local Z (mm)')).toHaveValue('1150')
 
+  await inspector.getByLabel('Local X (mm)').fill('135')
+  await inspector.getByRole('button', { name: 'Apply transform' }).click()
+  await expect(inspector.getByLabel('Local X (mm)')).toHaveValue('135')
+  await expect(inspector.getByLabel('World X (mm)')).toHaveValue('135')
   await page.getByLabel('Warning distance (mm)').fill('50')
   await expect(page.getByLabel('Live collision counts')).toContainText(
     /Near-miss [1-9]/,

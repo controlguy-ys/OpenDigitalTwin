@@ -105,10 +105,11 @@ export function robotLinkToGeometryEntity(
 export function workbenchToGeometryEntity(
   object: Object3D | null,
   colliderRevision = 0,
+  name = 'Workbench',
 ): GeometryEntityRegistration {
   return registration({
     id: 'workcell:workbench',
-    name: 'Workbench',
+    name,
     category: 'environment',
     boxes: [defaultBox([0, 0, 1.03], [0.9, 0.6, 0.05])],
     object,

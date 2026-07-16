@@ -40,8 +40,6 @@ import { jobCommandService } from '../features/jobs/job-command-service'
 import { RobotImportDialog } from '../features/robot/RobotImportDialog'
 import { RobotConfigurationDialog } from '../features/robot/RobotConfigurationDialog'
 import { useRobotGeometryStore } from '../features/robot/robot-geometry-store'
-import { restoreRobotGeometryRecords } from '../features/robot/robot-step-import'
-import { robotGeometryRepository } from '../features/robot/robot-geometry-repository'
 import { RobotGeometryDialog } from '../features/robot/RobotGeometryDialog'
 import { AppShell } from './AppShell'
 import { useObjectAssetStore } from '../features/objects/object-asset-store'
@@ -69,6 +67,7 @@ import {
   operationFeedbackStore,
   runOperationWithFeedback,
 } from '../features/ui/OperationFeedback'
+import { createInitialProjectBootstrap } from './initial-project-bootstrap'
 
 type RobotInspectorTab = 'Transform' | 'Mechanics' | 'Geometry' | 'Frames'
 const ROBOT_INSPECTOR_TABS = ['Transform', 'Mechanics', 'Geometry', 'Frames'] as const
@@ -207,12 +206,15 @@ export function App() {
   const interactionControllerRef = useRef<InteractionRuntimeController | null>(
     null,
   )
+  const initialProjectBootstrapRef = useRef<
+    ReturnType<typeof createInitialProjectBootstrap> | null
+  >(null)
+  initialProjectBootstrapRef.current ??= createInitialProjectBootstrap(projectStore)
   const sourceQuality = useRobotStore((state) => state.sourceQuality)
   const jointAnglesDeg = useRobotStore((state) => state.anglesDeg)
   const hydrateEquipment = useEquipmentStore((state) => state.hydrate)
   const hydrateObjectAssets = useObjectAssetStore((state) => state.hydrate)
   const hydrateRobotGeometry = useRobotGeometryStore((state) => state.hydrate)
-  const hydrateProject = useProjectStore((state) => state.hydrate)
   const selection = useInteractionStore((state) => state.selection)
   const selectEquipment = useInteractionStore((state) => state.selectEquipment)
   const selectedSceneEntityId = useStore(
@@ -321,31 +323,15 @@ export function App() {
         hydrateObjectAssets(),
         hydrateRobotGeometry(),
       ])
-      await hydrateProject()
-      if (projectStore.getState().activeSnapshot !== null) return
-      if (active) {
-        const robotRecords = useRobotGeometryStore.getState().links
-        const restoredRobot =
-          robotRecords.length === 0
-            ? null
-            : await restoreRobotGeometryRecords(robotRecords, stepImportClient)
-                .catch(() => null)
-        if (active && restoredRobot !== null) {
-          robotGeometryRepository.replace(restoredRobot)
-        }
-        await Promise.all([
-          importedGeometryRepository.restore(useEquipmentStore.getState().records),
-          importedGeometryRepository.restoreObjectAssets(
-            useObjectAssetStore.getState().assets,
-          ),
-        ])
-      }
-    })()
+      await initialProjectBootstrapRef.current!.run(() => active)
+    })().catch((error) => {
+      if (active) operationFeedbackStore.getState().publishError(error)
+    })
 
     return () => {
       active = false
     }
-  }, [hydrateEquipment, hydrateObjectAssets, hydrateProject, hydrateRobotGeometry])
+  }, [hydrateEquipment, hydrateObjectAssets, hydrateRobotGeometry])
 
   useEffect(() => {
     if (selection?.kind === 'equipment') {

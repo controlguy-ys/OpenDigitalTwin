@@ -33,7 +33,15 @@ export function createLabelledFrameMarker(name: string, frame: string): Group {
 export function frameMarkerScale(distance: number, verticalFovDeg: number, viewportHeightPx: number): number {
   if (!(distance > 0) || !(viewportHeightPx > 0)) return 1
   const visibleHeight = 2 * distance * Math.tan(MathUtils.degToRad(verticalFovDeg / 2))
-  return visibleHeight * 47 / viewportHeightPx / 0.12
+  return visibleHeight * 28 / viewportHeightPx / 0.12
+}
+
+export function displayedFrameMarkerScale(
+  distance: number,
+  verticalFovDeg: number,
+  viewportHeightPx: number,
+): number {
+  return Math.min(frameMarkerScale(distance, verticalFovDeg, viewportHeightPx), 3)
 }
 
 export interface TcpFrameMarkerProps {
@@ -53,10 +61,10 @@ export function TcpFrameMarker({
   useFrame(({ camera, size }) => {
     if (visualRef.current === null || !(camera instanceof PerspectiveCamera)) return
     visualRef.current.getWorldPosition(worldPosition)
-    const scale = MathUtils.clamp(
-      frameMarkerScale(camera.position.distanceTo(worldPosition), camera.fov, size.height),
-      0.35,
-      3,
+    const scale = displayedFrameMarkerScale(
+      camera.position.distanceTo(worldPosition),
+      camera.fov,
+      size.height,
     )
     visualRef.current.scale.setScalar(scale)
   })

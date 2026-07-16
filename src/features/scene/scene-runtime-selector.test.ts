@@ -88,6 +88,21 @@ describe('scene runtime selector', () => {
     expect(runtime.linearAxis?.entityId).toBe('linear-axis:active')
   })
 
+  it('publishes the dedicated Workbench Environment runtime without treating it as Equipment', () => {
+    const workbench: SceneEntityV1 = {
+      kind: 'environment', id: 'workcell:workbench', name: 'Workbench', parentId: null,
+      localPose: { ...IDENTITY_POSE, positionM: [0.25, 0.5, 0.75] }, visible: true,
+    }
+
+    const runtime = selectSceneRuntime(snapshot([workbench]), { isolatedEntityId: null })
+
+    expect(runtime.workbench).toMatchObject({
+      entityId: 'workcell:workbench',
+      worldPose: { positionM: [0.25, 0.5, 0.75] },
+    })
+    expect(runtime.objects).toEqual([])
+  })
+
   it('projects the session draft pose without mutating the published Entity', () => {
     const object: SceneEntityV1 = {
       kind: 'object', id: 'object:cup-1', name: 'Cup', parentId: null,

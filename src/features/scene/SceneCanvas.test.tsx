@@ -14,11 +14,13 @@ vi.mock('@react-three/fiber', () => ({
   Canvas: ({
     children,
     onPointerMissed,
+    shadows,
   }: {
     children: ReactNode
     onPointerMissed?: () => void
+    shadows?: boolean | string
   }) => (
-    <div data-testid="rendered-3d-viewport">
+    <div data-shadows={String(shadows)} data-testid="rendered-3d-viewport">
       {children}
       <button onClick={onPointerMissed} type="button">Miss rendered Entity</button>
     </div>
@@ -76,6 +78,13 @@ describe('SceneCanvas viewport context boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Home View' }))
     expect(cameraCalls.home).toHaveBeenCalledOnce()
     expect(screen.getByRole('button', { name: 'Focus Selection' })).toBeDisabled()
+  })
+
+  it('selects the supported percentage-closer shadow map', () => {
+    render(<SceneCanvas />)
+
+    expect(screen.getByTestId('rendered-3d-viewport'))
+      .toHaveAttribute('data-shadows', 'percentage')
   })
 
   it('does not publish test diagnostics for production camera commands', () => {

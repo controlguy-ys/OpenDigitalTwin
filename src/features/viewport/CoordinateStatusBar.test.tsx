@@ -23,6 +23,7 @@ describe('CoordinateStatusBar', () => {
     expect(screen.getByText('mm/deg')).toBeVisible()
     expect(screen.getByText('ZYX RPY')).toBeVisible()
     expect(screen.getByLabelText('Actual TCP pose')).toHaveTextContent('X 2000.0Y 250.0Z 500.0')
+    expect(screen.getByLabelText('Actual TCP pose')).toHaveTextContent('Rx 0.0Ry 0.0Rz 0.0')
 
     await user.selectOptions(screen.getByLabelText('Pose Frame'), 'mcp')
     expect(screen.getByLabelText('Actual TCP pose')).toHaveTextContent('X 1000.0Y 250.0Z 500.0')

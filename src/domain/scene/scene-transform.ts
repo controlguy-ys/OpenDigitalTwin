@@ -135,6 +135,9 @@ export function reparentSceneEntityPreservingWorld(
   if (entity.kind === 'linear-axis' && parentId !== null) {
     throw new Error('SCENE_AXIS_PARENT_INVALID: Linear Axis must remain MCP-level.')
   }
+  if (entity.kind === 'environment' && parentId !== null) {
+    throw new Error('SCENE_ENVIRONMENT_PARENT_INVALID: Environment must remain MCP-level.')
+  }
   if (entity.kind === 'object' && entity.transformSource === 'opcua' && parentId !== null) {
     throw new Error('SCENE_OPCUA_OBJECT_REQUIRES_MCP_PARENT: OPC UA Object must remain MCP-level.')
   }
@@ -150,14 +153,13 @@ export function reparentSceneEntityPreservingWorld(
           throw new Error('SCENE_AXIS_ROBOT_OCCUPIED: Linear Axis already has a Robot.')
         }
         robotEntityId = entity.id
-      } else {
+      } else if (entity.kind === 'group' || entity.kind === 'object') {
         if (carriageEntityId !== null && carriageEntityId !== entity.id) {
           throw new Error('SCENE_AXIS_CARRIAGE_OCCUPIED: Linear Axis already has a carriage.')
         }
-        if (entity.kind === 'linear-axis') {
-          throw new Error('SCENE_AXIS_PARENT_INVALID: Linear Axis cannot attach to itself.')
-        }
         carriageEntityId = entity.id
+      } else {
+        throw new Error('SCENE_AXIS_ATTACHMENT_INVALID: Entity cannot attach to the Linear Axis.')
       }
     }
     return { ...entry, carriageEntityId, robotEntityId }

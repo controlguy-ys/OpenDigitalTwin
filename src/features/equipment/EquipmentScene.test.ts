@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isExternalCollisionRegistrationActive,
+  isExternalSceneEntityPublished,
   isSceneTransformManuallyOwned,
 } from './EquipmentScene'
 import { testSceneRuntime } from '../scene/scene-ui-test-fixtures'
@@ -62,5 +63,12 @@ describe('external collision registration visibility', () => {
 
     expect(isSceneTransformManuallyOwned(runtime, 'object:cup-1')).toBe(true)
     expect(isSceneTransformManuallyOwned(runtime, 'object:live-part')).toBe(false)
+  })
+
+  it('excludes records missing from the published Scene runtime', () => {
+    const runtime = testSceneRuntime()
+
+    expect(isExternalSceneEntityPublished(runtime, 'object:cup-1')).toBe(true)
+    expect(isExternalSceneEntityPublished(runtime, 'equipment:machine-01')).toBe(false)
   })
 })

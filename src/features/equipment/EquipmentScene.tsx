@@ -74,6 +74,13 @@ export function isSceneTransformManuallyOwned(
   return source?.kind !== 'object' || source.transformSource === 'manual'
 }
 
+export function isExternalSceneEntityPublished(
+  sceneRuntime: Pick<SceneRuntimeProjectionV1, 'byId'>,
+  entityId: ExternalCollisionEntityId,
+): boolean {
+  return sceneRuntime.byId.get(entityId)?.effectiveVisible === true
+}
+
 export function EquipmentVisual({ record }: { record: EquipmentRecord }) {
   return record.kind === 'imported' ? (
     <ImportedEquipment record={record} />
@@ -278,7 +285,7 @@ export interface EquipmentSceneProps {
   >
   onDraggingChange?(dragging: boolean): void
   onEntityContextMenu?: SceneEntityContextHandler
-  sceneRuntime?: SceneRuntimeProjectionV1
+  sceneRuntime: SceneRuntimeProjectionV1
 }
 
 const NOOP_DRAGGING_CHANGE = () => undefined
@@ -288,7 +295,7 @@ export function EquipmentScene({
   onDraggingChange = NOOP_DRAGGING_CHANGE,
   onEntityContextMenu,
   sceneRuntime,
-}: EquipmentSceneProps = {}) {
+}: EquipmentSceneProps) {
   const records = useEquipmentStore((state) => state.records)
   const objectAssets = useObjectAssetStore((state) => state.assets)
   const objectInstances = useObjectAssetStore((state) => state.instances)
@@ -297,8 +304,8 @@ export function EquipmentScene({
     [objectAssets, objectInstances, records],
   )
   const publishedParticipants = useMemo(() => participants.flatMap((participant) => {
-    const runtime = sceneRuntime?.byId.get(participant.entityId)
-    if (runtime !== undefined && !runtime.effectiveVisible) return []
+    const runtime = sceneRuntime.byId.get(participant.entityId)
+    if (!isExternalSceneEntityPublished(sceneRuntime, participant.entityId)) return []
     return [{
       ...participant,
       record: runtime === undefined
@@ -326,7 +333,7 @@ export function EquipmentScene({
     const cleanups: (() => void)[] = []
     for (const record of records) {
       const entityId = `equipment:${record.id}` as const
-      if (sceneRuntime?.byId.get(entityId)?.effectiveVisible === false) continue
+      if (!isExternalSceneEntityPublished(sceneRuntime, entityId)) continue
       if (!isExternalCollisionRegistrationActive(
         entityId,
         record.id,
@@ -348,7 +355,7 @@ export function EquipmentScene({
     const assetsById = new Map(objectAssets.map((asset) => [asset.id, asset]))
     for (const instance of objectInstances) {
       const entityId = `object:${instance.id}` as const
-      if (sceneRuntime?.byId.get(entityId)?.effectiveVisible === false) continue
+      if (!isExternalSceneEntityPublished(sceneRuntime, entityId)) continue
       if (!isExternalCollisionRegistrationActive(
         entityId,
         instance.id,

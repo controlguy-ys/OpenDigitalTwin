@@ -143,7 +143,7 @@ describe('JointInspector', () => {
     unsubscribe()
   })
 
-  it('publishes Home and Reset through the simulation source', async () => {
+  it('publishes Robot Home and Reset through the simulation source', async () => {
     const user = userEvent.setup()
     const source = new SimulationJointSource()
     const receivedFrames = vi.fn()
@@ -167,7 +167,7 @@ describe('JointInspector', () => {
     }] })
 
     render(<JointInspector source={source} />)
-    await user.click(screen.getByRole('button', { name: 'Home' }))
+    await user.click(screen.getByRole('button', { name: 'Robot Home' }))
 
     expect(receivedFrames).toHaveBeenLastCalledWith({
       anglesDeg: [0, 0, 0, 0, 0, 0],
@@ -311,7 +311,7 @@ describe('JointInspector', () => {
     for (const control of [
       ...screen.getAllByRole('slider'),
       ...screen.getAllByRole('spinbutton'),
-      screen.getByRole('button', { name: 'Home' }),
+      screen.getByRole('button', { name: 'Robot Home' }),
       screen.getByRole('button', { name: 'Reset' }),
       screen.getByRole('button', { name: 'Save Pose' }),
       screen.getByRole('button', { name: 'Open Gripper' }),

@@ -19,12 +19,24 @@ export class RobotGeometryRepository {
 
   replace(nextAssets: ReadonlyMap<RobotLinkId, ImportedThreeAsset>): void {
     const previous = this.exchange(nextAssets)
-    for (const asset of previous.values()) asset.dispose()
+    const retained = new Set(nextAssets.values())
+    const disposed = new Set<ImportedThreeAsset>()
+    for (const asset of previous.values()) {
+      if (retained.has(asset) || disposed.has(asset)) continue
+      disposed.add(asset)
+      asset.dispose()
+    }
   }
 
   replaceLink(linkId: RobotLinkId, nextAsset: ImportedThreeAsset): void {
-    this.assets.get(linkId)?.dispose()
+    const previous = this.assets.get(linkId)
     this.assets.set(linkId, nextAsset)
+    if (
+      previous !== undefined && previous !== nextAsset &&
+      ![...this.assets.values()].includes(previous)
+    ) {
+      previous.dispose()
+    }
     this.emit()
   }
 

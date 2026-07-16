@@ -192,7 +192,7 @@ export function SceneCanvas({
             useInteractionStore.getState().clearSelection()
             sceneEditorStore.getState().select(null)
           }}
-          shadows
+          shadows="percentage"
         >
           <Suspense fallback={null}>
             <Workcell

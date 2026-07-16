@@ -6,9 +6,9 @@ export interface ViewCubeProps {
 }
 
 const FACE_VIEWS = [
-  ['Top', 'top'], ['Front', 'front'], ['Right', 'right'],
-  ['Back', 'back'], ['Left', 'left'], ['Bottom', 'bottom'],
-] as const satisfies readonly (readonly [string, StandardWorldView])[]
+  ['Top', 'top', 'T'], ['Front', 'front', 'F'], ['Right', 'right', 'R'],
+  ['Back', 'back', 'BK'], ['Left', 'left', 'L'], ['Bottom', 'bottom', 'BTM'],
+] as const satisfies readonly (readonly [string, StandardWorldView, string])[]
 
 export function ViewCube({ setStandardView }: ViewCubeProps) {
   return (
@@ -20,14 +20,14 @@ export function ViewCube({ setStandardView }: ViewCubeProps) {
         title="Isometric view (World)"
         type="button"
       >ISO</button>
-      {FACE_VIEWS.map(([label, view]) => (
+      {FACE_VIEWS.map(([label, view, abbreviation]) => (
         <button
           aria-label={`${label} view`}
           key={view}
           onClick={() => setStandardView(view)}
           title={`${label} view (World)`}
           type="button"
-        >{label.slice(0, 1)}</button>
+        >{abbreviation}</button>
       ))}
     </div>
   )

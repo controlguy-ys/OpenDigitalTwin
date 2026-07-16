@@ -25,9 +25,9 @@ function deletionSet(
 ): readonly SceneEntityIdV1[] {
   const root = runtime.byId.get(rootId)
   if (root === undefined) throw new Error(`Scene Entity ${rootId} is unavailable.`)
-  if (root.source.kind === 'object') return [rootId]
+  if (root.source.kind === 'object' || root.source.kind === 'environment') return [rootId]
   if (root.source.kind !== 'group') {
-    throw new Error('Only Object and Group Scene Entities can be deleted.')
+    throw new Error('Only Object, Environment, and Group Scene Entities can be deleted.')
   }
 
   const result: SceneEntityIdV1[] = [rootId]

@@ -191,7 +191,7 @@ export function AppShell({
 
   return (
     <div
-      className={`app-shell${isCompactTopBar ? ' is-compact-topbar' : ''}`}
+      className={`app-shell${isCompactTopBar ? ' is-compact-topbar' : ''}${isBottomRailOpen ? ' is-bottom-rail-open' : ''}`}
       data-controls-disabled={String(controlsDisabled)}
       style={{
         '--sidebar-split-percent': splitPercent,
@@ -222,8 +222,14 @@ export function AppShell({
         >
           {projectMenu}
           <span>SIMULATION</span>
-          <span className="source-quality" data-quality={sourceQuality}>
-            {sourceQuality}
+          <span
+            aria-label={`Joint source quality ${sourceQuality}`}
+            aria-live="polite"
+            className="source-quality"
+            data-quality={sourceQuality}
+            role="status"
+          >
+            JOINT {sourceQuality}
           </span>
           <label className="joint-source-select">
             <span>Joint source</span>
@@ -353,11 +359,12 @@ export function AppShell({
         {inspector}
       </aside>
       <section
+        aria-hidden={!isBottomRailOpen}
         aria-label="Timeline and Events"
         className={`bottom-rail${isBottomRailOpen ? ' is-open' : ''}`}
         id="timeline-events-panel"
       >
-        <div className="bottom-rail-content">{bottomRail}</div>
+        <div className="bottom-rail-content" hidden={!isBottomRailOpen}>{bottomRail}</div>
       </section>
     </div>
   )

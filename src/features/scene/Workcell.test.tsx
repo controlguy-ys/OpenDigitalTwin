@@ -3,9 +3,11 @@ import { BoxGeometry, Group, Mesh } from 'three'
 import type { SceneRuntimeProjectionV1 } from './scene-runtime-selector'
 import {
   createViewportBoundResolvers,
+  workbenchDropSurfaceZ,
   workcellLinearAxisBindings,
   workcellRenderEntities,
 } from './Workcell'
+import { WORKBENCH_TOP_Z } from './workcell-constants'
 import type { CommittedLinearAxisSourceV1 } from './linear-axis-source'
 import type { LinearAxisCommittedStateV1 } from './linear-axis-source'
 
@@ -139,6 +141,59 @@ describe('Workcell published render authority', () => {
     expect(createViewportBoundResolvers(
       runtime, 'group:fixture', roots, robotRoot, scene,
     ).canFocusSelection).toBe(true)
+  })
+
+  it('focuses and fits the dedicated published Workbench render root', () => {
+    const workbench = {
+      entityId: 'workcell:workbench', kind: 'environment', effectiveVisible: true,
+      parentId: null,
+    }
+    const runtime = {
+      entities: [workbench], objects: [], robot: null, linearAxis: null,
+      workbench,
+      byId: new Map([['workcell:workbench', workbench]]),
+    } as unknown as SceneRuntimeProjectionV1
+    const scene = new Group()
+    const root = new Group()
+    root.name = 'workcell:workbench'
+    root.add(new Mesh(new BoxGeometry(1.8, 1.2, 0.1)))
+    scene.add(root)
+
+    const resolvers = createViewportBoundResolvers(
+      runtime, 'workcell:workbench', new Map(), null, scene,
+    )
+
+    expect(resolvers.canFocusSelection).toBe(true)
+    expect(resolvers.focusSelectionBounds().isEmpty()).toBe(false)
+    expect(resolvers.fitAllBounds().isEmpty()).toBe(false)
+  })
+
+  it('uses the transformed Workbench top only while its published entity is visible', () => {
+    const visibleWorkbench = {
+      effectiveVisible: true,
+      worldMatrix: [
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0.25, 1,
+      ],
+    }
+    const runtime = { workbench: visibleWorkbench } as unknown as SceneRuntimeProjectionV1
+
+    expect(workbenchDropSurfaceZ(runtime)).toBeCloseTo(WORKBENCH_TOP_Z + 0.25)
+    expect(workbenchDropSurfaceZ(runtime, {
+      position: [0, 0, 0.5],
+      quaternion: [0, 0, 0, 1],
+      scale: [1, 1, 1],
+    })).toBeCloseTo(WORKBENCH_TOP_Z + 0.75)
+    expect(workbenchDropSurfaceZ({
+      ...runtime,
+      workbench: { ...visibleWorkbench, effectiveVisible: false },
+    } as unknown as SceneRuntimeProjectionV1)).toBe(0)
+    expect(workbenchDropSurfaceZ({
+      ...runtime,
+      workbench: null,
+    } as unknown as SceneRuntimeProjectionV1)).toBe(0)
   })
 
   it('binds the published runtime, live Object roots, and computed Robot root to the axis updater', () => {

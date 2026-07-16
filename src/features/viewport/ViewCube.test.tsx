@@ -14,6 +14,8 @@ describe('ViewCube', () => {
 
     rerender(<ViewCube robotRevision={99} setStandardView={setStandardView} />)
     expect(screen.getByLabelText('World view cube')).toHaveAttribute('data-reference', 'world')
+    expect(screen.getByRole('button', { name: 'Back view' })).toHaveTextContent('BK')
+    expect(screen.getByRole('button', { name: 'Bottom view' })).toHaveTextContent('BTM')
     await user.click(screen.getByRole('button', { name: 'Top view' }))
     await user.click(screen.getByRole('button', { name: 'Isometric view' }))
     expect(setStandardView).toHaveBeenNthCalledWith(1, 'top')

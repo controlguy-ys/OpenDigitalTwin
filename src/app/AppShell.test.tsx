@@ -70,6 +70,35 @@ describe('AppShell', () => {
     expect(getByLabelText('Timeline and Events')).toHaveClass('is-open')
   })
 
+  it('hides collapsed bottom content and restores viewport space on desktop', async () => {
+    const user = userEvent.setup()
+    render(
+      <AppShell
+        bottomRail={<button type="button">Bottom action</button>}
+        viewport={<div>3D viewport</div>}
+      />,
+    )
+
+    const shell = screen.getByLabelText('3D viewport').closest('.app-shell')
+    const control = screen.getByRole('button', { name: 'Timeline and Events sheet' })
+    const rail = screen.getByLabelText('Timeline and Events')
+    const content = screen.getByRole('button', { name: 'Bottom action', hidden: true })
+      .closest('.bottom-rail-content')
+
+    expect(control).toHaveAttribute('aria-expanded', 'false')
+    expect(shell).not.toHaveClass('is-bottom-rail-open')
+    expect(rail).toHaveAttribute('aria-hidden', 'true')
+    expect(content).toHaveAttribute('hidden')
+
+    await user.click(control)
+
+    expect(control).toHaveAttribute('aria-expanded', 'true')
+    expect(shell).toHaveClass('is-bottom-rail-open')
+    expect(rail).toHaveAttribute('aria-hidden', 'false')
+    expect(content).not.toHaveAttribute('hidden')
+    expect(localStorage.getItem('robotsim.bottomDrawerOpen')).toBe('true')
+  })
+
   it('exposes when scene-dependent controls are not ready', () => {
     render(<AppShell controlsDisabled viewport={<div>3D viewport</div>} />)
 
@@ -282,6 +311,8 @@ describe('AppShell', () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await user.click(screen.getByRole('button', { name: 'Timeline and Events sheet' }))
+
     expect(screen.getByRole('region', { name: 'Scene Objects' })).toBeVisible()
     expect(screen.getByRole('region', { name: 'Robot Jobs' })).toBeVisible()
     expect(screen.getByRole('button', { name: '+ New Job' })).toBeVisible()
@@ -325,15 +356,17 @@ describe('AppShell', () => {
     const user = userEvent.setup()
     render(<App />)
 
+    await user.click(screen.getByRole('button', { name: 'Timeline and Events sheet' }))
+
     expect(screen.getByRole('heading', { name: 'Inspector' })).toBeVisible()
     expect(screen.getByRole('heading', { name: 'Timeline' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Home' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Robot Home' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Save Pose' })).toBeDisabled()
     expect(screen.getByText(/create a Job/i)).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: 'Scene ready' }))
-    expect(screen.getByRole('button', { name: 'Home' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Robot Home' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
   })
 
@@ -368,7 +401,9 @@ describe('AppShell', () => {
       />,
     )
 
-    expect(screen.getByRole('banner')).toHaveTextContent('STALE')
+    expect(screen.getByRole('status', { name: 'Joint source quality STALE' }))
+      .toHaveTextContent('JOINT STALE')
+    expect(screen.getByRole('banner')).toHaveTextContent('JOINT STALE')
     expect(screen.getByRole('banner')).not.toHaveTextContent('GOOD')
   })
 })

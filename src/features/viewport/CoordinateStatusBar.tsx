@@ -55,9 +55,9 @@ export function CoordinateStatusBar({
         <span>X {value(pose?.xyzMm[0])}</span>
         <span>Y {value(pose?.xyzMm[1])}</span>
         <span>Z {value(pose?.xyzMm[2])}</span>
-        <span>R {value(pose?.rpyDeg[0])}</span>
-        <span>P {value(pose?.rpyDeg[1])}</span>
-        <span>Y {value(pose?.rpyDeg[2])}</span>
+        <span>Rx {value(pose?.rpyDeg[0])}</span>
+        <span>Ry {value(pose?.rpyDeg[1])}</span>
+        <span>Rz {value(pose?.rpyDeg[2])}</span>
       </output>
       <span className="coordinate-status-value">mm/deg</span>
       <span className="coordinate-status-value">ZYX RPY</span>

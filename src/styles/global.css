@@ -44,7 +44,11 @@ button {
     'assets viewport inspector'
     'bottom bottom bottom';
   grid-template-columns: 248px minmax(0, 1fr) 320px;
-  grid-template-rows: 48px minmax(0, 1fr) 128px;
+  grid-template-rows: 48px minmax(0, 1fr) 0;
+}
+
+.app-shell.is-bottom-rail-open {
+  grid-template-rows: 48px minmax(0, 1fr) var(--bottom-rail-height);
 }
 
 .top-bar {
@@ -256,6 +260,43 @@ button {
   display: none;
 }
 
+.sheet-control {
+  position: fixed;
+  right: 8px;
+  bottom: 8px;
+  z-index: 10;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--color-muted);
+  cursor: pointer;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  transition: bottom 160ms ease;
+  place-items: center;
+}
+
+.sheet-control.is-open {
+  bottom: calc(var(--bottom-rail-height) - 32px);
+}
+
+.sheet-control:not(.is-open) svg {
+  transform: rotate(180deg);
+}
+
+.sheet-control:hover,
+.sheet-control:focus-visible {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.sheet-control:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .asset-rail,
 .inspector,
 .bottom-rail {
@@ -271,6 +312,12 @@ button {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.bottom-rail[aria-hidden='true'] {
+  visibility: hidden;
+  border-top: 0;
+  pointer-events: none;
 }
 
 .asset-rail {
@@ -1410,8 +1457,8 @@ button {
 
 .equipment-status-overlay {
   display: grid;
-  min-width: 64px;
-  padding: 6px 10px;
+  min-width: 40px;
+  padding: 4px 6px;
   color: #f8fafc;
   text-align: center;
   background: rgb(10 16 24 / 92%);
@@ -1422,7 +1469,7 @@ button {
 }
 
 .equipment-status-overlay strong {
-  font: 600 14px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 600 12px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .equipment-status-overlay small {
@@ -1621,11 +1668,13 @@ button {
 
 .timeline {
   height: 100%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .bottom-workspace {
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: 40px minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -1641,10 +1690,10 @@ button {
 }
 
 .bottom-workspace-tabs button {
-  min-height: 26px;
+  min-height: 32px;
   padding: 0 10px;
   color: var(--color-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .bottom-workspace-tabs button[aria-selected='true'] {
@@ -1668,7 +1717,7 @@ button {
 .bottom-workspace-panel {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .bottom-workspace-panel > .timeline,
@@ -1740,8 +1789,8 @@ button {
 
 .timeline-controls button {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   color: var(--color-muted);
   cursor: pointer;
@@ -1799,7 +1848,7 @@ button {
   gap: 3px;
   align-items: center;
   justify-self: end;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .timeline-pose input {
@@ -1819,8 +1868,8 @@ button {
 
 .timeline-pose-actions button {
   display: grid;
-  width: 23px;
-  height: 20px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   color: var(--color-muted);
   cursor: pointer;
@@ -1905,7 +1954,7 @@ button {
   align-items: center;
   gap: 6px;
   color: var(--color-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .collision-policy-controls label:nth-child(2) {
@@ -1916,10 +1965,10 @@ button {
 .collision-policy-controls input[type='number'] {
   width: 62px;
   min-width: 0;
-  height: 24px;
+  height: 32px;
   padding: 0 5px;
   color: var(--color-text);
-  font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
   background: var(--color-canvas);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -1945,15 +1994,15 @@ button {
 .collision-navigation-buttons output {
   min-width: 82px;
   color: var(--color-muted);
-  font-size: 9px;
+  font-size: 11px;
   text-align: center;
 }
 
 .collision-panel button {
-  min-height: 23px;
+  min-height: 32px;
   padding: 2px 6px;
   color: var(--color-text);
-  font-size: 9px;
+  font-size: 11px;
   cursor: pointer;
   background: var(--color-canvas);
   border: 1px solid var(--color-border);
@@ -1983,25 +2032,25 @@ button {
   gap: 6px;
   align-items: center;
   min-width: 0;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .collision-finding code,
 .collision-ignored-pairs code {
   overflow: hidden;
   color: var(--color-muted);
-  font: 9px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .collision-finding output {
-  font: 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .collision-ignored-pairs,
 .collision-diagnostics {
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .collision-ignored-pairs ul,
@@ -2034,7 +2083,7 @@ button {
 .collision-panel-footer p {
   margin: 0;
   color: var(--color-muted);
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.3;
 }
 
@@ -2052,13 +2101,14 @@ button {
 }
 
 @media (max-width: 959.98px) {
-  .app-shell {
+  .app-shell,
+  .app-shell.is-bottom-rail-open {
     grid-template-areas:
       'top top top'
       'asset-edge viewport inspector-edge'
       'bottom bottom bottom';
     grid-template-columns: 48px minmax(0, 1fr) 48px;
-    grid-template-rows: 48px minmax(0, 1fr) 64px;
+    grid-template-rows: 48px minmax(0, 1fr) 0;
   }
 
   .app-shell::before,
@@ -2139,6 +2189,10 @@ button {
     border-left: 1px solid var(--color-border);
   }
 
+  .sheet-control.is-open {
+    bottom: 0;
+  }
+
   .sheet-control svg {
     transition: transform 160ms ease;
   }
@@ -2184,12 +2238,27 @@ button {
     left: 0;
     z-index: 4;
     height: 128px;
-    transform: translateY(64px);
+    transform: translateY(100%);
     transition: transform 160ms ease;
   }
 
   .bottom-rail.is-open {
     transform: translateY(0);
+  }
+
+  .sheet-control.is-open {
+    bottom: 96px;
+  }
+
+  .collision-panel {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    min-width: 0;
+  }
+
+  .collision-panel-header {
+    grid-column: 1;
+    flex-wrap: wrap;
   }
 
   .bottom-rail:not(.is-open) .bottom-rail-content {

@@ -36,7 +36,10 @@ import type { ImportedThreeAsset } from '../import/occt-to-three'
 import { useRobotStore } from '../joints/robot-store'
 import { useObjectAssetStore } from '../objects/object-asset-store'
 import { useInteractionStore } from '../interaction/interaction-store'
-import { loadDefaultRobotGeometry } from '../robot/default-robot-geometry'
+import {
+  bundledDefaultRobotLinkIds,
+  loadDefaultRobotGeometry,
+} from '../robot/default-robot-geometry'
 import {
   createDatasheetRobotConfiguration,
   useRobotConfigurationStore,
@@ -52,6 +55,8 @@ import type {
 } from './project-publication-coordinator'
 
 interface BrowserProjectRuntimeResources {
+  readonly geometrySignature: string
+  readonly ownsGeometryResources: boolean
   readonly robotAssets: ReadonlyMap<
     WorkcellProjectSnapshotV3['robot']['links'][number]['linkId'],
     ImportedThreeAsset
@@ -238,6 +243,60 @@ function projectBuiltInEquipmentReadModels(snapshot: WorkcellProjectSnapshotV3):
   return { records, hiddenIds }
 }
 
+async function projectGeometrySignature(
+  snapshot: WorkcellProjectSnapshotV3,
+  digest: Pick<ProjectSourceDigest, 'digestSource'>,
+): Promise<string> {
+  const objectAssets = await Promise.all(snapshot.objectAssets.map(async (asset) => {
+    if (asset.sourceKind === 'step') {
+      return {
+        id: asset.id,
+        sourceKind: asset.sourceKind,
+        sourceSha256: await digest.digestSource(asset.sourceBytes),
+        importScale: asset.importScale,
+        originMode: asset.originMode,
+      }
+    }
+    if (asset.sourceKind === 'box') {
+      return {
+        id: asset.id,
+        sourceKind: asset.sourceKind,
+        dimensionsM: asset.dimensionsM,
+        color: asset.color,
+        colliderCenter: asset.colliderCenter,
+        collisionHalfExtents: asset.collisionHalfExtents,
+      }
+    }
+    return {
+      id: asset.id,
+      sourceKind: asset.sourceKind,
+      radiusM: asset.radiusM,
+      heightM: asset.heightM,
+      axis: asset.axis,
+      radialSegments: asset.radialSegments,
+      color: asset.color,
+      colliderCenter: asset.colliderCenter,
+      collisionHalfExtents: asset.collisionHalfExtents,
+    }
+  }))
+  return JSON.stringify({
+    robotSources: snapshot.robot.sources.map((source) => ({
+      id: source.id,
+      sha256: source.sha256,
+      selectedSourceUnit: source.selectedSourceUnit,
+      sourceToMeters: source.sourceToMeters,
+      parserVersion: source.parserVersion,
+    })),
+    robotLinks: snapshot.robot.links.map((link) => ({
+      linkId: link.linkId,
+      sourceRefs: link.sourceRefs,
+      coordinateMode: link.coordinateMode,
+      zeroPoseLocalization: link.zeroPoseLocalization,
+    })),
+    objectAssets,
+  })
+}
+
 function replaceBuiltInVisibility(
   currentHiddenIds: readonly string[],
   previousRecords: readonly EquipmentRecord[],
@@ -341,6 +400,7 @@ function beginReadModelPublication(sources: readonly NotificationSource[]) {
 }
 
 function disposePreparedResources(resources: BrowserProjectRuntimeResources): void {
+  if (!resources.ownsGeometryResources) return
   for (const asset of resources.robotAssets.values()) asset.dispose()
   for (const [id, asset] of resources.objectAssets) {
     if (resources.objectRepository.get(id) !== asset) asset.dispose()
@@ -481,25 +541,41 @@ export function createBrowserProjectRuntime(
         frames: { mcp: identityTransform(), tcp: identityTransform() },
         simulation: { activeJobId: null, jobs: [] },
         scene: {
-          robotMountContact: { baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: null },
-          entities: [{
-            kind: 'robot',
-            id: 'robot:active',
-            name: configuration.name,
-            parentId: null,
-            localPose: {
-              positionM: [
-                configuration.basePosition[0],
-                configuration.basePosition[1],
-                configuration.basePosition[2] + WORKBENCH_TOP_Z,
-              ],
-              quaternion: new Quaternion().setFromEuler(new Euler(
-                ...configuration.baseRotationDeg.map(MathUtils.degToRad) as [number, number, number],
-                'XYZ',
-              )).toArray() as [number, number, number, number],
+          robotMountContact: {
+            baseLinkId: 'LINK00',
+            mountSurfaceCollisionEntityId: 'workcell:workbench',
+          },
+          entities: [
+            {
+              kind: 'robot',
+              id: 'robot:active',
+              name: configuration.name,
+              parentId: null,
+              localPose: {
+                positionM: [
+                  configuration.basePosition[0],
+                  configuration.basePosition[1],
+                  configuration.basePosition[2] + WORKBENCH_TOP_Z,
+                ],
+                quaternion: new Quaternion().setFromEuler(new Euler(
+                  ...configuration.baseRotationDeg.map(MathUtils.degToRad) as [number, number, number],
+                  'XYZ',
+                )).toArray() as [number, number, number, number],
+              },
+              visible: true,
             },
-            visible: true,
-          }],
+            {
+              kind: 'environment',
+              id: 'workcell:workbench',
+              name: 'Workbench',
+              parentId: null,
+              localPose: {
+                positionM: [0, 0, 0],
+                quaternion: [0, 0, 0, 1],
+              },
+              visible: true,
+            },
+          ],
         },
         objectAssets: [],
         objectInstances: [],
@@ -519,11 +595,32 @@ export function createBrowserProjectRuntime(
       const robotLinks = projectRobotReadModels(snapshot)
       const objects = projectObjectReadModels(snapshot)
       const equipment = projectBuiltInEquipmentReadModels(snapshot)
+      const geometrySignature = await projectGeometrySignature(snapshot, digest)
+      if (active?.resources.geometrySignature === geometrySignature) {
+        const resources = Object.freeze({
+          geometrySignature,
+          ownsGeometryResources: false,
+          robotAssets: active.resources.robotAssets,
+          objectAssets: active.resources.objectAssets,
+          objectRepository: active.resources.objectRepository,
+          robotLinks,
+          objectRecords: objects.assets,
+          objectInstances: objects.instances,
+          equipmentRecords: equipment.records,
+          hiddenBuiltInEquipmentIds: equipment.hiddenIds,
+        })
+        resourceOwnership.set(resources, 'prepared')
+        return resources
+      }
       const objectRepository = new ImportedGeometryRepository(stepImportClient)
       let robotAssets: ReadonlyMap<RobotLinkGeometryRecordV2['linkId'], ImportedThreeAsset> | null = null
       const primitiveAssets = new Map<string, ImportedThreeAsset>()
       try {
-        robotAssets = await prepareRobotAssets(robotLinks)
+        const bundledRobotLinks = bundledDefaultRobotLinkIds(snapshot.robot)
+        const importedRobotLinks = robotLinks.filter(({ linkId }) => !bundledRobotLinks.has(linkId))
+        robotAssets = importedRobotLinks.length === 0
+          ? new Map()
+          : await prepareRobotAssets(importedRobotLinks)
         await objectRepository.restoreObjectAssets(
           objects.assets.filter((asset) => asset.sourceKind === 'step'),
         )
@@ -539,6 +636,8 @@ export function createBrowserProjectRuntime(
           objectAssets.set(asset.id, geometry)
         }
         const resources = Object.freeze({
+          geometrySignature,
+          ownsGeometryResources: true,
           robotAssets,
           objectAssets,
           objectRepository,

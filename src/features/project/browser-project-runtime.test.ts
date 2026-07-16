@@ -17,6 +17,10 @@ import { robotGeometryRepository } from '../robot/robot-geometry-repository'
 import { useRobotGeometryStore } from '../robot/robot-geometry-store'
 import { WORKBENCH_TOP_Z } from '../scene/workcell-constants'
 import {
+  DEFAULT_ROBOT_SOURCE_FILE_NAMES,
+  DEFAULT_ROBOT_SOURCE_SHA256,
+} from '../robot/default-robot-geometry'
+import {
   createBrowserProjectRuntime,
   type BrowserProjectRuntimeBundleV1,
 } from './browser-project-runtime'
@@ -198,6 +202,193 @@ function publishRuntime(
 }
 
 describe('browser project collision policy bridge', () => {
+  it('uses bundled GLBs instead of reparsing the seven default STEP sources', async () => {
+    const prepareRobotAssets = vi.fn(async (_links: readonly RobotLinkGeometryRecordV2[]) => new Map())
+    const defaultLinks = LINK_IDS.map((linkId, index) => ({
+      ...robotLink(linkId),
+      sourceFileName: DEFAULT_ROBOT_SOURCE_FILE_NAMES[linkId],
+      sourceBytes: new Uint8Array([index + 1]).buffer,
+    }))
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => defaultLinks,
+      prepareRobotAssets,
+    })
+
+    const snapshot = structuredClone(await runtime.createNew()) as any
+    for (const source of snapshot.robot.sources) {
+      const linkId = LINK_IDS.find((candidate) =>
+        DEFAULT_ROBOT_SOURCE_FILE_NAMES[candidate] === source.sourceFileName,
+      )!
+      source.sha256 = DEFAULT_ROBOT_SOURCE_SHA256[linkId]
+    }
+    const resources = await runtime.prepare(snapshot, 'default-bundled')
+
+    expect(prepareRobotAssets).not.toHaveBeenCalled()
+    expect(resources.robotAssets.size).toBe(0)
+  })
+
+  it('does not substitute bundled GLBs for different STEP bytes with matching filenames', async () => {
+    const prepareRobotAssets = vi.fn(async (_links: readonly RobotLinkGeometryRecordV2[]) => new Map())
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map((linkId, index) => ({
+        ...robotLink(linkId),
+        sourceFileName: DEFAULT_ROBOT_SOURCE_FILE_NAMES[linkId],
+        sourceBytes: new Uint8Array([index + 1]).buffer,
+      })),
+      prepareRobotAssets,
+    })
+
+    const snapshot = await runtime.createNew()
+    await runtime.prepare(snapshot, 'same-names-different-bytes')
+
+    expect(prepareRobotAssets).toHaveBeenCalledOnce()
+  })
+
+  it('does not substitute bundled GLBs for a customized default-source assembly mapping', async () => {
+    const prepareRobotAssets = vi.fn(async (_links: readonly RobotLinkGeometryRecordV2[]) => new Map())
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map((linkId, index) => ({
+        ...robotLink(linkId),
+        sourceFileName: DEFAULT_ROBOT_SOURCE_FILE_NAMES[linkId],
+        sourceBytes: new Uint8Array([index + 1]).buffer,
+      })),
+      prepareRobotAssets,
+    })
+    const snapshot = structuredClone(await runtime.createNew()) as any
+    for (const source of snapshot.robot.sources) {
+      const linkId = LINK_IDS.find((candidate) =>
+        DEFAULT_ROBOT_SOURCE_FILE_NAMES[candidate] === source.sourceFileName,
+      )!
+      source.sha256 = DEFAULT_ROBOT_SOURCE_SHA256[linkId]
+    }
+    snapshot.robot.links[0].sourceRefs.push({
+      ...snapshot.robot.links[0].sourceRefs[0],
+      nodeName: 'custom-selection',
+    })
+
+    await runtime.prepare(snapshot, 'customized-default-source-mapping')
+
+    expect(prepareRobotAssets).toHaveBeenCalledOnce()
+    expect(prepareRobotAssets.mock.calls[0]?.[0].map(({ linkId }) => linkId)).toEqual(['LINK00'])
+  })
+
+  it('parses only a customized Link while retaining bundled GLBs for unchanged default Links', async () => {
+    const prepareRobotAssets = vi.fn(async (_links: readonly RobotLinkGeometryRecordV2[]) => new Map())
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map((linkId, index) => ({
+        ...robotLink(linkId),
+        sourceFileName: DEFAULT_ROBOT_SOURCE_FILE_NAMES[linkId],
+        sourceBytes: new Uint8Array([index + 1]).buffer,
+      })),
+      prepareRobotAssets,
+    })
+    const snapshot = structuredClone(await runtime.createNew()) as any
+    for (const source of snapshot.robot.sources) {
+      const linkId = LINK_IDS.find((candidate) =>
+        DEFAULT_ROBOT_SOURCE_FILE_NAMES[candidate] === source.sourceFileName,
+      )!
+      source.sha256 = DEFAULT_ROBOT_SOURCE_SHA256[linkId]
+    }
+    const link00SourceId = snapshot.robot.links[0].sourceRefs[0].sourceAssetId
+    snapshot.robot.sources.find(({ id }: { id: string }) => id === link00SourceId).sha256 = '0'.repeat(64)
+
+    await runtime.prepare(snapshot, 'one-customized-default-link')
+
+    expect(prepareRobotAssets).toHaveBeenCalledOnce()
+    expect(prepareRobotAssets.mock.calls[0]?.[0].map(({ linkId }) => linkId)).toEqual(['LINK00'])
+  })
+
+  it('retains bundled GLBs when canonical default Links are stored in a different array order', async () => {
+    const prepareRobotAssets = vi.fn(async (_links: readonly RobotLinkGeometryRecordV2[]) => new Map())
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map((linkId, index) => ({
+        ...robotLink(linkId),
+        sourceFileName: DEFAULT_ROBOT_SOURCE_FILE_NAMES[linkId],
+        sourceBytes: new Uint8Array([index + 1]).buffer,
+      })),
+      prepareRobotAssets,
+    })
+    const snapshot = structuredClone(await runtime.createNew()) as any
+    for (const source of snapshot.robot.sources) {
+      const linkId = LINK_IDS.find((candidate) =>
+        DEFAULT_ROBOT_SOURCE_FILE_NAMES[candidate] === source.sourceFileName,
+      )!
+      source.sha256 = DEFAULT_ROBOT_SOURCE_SHA256[linkId]
+    }
+    snapshot.robot.links.reverse()
+
+    await runtime.prepare(snapshot, 'reordered-default-links')
+
+    expect(prepareRobotAssets).not.toHaveBeenCalled()
+  })
+
+  it('reuses prepared geometry when a Scene pose changes without changing asset sources', async () => {
+    const robotDispose = vi.fn()
+    const prepareRobotAssets = vi.fn(async () => new Map([
+      ['LINK00' as const, geometryAsset(robotDispose)],
+    ]))
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map(robotLink),
+      prepareRobotAssets,
+    })
+    const first = withPrimitiveAssets(await runtime.createNew())
+    const firstResources = await runtime.prepare(first, 'revision-a')
+    publishRuntime(runtime, {
+      revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources,
+    })
+    const firstBox = importedGeometryRepository.get('box-asset')
+    const next = structuredClone(first) as any
+    next.scene.entities.find(({ id }: { id: string }) => id === 'object:box-asset-instance')
+      .localPose.positionM = [0.135, 0, 0]
+
+    const nextResources = await runtime.prepare(next, 'revision-b')
+
+    expect(prepareRobotAssets).toHaveBeenCalledTimes(1)
+    expect(nextResources.robotAssets).toBe(firstResources.robotAssets)
+    expect(nextResources.objectAssets).toBe(firstResources.objectAssets)
+    publishRuntime(runtime, {
+      revisionId: 'revision-b', snapshot: next, generation: 2, resources: nextResources,
+    })
+    expect(importedGeometryRepository.get('box-asset')).toBe(firstBox)
+    expect(useObjectAssetStore.getState().instances[0]?.transform.position).toEqual([0.135, 0, 0])
+    expect(robotDispose).not.toHaveBeenCalled()
+  })
+
+  it('does not dispose active geometry when a reused pose bundle is abandoned or rolled back', async () => {
+    const robotDispose = vi.fn()
+    const runtime = createBrowserProjectRuntime({
+      loadRobotGeometry: async () => LINK_IDS.map(robotLink),
+      prepareRobotAssets: async () => new Map([
+        ['LINK00', geometryAsset(robotDispose)],
+      ]),
+    })
+    const first = withPrimitiveAssets(await runtime.createNew())
+    const firstResources = await runtime.prepare(first, 'revision-a')
+    publishRuntime(runtime, {
+      revisionId: 'revision-a', snapshot: first, generation: 1, resources: firstResources,
+    })
+    const activeBox = importedGeometryRepository.get('box-asset')
+    const next = structuredClone(first) as any
+    next.scene.entities.find(({ id }: { id: string }) => id === 'object:box-asset-instance')
+      .localPose.positionM = [0.2, 0, 0]
+
+    const abandonedResources = await runtime.prepare(next, 'revision-abandoned')
+    runtime.dispose({
+      revisionId: 'revision-abandoned', snapshot: next, generation: 2,
+      resources: abandonedResources,
+    })
+    const rollbackResources = await runtime.prepare(next, 'revision-rollback')
+    const publication = runtime.apply({
+      revisionId: 'revision-rollback', snapshot: next, generation: 3,
+      resources: rollbackResources,
+    })
+    publication.rollback()
+
+    expect(runtime.activeRevisionId()).toBe('revision-a')
+    expect(importedGeometryRepository.get('box-asset')).toBe(activeBox)
+    expect(robotDispose).not.toHaveBeenCalled()
+  })
+
   it('creates a native V3 project with the canonical collision policy', async () => {
     useRobotGeometryStore.setState({ links: LINK_IDS.map(robotLink) })
     useCollisionStore.getState().setCollisionEnabled(false)
@@ -242,6 +433,19 @@ describe('browser project collision policy bridge', () => {
       },
     })
     expect(captured.collisionPolicy).toEqual(DEFAULT_COLLISION_POLICY)
+    expect(captured.scene.robotMountContact).toEqual({
+      baseLinkId: 'LINK00',
+      mountSurfaceCollisionEntityId: 'workcell:workbench',
+    })
+    expect(captured.scene.entities.find(({ id }) => id === 'workcell:workbench')).toEqual({
+      kind: 'environment',
+      id: 'workcell:workbench',
+      name: 'Workbench',
+      parentId: null,
+      localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+      visible: true,
+    })
+    expect(captured.builtInEquipment).toEqual([])
     expect(captured.scene.entities.find(({ kind }) => kind === 'robot')?.localPose)
       .toEqual({ positionM: [0, 0, WORKBENCH_TOP_Z], quaternion: [0, 0, 0, 1] })
   })
@@ -550,9 +754,11 @@ describe('browser project collision policy bridge', () => {
           : vi.fn(),
       )]]),
     })
-    const snapshot = await runtime.createNew()
+    const base = withPrimitiveAssets(await runtime.createNew())
 
     for (let index = 0; index < 10; index += 1) {
+      const snapshot = structuredClone(base) as any
+      snapshot.objectAssets[0].color = `#${index.toString(16).padStart(6, '0').toUpperCase()}`
       const revisionId = `revision-${index}`
       const resources = await runtime.prepare(snapshot, revisionId)
       publishRuntime(runtime, { revisionId, snapshot, generation: index + 1, resources })

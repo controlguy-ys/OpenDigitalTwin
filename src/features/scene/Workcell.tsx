@@ -1,6 +1,5 @@
 import { OrbitControls } from '@react-three/drei/core/OrbitControls.js'
 import {
-  forwardRef,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -9,8 +8,16 @@ import {
   useState,
   type ComponentRef,
 } from 'react'
-import { createPortal, useFrame, useThree } from '@react-three/fiber'
-import { Box3, Matrix4, PerspectiveCamera, type Group, type Object3D } from 'three'
+import { createPortal, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
+import {
+  Box3,
+  Matrix4,
+  PerspectiveCamera,
+  Quaternion,
+  Vector3,
+  type Group,
+  type Object3D,
+} from 'three'
 import { useStore } from 'zustand'
 import { CurrentPoseCollisionSystem } from '../collision/CurrentPoseCollisionSystem'
 import { EquipmentScene } from '../equipment/EquipmentScene'
@@ -28,17 +35,24 @@ import {
 import { useCoordinateFrameStore } from '../frames/coordinate-frame-store'
 import { registerGeometryEntity } from '../collision/geometry-entity-registry'
 import { workbenchToGeometryEntity } from '../collision/scene-entity-adapter'
-import type { ExternalCollisionEntityId } from '../interaction/interaction-store'
+import {
+  useInteractionStore,
+  type ExternalCollisionEntityId,
+} from '../interaction/interaction-store'
 import {
   createCollisionEntityOutlineSelector,
   useCollisionStore,
 } from '../collision/collision-store'
 import {
   usePublishedSceneRuntime,
+  type SceneRuntimeEntityV1,
   type SceneRuntimeProjectionV1,
 } from './scene-runtime-selector'
 import type { SceneEntityContextHandler } from './scene-context-request'
-import { LinearAxisRuntime } from './LinearAxisRuntime'
+import {
+  applySceneRuntimeWorldMatrix,
+  LinearAxisRuntime,
+} from './LinearAxisRuntime'
 import type {
   CommittedLinearAxisSourceV1,
   LinearAxisCommittedStateV1,
@@ -144,6 +158,9 @@ function fitAllBounds(
   if (runtime.linearAxis?.effectiveVisible) {
     addObjectBounds(bounds, scene.getObjectByName('linear-axis:active'))
   }
+  if (runtime.workbench?.effectiveVisible) {
+    addObjectBounds(bounds, scene.getObjectByName('workcell:workbench'))
+  }
   return bounds
 }
 
@@ -159,6 +176,9 @@ function selectedBounds(
   const selected = runtime.byId.get(selectedEntityId as SceneEntityIdV1)
   if (selected === undefined || !selected.effectiveVisible) return bounds
   if (selected.kind === 'robot') addObjectBounds(bounds, robotRoot)
+  else if (selected.kind === 'environment') {
+    addObjectBounds(bounds, scene.getObjectByName('workcell:workbench'))
+  }
   else if (selected.kind === 'linear-axis') {
     addObjectBounds(bounds, scene.getObjectByName('linear-axis:active'))
   } else if (selected.kind === 'object') {
@@ -202,6 +222,9 @@ function hasFocusCandidate(
   const selected = runtime.byId.get(selectedEntityId as SceneEntityIdV1)
   if (selected === undefined || !selected.effectiveVisible) return false
   if (selected.kind === 'robot') return hasVisibleRenderableGeometry(robotRoot)
+  if (selected.kind === 'environment') {
+    return hasVisibleRenderableGeometry(scene.getObjectByName('workcell:workbench'))
+  }
   if (selected.kind === 'linear-axis') {
     return hasVisibleRenderableGeometry(scene.getObjectByName('linear-axis:active'))
   }
@@ -384,15 +407,76 @@ function ViewportRuntime({
   )
 }
 
-const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
+export function workbenchDropSurfaceZ(
+  runtime: SceneRuntimeProjectionV1,
+  mcp: Readonly<{
+    position: readonly [number, number, number]
+    quaternion: readonly [number, number, number, number]
+    scale: readonly [number, number, number]
+  }> = {
+    position: [0, 0, 0], quaternion: [0, 0, 0, 1], scale: [1, 1, 1],
+  },
+): number {
+  const workbench = runtime.workbench
+  if (workbench === null || !workbench.effectiveVisible) return 0
+  const mcpMatrix = new Matrix4().compose(
+    new Vector3(...mcp.position),
+    new Quaternion(...mcp.quaternion),
+    new Vector3(...mcp.scale),
+  )
+  const workbenchMatrix = new Matrix4().fromArray(workbench.worldMatrix as number[])
+  return new Vector3(0, 0, WORKBENCH_TOP_Z)
+    .applyMatrix4(mcpMatrix.multiply(workbenchMatrix)).z
+}
+
+function Workbench({
+  entity,
+  onEntityContextMenu,
+}: Readonly<{
+  entity: SceneRuntimeEntityV1
+  onEntityContextMenu?: SceneEntityContextHandler
+}>) {
+  const objectRef = useRef<Group>(null)
   const collisionOutline = useCollisionStore(selectWorkbenchCollisionOutline)
   const outlineState =
     collisionOutline ??
     getExternalEntityOutlineState('workcell:workbench', false, [])
   const collision = outlineState === 'collision'
   const nearMiss = outlineState === 'near-miss'
+
+  useLayoutEffect(() => {
+    const object = objectRef.current
+    if (object === null) return
+    applySceneRuntimeWorldMatrix(object, entity)
+    if (!entity.effectiveVisible) return
+    return registerGeometryEntity(workbenchToGeometryEntity(object, 0, entity.name))
+  }, [entity])
+
+  const selectWorkbench = () => {
+    sceneEditorStore.getState().select(entity.entityId)
+    useInteractionStore.getState().clearSelection()
+  }
+
   return (
-    <group name="workbench" ref={ref}>
+    <group
+      name="workcell:workbench"
+      onContextMenu={(event: ThreeEvent<MouseEvent>) => {
+        event.stopPropagation()
+        event.nativeEvent.preventDefault()
+        selectWorkbench()
+        onEntityContextMenu?.(entity.entityId, {
+          x: event.nativeEvent.clientX,
+          y: event.nativeEvent.clientY,
+        })
+      }}
+      onPointerDown={(event: ThreeEvent<PointerEvent>) => {
+        event.stopPropagation()
+        selectWorkbench()
+      }}
+      ref={objectRef}
+      userData={{ collisionEntityId: entity.entityId }}
+      visible={entity.effectiveVisible}
+    >
       <mesh
         castShadow
         name="workbench-top"
@@ -438,7 +522,7 @@ const Workbench = forwardRef<Group>(function Workbench(_props, ref) {
       ))}
     </group>
   )
-})
+}
 
 export function Workcell({
   registerRig,
@@ -462,7 +546,6 @@ export function Workcell({
   const equipmentObjectsRef = useRef(
     new Map<ExternalCollisionEntityId, Object3D>(),
   )
-  const workbenchObjectRef = useRef<Group>(null)
   const handleRigRegistration = useCallback(
     (registration: RobotRigRegistration | null) => {
       setRig(registration)
@@ -473,14 +556,6 @@ export function Workcell({
   const handleEquipmentDraggingChange = useCallback((dragging: boolean) => {
     setOrbitEnabled(!dragging)
   }, [])
-
-  useLayoutEffect(
-    () =>
-      registerGeometryEntity(
-        workbenchToGeometryEntity(workbenchObjectRef.current),
-      ),
-    [],
-  )
 
   return (
     <>
@@ -504,13 +579,20 @@ export function Workcell({
         visible={showGrid}
       />
       <TcpFrameMarker frameName="World" name="world" visible={showWorldFrame} />
-      <Workbench ref={workbenchObjectRef} />
       <group
         name="mcp-frame"
         position={mcp.position}
         quaternion={mcp.quaternion}
         ref={mcpObjectRef}
       >
+        {sceneRuntime.workbench === null ? null : (
+          <Workbench
+            entity={sceneRuntime.workbench}
+            {...(onEntityContextMenu === undefined
+              ? {}
+              : { onEntityContextMenu })}
+          />
+        )}
         <EquipmentScene
           equipmentObjectsRef={equipmentObjectsRef}
           onDraggingChange={handleEquipmentDraggingChange}
@@ -555,7 +637,7 @@ export function Workcell({
               : { onEntityContextMenu })}
             registerController={registerInteractionController}
             rig={rig}
-            workbenchTopZ={WORKBENCH_TOP_Z}
+            workbenchTopZ={workbenchDropSurfaceZ(sceneRuntime, mcp)}
           />
         </>
       )}

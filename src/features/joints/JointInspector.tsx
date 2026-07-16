@@ -203,7 +203,7 @@ export function JointInspector({
           type="button"
         >
           <HomeIcon aria-hidden="true" size={16} strokeWidth={1.75} />
-          Home
+          Robot Home
         </button>
         <button
           disabled={disabled}

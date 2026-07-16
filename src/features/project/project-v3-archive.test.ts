@@ -276,6 +276,9 @@ async function projectFixture(
       entities: [
         { kind: 'robot', id: 'robot:active', name: 'Robot', parentId: null,
           localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true },
+        { kind: 'environment', id: 'workcell:workbench', name: 'Calibration Table', parentId: null,
+          localPose: { positionM: [0.25, -0.1, 0.2], quaternion: [0, 0, Math.SQRT1_2, Math.SQRT1_2] },
+          visible: false },
         ...objectStates,
         { kind: 'object', id: 'equipment:cup-01', name: 'Cup 01', parentId: null,
           localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
@@ -482,6 +485,28 @@ describe('deterministic Project V3 archive', () => {
     expect(JSON.stringify(decoded)).not.toContain('sourceBytes')
     expect(containsBinary(decoded)).toBe(false)
     expect(decoded.projection.simulation.jobs.map(({ id }) => id)).toEqual(['job-z', 'job-a'])
+  })
+
+  it('round-trips the managed Workbench name, transform, and visibility', async () => {
+    const project = await projectFixture()
+    const decoded = await decodeWorkcellProject(
+      await encodeWorkcellProject(project, { workerFactory }),
+      codecDependencies(),
+    )
+
+    const decodedWorkbench = decoded.projection.scene.entities.find(
+      ({ id }) => id === 'workcell:workbench',
+    )
+    const sourceWorkbench = project.scene.entities.find(
+      ({ id }) => id === 'workcell:workbench',
+    )
+    expect(decodedWorkbench).toMatchObject({
+      ...sourceWorkbench,
+      localPose: { positionM: sourceWorkbench?.localPose.positionM },
+    })
+    decodedWorkbench?.localPose.quaternion.forEach((value, index) => {
+      expect(value).toBeCloseTo(sourceWorkbench!.localPose.quaternion[index]!)
+    })
   })
 
   it('decodes each unique archive source with one digest and exposes no bytes', async () => {

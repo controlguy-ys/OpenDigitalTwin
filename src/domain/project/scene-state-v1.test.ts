@@ -41,6 +41,28 @@ const axis = (overrides: Partial<Extract<SceneEntityV1, { kind: 'linear-axis' }>
 })
 
 describe('ProjectSceneStateV1 validation', () => {
+  it('round-trips the one canonical Workbench Environment entity', () => {
+    const workbench = {
+      kind: 'environment',
+      id: 'workcell:workbench',
+      name: 'Workbench',
+      parentId: null,
+      localPose: POSE,
+      visible: true,
+    }
+
+    const validated = validateProjectSceneState({
+      entities: [workbench],
+      robotMountContact: null,
+    })
+
+    expect(validated.entities).toEqual([workbench])
+    expect(() => validateProjectSceneState({
+      entities: [{ ...workbench, id: 'workcell:other' }],
+      robotMountContact: null,
+    })).toThrow('SCENE_ID_KIND_MISMATCH')
+  })
+
   it('rejects sparse and accessor-backed entity arrays without invoking getters', () => {
     const sparse = [robot()]
     delete sparse[0]

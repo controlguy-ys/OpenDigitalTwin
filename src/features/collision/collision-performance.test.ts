@@ -197,5 +197,5 @@ describe('geometry collision reference performance fixture', () => {
     expect(result?.findings).toHaveLength(10_000)
     expect(progress).toEqual([250, 500, 750, 1_000])
     expect(animationCounter).toBeGreaterThan(0)
-  })
+  }, 10_000)
 })

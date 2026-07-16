@@ -108,6 +108,36 @@ function objectInstance(): ObjectInstanceRecordV1 {
 }
 
 describe('SceneCommandService', () => {
+  it('deletes the Workbench and clears mount-contact and ignored-pair references atomically', async () => {
+    const workbench: SceneEntityV1 = {
+      kind: 'environment', id: 'workcell:workbench', name: 'Workbench', parentId: null,
+      localPose: IDENTITY_POSE, visible: true,
+    }
+    const current = projection([robot(), workbench]) as unknown as {
+      scene: StoredWorkcellProjectSnapshotProjectionV3['scene']
+      collisionPolicy: { ignoredPairKeys: string[]; enabledRobotSelfPairs: string[] }
+    }
+    ;(current.scene as { robotMountContact: unknown }).robotMountContact = {
+      baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: 'workcell:workbench',
+    }
+    current.collisionPolicy.ignoredPairKeys = [
+      'robot-link:LINK00|workcell:workbench',
+      'object:part|robot-link:LINK03',
+    ]
+    const harness = mutationHarness(current as unknown as StoredWorkcellProjectSnapshotProjectionV3)
+    const commands = createSceneCommandService({ mutationService: harness.mutationService })
+
+    await commands.deleteEntity('workcell:workbench')
+
+    expect(harness.active().scene.entities.map(({ id }) => id)).toEqual(['robot:active'])
+    expect(harness.active().scene.robotMountContact).toEqual({
+      baseLinkId: 'LINK00', mountSurfaceCollisionEntityId: null,
+    })
+    expect(harness.active().collisionPolicy.ignoredPairKeys).toEqual([
+      'object:part|robot-link:LINK03',
+    ])
+  })
+
   it('imports the STEP Asset, Instance, Scene Entity, transform state, and target reference in one publication', async () => {
     const harness = mutationHarness(projection())
     const preparedSourceGroup = { ownerKeys: ['object-asset:asset-cup'] } as never

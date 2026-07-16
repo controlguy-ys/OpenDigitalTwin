@@ -16,7 +16,7 @@
   --top-bar-height: 48px;
   --asset-rail-width: 248px;
   --inspector-width: 320px;
-  --bottom-rail-height: 128px;
+  --bottom-rail-height: 240px;
 }
 
 :root[data-theme='light'] {

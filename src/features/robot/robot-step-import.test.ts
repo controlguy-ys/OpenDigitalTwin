@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Group } from 'three'
 import {
   importRobotStepFiles,
@@ -6,6 +6,7 @@ import {
   mapRobotStepFiles,
   validateCompleteRobotStepFiles,
   validateRobotStepFiles,
+  restoreRobotGeometryRecords,
 } from './robot-step-import'
 
 function file(name: string, size = 10): File {
@@ -82,5 +83,59 @@ describe('robot STEP import limits', () => {
     )
 
     expect(assets.get('LINK01')?.group.position.toArray()).toEqual([0, 0, 0])
+  })
+
+  it('parses a STEP source shared by multiple Links only once', async () => {
+    const sourceBytes = new Uint8Array([1, 2, 3]).buffer
+    const importSource = vi.fn(async () => ({
+      success: true as const,
+      root: { name: 'root', meshes: [], children: [] },
+      meshes: [],
+    }))
+    const dispose = vi.fn()
+    const convert = vi.fn(() => ({
+      group: new Group(),
+      bounds: {
+        min: [0, 0, 0] as [number, number, number],
+        max: [1, 1, 1] as [number, number, number],
+        size: [1, 1, 1] as [number, number, number],
+        center: [0.5, 0.5, 0.5] as [number, number, number],
+      },
+      colliderCenter: [0.5, 0.5, 0.5] as [number, number, number],
+      dispose,
+    }))
+    const record = (linkId: 'LINK00' | 'LINK01') => ({
+      linkId,
+      sourceFileName: 'assembly.step',
+      sourceBytes,
+      localTransform: {
+        position: [0, 0, 0] as [number, number, number],
+        quaternion: [0, 0, 0, 1] as [number, number, number, number],
+        scale: [1, 1, 1] as [number, number, number],
+      },
+      visible: true,
+      collisionCenter: [0, 0, 0] as [number, number, number],
+      collisionHalfExtents: [0.1, 0.1, 0.1] as [number, number, number],
+      collisionBoxes: [{
+        id: 'body',
+        center: [0, 0, 0] as [number, number, number],
+        halfExtents: [0.1, 0.1, 0.1] as [number, number, number],
+        quaternion: [0, 0, 0, 1] as [number, number, number, number],
+      }],
+      statistics: { vertices: 3, triangles: 1, meshes: 1, materials: 1 },
+    })
+
+    const assets = await restoreRobotGeometryRecords(
+      [record('LINK00'), record('LINK01')],
+      { import: importSource, cancel: () => undefined },
+      convert,
+    )
+
+    expect(importSource).toHaveBeenCalledTimes(1)
+    expect(convert).toHaveBeenCalledTimes(1)
+    expect(assets.get('LINK00')).toBe(assets.get('LINK01'))
+    assets.get('LINK00')?.dispose()
+    assets.get('LINK01')?.dispose()
+    expect(dispose).toHaveBeenCalledTimes(1)
   })
 })

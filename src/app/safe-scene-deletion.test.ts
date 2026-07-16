@@ -1,8 +1,35 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { SceneEntityV1 } from '../domain/project/scene-state-v1'
 import { testSceneRuntime } from '../features/scene/scene-ui-test-fixtures'
 import { deleteSceneEntitySafely } from './safe-scene-deletion'
 
 describe('deleteSceneEntitySafely', () => {
+  it('deletes the dedicated Workbench Environment and clears its Scene selection', async () => {
+    const workbench: SceneEntityV1 = {
+      kind: 'environment', id: 'workcell:workbench', name: 'Workbench', parentId: null,
+      localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, visible: true,
+    }
+    const deleteEntity = vi.fn(async () => undefined)
+    const clearSceneSelection = vi.fn()
+
+    await deleteSceneEntitySafely('workcell:workbench', {
+      beginRemoval: vi.fn(() => true),
+      clearCollisionPairs: vi.fn(),
+      clearInteractionSelection: vi.fn(),
+      clearSceneSelection,
+      deleteEntity,
+      deleteGroupAndContents: vi.fn(async () => undefined),
+      endRemoval: vi.fn(),
+      getHeldEntityId: () => null,
+      getSceneSelection: () => 'workcell:workbench',
+      releaseHeldEntity: vi.fn(async () => undefined),
+      runtime: testSceneRuntime([workbench]),
+    })
+
+    expect(deleteEntity).toHaveBeenCalledWith('workcell:workbench')
+    expect(clearSceneSelection).toHaveBeenCalledOnce()
+  })
+
   it('locks descendants, releases a held child before Group deletion, and clears both selections', async () => {
     const beginRemoval = vi.fn(() => true)
     const endRemoval = vi.fn()

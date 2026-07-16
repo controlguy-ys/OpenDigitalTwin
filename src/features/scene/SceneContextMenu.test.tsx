@@ -42,6 +42,29 @@ function commands() {
 }
 
 describe('SceneContextMenu', () => {
+  it('offers confirmed deletion for the dedicated Workbench Environment', async () => {
+    const user = userEvent.setup()
+    const onDelete = vi.fn(async () => undefined)
+    const workbench: SceneEntityV1 = {
+      kind: 'environment', id: 'workcell:workbench', name: 'Workbench', parentId: null,
+      localPose: TEST_IDENTITY_POSE, visible: true,
+    }
+    render(
+      <SceneContextMenu
+        commands={commands()}
+        entityId="workcell:workbench"
+        onDelete={onDelete}
+        onIsolate={vi.fn()}
+        runtime={testSceneRuntime([workbench])}
+      />,
+    )
+
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await user.click(screen.getByRole('button', { name: 'Delete Entity' }))
+
+    expect(onDelete).toHaveBeenCalledWith('workcell:workbench')
+  })
+
   it('renders the exact empty viewport command matrix including camera-only Fit All', async () => {
     const user = userEvent.setup()
     const service = commands()

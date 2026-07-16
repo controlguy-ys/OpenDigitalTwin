@@ -198,7 +198,7 @@ describe('scene collision Entity adapters', () => {
     geometryEntityRegistry.clear()
     const workbench = new Group()
     const linkObject = new Group()
-    registerGeometryEntity(workbenchToGeometryEntity(workbench))
+    registerGeometryEntity(workbenchToGeometryEntity(workbench, 0, 'Calibration Table'))
     registerGeometryEntity(
       robotLinkToGeometryEntity(
         {
@@ -225,6 +225,7 @@ describe('scene collision Entity adapters', () => {
       ({ id }) => id === 'workcell:workbench',
     )
     expect(workbenchEntity).toMatchObject({
+      name: 'Calibration Table',
       category: 'environment',
       boxes: [
         {

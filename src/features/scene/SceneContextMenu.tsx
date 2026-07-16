@@ -492,7 +492,8 @@ export function SceneContextMenu({
               !entity.persistedVisible,
             ))}>{entity.persistedVisible ? 'Hide' : 'Show'}</MenuItem>
             <MenuItem onClick={() => { onIsolate(entity.entityId); closeMenu() }}>Isolate</MenuItem>
-            {entity.source.kind === 'object' && !activeAxisCarriage ? (
+            {(entity.source.kind === 'object' || entity.source.kind === 'environment') &&
+              !activeAxisCarriage ? (
               <MenuItem onClick={() => setPending('delete-entity')}>Delete</MenuItem>
             ) : null}
             {entity.source.kind === 'group' && !activeAxisCarriage ? (
@@ -524,7 +525,8 @@ export function SceneContextMenu({
         )}
         {error === null ? null : <p role="alert">{error}</p>}
       </div>
-      {pending === 'delete-entity' && entity?.source.kind === 'object' ? (
+      {pending === 'delete-entity' &&
+        (entity?.source.kind === 'object' || entity?.source.kind === 'environment') ? (
         <ConfirmationDialog
           confirmLabel="Delete Entity"
           label="Delete Entity?"
