@@ -246,36 +246,50 @@ function prototypeOf(value: object, path: string): object | null {
   }
 }
 
-function inspectOwnDataProperties(value: object, path: string, allowArrayLength = false): void {
-  for (const key of ownKeys(value, path)) {
-    if (allowArrayLength && key === 'length') continue
-    if (typeof key !== 'string') invalid(path, 'Symbol properties are not valid protocol fields.')
-    const descriptor = ownDescriptor(value, key, path)
-    if (!descriptor.enumerable || !('value' in descriptor)) {
-      invalid(path, 'Protocol fields must be enumerable data properties.')
-    }
+function isArray(value: object, path: string): boolean {
+  try {
+    return Array.isArray(value)
+  } catch {
+    invalid(path, 'The protocol value kind could not be inspected.')
   }
 }
 
+function defineEnumerableDataProperty(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  })
+}
+
 function expectRecord(value: unknown, path: string): MutableRecord {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+  if (value === null || typeof value !== 'object' || isArray(value, path)) {
     invalid(path, 'Expected a plain record.')
   }
   const prototype = prototypeOf(value, path)
   if (prototype !== Object.prototype && prototype !== null) {
     invalid(path, 'Expected a plain record without a custom prototype.')
   }
-  inspectOwnDataProperties(value, path)
-  return value as MutableRecord
+
+  const snapshot: MutableRecord = {}
+  for (const key of ownKeys(value, path)) {
+    if (typeof key !== 'string') invalid(path, 'Symbol properties are not valid protocol fields.')
+    const descriptor = ownDescriptor(value, key, path)
+    if (!descriptor.enumerable || !('value' in descriptor)) {
+      invalid(path, 'Protocol fields must be enumerable data properties.')
+    }
+    defineEnumerableDataProperty(snapshot, key, descriptor.value)
+  }
+  return snapshot
 }
 
-function expectClosedRecord(
-  value: unknown,
+function expectClosedRecordSnapshot(
+  record: MutableRecord,
   path: string,
   requiredKeys: readonly string[],
   optionalKeys: readonly string[] = [],
 ): MutableRecord {
-  const record = expectRecord(value, path)
   const allowed = new Set([...requiredKeys, ...optionalKeys])
   for (const key of Object.keys(record)) {
     if (!allowed.has(key)) invalid(path, `Unexpected field ${JSON.stringify(key)}.`)
@@ -286,22 +300,65 @@ function expectClosedRecord(
   return record
 }
 
+function expectClosedRecord(
+  value: unknown,
+  path: string,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): MutableRecord {
+  return expectClosedRecordSnapshot(expectRecord(value, path), path, requiredKeys, optionalKeys)
+}
+
 function expectDenseArray(value: unknown, path: string): unknown[] {
-  if (!Array.isArray(value)) invalid(path, 'Expected an array.')
+  if (value === null || typeof value !== 'object' || !isArray(value, path)) {
+    invalid(path, 'Expected an array.')
+  }
   if (prototypeOf(value, path) !== Array.prototype) {
     invalid(path, 'Protocol arrays must use Array.prototype.')
   }
-  inspectOwnDataProperties(value, path, true)
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) invalid(path, `Array index ${index} is missing.`)
+
+  let length: number | undefined
+  const indexDescriptors = new Map<number, PropertyDescriptor>()
+  const descriptors = new Map<string, PropertyDescriptor>()
+  for (const key of ownKeys(value, path)) {
+    if (typeof key !== 'string') invalid(path, 'Symbol properties are not valid protocol fields.')
+    const descriptor = ownDescriptor(value, key, path)
+    if (key === 'length') {
+      if (!('value' in descriptor) || descriptor.enumerable) {
+        invalid(path, 'Protocol Array length must be a non-enumerable data property.')
+      }
+      if (
+        typeof descriptor.value !== 'number'
+        || !Number.isSafeInteger(descriptor.value)
+        || descriptor.value < 0
+        || descriptor.value > 0xffff_ffff
+      ) {
+        invalid(path, 'Protocol Array length is invalid.')
+      }
+      length = descriptor.value
+      continue
+    }
+    if (!descriptor.enumerable || !('value' in descriptor)) {
+      invalid(path, 'Protocol Array entries must be enumerable data properties.')
+    }
+    descriptors.set(key, descriptor)
   }
-  for (const key of Object.keys(value)) {
+
+  if (length === undefined) invalid(path, 'Protocol Array length is missing.')
+  for (const [key, descriptor] of descriptors) {
     const index = Number(key)
-    if (!Number.isSafeInteger(index) || index < 0 || String(index) !== key || index >= value.length) {
+    if (!Number.isSafeInteger(index) || index < 0 || String(index) !== key || index >= length) {
       invalid(path, `Unexpected array property ${JSON.stringify(key)}.`)
     }
+    indexDescriptors.set(index, descriptor)
   }
-  return value
+  if (indexDescriptors.size !== length) invalid(path, 'Protocol Array is not dense.')
+
+  const snapshot = Array.from<unknown>({ length })
+  for (const [index, descriptor] of indexDescriptors) {
+    defineEnumerableDataProperty(snapshot, String(index), descriptor.value)
+  }
+  return snapshot
 }
 
 function utf8ByteLength(value: string, path: string): number {
@@ -505,19 +562,22 @@ function cloneRuntimeValue(
   if (ancestors.has(value)) invalid(path, 'Runtime Structure contains a cycle.')
   ancestors.add(value)
 
-  if (Array.isArray(value)) {
+  if (isArray(value, path)) {
     const source = expectDenseArray(value, path)
     if (source.length === 0) invalid(path, 'Runtime Structure arrays must not be empty.')
     if (source.length > MAX_RUNTIME_FIXED_ARRAY_ELEMENTS_V1) {
       invalid(path, `Runtime Structure arrays may contain at most ${MAX_RUNTIME_FIXED_ARRAY_ELEMENTS_V1} entries.`)
     }
-    const clone = source.map((item, index) => cloneRuntimeValue(
-      item,
-      `${path}[${index}]`,
-      depth + 1,
-      budget,
-      ancestors,
-    ))
+    const clone: RuntimeScalarOrStructureV1[] = []
+    for (let index = 0; index < source.length; index += 1) {
+      clone.push(cloneRuntimeValue(
+        source[index],
+        `${path}[${index}]`,
+        depth + 1,
+        budget,
+        ancestors,
+      ))
+    }
     ancestors.delete(value)
     return clone
   }
@@ -529,7 +589,11 @@ function cloneRuntimeValue(
   for (const key of keys) {
     const keyPath = `${path}[${JSON.stringify(key)}]`
     validateStructureKey(key, keyPath)
-    clone[key] = cloneRuntimeValue(source[key], keyPath, depth + 1, budget, ancestors)
+    defineEnumerableDataProperty(
+      clone,
+      key,
+      cloneRuntimeValue(source[key], keyPath, depth + 1, budget, ancestors),
+    )
   }
   ancestors.delete(value)
   return clone
@@ -888,7 +952,7 @@ export function validateRevisionStageResultV1(value: unknown): RevisionStageResu
   const requestId = validateId(discriminator.requestId, '$.requestId')
   const ok = expectBoolean(discriminator.ok, '$.ok')
   if (ok) {
-    const record = expectClosedRecord(value, '$', [
+    const record = expectClosedRecordSnapshot(discriminator, '$', [
       'type',
       'protocolVersion',
       'requestId',
@@ -907,7 +971,7 @@ export function validateRevisionStageResultV1(value: unknown): RevisionStageResu
       stageToken: validateStageToken(record.stageToken, '$.stageToken'),
     })
   }
-  const record = expectClosedRecord(value, '$', [
+  const record = expectClosedRecordSnapshot(discriminator, '$', [
     'type',
     'protocolVersion',
     'requestId',
@@ -945,7 +1009,7 @@ export function validateRevisionActivateResultV1(value: unknown): RevisionActiva
   const requestId = validateId(discriminator.requestId, '$.requestId')
   const ok = expectBoolean(discriminator.ok, '$.ok')
   if (ok) {
-    const record = expectClosedRecord(value, '$', [
+    const record = expectClosedRecordSnapshot(discriminator, '$', [
       'type',
       'protocolVersion',
       'requestId',
@@ -962,7 +1026,7 @@ export function validateRevisionActivateResultV1(value: unknown): RevisionActiva
       configRevision: validateConfigRevision(record.configRevision, '$.configRevision'),
     })
   }
-  const record = expectClosedRecord(value, '$', [
+  const record = expectClosedRecordSnapshot(discriminator, '$', [
     'type',
     'protocolVersion',
     'requestId',
@@ -1000,7 +1064,7 @@ export function validateRevisionRollbackResultV1(value: unknown): RevisionRollba
   const requestId = validateId(discriminator.requestId, '$.requestId')
   const ok = expectBoolean(discriminator.ok, '$.ok')
   if (ok) {
-    const record = expectClosedRecord(value, '$', [
+    const record = expectClosedRecordSnapshot(discriminator, '$', [
       'type',
       'protocolVersion',
       'requestId',
@@ -1015,7 +1079,7 @@ export function validateRevisionRollbackResultV1(value: unknown): RevisionRollba
       stageToken: validateStageToken(record.stageToken, '$.stageToken'),
     })
   }
-  const record = expectClosedRecord(value, '$', [
+  const record = expectClosedRecordSnapshot(discriminator, '$', [
     'type',
     'protocolVersion',
     'requestId',
@@ -1036,25 +1100,25 @@ export function validateRuntimeProtocolV1Message(value: unknown): RuntimeProtoco
   const type = expectString(record.type, '$.type')
   switch (type) {
     case 'state-batch-v1':
-      return validateStateBatchV1(value)
+      return validateStateBatchV1(record)
     case 'command-request-v1':
-      return validateCommandRequestV1(value)
+      return validateCommandRequestV1(record)
     case 'command-batch-v1':
-      return validateCommandBatchV1(value)
+      return validateCommandBatchV1(record)
     case 'command-result-v1':
-      return validateCommandResultV1(value)
+      return validateCommandResultV1(record)
     case 'revision-stage-v1':
-      return validateRevisionStageRequestV1(value)
+      return validateRevisionStageRequestV1(record)
     case 'revision-stage-result-v1':
-      return validateRevisionStageResultV1(value)
+      return validateRevisionStageResultV1(record)
     case 'revision-activate-v1':
-      return validateRevisionActivateRequestV1(value)
+      return validateRevisionActivateRequestV1(record)
     case 'revision-activate-result-v1':
-      return validateRevisionActivateResultV1(value)
+      return validateRevisionActivateResultV1(record)
     case 'revision-rollback-v1':
-      return validateRevisionRollbackRequestV1(value)
+      return validateRevisionRollbackRequestV1(record)
     case 'revision-rollback-result-v1':
-      return validateRevisionRollbackResultV1(value)
+      return validateRevisionRollbackResultV1(record)
     default:
       invalid('$.type', `Unknown Runtime Protocol V1 message type ${JSON.stringify(type)}.`)
   }

@@ -278,6 +278,47 @@ function commandBatchAtEncodedSize(byteLength: number): Record<string, unknown> 
   return batch
 }
 
+function adversarialStructure(payload = ''): Record<string, unknown> {
+  const structure: Record<string, unknown> = {
+    10: 'ten',
+    2: 'two',
+    payload,
+  }
+  Object.defineProperty(structure, '__proto__', {
+    configurable: true,
+    enumerable: true,
+    value: { safe: true },
+    writable: true,
+  })
+  return structure
+}
+
+function stateBatchWithAdversarialStructureAtEncodedSize(
+  byteLength: number,
+): Record<string, unknown> {
+  const structure = adversarialStructure()
+  const batch = stateBatch({ values: [mappedValue({ value: structure })] })
+  const emptyLength = encoder.encode(JSON.stringify(batch)).byteLength
+  const padding = byteLength - emptyLength
+  if (padding < 0) throw new Error('Requested State Batch size is below its fixed envelope size.')
+  structure.payload = 'x'.repeat(padding)
+  expect(encoder.encode(JSON.stringify(batch)).byteLength).toBe(byteLength)
+  return batch
+}
+
+function commandBatchWithAdversarialStructureAtEncodedSize(
+  byteLength: number,
+): Record<string, unknown> {
+  const structure = adversarialStructure()
+  const batch = commandBatch({ commands: [commandItem(1, { value: structure })] })
+  const emptyLength = encoder.encode(JSON.stringify(batch)).byteLength
+  const padding = byteLength - emptyLength
+  if (padding < 0) throw new Error('Requested Command Batch size is below its fixed envelope size.')
+  structure.payload = 'x'.repeat(padding)
+  expect(encoder.encode(JSON.stringify(batch)).byteLength).toBe(byteLength)
+  return batch
+}
+
 describe('Runtime Protocol V1 State records', () => {
   it('exports the locked protocol version and accepts a complete independent deeply frozen State Batch', () => {
     expect(RUNTIME_PROTOCOL_VERSION_V1).toBe(1)
@@ -455,6 +496,136 @@ describe('Runtime Protocol V1 State records', () => {
     expect(validateRuntimeMappedValueV1(mappedValue({ value })).value).toEqual(value)
   })
 
+  it('preserves own __proto__ and numeric-looking keys on a standalone mapped value', () => {
+    const result = validateRuntimeMappedValueV1(mappedValue({
+      value: adversarialStructure('standalone'),
+    }))
+    const structure = result.value as Readonly<Record<string, RuntimeScalarOrStructureV1>>
+
+    expect(Object.getPrototypeOf(structure)).toBe(Object.prototype)
+    expect(Object.hasOwn(structure, '__proto__')).toBe(true)
+    expect(structure['__proto__']).toEqual({ safe: true })
+    expect(structure['10']).toBe('ten')
+    expect(structure['2']).toBe('two')
+    expect(JSON.stringify(structure)).toContain('"__proto__":{"safe":true}')
+    expectDeepFrozen(structure)
+    expect(Object.isFrozen(structure['__proto__'])).toBe(true)
+  })
+
+  it('clones Proxy arrays from validated index descriptors without calling a replacement map', () => {
+    let mapReads = 0
+    const value = new Proxy([1, 2], {
+      get(target, property, receiver) {
+        if (property === 'map') {
+          mapReads += 1
+          return () => [99]
+        }
+        return Reflect.get(target, property, receiver)
+      },
+    })
+
+    expect(validateRuntimeMappedValueV1(mappedValue({ value })).value).toEqual([1, 2])
+    expect(mapReads).toBe(0)
+  })
+
+  it('cannot hide forbidden null or function Array entries behind a Proxy map replacement', () => {
+    for (const forbidden of [null, () => undefined]) {
+      const value = new Proxy([forbidden], {
+        get(target, property, receiver) {
+          if (property === 'map') return () => [1]
+          return Reflect.get(target, property, receiver)
+        },
+      })
+      expectProtocolError(
+        () => validateRuntimeMappedValueV1(mappedValue({ value })),
+        'RUNTIME_PROTOCOL_INVALID',
+        '$.value[0]',
+      )
+    }
+  })
+
+  it('uses record descriptor snapshots instead of changing or throwing Proxy get traps', () => {
+    let changingGetReads = 0
+    const changingValue = new Proxy({ stable: 1 }, {
+      get() {
+        changingGetReads += 1
+        return 99
+      },
+    })
+    const changingResult = validateRuntimeMappedValueV1(mappedValue({ value: changingValue }))
+    expect(changingResult.value).toEqual({ stable: 1 })
+    expect(changingGetReads).toBe(0)
+
+    const throwingRecord = new Proxy(mappedValue(), {
+      get() {
+        throw new Error('raw get trap must not escape')
+      },
+    })
+    expect(validateRuntimeMappedValueV1(throwingRecord).mappingId).toBe('mapping-1')
+
+    const throwingArray = new Proxy([1], {
+      get() {
+        throw new Error('raw Array get trap must not escape')
+      },
+    })
+    expect(validateRuntimeMappedValueV1(mappedValue({ value: throwingArray })).value).toEqual([1])
+  })
+
+  it('uses descriptor snapshots for proxied State values and Command items', () => {
+    let stateIndexReads = 0
+    const values = new Proxy([mappedValue()], {
+      get(target, property, receiver) {
+        if (property === '0') {
+          stateIndexReads += 1
+          return mappedValue({ value: null })
+        }
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    expect(validateStateBatchV1(stateBatch({ values })).values[0]!.value).toBe(1)
+    expect(stateIndexReads).toBe(0)
+
+    let commandIndexReads = 0
+    const commands = new Proxy([commandItem()], {
+      get(target, property, receiver) {
+        if (property === '0') {
+          commandIndexReads += 1
+          return commandItem(1, { value: null })
+        }
+        return Reflect.get(target, property, receiver)
+      },
+    })
+    expect(validateCommandBatchV1(commandBatch({ commands })).commands[0]!.value).toBe(1)
+    expect(commandIndexReads).toBe(0)
+  })
+
+  it('converts throwing Proxy reflection traps to stable protocol errors', () => {
+    const reflectionFailures: Array<readonly [string, () => unknown]> = [
+      ['ownKeys', () => new Proxy({ stable: 1 }, {
+        ownKeys() { throw new Error('ownKeys trap') },
+      })],
+      ['getPrototypeOf', () => new Proxy({ stable: 1 }, {
+        getPrototypeOf() { throw new Error('getPrototypeOf trap') },
+      })],
+      ['getOwnPropertyDescriptor', () => new Proxy({ stable: 1 }, {
+        getOwnPropertyDescriptor() { throw new Error('descriptor trap') },
+      })],
+      ['revoked Array', () => {
+        const revocable = Proxy.revocable([1], {})
+        revocable.revoke()
+        return revocable.proxy
+      }],
+    ]
+
+    for (const [_name, makeValue] of reflectionFailures) {
+      expectProtocolError(
+        () => validateRuntimeMappedValueV1(mappedValue({ value: makeValue() })),
+        'RUNTIME_PROTOCOL_INVALID',
+        '$.value',
+      )
+    }
+  })
+
   it.each([
     null,
     Number.NaN,
@@ -476,6 +647,20 @@ describe('Runtime Protocol V1 State records', () => {
       .not.toThrow()
     expectProtocolError(
       () => validateStateBatchV1(stateBatchAtEncodedSize(MAX_RUNTIME_BATCH_BYTES_V1 + 1)),
+      'RUNTIME_STATE_BATCH_SIZE_EXCEEDED',
+      '$',
+    )
+  })
+
+  it('counts own __proto__ and numeric-looking Structure keys in State Batch bytes', () => {
+    const exact = validateStateBatchV1(
+      stateBatchWithAdversarialStructureAtEncodedSize(MAX_RUNTIME_BATCH_BYTES_V1),
+    )
+    expect(encoder.encode(JSON.stringify(exact)).byteLength).toBe(MAX_RUNTIME_BATCH_BYTES_V1)
+    expectProtocolError(
+      () => validateStateBatchV1(
+        stateBatchWithAdversarialStructureAtEncodedSize(MAX_RUNTIME_BATCH_BYTES_V1 + 1),
+      ),
       'RUNTIME_STATE_BATCH_SIZE_EXCEEDED',
       '$',
     )
@@ -598,6 +783,20 @@ describe('Runtime Protocol V1 Command, Result, and Lease records', () => {
       .not.toThrow()
     expectProtocolError(
       () => validateCommandBatchV1(commandBatchAtEncodedSize(MAX_RUNTIME_BATCH_BYTES_V1 + 1)),
+      'RUNTIME_COMMAND_BATCH_SIZE_EXCEEDED',
+      '$',
+    )
+  })
+
+  it('counts own __proto__ and numeric-looking Structure keys in Command Batch bytes', () => {
+    const exact = validateCommandBatchV1(
+      commandBatchWithAdversarialStructureAtEncodedSize(MAX_RUNTIME_BATCH_BYTES_V1),
+    )
+    expect(encoder.encode(JSON.stringify(exact)).byteLength).toBe(MAX_RUNTIME_BATCH_BYTES_V1)
+    expectProtocolError(
+      () => validateCommandBatchV1(
+        commandBatchWithAdversarialStructureAtEncodedSize(MAX_RUNTIME_BATCH_BYTES_V1 + 1),
+      ),
       'RUNTIME_COMMAND_BATCH_SIZE_EXCEEDED',
       '$',
     )
