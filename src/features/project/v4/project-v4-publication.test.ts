@@ -228,6 +228,80 @@ describe('Project V4 serialized publication', () => {
     })
   })
 
+  it('applies a frozen coordinator snapshot when prepared bundle getters change after commit', async () => {
+    const candidateA = project('revision-a')
+    const candidateB = project('revision-b')
+    const resourcesA = { label: 'resources:revision-a' }
+    const resourcesB = { label: 'resources:revision-b' }
+    const reads = { project: 0, revisionId: 0, resources: 0 }
+    let committed = false
+    let appliedBundle: PreparedProjectRuntimeBundleV4<RuntimeResources> | undefined
+    let appliedSnapshot: PreparedProjectRuntimeBundleV4<RuntimeResources> | undefined
+    let preparedAdapter: PreparedProjectRuntimeBundleV4<RuntimeResources> | undefined
+    const application: AppliedProjectRuntimePublicationV4 = {
+      commit: vi.fn(),
+      rollback: vi.fn(),
+      cleanup: vi.fn(),
+    }
+    const runtime: ProjectRuntimeV4<RuntimeResources> = {
+      prepare: vi.fn(async (authoritativeProject) => {
+        preparedAdapter = new Proxy({} as PreparedProjectRuntimeBundleV4<RuntimeResources>, {
+          get: (_target, property) => {
+            if (property === 'project') {
+              reads.project += 1
+              return committed ? candidateB : authoritativeProject
+            }
+            if (property === 'revisionId') {
+              reads.revisionId += 1
+              return committed ? candidateB.revisionId : candidateA.revisionId
+            }
+            if (property === 'resources') {
+              reads.resources += 1
+              return committed ? resourcesB : resourcesA
+            }
+            return undefined
+          },
+        })
+        return preparedAdapter
+      }),
+      apply: vi.fn(async (bundle) => {
+        appliedBundle = bundle
+        appliedSnapshot = {
+          project: bundle.project,
+          revisionId: bundle.revisionId,
+          resources: bundle.resources,
+        }
+        return application
+      }),
+      dispose: vi.fn(),
+    }
+    const target = wrapRepository({
+      commitPreparedRevision: async (expectedRevisionId, prepared, commitToken) => {
+        await repository.commitPreparedRevision(expectedRevisionId, prepared, commitToken)
+        committed = true
+      },
+    })
+    const publication = coordinator(runtime, ['token-a'], target)
+
+    const result = await publication.replace({ candidate: candidateA, expectedRevisionId: null })
+
+    expect(appliedBundle).not.toBe(preparedAdapter)
+    expect(Object.isFrozen(appliedBundle)).toBe(true)
+    expect(appliedSnapshot).toEqual({
+      project: result.project,
+      revisionId: result.revisionId,
+      resources: resourcesA,
+    })
+    expect(reads).toEqual({ project: 1, revisionId: 1, resources: 1 })
+    expect(publication.readPublished()).toEqual(result)
+    await expect(repository.readActive()).resolves.toEqual(result.project)
+    await expect(repository.readPointer()).resolves.toMatchObject({
+      state: 'stable',
+      revisionId: result.revisionId,
+      commitToken: 'token-a',
+    })
+  })
+
   it('executes concurrent replacements strictly in invocation order', async () => {
     const harness = createRuntimeHarness()
     const publication = coordinator(harness.runtime, ['token-a', 'token-b'])
@@ -319,6 +393,69 @@ describe('Project V4 serialized publication', () => {
     expect(publication.readPublished()?.revisionId).toBe('revision-a')
     expect(harness.currentRevisionId).toBe('revision-a')
     expect(publication.isRecoveryRequired()).toBe(false)
+  })
+
+  it('keeps publishing evidence and enters recovery when apply stages B but resolves an invalid handle', async () => {
+    const harness = createRuntimeHarness()
+    const invalidApplication = {
+      rollback: vi.fn(),
+      cleanup: vi.fn(),
+    }
+    let stagedRevisionId: string | null = null
+    const runtime: ProjectRuntimeV4<RuntimeResources> = {
+      prepare: harness.runtime.prepare,
+      apply: vi.fn(async (bundle) => {
+        if (bundle.revisionId === 'revision-b') {
+          harness.events.push('apply:revision-b')
+          stagedRevisionId = bundle.revisionId
+          return invalidApplication as never
+        }
+        return harness.runtime.apply(bundle)
+      }),
+      dispose: harness.runtime.dispose,
+    }
+    const compensatePublication = vi.fn(repository.compensatePublication)
+    const recoveryErrors: unknown[] = []
+    const publication = coordinator(
+      runtime,
+      ['token-a', 'token-b'],
+      wrapRepository({ compensatePublication }),
+      (error) => recoveryErrors.push(error),
+    )
+    const candidateA = project('revision-a')
+    await publication.replace({ candidate: candidateA, expectedRevisionId: null })
+
+    await expectPublicationError(
+      publication.replace({
+        candidate: project('revision-b'),
+        expectedRevisionId: 'revision-a',
+      }),
+      'PROJECT_RUNTIME_APPLICATION_INVALID',
+    )
+
+    expect(stagedRevisionId).toBe('revision-b')
+    expect(compensatePublication).not.toHaveBeenCalled()
+    expect(invalidApplication.rollback).not.toHaveBeenCalled()
+    expect(harness.events).not.toContain('dispose:revision-b')
+    expect(publication.readPublished()?.revisionId).toBe('revision-a')
+    expect(publication.isRecoveryRequired()).toBe(true)
+    expect(recoveryErrors).toHaveLength(1)
+    await expect(repository.readPointer()).resolves.toMatchObject({
+      state: 'publishing',
+      revisionId: 'revision-b',
+      commitToken: 'token-b',
+    })
+    await expectPublicationError(
+      publication.replace({
+        candidate: project('revision-c'),
+        expectedRevisionId: 'revision-b',
+      }),
+      'PROJECT_RECOVERY_REQUIRED',
+    )
+    await expectPublicationError(
+      publication.restorePublished(await publishedBundle(candidateA)),
+      'PROJECT_RECOVERY_REQUIRED',
+    )
   })
 
   it('enters recovery when apply rejection compensation fails and rejects every later edit/restore', async () => {

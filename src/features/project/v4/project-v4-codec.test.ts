@@ -107,6 +107,89 @@ describe('Project V4 canonical JSON codec', () => {
     }
   })
 
+  it('decodes genuine Blob, Uint8Array, and ArrayBuffer values from an iframe realm', async () => {
+    const project = logicalAssetProject()
+    const canonical = canonicalProjectV4Bytes(project)
+    const frame = document.createElement('iframe')
+    document.body.append(frame)
+    try {
+      const foreign = frame.contentWindow as unknown as typeof globalThis
+      const foreignBytes = new foreign.Uint8Array(canonical.byteLength)
+      for (let index = 0; index < canonical.byteLength; index += 1) {
+        foreignBytes[index] = canonical[index]!
+      }
+      const foreignBuffer = foreignBytes.buffer.slice(0)
+      const foreignBlob = new foreign.Blob([foreignBytes])
+      expect(foreignBytes).not.toBeInstanceOf(Uint8Array)
+      expect(foreignBuffer).not.toBeInstanceOf(ArrayBuffer)
+      expect(foreignBlob).not.toBeInstanceOf(Blob)
+
+      await expect(Promise.all([
+        decodeProjectV4(foreignBlob as never),
+        decodeProjectV4(foreignBytes as never),
+        decodeProjectV4(foreignBuffer as never),
+      ])).resolves.toEqual([project, project, project])
+    } finally {
+      frame.remove()
+    }
+  })
+
+  it('uses intrinsic brands instead of caller-overridable methods or tags', async () => {
+    const project = logicalAssetProject()
+    const canonical = canonicalProjectV4Bytes(project)
+    const blob = new Blob([canonical])
+    Object.defineProperty(blob, 'arrayBuffer', {
+      configurable: true,
+      value: () => Promise.reject(new Error('caller Blob method must not run')),
+    })
+    const bytes = canonical.slice()
+    Object.defineProperty(bytes, Symbol.toStringTag, {
+      configurable: true,
+      value: 'DataView',
+    })
+    const buffer = canonical.buffer.slice(
+      canonical.byteOffset,
+      canonical.byteOffset + canonical.byteLength,
+    )
+    Object.defineProperties(buffer, {
+      slice: {
+        configurable: true,
+        value: () => { throw new Error('caller ArrayBuffer method must not run') },
+      },
+      [Symbol.toStringTag]: {
+        configurable: true,
+        value: 'Blob',
+      },
+    })
+
+    await expect(Promise.all([
+      decodeProjectV4(blob),
+      decodeProjectV4(bytes),
+      decodeProjectV4(buffer),
+    ])).resolves.toEqual([project, project, project])
+  })
+
+  it('normalizes spoofed DataView, Blob-prototype, and raw tag failures as invalid sources', async () => {
+    const dataView = new DataView(new ArrayBuffer(8))
+    Object.defineProperty(dataView, Symbol.toStringTag, {
+      configurable: true,
+      value: 'Uint8Array',
+    })
+    const blobPrototypeImpostor = Object.create(Blob.prototype) as Blob
+    const throwingTag = Object.create(null) as Record<PropertyKey, unknown>
+    Object.defineProperty(throwingTag, Symbol.toStringTag, {
+      configurable: true,
+      get: () => { throw new Error('raw caller tag failure') },
+    })
+
+    for (const source of [dataView, blobPrototypeImpostor, throwingTag]) {
+      await expect(decodeProjectV4(source as never)).rejects.toMatchObject({
+        name: 'ProjectV4CodecError',
+        code: 'PROJECT_JSON_SOURCE_INVALID',
+      } satisfies Partial<ProjectV4CodecError>)
+    }
+  })
+
   it('accepts noncanonical object-key order and re-exports it canonically', async () => {
     const project = logicalAssetProject()
     const noncanonicalText = JSON.stringify(reverseObjectKeyOrder(project))

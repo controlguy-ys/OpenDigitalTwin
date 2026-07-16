@@ -88,25 +88,39 @@ function copyPublicBundle(bundle: PublishedProjectBundleV4): PublishedProjectBun
   return publicBundle(bundle.project, bundle.revisionId, bundle.configRevision)
 }
 
-async function validateRuntimeBundle<R>(
+async function stabilizeRuntimeBundle<R>(
   bundle: PreparedProjectRuntimeBundleV4<R>,
-  prepared: PreparedProjectRevisionV4 | PublishedProjectBundleV4,
-): Promise<void> {
+  authoritative: PreparedProjectRevisionV4 | PublishedProjectBundleV4,
+): Promise<PreparedProjectRuntimeBundleV4<R>> {
   try {
-    if (typeof bundle !== 'object' || bundle === null || bundle.revisionId !== prepared.revisionId) {
+    if (typeof bundle !== 'object' || bundle === null) {
+      return failPublication(
+        'PROJECT_RUNTIME_PREPARED_BUNDLE_INVALID',
+        'Runtime returned an invalid prepared Project V4 bundle.',
+      )
+    }
+    const runtimeProjectSource = bundle.project
+    const runtimeRevisionId = bundle.revisionId
+    const resources = bundle.resources
+    if (runtimeRevisionId !== authoritative.revisionId) {
       return failPublication(
         'PROJECT_RUNTIME_PREPARED_BUNDLE_INVALID',
         'Runtime prepared another Project V4 revision.',
       )
     }
-    const runtimeProject = validateWorkcellProjectV4(bundle.project)
+    const runtimeProject = validateWorkcellProjectV4(runtimeProjectSource)
     const runtimeConfigRevision = await configRevisionForProjectV4(runtimeProject)
-    if (runtimeConfigRevision !== prepared.configRevision) {
+    if (runtimeConfigRevision !== authoritative.configRevision) {
       return failPublication(
         'PROJECT_RUNTIME_PREPARED_BUNDLE_INVALID',
         'Runtime prepared canonical content other than the requested Project V4 revision.',
       )
     }
+    return Object.freeze({
+      project: authoritative.project,
+      revisionId: authoritative.revisionId,
+      resources,
+    })
   } catch (error) {
     if (
       error instanceof ProjectPublicationV4Error &&
@@ -241,16 +255,21 @@ export function createProjectPublicationCoordinatorV4<R>(
         const previous = published
         const prepared = await repository.prepareRevision(request.candidate)
         let runtimeBundle: PreparedProjectRuntimeBundleV4<R> | undefined
+        let preparedRuntimeBundle: PreparedProjectRuntimeBundleV4<R> | undefined
         let commitToken: string | undefined
         let pointerPublished = false
+        let runtimeApplyResolved = false
         let application: AppliedProjectRuntimePublicationV4 | undefined
         let durableFinalized = false
         let next: PublishedProjectBundleV4 | undefined
 
         try {
           const project = repository.materializePreparedProject(prepared)
-          runtimeBundle = await runtime.prepare(project, prepared.revisionId)
-          await validateRuntimeBundle(runtimeBundle, prepared)
+          preparedRuntimeBundle = await runtime.prepare(project, prepared.revisionId)
+          runtimeBundle = await stabilizeRuntimeBundle(preparedRuntimeBundle, {
+            ...prepared,
+            project,
+          })
           commitToken = createCommitToken()
           await repository.commitPreparedRevision(
             request.expectedRevisionId,
@@ -258,7 +277,9 @@ export function createProjectPublicationCoordinatorV4<R>(
             commitToken,
           )
           pointerPublished = true
-          application = validateApplication(await runtime.apply(runtimeBundle))
+          const applicationCandidate = await runtime.apply(runtimeBundle)
+          runtimeApplyResolved = true
+          application = validateApplication(applicationCandidate)
           await repository.finalizePublication(commitToken)
           durableFinalized = true
           next = publicBundle(
@@ -275,6 +296,8 @@ export function createProjectPublicationCoordinatorV4<R>(
             if (durableFinalized) published = previous
             await rollbackBestEffort(application)
             enterRecovery(error)
+          } else if (pointerPublished && runtimeApplyResolved) {
+            enterRecovery(error)
           } else if (pointerPublished) {
             let compensated = false
             try {
@@ -287,7 +310,8 @@ export function createProjectPublicationCoordinatorV4<R>(
               await disposeBestEffort(runtimeBundle)
             }
           } else {
-            if (runtimeBundle !== undefined) await disposeBestEffort(runtimeBundle)
+            const disposableBundle = runtimeBundle ?? preparedRuntimeBundle
+            if (disposableBundle !== undefined) await disposeBestEffort(disposableBundle)
             try {
               repository.discardPreparedRevision(prepared)
             } catch {
@@ -315,19 +339,23 @@ export function createProjectPublicationCoordinatorV4<R>(
       return enqueue(async () => {
         requireEditable()
         const next = await validatePublishedBundle(bundle)
-        const runtimeBundle = await runtime.prepare(next.project, next.revisionId)
+        const preparedRuntimeBundle = await runtime.prepare(next.project, next.revisionId)
+        let runtimeBundle: PreparedProjectRuntimeBundleV4<R>
         try {
-          await validateRuntimeBundle(runtimeBundle, next)
+          runtimeBundle = await stabilizeRuntimeBundle(preparedRuntimeBundle, next)
         } catch (error) {
-          await disposeBestEffort(runtimeBundle)
+          await disposeBestEffort(preparedRuntimeBundle)
           throw error
         }
 
         let application: AppliedProjectRuntimePublicationV4
+        let runtimeApplyResolved = false
         try {
-          application = validateApplication(await runtime.apply(runtimeBundle))
+          const applicationCandidate = await runtime.apply(runtimeBundle)
+          runtimeApplyResolved = true
+          application = validateApplication(applicationCandidate)
         } catch (error) {
-          await disposeBestEffort(runtimeBundle)
+          if (!runtimeApplyResolved) await disposeBestEffort(runtimeBundle)
           enterRecovery(error)
           throw error
         }
