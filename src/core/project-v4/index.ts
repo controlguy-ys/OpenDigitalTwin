@@ -1,3 +1,4 @@
+export * from './canonical-json'
 export * from './errors'
 export * from './limits'
 export * from './rigid-transform'
