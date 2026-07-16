@@ -61,6 +61,28 @@ function projectWithScalarMapping(
   }
 }
 
+function projectWithLeafPaths(
+  leafPaths: readonly (readonly (string | number)[])[],
+): WorkcellProjectV4 {
+  const project = projectWithScalarMapping('Double', 'number')
+  const mapping = project.opcUa.mappings[0]!
+  const leaf = mapping.leaves[0]!
+  return {
+    ...project,
+    opcUa: {
+      ...project.opcUa,
+      mappings: [{
+        ...mapping,
+        leaves: leafPaths.map((leafPath, index) => ({
+          ...leaf,
+          leafPath,
+          nodeId: `ns=2;s=Leaf${index}`,
+        })),
+      }],
+    },
+  }
+}
+
 describe('Project V4 aggregate validation', () => {
   it.each([
     ['robots', 8, 9, 'ROBOT_INSTANCE_LIMIT_EXCEEDED'],
@@ -155,6 +177,140 @@ describe('Project V4 aggregate validation', () => {
     expect(() => validateWorkcellProjectV4(aliasedProject)).toThrowError(
       expect.objectContaining({ code: 'OPCUA_STATE_COMMAND_NODE_ALIAS' }),
     )
+  })
+
+  it('rejects an Action Binding that aliases a State Mapping endpoint and Node', () => {
+    const project = projectWithScalarMapping('Boolean', 'boolean')
+    const aliasedProject: WorkcellProjectV4 = {
+      ...project,
+      actions: [{
+        id: 'action-1',
+        kind: 'set-gripper-state',
+        robotId: 'robot-1',
+        state: 'OPEN',
+      }],
+      opcUa: {
+        ...project.opcUa,
+        actionBindings: [{
+          id: 'binding-1',
+          endpointId: 'endpoint-1',
+          nodeId: 'ns=2;s=Joint1',
+          kind: 'action-execute',
+          actionId: 'action-1',
+          triggerMode: 'boolean-rising-edge',
+          integerCommandValue: null,
+        }],
+      },
+    }
+
+    expect(() => validateWorkcellProjectV4(aliasedProject)).toThrowError(
+      expect.objectContaining({ code: 'OPCUA_STATE_COMMAND_NODE_ALIAS' }),
+    )
+  })
+
+  it('rejects a multi-route static Bridge cycle', () => {
+    const project = projectWithScalarMapping('Double', 'number')
+    const firstMapping = project.opcUa.mappings[0]!
+    const secondMapping = {
+      ...firstMapping,
+      id: 'mapping-2',
+      leaves: firstMapping.leaves.map((leaf) => ({
+        ...leaf,
+        nodeId: 'ns=2;s=Joint2',
+      })),
+    }
+    const cyclicProject: WorkcellProjectV4 = {
+      ...project,
+      opcUa: {
+        ...project.opcUa,
+        mode: 'bridge',
+        mappings: [firstMapping, secondMapping],
+        bridgeRoutes: [
+          {
+            id: 'route-1',
+            sourceChannelId: 'mapping-1',
+            destinationChannelId: 'mapping-2',
+            direction: 'forward',
+            scale: 1,
+            offset: 0,
+            unit: 'degree',
+            sourceOwnership: 'client',
+          },
+          {
+            id: 'route-2',
+            sourceChannelId: 'mapping-2',
+            destinationChannelId: 'mapping-1',
+            direction: 'forward',
+            scale: 1,
+            offset: 0,
+            unit: 'degree',
+            sourceOwnership: 'server',
+          },
+        ],
+      },
+    }
+
+    expect(() => validateWorkcellProjectV4(cyclicProject)).toThrowError(
+      expect.objectContaining({ code: 'BRIDGE_ROUTE_CYCLE' }),
+    )
+  })
+
+  it.each([
+    ['scalar plus structure', [[], ['value']]],
+    ['ancestor before descendant', [['pose'], ['pose', 'x']]],
+    ['descendant before ancestor', [['pose', 'x'], ['pose']]],
+    ['named and numeric children', [['pose', 'x'], ['pose', 0]]],
+  ] as const)('rejects incoherent OPC leaf trees: %s', (_label, leafPaths) => {
+    expect(() => validateWorkcellProjectV4(projectWithLeafPaths(leafPaths))).toThrowError(
+      expect.objectContaining({ code: 'OPCUA_LEAF_PATH_TREE_INVALID' }),
+    )
+  })
+
+  it('rejects an Array with a custom prototype without calling its inherited map', () => {
+    const project = makeMinimalWorkcellProjectV4()
+    const robots = [...project.robots]
+    let inheritedMapCalled = false
+    const customPrototype = Object.create(Array.prototype) as object
+    Object.defineProperty(customPrototype, 'map', {
+      configurable: true,
+      value: () => {
+        inheritedMapCalled = true
+        return []
+      },
+    })
+    Object.setPrototypeOf(robots, customPrototype)
+
+    expect(() => validateWorkcellProjectV4({ ...project, robots })).toThrowError(
+      expect.objectContaining({ code: 'PROJECT_ARRAY_PROTOTYPE_INVALID' }),
+    )
+    expect(inheritedMapCalled).toBe(false)
+  })
+
+  it('clones a valid __proto__ Joint key as an own property without prototype mutation', () => {
+    const project = makeMinimalWorkcellProjectV4()
+    const definition = project.robotDefinitions[0]!
+    const robot = project.robots[0]!
+    const initialJointValues: Record<string, number> = {}
+    Object.defineProperty(initialJointValues, '__proto__', {
+      configurable: true,
+      enumerable: true,
+      value: 0,
+      writable: true,
+    })
+    const protoKeyProject: WorkcellProjectV4 = {
+      ...project,
+      robotDefinitions: [{
+        ...definition,
+        joints: [{ ...definition.joints[0]!, id: '__proto__' }],
+      }],
+      robots: [{ ...robot, initialJointValues }],
+    }
+
+    const validated = validateWorkcellProjectV4(protoKeyProject)
+    const validatedJointValues = validated.robots[0]!.initialJointValues
+    expect(Object.hasOwn(validatedJointValues, '__proto__')).toBe(true)
+    expect(validatedJointValues.__proto__).toBe(0)
+    expect(Object.getPrototypeOf(validatedJointValues)).toBe(Object.prototype)
   })
 
   it('always reports the shared ProjectV4Error contract', () => {

@@ -139,6 +139,9 @@ function expectClosedRecord(
 
 function expectDenseArray(value: unknown, path: string): unknown[] {
   if (!Array.isArray(value)) invalid(path, 'Expected an array.')
+  if (Object.getPrototypeOf(value) !== Array.prototype) {
+    invalid(path, 'Persisted arrays must use Array.prototype.', 'PROJECT_ARRAY_PROTOTYPE_INVALID')
+  }
   inspectOwnDataProperties(value, path, true)
   for (let index = 0; index < value.length; index += 1) {
     if (!Object.hasOwn(value, index)) {
@@ -164,7 +167,10 @@ function clonePlainValue(value: unknown, path: string, ancestors: WeakSet<object
 
   if (Array.isArray(value)) {
     const source = expectDenseArray(value, path)
-    const clone = source.map((item, index) => clonePlainValue(item, `${path}[${index}]`, ancestors))
+    const clone: unknown[] = []
+    for (let index = 0; index < source.length; index += 1) {
+      clone.push(clonePlainValue(source[index], `${path}[${index}]`, ancestors))
+    }
     ancestors.delete(value)
     return clone
   }
@@ -172,7 +178,12 @@ function clonePlainValue(value: unknown, path: string, ancestors: WeakSet<object
   const source = expectRecord(value, path)
   const clone: MutableRecord = {}
   for (const [key, item] of Object.entries(source)) {
-    clone[key] = clonePlainValue(item, `${path}.${key}`, ancestors)
+    Object.defineProperty(clone, key, {
+      configurable: true,
+      enumerable: true,
+      value: clonePlainValue(item, `${path}.${key}`, ancestors),
+      writable: true,
+    })
   }
   ancestors.delete(value)
   return clone
@@ -890,6 +901,42 @@ function validateProjectTarget(value: unknown, path: string): void {
   }
 }
 
+interface LeafPathTreeNode {
+  childKind?: 'named' | 'numeric'
+  readonly children: Map<string, LeafPathTreeNode>
+  terminal: boolean
+}
+
+function createLeafPathTreeNode(): LeafPathTreeNode {
+  return { children: new Map<string, LeafPathTreeNode>(), terminal: false }
+}
+
+function insertLeafPath(
+  root: LeafPathTreeNode,
+  segments: readonly (string | number)[],
+  path: string,
+): void {
+  let node = root
+  for (const segment of segments) {
+    if (node.terminal) {
+      invalid(path, 'A Mapping Leaf path cannot descend from another terminal Leaf.', 'OPCUA_LEAF_PATH_TREE_INVALID')
+    }
+    const childKind = typeof segment === 'string' ? 'named' : 'numeric'
+    if (node.childKind !== undefined && node.childKind !== childKind) {
+      invalid(path, 'One Mapping container cannot mix named and numeric children.', 'OPCUA_LEAF_PATH_TREE_INVALID')
+    }
+    node.childKind = childKind
+    const childKey = `${childKind}:${segment}`
+    const child = node.children.get(childKey) ?? createLeafPathTreeNode()
+    node.children.set(childKey, child)
+    node = child
+  }
+  if (node.children.size !== 0) {
+    invalid(path, 'A terminal Mapping Leaf cannot be an ancestor of another Leaf.', 'OPCUA_LEAF_PATH_TREE_INVALID')
+  }
+  node.terminal = true
+}
+
 function validateMapping(value: unknown, path: string, context: ShapeContext): void {
   const record = expectClosedRecord(
     value,
@@ -935,6 +982,7 @@ function validateMapping(value: unknown, path: string, context: ShapeContext): v
     'OPCUA_STRUCTURE_LEAF_LIMIT_EXCEEDED',
   )
   const leafPaths = new Set<string>()
+  const leafPathTree = createLeafPathTreeNode()
   const numericIndicesByPrefix = new Map<string, Set<number>>()
   leaves.forEach((leaf, leafIndex) => {
     const leafPath = `${path}.leaves[${leafIndex}]`
@@ -956,21 +1004,25 @@ function validateMapping(value: unknown, path: string, context: ShapeContext): v
       `${leafPath}.leafPath`,
       'OPCUA_STRUCTURE_DEPTH_LIMIT_EXCEEDED',
     )
-    segments.forEach((segment, segmentIndex) => {
+    const validatedSegments = segments.map((segment, segmentIndex): string | number => {
       const segmentPath = `${leafPath}.leafPath[${segmentIndex}]`
       if (typeof segment === 'string') {
-        validateBoundedText(segment, segmentPath, MAX_IDENTIFIER_UTF8_BYTES_V4)
-        return
+        return validateBoundedText(segment, segmentPath, MAX_IDENTIFIER_UTF8_BYTES_V4)
       }
-      const arrayIndex = expectSafeInteger(segment, segmentPath)
-      const prefix = JSON.stringify(segments.slice(0, segmentIndex))
-      const indices = numericIndicesByPrefix.get(prefix) ?? new Set<number>()
-      indices.add(arrayIndex)
-      numericIndicesByPrefix.set(prefix, indices)
+      return expectSafeInteger(segment, segmentPath)
     })
-    const serializedPath = JSON.stringify(segments)
+    leafRecord.leafPath = validatedSegments
+    const serializedPath = JSON.stringify(validatedSegments)
     if (leafPaths.has(serializedPath)) invalid(`${leafPath}.leafPath`, 'Mapping Leaf path is duplicated.')
     leafPaths.add(serializedPath)
+    insertLeafPath(leafPathTree, validatedSegments, `${leafPath}.leafPath`)
+    validatedSegments.forEach((segment, segmentIndex) => {
+      if (typeof segment === 'string') return
+      const prefix = JSON.stringify(validatedSegments.slice(0, segmentIndex))
+      const indices = numericIndicesByPrefix.get(prefix) ?? new Set<number>()
+      indices.add(segment)
+      numericIndicesByPrefix.set(prefix, indices)
+    })
     validateNodeId(leafRecord.nodeId, `${leafPath}.nodeId`)
     validateProjectTarget(leafRecord.projectTarget, `${leafPath}.projectTarget`)
     const opcUaDataType = expectEnum(leafRecord.opcUaDataType, `${leafPath}.opcUaDataType`, [
@@ -1740,6 +1792,14 @@ function validateOpcUaReferences(
       'OPCUA_ENDPOINT_NOT_FOUND',
       'OPC UA endpoint',
     )
+    const mappingAtNode = nodeMappings.get(`${binding.endpointId}\u0000${binding.nodeId}`)
+    if (mappingAtNode !== undefined && mappingCarriesState(mappingAtNode.direction)) {
+      invalid(
+        `${path}.nodeId`,
+        'One Node cannot alias both Project State and an Action Command Binding.',
+        'OPCUA_STATE_COMMAND_NODE_ALIAS',
+      )
+    }
     if (binding.kind === 'action-execute') {
       requireReference(actions, binding.actionId, `${path}.actionId`, 'ACTION_NOT_FOUND', 'Action')
     } else {
@@ -1763,6 +1823,8 @@ function validateOpcUaReferences(
     if (matches === 0) invalid(path, `Bridge channel ${channelId} does not exist.`, 'BRIDGE_CHANNEL_NOT_FOUND')
     if (matches > 1) invalid(path, `Bridge channel ${channelId} is ambiguous.`, 'BRIDGE_CHANNEL_AMBIGUOUS')
   }
+  const bridgeDestinations = new Map<string, string[]>()
+  const bridgeInDegree = new Map<string, number>()
   project.opcUa.bridgeRoutes.forEach((route, index) => {
     const path = `$.opcUa.bridgeRoutes[${index}]`
     resolveChannel(route.sourceChannelId, `${path}.sourceChannelId`)
@@ -1770,7 +1832,35 @@ function validateOpcUaReferences(
     if (route.sourceChannelId === route.destinationChannelId) {
       invalid(path, 'Bridge route cannot echo a channel to itself.', 'BRIDGE_ROUTE_ECHO')
     }
+    const destinations = bridgeDestinations.get(route.sourceChannelId) ?? []
+    destinations.push(route.destinationChannelId)
+    bridgeDestinations.set(route.sourceChannelId, destinations)
+    if (!bridgeInDegree.has(route.sourceChannelId)) bridgeInDegree.set(route.sourceChannelId, 0)
+    bridgeInDegree.set(
+      route.destinationChannelId,
+      (bridgeInDegree.get(route.destinationChannelId) ?? 0) + 1,
+    )
   })
+  const readyChannels = [...bridgeInDegree]
+    .filter(([, inDegree]) => inDegree === 0)
+    .map(([channelId]) => channelId)
+  let visitedChannels = 0
+  while (readyChannels.length !== 0) {
+    const channelId = readyChannels.pop()!
+    visitedChannels += 1
+    for (const destinationId of bridgeDestinations.get(channelId) ?? []) {
+      const remainingInDegree = bridgeInDegree.get(destinationId)! - 1
+      bridgeInDegree.set(destinationId, remainingInDegree)
+      if (remainingInDegree === 0) readyChannels.push(destinationId)
+    }
+  }
+  if (visitedChannels !== bridgeInDegree.size) {
+    invalid(
+      '$.opcUa.bridgeRoutes',
+      'Declared Bridge routes must form an acyclic directed graph.',
+      'BRIDGE_ROUTE_CYCLE',
+    )
+  }
 }
 
 function validateReferencesAndBudgets(project: WorkcellProjectV4): void {
