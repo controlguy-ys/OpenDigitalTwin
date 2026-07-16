@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 
-**Status:** Conversation-approved; written-spec review pending
+**Status:** Approved; implementation-ready
 
 **Target:** `main`
 
