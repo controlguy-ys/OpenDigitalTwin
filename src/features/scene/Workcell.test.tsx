@@ -1,7 +1,10 @@
+import { render, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { BoxGeometry, Group, Mesh } from 'three'
+import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three'
 import type { SceneRuntimeProjectionV1 } from './scene-runtime-selector'
 import {
+  WorkcellV4,
+  assertPreparedVisibleSceneTriangleBudgetV4,
   createViewportBoundResolvers,
   workbenchDropSurfaceZ,
   workcellLinearAxisBindings,
@@ -10,6 +13,29 @@ import {
 import { WORKBENCH_TOP_Z } from './workcell-constants'
 import type { CommittedLinearAxisSourceV1 } from './linear-axis-source'
 import type { LinearAxisCommittedStateV1 } from './linear-axis-source'
+import { makeMinimalWorkcellProjectV4 } from '../../core/project-v4/test-support'
+import type { WorkcellProjectV4 } from '../../core/project-v4/types'
+import { buildInitialRobotRuntimeStatesV4 } from '../robot/v4/robot-runtime-registry'
+import { selectSceneRuntimeV4 } from './v4/scene-runtime-selector'
+import {
+  createPreparedRobotDefinitionGeometryV4,
+  createRobotDefinitionGeometryRepositoryV4,
+} from '../robot/v4/robot-definition-geometry-repository'
+import type {
+  RobotDefinitionGeometryPublicationSnapshotV4,
+  RobotDefinitionGeometryRepositoryV4,
+} from '../robot/v4/robot-definition-geometry-repository'
+import type { WorkcellRegistrationV4 } from './Workcell'
+
+vi.mock('@react-three/fiber', () => ({
+  createPortal: (node: unknown) => node,
+  useFrame: vi.fn(),
+  useThree: vi.fn(),
+}))
+
+vi.mock('@react-three/drei/web/Html.js', () => ({
+  Html: ({ children }: { children: unknown }) => children,
+}))
 
 describe('Workcell published render authority', () => {
   it('uses only effective-visible entities from the published runtime projection', () => {
@@ -224,5 +250,339 @@ describe('Workcell published render authority', () => {
       source,
       committedState,
     })
+  })
+})
+
+function v4Project(robotCount = 1): WorkcellProjectV4 {
+  const project = makeMinimalWorkcellProjectV4()
+  const robot = project.robots[0]!
+  return {
+    ...project,
+    robots: Array.from({ length: robotCount }, (_, index) => ({
+      ...robot,
+      id: `robot-${index + 1}`,
+      name: `Robot ${index + 1}`,
+      localBasePose: {
+        positionM: [index, 0, 0],
+        quaternion: [0, 0, 0, 1],
+      },
+    })),
+    spatialEntities: [{
+      id: 'fixture-box',
+      name: 'Fixture Box',
+      geometry: { kind: 'box', dimensionsM: [1, 1, 1], color: '#808080' },
+      parentFrameId: 'world',
+      localPose: { positionM: [3, 0, 0], quaternion: [0, 0, 0, 1] },
+      visible: true,
+      groupId: null,
+      removable: true,
+      transformOwner: 'manual',
+      numericStatus: {
+        value: 5,
+        sourceOwnership: 'manual',
+        overlay: { visible: false, frameId: null },
+      },
+      graspable: false,
+      graspFrames: [],
+      movingFrames: [],
+    }],
+  }
+}
+
+function v4Projection(project: WorkcellProjectV4) {
+  return selectSceneRuntimeV4(project, {
+    projectRevisionId: project.revisionId,
+    robots: buildInitialRobotRuntimeStatesV4(project),
+  })
+}
+
+function preparedV4(project: WorkcellProjectV4, triangleCount: number) {
+  const definition = project.robotDefinitions[0]!
+  const geometry = new BoxGeometry(0.1, 0.1, 0.1)
+  return createPreparedRobotDefinitionGeometryV4({
+    definitionId: definition.id,
+    linkTemplates: new Map(definition.links.map(({ id }) => {
+      const root = new Group()
+      root.add(new Mesh(geometry, new MeshStandardMaterial()))
+      return [id, root] as const
+    })),
+    sharedGeometry: new Set([geometry]),
+    triangleCount,
+    disposeResources: vi.fn(),
+  })
+}
+
+describe('WorkcellV4 dark multi-Robot composition', () => {
+  it('accepts exactly 1,500,000 prepared triangles and rejects 1,500,001', () => {
+    const project = v4Project()
+    const runtime = v4Projection(project)
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const definition = project.robotDefinitions[0]!
+    const passingHandle = repository.stage(definition, preparedV4(project, 1_499_988))
+    repository.commitBatch([passingHandle])
+    const passing = new Map([[definition.id, repository.readCurrent(definition.id)!]])
+    expect(assertPreparedVisibleSceneTriangleBudgetV4(project, runtime, passing))
+      .toBe(1_500_000)
+
+    const failingHandle = repository.stage(definition, preparedV4(project, 1_499_989))
+    repository.commitBatch([failingHandle])
+    const failing = new Map([[definition.id, repository.readCurrent(definition.id)!]])
+    expect(() => assertPreparedVisibleSceneTriangleBudgetV4(project, runtime, failing))
+      .toThrow(/VISIBLE_SCENE_TRIANGLE_LIMIT_EXCEEDED/)
+    repository.revoke(failingHandle)
+    repository.revoke(passingHandle)
+  })
+
+  it('publishes two Robot roots, one Spatial root, and only Project collision proxies', async () => {
+    const project = v4Project(2)
+    const runtime = v4Projection(project)
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const definition = project.robotDefinitions[0]!
+    const handle = repository.stage(definition, preparedV4(project, 12))
+    repository.commitBatch([handle])
+    let registration: WorkcellRegistrationV4 | null = null
+    const view = render(
+      <WorkcellV4
+        geometryRepository={repository}
+        onRegister={(value) => {
+          registration = value
+        }}
+        project={project}
+        sceneRuntime={runtime}
+      />,
+    )
+
+    await waitFor(() => expect(registration?.robots.size).toBe(2))
+    expect([...registration!.robots.keys()]).toEqual(['robot-1', 'robot-2'])
+    expect([...registration!.spatialEntities.keys()]).toEqual(['fixture-box'])
+    expect(registration!.collisionProxies).toHaveLength(1)
+    expect('set' in registration!.robots).toBe(false)
+    expect('set' in registration!.spatialEntities).toBe(false)
+    expect(registration!.robots.has('environment')).toBe(false)
+    expect(registration!.spatialEntities.has('linear-axis')).toBe(false)
+    view.unmount()
+    expect(registration).toBeNull()
+    repository.revoke(handle)
+  })
+
+  it('throws the prepared budget guard before publishing any registration', () => {
+    const project = v4Project()
+    const runtime = v4Projection(project)
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const definition = project.robotDefinitions[0]!
+    const handle = repository.stage(definition, preparedV4(project, 1_500_001))
+    repository.commitBatch([handle])
+    const onRegister = vi.fn()
+
+    expect(() => render(
+      <WorkcellV4
+        geometryRepository={repository}
+        onRegister={onRegister}
+        project={project}
+        sceneRuntime={runtime}
+      />,
+    )).toThrow(/VISIBLE_SCENE_TRIANGLE_LIMIT_EXCEEDED/)
+    expect(onRegister).not.toHaveBeenCalled()
+    repository.revoke(handle)
+  })
+
+  it('pins the budgeted handle when a same-Definition replacement commits before mount', async () => {
+    const project = v4Project()
+    const runtime = v4Projection(project)
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const definition = project.robotDefinitions[0]!
+    const oldHandle = repository.stage(definition, preparedV4(project, 12))
+    repository.commitBatch([oldHandle])
+    const oldSnapshot = repository.readCurrent(definition.id)!
+    const replacementHandle = repository.stage(definition, preparedV4(project, 1_500_000))
+    const frozenVersion = repository.getSnapshot()
+    let replacementCommitted = false
+    const acquire = vi.fn(repository.acquire)
+    const racingRepository: RobotDefinitionGeometryRepositoryV4 = {
+      ...repository,
+      acquire,
+      getSnapshot: () => frozenVersion,
+      subscribe: () => () => undefined,
+      readCurrent: (definitionId): RobotDefinitionGeometryPublicationSnapshotV4 | null => {
+        if (definitionId !== definition.id) return repository.readCurrent(definitionId)
+        return Object.freeze({
+          definitionId,
+          handle: oldSnapshot.handle,
+          get triangleCount() {
+            if (!replacementCommitted) {
+              replacementCommitted = true
+              repository.commitBatch([replacementHandle])
+            }
+            return oldSnapshot.triangleCount
+          },
+        })
+      },
+    }
+    let registration: WorkcellRegistrationV4 | null = null
+    const view = render(
+      <WorkcellV4
+        geometryRepository={racingRepository}
+        onRegister={(value) => {
+          registration = value
+        }}
+        project={project}
+        sceneRuntime={runtime}
+      />,
+    )
+
+    await waitFor(() => expect(registration?.robots.size).toBe(1))
+    expect(replacementCommitted).toBe(true)
+    expect(repository.readCurrent(definition.id)?.handle).toBe(replacementHandle)
+    expect(registration!.robots.values().next().value?.publicationHandle).toBe(oldHandle)
+    expect(acquire).toHaveBeenCalledOnce()
+    expect(acquire.mock.calls[0]?.[2]).toBe(oldHandle)
+    expect(acquire.mock.calls[0]?.[2]).not.toBe(replacementHandle)
+
+    view.unmount()
+    repository.revoke(replacementHandle)
+    repository.revoke(oldHandle)
+  })
+
+  it('never republishes an old same-count Robot set during a visibility swap', async () => {
+    const base = v4Project(2)
+    const projectA: WorkcellProjectV4 = {
+      ...base,
+      robots: [base.robots[0]!, { ...base.robots[1]!, visible: false }],
+    }
+    const projectB: WorkcellProjectV4 = {
+      ...projectA,
+      revisionId: 'visibility-swap-revision',
+      robots: [{ ...base.robots[0]!, visible: false }, base.robots[1]!],
+    }
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const definition = base.robotDefinitions[0]!
+    const handle = repository.stage(definition, preparedV4(base, 12))
+    repository.commitBatch([handle])
+    const calls: Array<WorkcellRegistrationV4 | null> = []
+    const view = render(
+      <WorkcellV4
+        geometryRepository={repository}
+        onRegister={(value) => calls.push(value)}
+        project={projectA}
+        sceneRuntime={v4Projection(projectA)}
+      />,
+    )
+    await waitFor(() => expect(calls.at(-1)?.robots.has('robot-1')).toBe(true))
+    calls.length = 0
+
+    view.rerender(
+      <WorkcellV4
+        geometryRepository={repository}
+        onRegister={(value) => calls.push(value)}
+        project={projectB}
+        sceneRuntime={v4Projection(projectB)}
+      />,
+    )
+    await waitFor(() => expect(calls.at(-1)?.robots.has('robot-2')).toBe(true))
+    expect(calls
+      .filter((value): value is WorkcellRegistrationV4 => value !== null)
+      .every((value) => !value.robots.has('robot-1'))).toBe(true)
+
+    view.unmount()
+    repository.revoke(handle)
+  })
+
+  it('never republishes an old same-count Spatial Entity set during a visibility swap', async () => {
+    const base = v4Project()
+    const entityA = base.spatialEntities[0]!
+    const entityB = { ...entityA, id: 'fixture-box-b', name: 'Fixture Box B', visible: false }
+    const projectA: WorkcellProjectV4 = {
+      ...base,
+      spatialEntities: [entityA, entityB],
+    }
+    const projectB: WorkcellProjectV4 = {
+      ...projectA,
+      revisionId: 'spatial-visibility-swap-revision',
+      spatialEntities: [
+        { ...entityA, visible: false },
+        { ...entityB, visible: true },
+      ],
+    }
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const definition = base.robotDefinitions[0]!
+    const handle = repository.stage(definition, preparedV4(base, 12))
+    repository.commitBatch([handle])
+    const calls: Array<WorkcellRegistrationV4 | null> = []
+    const view = render(
+      <WorkcellV4
+        geometryRepository={repository}
+        onRegister={(value) => calls.push(value)}
+        project={projectA}
+        sceneRuntime={v4Projection(projectA)}
+      />,
+    )
+    await waitFor(() => expect(calls.at(-1)?.spatialEntities.has('fixture-box')).toBe(true))
+    calls.length = 0
+
+    view.rerender(
+      <WorkcellV4
+        geometryRepository={repository}
+        onRegister={(value) => calls.push(value)}
+        project={projectB}
+        sceneRuntime={v4Projection(projectB)}
+      />,
+    )
+    await waitFor(() => expect(calls.at(-1)?.spatialEntities.has('fixture-box-b')).toBe(true))
+    expect(calls
+      .filter((value): value is WorkcellRegistrationV4 => value !== null)
+      .every((value) => !value.spatialEntities.has('fixture-box'))).toBe(true)
+
+    view.unmount()
+    repository.revoke(handle)
+  })
+
+  it('updates a stable ready registration without a null publication on a Joint tick', async () => {
+    const project = v4Project()
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const definition = project.robotDefinitions[0]!
+    const handle = repository.stage(definition, preparedV4(project, 12))
+    repository.commitBatch([handle])
+    const calls: Array<WorkcellRegistrationV4 | null> = []
+    const runtimeA = buildInitialRobotRuntimeStatesV4(project)
+    const robotState = runtimeA['robot-1']!
+    const runtimeB = {
+      ...runtimeA,
+      'robot-1': {
+        ...robotState,
+        jointValues: { ...robotState.jointValues, J1: 45 },
+        numericStatus: 99,
+      },
+    }
+    const view = render(
+      <WorkcellV4
+        geometryRepository={repository}
+        onRegister={(value) => calls.push(value)}
+        project={project}
+        sceneRuntime={selectSceneRuntimeV4(project, {
+          projectRevisionId: project.revisionId,
+          robots: runtimeA,
+        })}
+      />,
+    )
+    await waitFor(() => expect(calls.at(-1)?.robots.size).toBe(1))
+    const root = calls.at(-1)!.robots.get('robot-1')!.root
+    calls.length = 0
+
+    view.rerender(
+      <WorkcellV4
+        geometryRepository={repository}
+        onRegister={(value) => calls.push(value)}
+        project={project}
+        sceneRuntime={selectSceneRuntimeV4(project, {
+          projectRevisionId: project.revisionId,
+          robots: runtimeB,
+        })}
+      />,
+    )
+    await waitFor(() => expect(calls.at(-1)?.robots.get('robot-1')?.root).toBe(root))
+    expect(calls).not.toContain(null)
+
+    view.unmount()
+    repository.revoke(handle)
   })
 })
