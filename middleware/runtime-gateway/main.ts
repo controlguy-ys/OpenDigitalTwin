@@ -61,8 +61,7 @@ export function createRuntimeGatewayEntrypointService(
 ): RuntimeGatewayEntrypointServiceV1 {
   const createHttpServer = dependencies.createHttpServer ?? createServer
   let server: Server | null = null
-  let startPromise: Promise<void> | null = null
-  let stopPromise: Promise<void> | null = null
+  let lifecycleTail: Promise<void> = Promise.resolve()
 
   const requestListener: RequestListener = (request, response) => {
     if (request.method === 'GET' && request.url === '/healthz') {
@@ -115,30 +114,14 @@ export function createRuntimeGatewayEntrypointService(
     server = candidate
   }
 
-  async function start(): Promise<void> {
+  async function startTransition(): Promise<void> {
     if (server?.listening === true) return
-    if (startPromise !== null) return startPromise
-    if (stopPromise !== null) await stopPromise
-
-    startPromise = startListening()
-    try {
-      await startPromise
-    } finally {
-      startPromise = null
-    }
+    server = null
+    await startListening()
   }
 
   async function closeActiveServer(): Promise<void> {
-    if (startPromise !== null) {
-      try {
-        await startPromise
-      } catch {
-        return
-      }
-    }
-
     const activeServer = server
-    server = null
     if (activeServer === null) return
 
     await new Promise<void>((resolveStop, rejectStop) => {
@@ -147,16 +130,23 @@ export function createRuntimeGatewayEntrypointService(
         else rejectStop(error)
       })
     })
+    server = null
   }
 
-  async function stop(): Promise<void> {
-    if (stopPromise !== null) return stopPromise
-    stopPromise = closeActiveServer()
-    try {
-      await stopPromise
-    } finally {
-      stopPromise = null
-    }
+  function enqueueLifecycleTransition(
+    transition: () => Promise<void>,
+  ): Promise<void> {
+    const requestedTransition = lifecycleTail.then(transition)
+    lifecycleTail = requestedTransition.catch(() => undefined)
+    return requestedTransition
+  }
+
+  function start(): Promise<void> {
+    return enqueueLifecycleTransition(startTransition)
+  }
+
+  function stop(): Promise<void> {
+    return enqueueLifecycleTransition(closeActiveServer)
   }
 
   return Object.freeze({

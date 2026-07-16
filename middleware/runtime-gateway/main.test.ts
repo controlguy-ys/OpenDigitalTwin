@@ -1,6 +1,10 @@
 // @vitest-environment node
 
-import { createServer as createNetServer, connect } from 'node:net'
+import {
+  createServer as createNetServer,
+  connect,
+  type Server as NetServer,
+} from 'node:net'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -28,6 +32,32 @@ async function findAvailablePort(): Promise<number> {
     server.close((error) => error === undefined ? resolve() : reject(error))
   })
   return address.port
+}
+
+async function closeNetServer(server: NetServer): Promise<void> {
+  if (!server.listening) return
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error === undefined ? resolve() : reject(error))
+  })
+}
+
+async function listenOnEphemeralPort(): Promise<{
+  readonly server: NetServer
+  readonly port: number
+}> {
+  const server = createNetServer()
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+
+  const address = server.address()
+  if (address === null || typeof address === 'string') {
+    server.close()
+    throw new Error('Expected an ephemeral TCP address')
+  }
+
+  return { server, port: address.port }
 }
 
 function createTestConfig(httpPort: number): RuntimeGatewayDeploymentConfigV1 {
@@ -181,5 +211,104 @@ describe('runtime Gateway entrypoint', () => {
     await service.stop()
 
     await expect(fetch(`http://127.0.0.1:${port}/healthz`)).rejects.toThrow()
+  })
+
+  it('serializes start, pending stop, and restart so the final state is live', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port))
+
+    const firstStart = service.start()
+    const pendingStop = service.stop()
+    const restart = service.start()
+
+    try {
+      const results = await Promise.allSettled([firstStart, pendingStop, restart])
+      expect(results.map(({ status }) => status)).toEqual([
+        'fulfilled',
+        'fulfilled',
+        'fulfilled',
+      ])
+
+      const health = await fetch(`http://127.0.0.1:${port}/healthz`)
+      expect(health.status).toBe(200)
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('serializes concurrent restarts after stop without competing listeners', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port))
+
+    await service.start()
+    const pendingStop = service.stop()
+    const firstRestart = service.start()
+    const secondRestart = service.start()
+
+    try {
+      const results = await Promise.allSettled([
+        pendingStop,
+        firstRestart,
+        secondRestart,
+      ])
+      expect(results.map(({ status }) => status)).toEqual([
+        'fulfilled',
+        'fulfilled',
+        'fulfilled',
+      ])
+
+      const health = await fetch(`http://127.0.0.1:${port}/healthz`)
+      expect(health.status).toBe(200)
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('honors the final requested state across repeated concurrent transitions', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port))
+
+    await service.start()
+    const transitions = [
+      service.stop(),
+      service.start(),
+      service.stop(),
+      service.start(),
+      service.stop(),
+      service.start(),
+    ]
+
+    try {
+      const results = await Promise.allSettled(transitions)
+      expect(results.every(({ status }) => status === 'fulfilled')).toBe(true)
+
+      const health = await fetch(`http://127.0.0.1:${port}/healthz`)
+      expect(health.status).toBe(200)
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('retries a failed listen after the real port conflict is removed', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const blocker = await listenOnEphemeralPort()
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(blocker.port),
+    )
+
+    try {
+      await expect(service.start()).rejects.toMatchObject({ code: 'EADDRINUSE' })
+      await closeNetServer(blocker.server)
+
+      await service.start()
+      const health = await fetch(`http://127.0.0.1:${blocker.port}/healthz`)
+      expect(health.status).toBe(200)
+    } finally {
+      await service.stop()
+      await closeNetServer(blocker.server)
+    }
   })
 })
