@@ -17,41 +17,92 @@ const rawCoreModules = import.meta.glob('../**/*.ts', {
 
 const CORE_ROOT = 'src/core'
 const TEST_DIRECTORY = 'src/core/project-v4'
-const FORBIDDEN_PLATFORM_IDENTIFIERS = new Set([
-  'window',
-  'document',
-  'navigator',
-  'location',
-  'history',
-  'localStorage',
-  'sessionStorage',
-  'indexedDB',
-  'WebSocket',
-  'Worker',
-  'SharedWorker',
-  'ServiceWorker',
-  'HTMLElement',
-  'Element',
-  'Node',
-  'Document',
-  'Window',
-  'Navigator',
-  'Location',
-  'History',
-  'Storage',
-  'Event',
-  'EventTarget',
-  'MessageEvent',
-  'CustomEvent',
-  'MouseEvent',
-  'KeyboardEvent',
-  'process',
-  'Buffer',
-  'require',
-  'module',
-  '__dirname',
-  '__filename',
-])
+const RUNTIME_SURFACE_CLASSIFICATION = {
+  approvedPortable: [
+    'crypto',
+    'TextEncoder',
+    'TextDecoder',
+  ],
+  forbidden: {
+    browserTransport: [
+      'BroadcastChannel',
+      'MessageChannel',
+      'MessagePort',
+      'WebSocket',
+      'XMLHttpRequest',
+      'EventSource',
+      'fetch',
+      'WebTransport',
+      'Request',
+      'Response',
+      'Headers',
+      'FormData',
+    ],
+    browserWorkersAndTiming: [
+      'Worker',
+      'SharedWorker',
+      'ServiceWorker',
+      'postMessage',
+      'importScripts',
+      'requestAnimationFrame',
+      'cancelAnimationFrame',
+    ],
+    dom: [
+      'window',
+      'document',
+      'navigator',
+      'location',
+      'history',
+      'HTMLElement',
+      'Element',
+      'Node',
+      'Document',
+      'Window',
+      'Navigator',
+      'Location',
+      'History',
+      'Event',
+      'EventTarget',
+      'MessageEvent',
+      'CustomEvent',
+      'MouseEvent',
+      'KeyboardEvent',
+      'DOMParser',
+      'XMLSerializer',
+      'MutationObserver',
+      'ResizeObserver',
+      'IntersectionObserver',
+      'FileReader',
+    ],
+    browserState: [
+      'localStorage',
+      'sessionStorage',
+      'indexedDB',
+      'caches',
+      'Cache',
+      'CacheStorage',
+      'Storage',
+      'StorageManager',
+      'cookieStore',
+      'CookieStore',
+    ],
+    nodeRuntime: [
+      'process',
+      'Buffer',
+      'require',
+      'module',
+      '__dirname',
+      '__filename',
+    ],
+  },
+} as const
+
+const APPROVED_PORTABLE_RUNTIME_IDENTIFIERS = new Set<string>(
+  RUNTIME_SURFACE_CLASSIFICATION.approvedPortable,
+)
+const FORBIDDEN_RUNTIME_SURFACE_IDENTIFIERS = new Set<string>(
+  Object.values(RUNTIME_SURFACE_CLASSIFICATION.forbidden).flat(),
+)
 
 interface ProductionCoreModule {
   readonly path: string
@@ -89,8 +140,10 @@ function normalizePosixPath(value: string): string | null {
   return segments.join('/')
 }
 
-function productionCoreModules(): readonly ProductionCoreModule[] {
-  return Object.entries(rawCoreModules)
+function productionCoreModules(
+  rawModules: Readonly<Record<string, string>> = rawCoreModules,
+): readonly ProductionCoreModule[] {
+  return Object.entries(rawModules)
     .map(([globPath, source]) => {
       const path = normalizePosixPath(`${TEST_DIRECTORY}/${globPath}`)
       if (path === null || !path.startsWith(`${CORE_ROOT}/`)) {
@@ -188,8 +241,18 @@ function resolveRelativeCoreSpecifier(
   return candidates.filter((candidate) => productionPaths.has(candidate))
 }
 
-function scanProductionCoreGraph(): CoreSourceGraphReport {
-  const modules = productionCoreModules()
+function classifyRuntimeSurfaceIdentifier(
+  identifier: string,
+): 'approved-portable' | 'forbidden' | null {
+  if (APPROVED_PORTABLE_RUNTIME_IDENTIFIERS.has(identifier)) return 'approved-portable'
+  if (FORBIDDEN_RUNTIME_SURFACE_IDENTIFIERS.has(identifier)) return 'forbidden'
+  return null
+}
+
+function scanProductionCoreGraph(
+  rawModules: Readonly<Record<string, string>> = rawCoreModules,
+): CoreSourceGraphReport {
+  const modules = productionCoreModules(rawModules)
   const productionPaths = new Set(modules.map(({ path }) => path))
   const externalSpecifiers: string[] = []
   const unresolvedSpecifiers: string[] = []
@@ -254,7 +317,10 @@ function scanProductionCoreGraph(): CoreSourceGraphReport {
     }
 
     const visitIdentifiers = (node: ts.Node): void => {
-      if (ts.isIdentifier(node) && FORBIDDEN_PLATFORM_IDENTIFIERS.has(node.text)) {
+      if (
+        ts.isIdentifier(node)
+        && classifyRuntimeSurfaceIdentifier(node.text) === 'forbidden'
+      ) {
         forbiddenPlatformIdentifiers.push(`${sourceLocation(sourceFile, node)}: ${node.text}`)
       }
       ts.forEachChild(node, visitIdentifiers)
@@ -271,6 +337,14 @@ function scanProductionCoreGraph(): CoreSourceGraphReport {
     forbiddenReferences,
     parserFailures,
   }
+}
+
+function scanSyntheticCoreModule(source: string): CoreSourceGraphReport {
+  return scanProductionCoreGraph({ './synthetic-runtime-surface.ts': source })
+}
+
+function reportedIdentifierNames(report: CoreSourceGraphReport): readonly string[] {
+  return report.forbiddenPlatformIdentifiers.map((finding) => finding.slice(finding.lastIndexOf(': ') + 2))
 }
 
 function keyedStateBatch(configRevision: string): unknown {
@@ -321,5 +395,45 @@ describe('Project V4 shared Core browser boundary', () => {
       forbiddenReferences: [],
       parserFailures: [],
     })
+  })
+
+  it('rejects browser transport, DOM, and state surfaces even when Node exposes their types', () => {
+    const forbiddenSurfaceNames = [
+      'BroadcastChannel',
+      'MessageChannel',
+      'MessagePort',
+      'WebSocket',
+      'Worker',
+      'XMLHttpRequest',
+      'EventSource',
+      'fetch',
+      'WebTransport',
+      'DOMParser',
+      'MutationObserver',
+      'localStorage',
+      'sessionStorage',
+      'indexedDB',
+      'caches',
+      'CacheStorage',
+    ] as const
+    const report = scanSyntheticCoreModule(
+      forbiddenSurfaceNames.map((name) => `void ${name}`).join('\n'),
+    )
+
+    expect(reportedIdentifierNames(report)).toEqual(forbiddenSurfaceNames)
+  })
+
+  it('allows approved portable crypto and text APIs plus ordinary ECMAScript globals', () => {
+    const report = scanSyntheticCoreModule(`
+      void globalThis.crypto
+      void new TextEncoder()
+      void new TextDecoder()
+      void new Map()
+      void new Set()
+      void Promise.resolve()
+      void JSON.stringify(null)
+    `)
+
+    expect(report.forbiddenPlatformIdentifiers).toEqual([])
   })
 })

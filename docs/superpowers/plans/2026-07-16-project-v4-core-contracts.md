@@ -625,15 +625,21 @@ git commit -m "test: prove project v4 core boundary"
   ignored Task 6 report and implementation handoff because a commit cannot
   contain its own hash.
 - Boundary RED preceded both test files: Vitest exited 1 with `No test files
-  found` for the two exact boundary paths. Boundary GREEN passed 2 files and 3
-  tests.
-- The focused P1 gate passed 14 files and 241 tests; the complete repository
-  regression gate passed 136 files and 1,244 tests. Both ran serially.
+  found` for the two exact boundary paths. After independent review hardening,
+  Boundary GREEN passed 2 files and 5 tests.
+- The focused P1 gate passed 14 files and 243 tests; the complete repository
+  regression gate passed 136 files and 1,246 tests. Both ran serially.
 - The TypeScript-parser source graph scanned the exact Gateway-emitted Core set:
   8 production files and 20 module specifiers, with zero external specifiers,
   unresolved/ambiguous relative specifiers, forbidden platform identifiers,
   triple-slash/ambient references, parse diagnostics, or AST/preprocess
   mismatches.
+- A reviewer-supplied synthetic RED proved that the original finite identifier
+  list caught only 5 of 16 browser transport/DOM/state surfaces. The shared
+  analyzer now classifies those surfaces explicitly, rejects all 16 synthetic
+  cases (including `BroadcastChannel`, `MessageChannel`, and `MessagePort`), and
+  separately proves that `globalThis.crypto`, `TextEncoder`, `TextDecoder`, and
+  ordinary ECMAScript globals remain allowed.
 - The default-jsdom browser consumer and explicit Node Gateway consumer both
   validated the deterministic Project and keyed Runtime Protocol fixture, and
   both matched the independently derived golden config revision
