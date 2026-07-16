@@ -21,6 +21,7 @@
     "test:run": "vitest run",
     "test:middleware": "vitest run middleware",
     "test:coverage": "vitest run --coverage",
+    "verify:p1": "npm run test:run -- src/core src/features/project/v4 middleware/runtime-gateway && npm run lint && npm run build:gateway && node dist-gateway/middleware/runtime-gateway/main.js --check-config && npm run build",
     "cad:convert": "tsx scripts/cad/convert-robot.ts",
     "cad:validate": "tsx scripts/cad/validate-robot-assets.ts",
     "deploy:validate": "node scripts/deployment/validate-deployment.mjs",
