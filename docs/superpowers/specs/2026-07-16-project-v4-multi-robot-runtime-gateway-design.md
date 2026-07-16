@@ -65,6 +65,8 @@ simulator.
     same Action Executor.
 15. Verify the finished system through the browser with a two-Robot sample and
     a real OPC UA Server read/write smoke client.
+16. Use heterogeneous Robot Definitions in the final sample: the built-in ABB
+    CRB15000 and a Savvy MRb05 created from one external Assembly STEP source.
 
 ## 3. Current Baseline and Breaking Boundary
 
@@ -383,6 +385,11 @@ The Object keeps its World pose at the attach instant and then follows the Tool
 exactly. Closing a Gripper never implies Attach. Opening it never implies
 Detach.
 
+Automated Attach/Detach checks compare the Object World pose immediately before
+and after the parent change. The maximum accepted discontinuity is 0.5 mm in
+position and 0.1 degree in orientation; later commanded Tool motion is outside
+that boundary measurement.
+
 On `detach-object`, the Object keeps its World pose and becomes a child of the
 explicit target Frame or World. Simulation Reset restores the Project's initial
 parent and pose. Deleting an attached Robot, Tool, Object, or parent is blocked
@@ -438,6 +445,8 @@ Repeated Instances reuse the same prepared Asset where possible.
 | Structure nesting depth | 4 | 4 | 4 |
 | Fixed array elements | global Leaf budget | global Leaf budget | 256 |
 | State/command batch | 256 KiB | 128 values/call target | n/a |
+| Concurrent OPC UA Server Client Sessions | 16 | n/a | n/a |
+| Active Command deduplication records | 4,096 | n/a | n/a |
 
 The update-rate budget is:
 
@@ -453,6 +462,12 @@ arrays and nested Structures are expanded. Dynamic or unbounded arrays are
 rejected. A single OPC UA ExtensionObject still consumes all decoded Leaves.
 When one MonitoredItem fans out to several Project targets, the upstream
 MonitoredItem is deduplicated but routed Leaves count once per target.
+
+An external Server command's `expiresAt` may be at most 60 seconds after the
+Trigger snapshot. Its deduplication record remains active while execution is
+`RUNNING` and for five minutes after a terminal result. Expired terminal records
+are pruned. If 4,096 records are active, the Gateway does not evict a valid
+record; it rejects a new command with `COMMAND_DEDUP_CAPACITY_EXCEEDED`.
 
 All limits apply simultaneously. Exactly-at-limit candidates pass. Each limit
 plus one is rejected before Gateway activation.
@@ -549,6 +564,13 @@ Schema or budget errors reject the entire candidate and leave the prior
 Revision active. A valid offline Endpoint configuration may activate in
 `CONNECTING` or `DEGRADED`; it does not invalidate unrelated configuration.
 
+`/healthz` reports process liveness. `/readyz` reports ready only after one
+validated Revision is active, the configured mode has staged its required
+workers/namespace, and a Runtime Publisher Lease exists when Server commands
+need a Simulation owner. Before first Apply it returns not-ready with
+`NO_ACTIVE_REVISION`; callers do not wait for readiness before loading the
+Project that creates that Revision.
+
 ### 9.4 State Transport
 
 The Gateway sends `state-batch-v1` envelopes containing:
@@ -605,13 +627,42 @@ expiry, and duplicate Command ID. It returns per-item acknowledgement and stable
 failure results. A timed-out non-idempotent command is not automatically
 repeated.
 
-For an external OPC UA Client writing the Gateway Server, the client supplies
-the preconfigured Action Binding's Command ID and Trigger, not a browser Lease
-token. The Gateway requires a live `RuntimePublisherLease`, captures its current
+The deduplication key is `(projectId, configRevision, leaseGeneration,
+bindingOrMappingId, commandId)`. While its bounded record is active, replay
+returns the stored acknowledgement and terminal result and never re-executes,
+even when the client supplies a new valid Trigger edge. Duplicate lookup occurs
+before first-execution expiry validation, so an active identical replay returns
+the stored result even after its original expiry. The same active Command ID
+with changed expiry or payload fails as `COMMAND_ID_CONFLICT`. A new Revision or
+Lease generation starts a new key space. A new or no-longer-retained request
+whose expiry has passed is rejected as `COMMAND_EXPIRED`.
+
+For an external OPC UA Client writing the Gateway Server, the client supplies a
+preconfigured Mapping or Action Binding's Command ID, `expiresAt`, and Trigger,
+not a browser Lease token. Command staging is isolated by OPC UA Session and
+Binding/Mapping ID. A Mapping stages its typed `Value`; only a Boolean
+`false -> true` Trigger snapshots the complete ID, expiry, and Value written by
+that same Session. Writes from another Session cannot contribute fields, and a
+Value write alone has no runtime effect. Incomplete staging fails as
+`COMMAND_STAGING_INCOMPLETE`. Staging clears after a successful Trigger, Session
+close, or Session timeout.
+
+The Gateway requires a live `RuntimePublisherLease`, captures its current
 generation, and forwards a `command-request-v1` only to that Lease owner. The
 owner returns the result with the same Revision, generation, and Command ID. If
-no owner exists, the Action fails as `NO_ACTIVE_PUBLISHER`. A stale Browser
+no owner exists, the command fails as `NO_ACTIVE_PUBLISHER`. A stale Browser
 cannot complete a command after Lease takeover.
+
+A Server-side Joint Command Mapping addressed to a Robot in Simulation
+ownership is a one-shot imperative request to the Lease owner. It does not
+change that Robot's configured Joint source. Changing source ownership to an
+upstream OPC UA Binding requires a separate validated configuration Apply; a
+Robot under OPC UA ownership cannot start a Simulation Job.
+
+Each Server Mapping result exposes `IDLE | ACCEPTED | REJECTED`
+acknowledgement and `IDLE | RUNNING | SUCCEEDED | FAILED` execution state.
+`SUCCEEDED` means the Lease owner applied the complete command, not merely that
+the Gateway accepted its Trigger.
 
 ### 9.7 Runtime Publisher Lease
 
@@ -645,10 +696,11 @@ WebDigitalTwin
       │  ├─ Entities/<entityId>/Status
       │  └─ Attachments/<objectId>
       ├─ Command
-      │  ├─ Mappings/<mappingId>
-      │  └─ Actions/<actionBindingId>/{CommandId,Trigger}
+      │  ├─ Mappings/<mappingId>/{CommandId,ExpiresAt,Value,Trigger}
+      │  └─ Actions/<actionBindingId>/{CommandId,ExpiresAt,Trigger}
       ├─ Result
-      │  └─ Actions/<actionBindingId>/{State,FailureCode,Message}
+      │  ├─ Mappings/<mappingId>/{CommandId,Acknowledgement,State,FailureCode,Message}
+      │  └─ Actions/<actionBindingId>/{CommandId,Acknowledgement,State,FailureCode,Message}
       └─ Diagnostics
          ├─ ConfigRevision
          ├─ RuntimePublisherLease
@@ -693,10 +745,17 @@ does not accept a remotely supplied Robot ID or Object ID. The binding publishes
 
 ```text
 CommandId
+CommandAcknowledgement: IDLE | ACCEPTED | REJECTED
 ActionState: IDLE | RUNNING | SUCCEEDED | FAILED
 AttachedObjectId
 FailureCode
 ```
+
+Acknowledgement covers validation and enqueueing only. For `job-start`,
+`ActionState` remains `RUNNING` until the entire Job terminates and then becomes
+`SUCCEEDED` or `FAILED`. For `action-execute`, it reaches a terminal state only
+after the shared Action Executor completes. The terminal state is stored with
+the deduplication key.
 
 ## 11. JSON, XML, and XLSX
 
@@ -770,6 +829,9 @@ Robots:
 | Partial/BAD coherent Structure | Keep prior complete value; mark quality |
 | Lease expired or old generation | Reject publish/write; observation continues |
 | Duplicate Command ID | Return prior result; do not execute twice |
+| Active Command ID with changed immutable fields | `COMMAND_ID_CONFLICT` |
+| Incomplete or cross-Session Command staging | `COMMAND_STAGING_INCOMPLETE` |
+| Command deduplication capacity full | `COMMAND_DEDUP_CAPACITY_EXCEEDED` |
 | Command timeout | Report failure; do not automatically replay |
 | Bridge route cycle | Reject configuration before activation |
 | Object already attached | `ALREADY_ATTACHED` |
@@ -783,55 +845,159 @@ and optional recovery action. Raw stack traces are diagnostic-only.
 
 ## 14. Final Sample Project and Browser Verification
 
-The final integrated fixture is named **Dual Robot OPC UA Pick/Place Demo**.
+The final integrated fixture is named
+**Heterogeneous Dual Robot OPC UA Pick/Place Demo**.
 
 ### 14.1 Scene
 
-- `Robot_A` and `Robot_B` reference the same
-  `CRB15000_12kg-127_OmniCore_rev00_STEP_J` built-in or checked-in Robot
-  Definition so Geometry is reused.
+- `Robot_A_CRB15000` references the built-in or checked-in
+  `CRB15000_12kg-127_OmniCore_rev00_STEP_J` Robot Definition.
+- `Robot_B_MRb05` references a separate Savvy MRb05 Robot Definition created
+  from exactly one external Assembly STEP source.
 - Their Base Frames are positioned independently on one workcell.
 - `Cup_01` is a graspable Object with a configured Grasp Frame.
 - `Pick_Table` and `Place_Table` provide named placement Frames.
 - The Project runs in OPC UA `Server` mode and displays Server readiness.
 
-### 14.2 Jobs
+### 14.2 MRb05 Single-Assembly Fixture
 
-- `Job_A_PickPlace` belongs to `Robot_A` and performs Joint Pose movement,
-  Close, Attach `Cup_01`, transport, Open, and Detach at `Place_Table`.
-- `Job_B_Inspection` belongs to `Robot_B` and performs an independent ordered
-  Joint Pose sequence with different per-segment speeds.
+The local acceptance source is resolved as:
+
+```text
+asset://local-samples/Savvy/MRb05_3D_20241011.STEP
+sha256: 8bce1c031ec9301ce8e66d01c82560a7bb0c881e0455871b6d5f2c38afe567fa
+source bytes: 14,161,656
+```
+
+The physical `Savvy/MRb05_3D_20241011.STEP` remains an untracked user Asset and
+is not added to Git. The test deployment maps `local-samples` outside Project
+content.
+
+The physical mount root is supplied through
+`ROBOTSIM_ASSET_MOUNT_LOCAL_SAMPLES`. A release-fixture preflight must resolve
+the URI and verify byte length, SHA-256, parser version, and import options
+before starting browser tests. The ordinary source-only CI suite may report the
+external fixture suite as skipped when this mount is absent, but the dedicated
+`test:release:mrb05` gate requires it; a skipped external suite cannot satisfy
+final completion.
+
+With `occt-import-js@0.0.23` and the checked-in `STEP_IMPORT_OPTIONS`, the
+source must parse successfully into:
+
+- 49 Meshes;
+- 12 hierarchy Nodes, including 10 selectable mesh-bearing component
+  occurrences beneath the assembly root;
+- 117,708 vertices and 140,689 triangles; and
+- component-preserving groups including `LINK0_ASSY`, `LOWER_LINK_ASSY`,
+  `UPPER_LINK_ASSY_STANDARD`, and `END EFFECTOR ASSY-MRB_STANDARD`.
+
+The source is an AP214 Assembly with 36 Product records, 55 assembly
+occurrences, and 25 `MANIFOLD_SOLID_BREP` records. Exact tessellation counts are
+pinned to the parser version and options above; a deliberate parser upgrade
+must update the fixture evidence in the same change.
+
+The Robot Import Wizard displays the occurrence hierarchy and allows the
+operator to include/exclude hardware and assign each included
+`nodePath + meshIndices` occurrence to exactly one of seven rigid Links. It then
+configures six revolute Joints. The MRb05 product specification supplies Joint
+range and maximum-velocity evidence:
+
+- J1/J2: -360 to +360 degrees, 180 degrees/second;
+- J3: -158 to +158 degrees, 180 degrees/second; and
+- J4/J5/J6: -360 to +360 degrees, 360 degrees/second.
+
+The STEP component names and motor-like occurrences are selection evidence only.
+Joint origins, axes, parent/child order, zero pose, Base, Flange, and TCP must be
+entered or confirmed from mechanical evidence by the operator. The importer
+does not infer those values.
+
+For this pinned fixture, the saved source convention is `Y-Up`; the Scene
+Coordinate Adapter normalizes it to the Robot domain's `Z-Up`. The operator may
+preview and choose an equivalent source-root Import Rotation for another Asset,
+but the fixture never applies both corrections and never asks an AI service to
+guess orientation.
+
+Before committing the Definition, Joint preview must prove that moving Jn moves
+only its configured child subtree and never an ancestor. For every included
+occurrence, reconstructed zero-pose World vertices must remain within 0.5 mm of
+that same occurrence's source World vertices. Excluded hardware is outside this
+comparison. Save/Reload and JSON/XML round-trip must retain the source digest,
+occurrence ownership, link-local transforms, Mechanics, Frames, and collision
+proxies.
+
+### 14.3 Jobs and OPC UA Bindings
+
+- `Job_A_CRB_PickPlace` belongs to `Robot_A_CRB15000` and performs Joint Pose
+  movement, Close, Attach `Cup_01`, transport, Open, and Detach at
+  `Place_Table`.
+- `Job_B_MRb05_Inspection` belongs to `Robot_B_MRb05` and performs an
+  independent ordered six-Joint Pose sequence with different per-segment
+  speeds.
 - The Jobs may run concurrently but contain no synchronization barrier.
-- `Start_Robot_A_PickPlace` is an OPC UA Action Binding that starts the
-  preconfigured Job. A repeated identical Command ID cannot start it twice.
+- `Action_A_CloseGripper` is one reusable `set-gripper-state` Action invoked
+  directly from UI and through the `Execute_Action_A_CloseGripper`
+  `action-execute` Binding to prove both routes use one Action Executor.
+- `Start_Robot_A_CRB_PickPlace` is an OPC UA Action Binding that starts the
+  preconfigured Pick/Place Job.
+- `Set_Robot_B_MRb05_J1` is an explicit OPC UA Command Mapping used to prove
+  that variable Robot/Joint IDs are not tied to the CRB runtime. It is a
+  one-shot command and leaves MRb05 Joint source ownership as `simulation`.
+- A repeated identical Command ID cannot re-execute any command.
 
-### 14.3 Browser Acceptance Procedure
+### 14.4 Browser Acceptance Procedure
 
-1. Build and start Web plus Runtime Gateway in OPC UA Server mode.
-2. Wait for `/healthz` and `/readyz` to report healthy/ready.
-3. Open the application in the Codex in-app browser.
-4. Load the built-in Dual Robot Demo Project.
-5. Confirm two Robots are simultaneously visible and independently selectable.
-6. Confirm each selected Robot displays only its Jobs and Joint controls.
-7. Run `Job_B_Inspection` from the browser and verify independent motion.
-8. Use a real OPC UA test client to read both Robots' Actual Joint nodes.
-9. Write a new Command ID and rising Trigger to
-   `Start_Robot_A_PickPlace`.
-10. Observe in the browser that Robot A moves, `Cup_01` attaches without a pose
-    jump, follows the Tool, and detaches at the destination while Robot B state
-    remains independent.
-11. Verify Action Result becomes `SUCCEEDED` and Attachment state becomes
-    detached at the destination.
-12. Repeat the same Command ID and verify no second execution.
-13. Save and reload the Project and verify both Robots, Jobs, Action Binding,
-    logical Asset references, and independent Joint state configuration remain.
-14. Reset Simulation and verify both Robots, Object parent, Object pose,
+1. Set `ROBOTSIM_ASSET_MOUNT_LOCAL_SAMPLES` to the physical Asset root without
+   changing Project content.
+2. Run the MRb05 release-fixture digest/parser preflight.
+3. Build and start Web plus Runtime Gateway in OPC UA Server mode.
+4. Wait for `/healthz`; confirm `/readyz` reports `NO_ACTIVE_REVISION` rather
+   than waiting indefinitely.
+5. Open the application in the Codex in-app browser.
+6. Load and Apply the Heterogeneous Dual Robot Demo Project, resolve the MRb05
+   Asset, and acquire the Runtime Publisher Lease.
+7. Wait for `/readyz` to report the applied Revision ready.
+8. Confirm the CRB15000 and MRb05 are simultaneously visible, have different
+   Definitions, and are independently selectable.
+9. Confirm each selected Robot displays its own Joint IDs, Mechanics, Jobs, and
+   controls.
+10. Use a real OPC UA test client to read both Robots' Actual Joint nodes.
+11. In one OPC UA Session, stage one allowed MRb05 J1 Value, a new Command ID,
+    and an expiry within 60 seconds, then write its Mapping Trigger
+    `false -> true`. Verify `ACCEPTED`, terminal success, only the intended MRb05
+    child subtree moves, Joint ownership remains `simulation`, and MRb05 can
+    return Home.
+12. Invoke `Action_A_CloseGripper` from the UI, verify the CRB Gripper closes,
+    then restore it to Open.
+13. With a new Command ID and valid expiry, write Trigger `false -> true` to
+    `Execute_Action_A_CloseGripper`; verify `ACCEPTED`, `RUNNING -> SUCCEEDED`,
+    and the same Gripper result, then restore Open.
+14. Run `Job_B_MRb05_Inspection` from the browser and wait until its state is
+    `RUNNING`; do not use an arbitrary delay.
+15. While that Job is `RUNNING`, write a new Command ID, valid expiry, and
+    Trigger `false -> true` to
+    `Start_Robot_A_CRB_PickPlace`.
+16. Observe in the browser that the CRB moves, `Cup_01` Attach/Detach pose
+    discontinuity stays within 0.5 mm and 0.1 degree, the Object follows the
+    Tool, and MRb05 state remains independent.
+17. Verify the Pick/Place acknowledgement is `ACCEPTED`, its Action Result stays
+    `RUNNING` until the Job ends and then becomes `SUCCEEDED`, and Attachment
+    state is detached at the destination.
+18. Before each result's five-minute retention ends, prove deduplication with a
+    new valid delivery event: for the J1 Mapping and each Boolean Binding write
+    Trigger `false`, restore its same prior Command ID and expiry, then write
+    `false -> true`. Verify the stored result is returned and no command
+    executes again.
+19. Save and reload the Project and verify both Robot Definitions/Instances,
+    MRb05 logical Asset/digest/occurrence mapping, Jobs, Action Binding, Command
+    Mapping, and independent Joint configuration remain.
+20. Reset Simulation and verify both Robots, Object parent, Object pose,
     Gripper states, Jobs, and Action results return to their defined reset state.
 
 The handoff includes browser screenshots or equivalent visible evidence, OPC UA
 client read/write assertions, automated test output, and exact Docker health
-results. If Docker Engine or another required runtime is unavailable, that is an
-explicit blocker; static-only validation is not counted as final completion.
+results. If Docker Engine, the MRb05 external Asset, or another required runtime
+is unavailable, that is an explicit blocker; static-only validation is not
+counted as final completion.
 
 ## 15. Verification Strategy
 
@@ -846,17 +1012,35 @@ explicit blocker; static-only validation is not counted as final completion.
 - Structure/Leaf/depth/array/update-rate budget boundaries and plus-one cases.
 - XML lossless round-trip and XLSX semantic round-trip.
 - Logical URI normalization, mount confinement, and digest validation.
-- Command ID deduplication, Lease fencing, and Bridge cycle rejection.
+- Session-local Command staging, expiry, 4,096-record deduplication boundaries,
+  Lease fencing, and Bridge cycle rejection.
 
 ### 15.2 Integration Tests
 
 - Two Robot Instances sharing one Definition with independent Joint state.
+- One MRb05 Assembly STEP import preserving 10 selectable occurrence groups,
+  grouping those occurrences into seven Links, configuring six Joints, and
+  proving child-subtree motion within the included-occurrence 0.5 mm Geometry
+  reconstruction gate.
+- A dedicated external-fixture Release suite that requires the configured
+  `local-samples` mount and fails preflight on missing bytes, digest mismatch,
+  parser drift, or import-option drift; ordinary CI reports this suite's skip
+  separately.
+- Heterogeneous CRB15000 and MRb05 Instances with independent RobotDefinition,
+  Joint, Job, selection, collision, and OPC UA state.
 - Namespaced multi-Robot collision proxies, per-Robot adjacency exclusions,
   intentional mount contact, and attached Tool/Object contact exclusion.
 - Robot mounted beneath a Moving Frame without duplicate Base ownership.
 - Eight mock Endpoint workers with one disconnect/reconnect failure.
 - OPC UA Client Subscription quality, timestamp, sequence, and coherence.
 - OPC UA Server Actual/Command separation and Action Binding execution.
+- Two OPC UA Client Sessions interleaving Command ID/Value writes to the same
+  Mapping without cross-Session snapshots, plus 16/17 Session boundaries.
+- Exactly 4,096 active deduplication records pass; a 4,097th command is rejected
+  without evicting an active result, then succeeds after an eligible record is
+  pruned.
+- UI and OPC UA `action-execute` invocation of the same reusable Action, plus
+  `job-start` acknowledgement separated from terminal Job completion.
 - Bridge route forwarding without echo.
 - Asset resolve, managed import, missing source, and digest mismatch in `Off`
   and `Server` modes.
@@ -865,6 +1049,8 @@ explicit blocker; static-only validation is not counted as final completion.
 - A Playwright fixture that starts both Vite and the Runtime Gateway, plus a
   `node-opcua` client in the test process. Browser UI evidence alone is not
   accepted as proof that the OPC UA TCP Server works.
+- Server startup readiness ordering: live before Apply, not-ready with
+  `NO_ACTIVE_REVISION`, then ready only after Project Apply and Lease acquisition.
 
 ### 15.3 Performance and Docker Gates
 
@@ -880,9 +1066,10 @@ explicit blocker; static-only validation is not counted as final completion.
 | Queue behavior | bounded latest-wins, no historical growth |
 | OPC UA modes | Off, Client, Server, and Bridge Compose smoke tests |
 
-Docker tests cover Nginx SPA fallback, `/healthz`, `/readyz`, WebSocket Upgrade,
-Asset resolution, OPC UA Server port exposure, and orderly shutdown. Gateway
-readiness reports Revision and mode state separately from process liveness.
+Docker tests cover Nginx SPA fallback, `/healthz`, pre/post-Apply `/readyz`,
+WebSocket Upgrade, Asset resolution, OPC UA Server port exposure, and orderly
+shutdown. Gateway readiness reports Revision and mode state separately from
+process liveness.
 
 ## 16. Success Criteria
 
@@ -893,36 +1080,49 @@ The work is complete only when all of the following are true:
 2. A Robot imported from one assembly STEP can map several Links and Joints
    manually. One and seven STEP sources pass; zero/eight fail. Source count does
    not alter Joint count.
-3. Two Robots sharing one Definition render and execute independent Jobs without
+3. The exact MRb05 external Asset parses into the pinned hierarchy/Geometry
+   fixture, applies the saved `Y-Up` convention, maps to seven Links and six
+   operator-confirmed Joints, and completes Joint Jog, Job, OPC UA Read/Write,
+   Save/Reload, and Reset without becoming a rigid Object.
+4. Two Robots sharing one Definition render and execute independent Jobs without
    state, selection, or OPC UA crosstalk.
-4. A Robot Base mounted to a Moving Frame follows that Frame and maintains one
+5. The heterogeneous CRB15000 and MRb05 final fixture renders and executes
+   independent Jobs without Definition, Joint, selection, collision, or OPC UA
+   crosstalk.
+6. A Robot Base mounted to a Moving Frame follows that Frame and maintains one
    authoritative transform path.
-5. The 128th imported Object STEP Asset passes and the 129th fails before active
+7. The 128th imported Object STEP Asset passes and the 129th fails before active
    mutation. Primitive Objects do not consume STEP source count.
-6. Eight OPC UA Endpoints operate concurrently and failure of one does not stop
-   healthy Endpoint state or writes.
-7. Off, Client, Server, and Bridge work as specified; Server publishes accepted
+8. Eight OPC UA Endpoints operate concurrently and failure of one does not stop
+   healthy Endpoint state or writes. Sixteen OPC UA Server Client Sessions pass
+   and a seventeenth is rejected without disturbing active Sessions.
+9. Off, Client, Server, and Bridge work as specified; Server publishes accepted
    original state rather than browser interpolation.
-8. The exact 128 Structure, 1,024 Leaf, and 10,240 updates/second boundaries
-   pass, while each plus-one case fails before activation.
-9. A stale Lease generation cannot publish state, write upstream, or execute an
+10. The exact 128 Structure, 1,024 Leaf, and 10,240 updates/second boundaries
+    pass, while each plus-one case fails before activation. Exactly 4,096 active
+    Command deduplication records pass and a 4,097th is rejected without
+    eviction.
+11. A stale Lease generation cannot publish state, write upstream, or execute an
    Action. An observer can continue reading.
-10. Bridge routes do not echo their own output.
-11. `JSON -> XML -> JSON` preserves canonical hash, and XLSX mapping round-trip
+12. Bridge routes do not echo their own output.
+13. `JSON -> XML -> JSON` preserves canonical hash, and XLSX mapping round-trip
     preserves semantic Mapping configuration.
-12. Logical Assets resolve across configured Windows/Linux/Docker mounts without
+14. Logical Assets resolve across configured Windows/Linux/Docker mounts without
     changing Project content. Missing and mismatched Assets fail locally without
     destroying the Project.
-13. Job/UI and OPC UA trigger the same preconfigured Action behavior.
-14. Pick/Place attaches one explicit Object, preserves pose at Attach/Detach,
+15. UI and OPC UA `action-execute` trigger the same reusable Action behavior;
+    `job-start` acknowledgement and terminal Job result remain distinct.
+16. Pick/Place attaches one explicit Object, preserves pose at Attach/Detach,
     follows the Tool, rejects double Attach, and Reset restores initial state.
-15. Multi-Robot collision IDs cannot alias, and intentional Tool/Object or Base
+17. Multi-Robot collision IDs cannot alias, and intentional Tool/Object or Base
     mount contact does not suppress unrelated collision findings.
-16. The Dual Robot OPC UA Pick/Place Demo completes the browser acceptance
-    procedure, including OPC UA read, Action write, Command deduplication, two
-    visible Robots, independent Sample Jobs, Save/Reload, and successful Reset.
-17. Automated tests, production build, Docker smoke tests, performance gates,
-    and browser evidence all pass. Static validation alone is insufficient.
+18. The Heterogeneous Dual Robot OPC UA Pick/Place Demo completes the browser
+    acceptance procedure, including MRb05 single-source resolution, OPC UA
+    Joint Read/Write, Action write, Command deduplication, two different visible
+    Robots, independent Sample Jobs, Save/Reload, and successful Reset.
+19. Automated tests, production build, Docker smoke tests, performance gates,
+    required external-fixture Release tests, and browser evidence all pass.
+    Static validation or a skipped MRb05 suite is insufficient.
 
 ## 17. Delivery Decomposition
 
@@ -941,8 +1141,10 @@ This is one approved target architecture, delivered through bounded milestones:
 6. **Interchange:** XML and XLSX adapters with preview and atomic apply.
 7. **Pick/Place:** shared Action Executor, Attachment constraints, Job actions,
    OPC UA triggers, and Reset behavior.
-8. **Release Demo:** two-Robot Sample Project, Docker profiles, OPC UA test
-   client, in-app browser verification, performance run, and operator docs.
+8. **Release Demo:** heterogeneous CRB15000/MRb05 Sample Project, MRb05
+   single-Assembly Asset fixture, Docker profiles, OPC UA test client, in-app
+   browser verification, `test:release:mrb05`, performance run, and operator
+   docs.
 
 Each milestone must keep the production build and existing applicable tests
 green. The implementation plan will identify file-level tasks and commit gates;
@@ -958,3 +1160,5 @@ it must not treat the final Demo as optional polish.
   <https://reference.opcfoundation.org/specs/OPC-10000-6/5.1.8>
 - OPC UA `3DFrame`:
   <https://reference.opcfoundation.org/specs/OPC-10000-5/12.30>
+- Savvy Robotics MRb05 product specification:
+  <https://savvy-robotics.com/en/portfolio/mrb05-en/>
