@@ -196,7 +196,7 @@ export async function runCollisionValidationV4(
   const findings: CollisionValidationResultV4['findings'][number][] = []
   let findingsTruncated = false
   const isCancelled = controls.isCancelled ?? (() => false)
-  const yieldControl = controls.yieldControl ?? (() => Promise.resolve())
+  const yieldControl = controls.yieldControl ?? defaultYieldControl
 
   for (const sample of request.sequence) {
     if (isCancelled()) return null

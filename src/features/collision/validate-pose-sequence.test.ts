@@ -796,4 +796,33 @@ describe('runCollisionValidationV4', () => {
     expect(result).toMatchObject({ sampleCount: 2, durationMs: 1_000 })
     expect(progress).toEqual([2])
   })
+
+  it('lets a timer cancellation run at the first default yield boundary', async () => {
+    const base = workerRequestV4(false, false)
+    const firstSample = base.sequence[0]!
+    const progress: number[] = []
+    let cancelled = false
+    const cancellationSignal = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        cancelled = true
+        resolve()
+      }, 0)
+    })
+
+    const result = await runCollisionValidationV4({
+      ...base,
+      sequence: Array.from({ length: 250 }, (_, sampleIndex) => ({
+        ...firstSample,
+        sampleIndex,
+        timeMs: sampleIndex,
+      })),
+    }, {
+      isCancelled: () => cancelled,
+      onProgress: ({ processedSamples }) => progress.push(processedSamples),
+    })
+    await cancellationSignal
+
+    expect(result).toBeNull()
+    expect(progress).toEqual([250])
+  })
 })
