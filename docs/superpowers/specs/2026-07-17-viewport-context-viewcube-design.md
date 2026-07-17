@@ -194,8 +194,9 @@ The interaction contract becomes:
 - A new context request replaces the existing request, commands, and position.
 - Replacement retains the focus-return owner captured before the first request;
   it neither restores nor recaptures focus between requests.
-- Destructive commands continue to use their existing dedicated confirmation
-  dialogs; those dialogs remain modal.
+- Destructive commands retain their current service behavior. Project V4 does
+  not currently provide a common confirmation dialog, and this Viewport change
+  does not introduce one.
 
 The menu retains its industrial panel colors, border, and shadow, but the
 full-screen 46-percent dimming layer is removed. Its own stacking level is high
@@ -360,7 +361,7 @@ render a fake Cube.
 - Tab closes the menu, restores the pre-menu focus owner, and does not cycle
   inside the menu.
 - Arrow, Home, End, pending action, disabled action, stale target, inline error,
-  and destructive confirmation behaviors remain valid.
+  and existing destructive service behaviors remain valid.
 
 ### Camera and Cube checks
 

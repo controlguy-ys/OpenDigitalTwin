@@ -148,6 +148,27 @@ divider resets only that divider to its default. `View > Reset Layout` resets
 all dock sizes, visibility, and Ribbon expansion after confirmation is not
 required because it changes browser-local UI state only.
 
+If 45 percent of an unusually short workspace is below 120 CSS pixels, the
+120-pixel accessibility minimum wins and the Bottom panel uses its own internal
+scrolling; the document root still does not scroll.
+
+Default visibility is deterministic:
+
+- Wide: Sidebar and Inspector visible, Bottom Workspace closed, Ribbon expanded.
+- Compact: Sidebar visible, Inspector overlay closed, Bottom Workspace closed,
+  Ribbon collapsed.
+- Narrow: both side drawers and Bottom Sheet closed, Ribbon collapsed.
+
+Ribbon expansion and docked-region visibility are stored per responsive mode,
+so each mode can retain its own user choice without contradicting these
+defaults. Compact Inspector, narrow side drawers, and the narrow Bottom Sheet
+are transient overlays: they start closed on reload and close whenever the
+Shell enters another responsive mode.
+
+Reset Layout restores the defaults for all three responsive modes, the approved
+shared sizes, and the Scene-to-Job split, then closes every transient overlay.
+It preserves Theme and the selected Timeline or Collision tab.
+
 On a 1200-CSS-pixel-or-wider desktop, the central Viewport has a 480-CSS-pixel
 minimum width after separators. Dragging a divider clamps only the active dock
 against the other dock and that minimum; it never proportionally changes or
@@ -196,7 +217,9 @@ The Menu Bar follows desktop application behavior:
 - Pointerdown outside closes the menu without dimming or making the app inert.
 - Disabled commands remain stable only when their presence explains current
   context; future unavailable product features remain hidden.
-- Destructive commands retain their existing dedicated confirmation flows.
+- Destructive commands retain their current service behavior. Project V4 does
+  not currently provide a common confirmation flow, so adding one requires a
+  separate interaction design rather than being implied by this menu migration.
 
 ## 4. Menu information architecture
 
@@ -402,13 +425,15 @@ interface AppCommandV4 {
   readonly disabledReason?: string
   readonly destructive?: boolean
   readonly shortcut?: string
-  execute(): void | Promise<void>
+  execute(): void | 'cancelled' | Promise<void | 'cancelled'>
 }
 
 interface AppCommandRuntimeV4 {
   readonly pendingCommandIds: ReadonlySet<string>
   readonly errorByCommandId: ReadonlyMap<string, string>
-  invoke(commandId: string): Promise<void>
+  invoke(commandId: string): Promise<
+    'completed' | 'cancelled' | 'ignored' | 'failed'
+  >
 }
 ```
 
@@ -426,11 +451,18 @@ Requirements:
 - The shared command runtime, not component-local flags, rejects duplicate
   invocation while pending and publishes the same pending or error state to
   every surface showing that command.
+- Prompt dismissal or an equivalent user cancellation returns `cancelled`, does
+  not publish an error, and lets an anchored menu remain open. A thrown command
+  error returns `failed`; a resolved command returns `completed`.
+- A repeat invocation while the same command is pending returns `ignored`. It is
+  not user cancellation, does not start a second operation, and does not close
+  the invoking menu.
 - Project loading, saving, importing, recovery-required, Simulation ownership,
   OPC UA ownership, and stale-selection checks remain authoritative.
 - Global menus keep disabled positions stable for current-context commands.
   Context Menus omit irrelevant commands.
-- Existing destructive confirmation services remain authoritative.
+- Existing destructive service behavior remains authoritative; this work does
+  not introduce a new confirmation layer.
 - Command presentation does not mutate Project state merely by opening a menu.
 
 `App.tsx` remains the composition boundary for Project, Scene, Robot, Job,
@@ -469,6 +501,8 @@ remain owned by the existing Viewport design.
   central Viewport minimum.
 - The Inspector opens as an overlay drawer and does not participate in dock
   width calculations at this breakpoint.
+- Opening that drawer publishes a right Viewport safe-area inset so the real
+  View Cube, camera controls, and anchored Context Menu remain usable.
 
 ### Narrow, below 960 CSS pixels
 
@@ -478,21 +512,39 @@ remain owned by the existing Viewport design.
 - Dock resize handles are hidden because those regions are overlays.
 - Camera and Context commands remain available without covering the complete
   Viewport.
+- An open edge drawer or Bottom Sheet publishes Viewport safe-area insets and
+  closes when the responsive mode changes.
+
+The Shell responsive mode is derived from a ResizeObserver on the
+`studio-workspace` element in CSS pixels: width 1200 and above is wide, 960
+through 1199 is compact, and below 960 is narrow. That element's height is also
+the available workspace height used by the Bottom limit. The resulting mode is
+written to a Shell-root data attribute used by layout CSS, avoiding divergent
+JavaScript and CSS breakpoints. Resizing down and back up preserves preferred
+dock widths; only effective geometry is clamped.
 
 ## 9. Browser-local layout state
 
 The following values are stored as versioned browser preferences:
 
-- Ribbon expanded state.
-- Left Sidebar open state and width.
+- Ribbon expanded state for wide, compact, and narrow modes.
+- Docked Left Sidebar visibility for wide and compact modes, plus its width.
 - Scene-to-Job split.
-- Inspector open state and width.
-- Bottom Workspace open state, selected tab, and height.
+- Docked Inspector visibility for wide mode, plus its width.
+- Docked Bottom Workspace visibility for wide and compact modes, selected tab,
+  and height.
 - Theme preference.
 
+Compact Inspector overlay state and narrow Sidebar, Inspector, and Bottom Sheet
+state are session-only and are not restored after reload. Menu items, drawer
+buttons, and Ribbon commands still read one effective current-mode visibility
+from the Shell controller; they never maintain duplicate checked state.
+On narrow screens, opening one side drawer closes the opposite side drawer;
+the Bottom Sheet may coexist because it publishes an independent bottom inset.
+
 Invalid, missing, non-finite, or out-of-range values fall back to the approved
-defaults. A future incompatible layout change increments the preference
-version and migrates or safely resets the old values.
+per-mode defaults. A future incompatible layout change increments the
+preference version and migrates or safely resets the old values.
 
 Project New, Import, Export, and Save never include these preferences. Layout
 Reset does not change Robot Pose, Scene content, Job state, camera domain
@@ -581,28 +633,41 @@ rules.
 ### Dock and responsive layout
 
 - Pointer and keyboard resizing clamps to every documented limit.
-- Reload restores valid sizes and open states.
+- Compact hides the Inspector resize handle; narrow hides every dock resize
+  handle while retaining the internal Scene-to-Job control only when its drawer
+  content height is at least 360 CSS pixels. Below 360 pixels, the split remains
+  at its stored ratio, the separator is hidden, and each pane scrolls internally.
+- Reload restores valid sizes and persisted per-mode dock or Ribbon state while
+  every transient overlay starts closed.
 - Invalid persisted values restore defaults.
 - Reset Layout restores only browser UI preferences.
 - Scene and Job panes retain their adjustable vertical split.
-- 1440 by 900, the 1200-pixel breakpoint, the 960-pixel breakpoint, and 768 by
-  1024 show no application-level horizontal scroll or overlapping panels.
+- One live session crosses 1200 to 1199 and 960 to 959 CSS pixels, then grows
+  again, without losing preferred dock sizes or leaving a stale overlay open.
+- 1440 by 900, 1200, 1199, 960, 959, and 768 by 1024 show no
+  application-level horizontal or vertical scroll and no overlapping panels.
+- At compact and narrow sizes, opening each overlay keeps the View Cube,
+  orientation fallback, and Context Menu inside the published safe area.
 - Long Project, Robot, Object, and Job names truncate without moving menu
   triggers or statuses.
+- At 1199 and 960 CSS pixels and 200-percent browser zoom, status labels shorten
+  before Quick Actions or supported commands disappear.
 - The Bottom Workspace stays under the central Viewport only.
 
 ### Regression gates
 
-- Targeted App Shell, Project Menu, Scene Explorer, Context Menu, Joint
-  Inspector, Job List, Timeline, camera, Collision, and Runtime Gateway tests
-  pass.
+- Targeted App Shell, App command composition, Menu Bar, compact Menu, Scene
+  Explorer, Context Menu, Joint Inspector, Job List, Timeline, camera,
+  Collision, and Runtime Gateway tests pass.
 - Lint, the complete Vitest suite, and production build pass.
 - After the prerequisite Viewport work lands, the real 3D View Cube and
   right-button Pan classification remain operational. Robot Joint motion, Job
   execution, project persistence, and OPC UA Server behavior remain
   operational throughout.
 - Browser verification is repeated in Light and Dark themes using the same
-  viewport and Project state for before-and-after comparison.
+  viewport size, Project revision, camera position/target, selection, Active
+  Robot/Job, and command state. Before/after screenshots are reviewed as paired
+  images in one comparison input.
 
 ## 13. Success criteria
 
