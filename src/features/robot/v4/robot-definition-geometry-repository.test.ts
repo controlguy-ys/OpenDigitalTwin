@@ -98,6 +98,56 @@ function firstMesh(root: Group): Mesh {
 }
 
 describe('Robot Definition Geometry repository V4', () => {
+  it('publishes an UNRESOLVED same-Definition generation without leasing stale Geometry', () => {
+    const robotDefinition = definition()
+    const source = prepared(robotDefinition)
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const resolvedHandle = repository.stage(robotDefinition, source.resource)
+    repository.commitBatch([resolvedHandle])
+    const notifications: number[] = []
+    repository.subscribe(() => notifications.push(repository.getSnapshot()))
+
+    const unresolvedHandle = repository.stageUnresolved(robotDefinition, 44)
+
+    expect(repository.readCurrent(robotDefinition.id)).toMatchObject({
+      handle: resolvedHandle,
+      resolution: 'RESOLVED',
+      triangleCount: 12,
+    })
+    expect(repository.acquire(robotDefinition.id, 'robot-a', unresolvedHandle)).toBeNull()
+
+    repository.commitBatch([unresolvedHandle])
+
+    expect(repository.readCurrent(robotDefinition.id)).toEqual({
+      definitionId: robotDefinition.id,
+      handle: unresolvedHandle,
+      resolution: 'UNRESOLVED',
+      triangleCount: 44,
+    })
+    expect(repository.acquire(robotDefinition.id, 'robot-a')).toBeNull()
+    expect(repository.acquire(robotDefinition.id, 'robot-a', resolvedHandle)).not.toBeNull()
+    expect(notifications).toEqual([2])
+
+    repository.revoke(unresolvedHandle)
+    expect(repository.readCurrent(robotDefinition.id)).toMatchObject({
+      handle: resolvedHandle,
+      resolution: 'RESOLVED',
+    })
+  })
+
+  it('rolls back an UNRESOLVED staged generation without notification', () => {
+    const robotDefinition = definition()
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const listener = vi.fn()
+    repository.subscribe(listener)
+
+    const handle = repository.stageUnresolved(robotDefinition, 0)
+    repository.rollback(handle)
+
+    expect(repository.readCurrent(robotDefinition.id)).toBeNull()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it('shares immutable BufferGeometry while leasing distinct roots and materials', () => {
     const robotDefinition = definition()
     const source = prepared(robotDefinition)

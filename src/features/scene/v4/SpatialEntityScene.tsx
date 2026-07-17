@@ -33,7 +33,7 @@ import { encodeRuntimeIdentitySegmentV4 } from '../../../core/robot-runtime/coll
 import {
   spatialEntityCollisionProxyV4,
   type CollisionGeometryProxyV4,
-} from '../../collision/scene-entity-adapter'
+} from '../../collision/v4/scene-entity-adapter-v4.js'
 import type { SceneIsolationTargetV4 } from '../../interaction/v4/scene-selection.js'
 import type { WorkcellInteractionHandlersV4 } from './scene-context-request.js'
 import type {

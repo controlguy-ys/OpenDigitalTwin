@@ -27,12 +27,18 @@ export interface RobotJobTerminalResultV4 {
   readonly message: string
 }
 
+export interface JobRuntimeCheckpointV4 {
+  readonly kind: 'job-runtime-checkpoint-v4'
+}
+
 export interface JobRuntimeStoreV4 {
   readonly projectRevisionId: string | null
   readonly byRobotId: Readonly<Record<string, RobotJobRuntimeStateV4>>
   replaceProject(project: WorkcellProjectV4): void
   setRobotState(state: RobotJobRuntimeStateV4): void
   reset(project: WorkcellProjectV4): void
+  captureCheckpoint(): JobRuntimeCheckpointV4
+  restoreCheckpoint(checkpoint: JobRuntimeCheckpointV4): void
 }
 
 const EMPTY_JOB_RUNTIME_STATES_V4 = Object.freeze({}) as Readonly<
@@ -68,6 +74,12 @@ function prepareProjectState(project: WorkcellProjectV4): {
       validated.robots.map((robot) => [robot.id, idleRobotState(robot.id)]),
     )),
   }
+}
+
+export function buildInitialJobRuntimeStatesV4(
+  project: WorkcellProjectV4,
+): Readonly<Record<string, RobotJobRuntimeStateV4>> {
+  return prepareProjectState(project).byRobotId
 }
 
 function isFiniteNonnegative(value: number | null): value is number {
@@ -160,6 +172,7 @@ function inspectRobotState(state: RobotJobRuntimeStateV4): RobotJobRuntimeStateV
 }
 
 export function createJobRuntimeStoreV4(): StoreApi<JobRuntimeStoreV4> {
+  const checkpoints = new WeakMap<object, JobRuntimeStoreV4>()
   return createStore<JobRuntimeStoreV4>()((set, get) => {
     const replaceProject = (project: WorkcellProjectV4): void => {
       const candidate = prepareProjectState(project)
@@ -185,6 +198,31 @@ export function createJobRuntimeStoreV4(): StoreApi<JobRuntimeStoreV4> {
           ...current,
           byRobotId: Object.freeze({ ...current.byRobotId, [candidate.robotId]: candidate }),
         }, true)
+      },
+      captureCheckpoint: () => {
+        const checkpoint = Object.freeze({
+          kind: 'job-runtime-checkpoint-v4' as const,
+        })
+        checkpoints.set(checkpoint, get())
+        return checkpoint
+      },
+      restoreCheckpoint: (checkpoint) => {
+        if (checkpoint === null || typeof checkpoint !== 'object') {
+          runtimeFailure(
+            'JOB_RUNTIME_CHECKPOINT_INVALID',
+            '$.checkpoint',
+            'Job runtime checkpoint is not owned by this store.',
+          )
+        }
+        const captured = checkpoints.get(checkpoint)
+        if (captured === undefined) {
+          runtimeFailure(
+            'JOB_RUNTIME_CHECKPOINT_INVALID',
+            '$.checkpoint',
+            'Job runtime checkpoint is not owned by this store.',
+          )
+        }
+        set(captured, true)
       },
     }
   })

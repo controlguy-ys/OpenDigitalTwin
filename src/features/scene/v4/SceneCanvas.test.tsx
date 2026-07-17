@@ -278,6 +278,93 @@ describe('SceneCanvasV4', () => {
     })
   })
 
+  it('runs each matching revision-qualified camera request once and ignores stale requests', () => {
+    const data = renderCanvas()
+    const home = vi.fn()
+    const fitAll = vi.fn()
+    const focusSelection = vi.fn()
+    const onRegister = capture.runtime?.onRegister as (controller: Record<string, unknown>) => void
+    act(() => onRegister({
+      actions: {
+        home,
+        fitAll,
+        focusSelection,
+        setStandardView: vi.fn(),
+      },
+      canFocusSelection: true,
+      readCameraState: () => data.viewportPreferences.getState().cameraState,
+    }))
+
+    const matching = {
+      id: 1,
+      projectRevisionId: data.project.revisionId,
+      command: 'fit-all' as const,
+    }
+    data.rerender(
+      <SceneCanvasV4
+        cameraRequest={matching}
+        coordinateDisplay={data.coordinateDisplay}
+        geometryRepository={data.geometryRepository}
+        interaction={data.interaction}
+        onContextRequest={data.onContextRequest}
+        project={data.project}
+        sceneRuntime={data.sceneRuntime}
+        viewportPreferences={data.viewportPreferences}
+      />,
+    )
+    expect(fitAll).toHaveBeenCalledOnce()
+
+    data.rerender(
+      <SceneCanvasV4
+        cameraRequest={matching}
+        coordinateDisplay={data.coordinateDisplay}
+        geometryRepository={data.geometryRepository}
+        interaction={data.interaction}
+        onContextRequest={data.onContextRequest}
+        project={data.project}
+        sceneRuntime={data.sceneRuntime}
+        viewportPreferences={data.viewportPreferences}
+      />,
+    )
+    expect(fitAll).toHaveBeenCalledOnce()
+
+    data.rerender(
+      <SceneCanvasV4
+        cameraRequest={{
+          id: 2,
+          projectRevisionId: 'stale-revision',
+          command: 'focus-selection',
+        }}
+        coordinateDisplay={data.coordinateDisplay}
+        geometryRepository={data.geometryRepository}
+        interaction={data.interaction}
+        onContextRequest={data.onContextRequest}
+        project={data.project}
+        sceneRuntime={data.sceneRuntime}
+        viewportPreferences={data.viewportPreferences}
+      />,
+    )
+    expect(focusSelection).not.toHaveBeenCalled()
+
+    data.rerender(
+      <SceneCanvasV4
+        cameraRequest={{
+          id: 3,
+          projectRevisionId: data.project.revisionId,
+          command: 'home',
+        }}
+        coordinateDisplay={data.coordinateDisplay}
+        geometryRepository={data.geometryRepository}
+        interaction={data.interaction}
+        onContextRequest={data.onContextRequest}
+        project={data.project}
+        sceneRuntime={data.sceneRuntime}
+        viewportPreferences={data.viewportPreferences}
+      />,
+    )
+    expect(home).toHaveBeenCalledOnce()
+  })
+
   it('clears an error scope when a new Project revision becomes ready', () => {
     const data = renderCanvas()
     const onError = capture.errorBoundary?.onError as (error: Error) => void

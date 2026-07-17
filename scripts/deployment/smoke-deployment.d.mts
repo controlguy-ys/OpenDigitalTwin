@@ -5,15 +5,22 @@ export type SmokeCommandRunner = (
 
 export interface SmokeResponse {
   readonly ok: boolean
+  readonly status?: number
+}
+
+export interface OpcUaServerSmokeProbeOptions {
+  readonly endpointUrl: string
+  readonly gatewayBaseUrl: string
+  readonly webBaseUrl: string
 }
 
 export interface SmokeDeploymentOptions {
-  includeOpcUa?: boolean
   run?: SmokeCommandRunner
   fetch?: (url: string) => Promise<SmokeResponse>
-  probeWebSocket?: (url: string) => Promise<void>
+  probeOpcUaServer?: (options: OpcUaServerSmokeProbeOptions) => Promise<void>
   sleep?: (milliseconds: number) => Promise<void>
   port?: number
+  opcUaPort?: number
   projectName?: string
   maxAttempts?: number
 }

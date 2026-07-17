@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { CRB15000_DEFINITION } from '../../src/domain/robot/crb15000'
+import { createBuiltinCrbDefinitionV4 } from '../../src/features/robot/v4/builtin-crb-definition'
 import { probeStepLink } from './convert-robot'
 
 describe('CRB15000 source CAD', () => {
   it('locks the 12/1.27 joint definition', () => {
-    expect(CRB15000_DEFINITION.joints.map((joint) => joint.origin)).toEqual([
+    const definition = createBuiltinCrbDefinitionV4()
+    expect(definition.joints.map((joint) => joint.origin.positionM)).toEqual([
       [0, 0, 0.338],
       [0, 0, 0],
       [0, 0, 0.707],
@@ -14,7 +15,7 @@ describe('CRB15000 source CAD', () => {
       [0.101, 0, 0.08],
     ])
     expect(
-      CRB15000_DEFINITION.joints.map((joint) => [joint.minDeg, joint.maxDeg]),
+      definition.joints.map((joint) => [joint.min, joint.max]),
     ).toEqual([
       [-270, 270],
       [-180, 180],

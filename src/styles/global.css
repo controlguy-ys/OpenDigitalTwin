@@ -711,6 +711,35 @@ button {
   font-size: 10px;
 }
 
+.gateway-mode-control {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.gateway-mode-control select {
+  height: 28px;
+  min-width: 68px;
+  padding-inline: 6px;
+}
+
+.gateway-status {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-status-ready {
+  color: var(--color-running);
+}
+
+.gateway-status-error {
+  color: var(--color-fault);
+}
+
 .scene-entity-inspector-v4 {
   display: grid;
   align-content: start;

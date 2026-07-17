@@ -4,122 +4,188 @@
 
 - Docker Engine 27 or newer.
 - Docker Compose v2.
-- A trusted factory LAN. This package does not configure TLS, authentication,
-  secure OPC UA, or public-internet protection.
+- A trusted factory or development LAN.
 
-## Web-only deployment
+This short-term package does not configure authentication, authorization, TLS,
+OPC UA signing/encryption, certificate trust, or public-internet protection.
+
+## Standard topology
+
+The default Compose project always starts two services:
+
+```text
+Browser -> web:8080 (Nginx SPA)
+             |
+             +-- /runtime/* -> runtime-gateway:8081
+
+OPC UA Client -> host:4840 -> runtime-gateway:4840 (Server mode only)
+```
+
+The Gateway process is always available, but the applied Project owns the OPC UA
+mode. `Off` keeps browser Simulation and Project activation available without an
+OPC UA listener. `Server` starts the read-only OPC UA namespace for that exact
+Project revision. There is no separate Connector profile or configuration file.
+
+## Start
 
 ```powershell
-docker compose up -d --build web
+docker compose up -d --build --wait
 docker compose ps
 Invoke-WebRequest http://127.0.0.1:8080/healthz
 ```
 
-Open `http://<docker-host>:8080/`. Change the published port when required:
+Open `http://<docker-host>:8080/`. Load or create a Project in the browser. The
+browser publishes the validated Project V4 revision to the Gateway through the
+same-origin `/runtime/` proxy.
+
+Change published host ports when required:
 
 ```powershell
 $env:WEB_PORT = '9080'
-docker compose up -d --build web
+$env:ROBOTSIM_OPCUA_ADVERTISE_HOST = 'robot-sim.example.local'
+$env:ROBOTSIM_OPCUA_PORT = '14840'
+docker compose up -d --build --wait
 ```
 
-The Web container serves the SPA and remains usable in Simulation mode without
-the OPC UA profile.
+`WEB_PORT` changes only the host-side Web port. Gateway HTTP remains internal
+port `8081`. `ROBOTSIM_OPCUA_PORT` is used for both the container listener and
+the host-side OPC UA port so endpoint discovery has one deterministic URL.
+`ROBOTSIM_OPCUA_ADVERTISE_HOST` is different: it must be the DNS name or IP that
+external OPC UA Clients use, because it is returned in endpoint discovery. The
+default `localhost` is suitable only for Clients running on the Docker host.
+Compose advertises and listens on the same `ROBOTSIM_OPCUA_PORT`, so strict OPC
+UA endpoint discovery also works when the published port is changed.
 
-## Web plus OPC UA Connector
+## Select OPC UA Server mode
 
-Copy [`middleware/opcua.config.json`](../../middleware/opcua.config.json) to an
-operator-owned location and edit:
+1. Load the intended Project, or choose **Dual sample**.
+2. Change the Project's **OPC UA** selector from **Off** to **Server**.
+3. Wait for **Gateway ready** and inspect the reported endpoint.
+4. Connect an external OPC UA Client to
+   `opc.tcp://<docker-host>:${ROBOTSIM_OPCUA_PORT:-4840}`.
 
-- `endpointUrl`;
-- exactly six ordered `J1` through `J6` NodeIds;
-- scale and offset for each joint;
-- optional Object status mappings;
-- sampling and reconnect intervals.
+The namespace URI is `urn:web-digital-twin:robot-sim:v4`. Each configured Robot
+Joint is exposed as a read-only `Double`:
 
-The endpoint is resolved from inside the Connector container. On Docker
-Desktop, use `host.docker.internal` to reach an OPC UA server running on the
-Docker host. For another factory device, use its LAN DNS name or IP address.
-Do not use `127.0.0.1` unless the OPC UA server is in the same container.
-
-```powershell
-$env:OPCUA_CONFIG_PATH = 'C:\RobotSim\opcua.config.json'
-docker compose --profile opcua up -d --build --wait
-docker compose --profile opcua ps
+```text
+ns=2;s=RobotSim/Robots/<robotId>/Joints/<jointId>/Actual
 ```
 
-The browser connects to the same-origin `/opcua` path. Nginx upgrades and
-proxies that connection to the Connector, so no browser-side host address is
-baked into the image. An explicit `VITE_OPCUA_GATEWAY_URL` build override
-remains available for special deployments.
+The numeric namespace index is deterministic in the current adapter tests, but
+an OPC UA Client should resolve the namespace URI when possible. Runtime state
+is accepted only for the exact active Project and revision. Unknown Robots,
+unknown Joints, duplicate Robots, non-finite values, and oversized batches are
+rejected before publication.
+
+The Server namespace is currently derived from Robot Definitions. Project
+`opcUa.mappings` remain persisted roadmap configuration; the dual sample aligns
+its mapping NodeIds with the derived Actual nodes, but arbitrary Server-node
+authoring from mappings is not part of this release.
 
 ## Health and diagnostics
 
-Web health is independent from PLC availability:
-
 ```powershell
 Invoke-WebRequest http://127.0.0.1:8080/healthz
-docker compose --profile opcua logs --tail 200 web
-docker compose --profile opcua logs --tail 200 opcua-connector
-docker compose --profile opcua ps
+Invoke-WebRequest http://127.0.0.1:8080/runtime/healthz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/status
+docker compose logs --tail 200 web
+docker compose logs --tail 200 runtime-gateway
+docker compose ps
 ```
 
-- Web `healthy`, Connector omitted: Simulation mode is available; OPC UA mode
-  cannot connect.
-- Connector `healthy`, OPC UA server unavailable: the process retries and the
-  browser receives BAD joint quality. The container remains healthy.
-- Connector restarting: inspect configuration validation, read-only mount, and
-  NodeId errors in its logs.
-- `/opcua` returns a gateway error when the optional Connector is not running;
-  `/healthz` and the rest of the application remain available.
+- `/healthz` reports Nginx liveness.
+- `/runtime/healthz` reports Gateway process liveness independently of Project
+  activation.
+- `/runtime/readyz` returns `503 NO_ACTIVE_REVISION` until a browser applies a
+  Project, then `200` for either Off or Server mode.
+- `/runtime/status` reports the active Project ID, revision, mode, readiness,
+  OPC UA start state, and endpoint URL.
+- If Server activation fails, the Gateway rejects the candidate and attempts to
+  restore the previous active runtime rather than publishing a partial revision.
+
+The Browser remains a local Simulation runtime when the Gateway is unavailable;
+its Gateway indicator reports the integration error separately.
+
+## Direct Gateway check
+
+For middleware development without Docker:
+
+```powershell
+npm run build:gateway
+npm run runtime:gateway
+```
+
+Environment variables are optional:
+
+```powershell
+$env:ROBOTSIM_GATEWAY_HOST = '127.0.0.1'
+$env:ROBOTSIM_GATEWAY_HTTP_PORT = '18081'
+$env:ROBOTSIM_OPCUA_ADVERTISE_HOST = '127.0.0.1'
+$env:ROBOTSIM_OPCUA_ADVERTISE_PORT = '14840'
+$env:ROBOTSIM_OPCUA_PORT = '14840'
+npm run runtime:gateway
+```
+
+The browser build expects same-origin `/runtime/`; use the Compose/Nginx
+topology for the supported end-to-end browser flow.
 
 ## Validation before deployment
 
 ```powershell
+npm run lint
+npm run test:run
+npm run build:gateway
+npm run build
 npm run deploy:validate
 docker compose config --quiet
-docker compose --profile opcua config --quiet
 npm run deploy:smoke
-npm run deploy:smoke:opcua
 ```
 
-The smoke commands use a unique Compose project, build the images, run
-`nginx -t`, wait for service health, probe the application, and always remove
-their containers and network.
+The final release gate also uses a real `node-opcua` Client to read both sample
+Robots, confirms that Client writes return `BadNotWritable`, and exercises the
+two-Robot Project in the browser.
 
-## Updating and rollback
+## Persistence, update, and rollback
 
-Before replacement, export every required browser project as `.wdtwin`. Project
-state lives in each browser's IndexedDB and is not a server-side Docker volume.
+Project V4 state is stored in each browser's IndexedDB and exported as canonical
+JSON. The Runtime Gateway holds only the currently applied revision in memory;
+it is not a Project database.
+
+Before updating, export every Project that must survive browser-data loss:
 
 ```powershell
 git pull --ff-only
-docker compose --profile opcua build --pull
-docker compose --profile opcua up -d --wait
+docker compose build --pull
+docker compose up -d --wait
 ```
 
-For rollback, check out the previously validated Git revision, rebuild, and
-start the same profile. Import the `.wdtwin` archive in the browser if its local
-storage was cleared or a different workstation is used.
+For rollback, check out the previously verified Git revision, rebuild, start the
+same Compose topology, and import the saved Project V4 JSON if necessary. Old
+formats are not migrated by this release.
 
-## Resource tuning
+## Resource and container boundary
 
-The checked-in defaults bound CPU, memory, and process counts. Increase limits
-in an operator-maintained Compose override only after measuring STEP scene
-complexity and browser performance. The browser performs rendering and stores
-projects locally; the Nginx container does not process uploaded STEP bodies.
+The checked-in Compose defaults use read-only root filesystems, dropped Linux
+capabilities, `no-new-privileges`, PID limits, and bounded CPU/memory. Nginx and
+the Gateway receive only temporary writable storage. Increase limits in an
+operator-maintained override only after measuring browser STEP/render load and
+Gateway traffic.
+
+These controls reduce accidental container scope; they do not replace network
+segmentation or an OPC UA security policy.
 
 ## Shutdown
 
 ```powershell
-docker compose --profile opcua down
+docker compose down
 ```
 
-Add `--volumes` only when intentionally removing Compose-managed temporary
-state. Export `.wdtwin` files before clearing browser data or retiring a client
-workstation.
+No Compose-managed Project volume exists. Export Project JSON before clearing
+browser storage or retiring the workstation.
 
 ## Safety boundary
 
-The Connector performs OPC UA reads only. This package does not start Robot
-motion, transfer to a PLC, write variables, implement a safety function, or
-make the application suitable for public-internet exposure.
+The short-term Server publishes read-only simulation Actual Joint values. It
+does not start Robot motion, transfer to a PLC, write controller variables,
+implement a safety function, or make the application suitable for public-
+internet exposure.

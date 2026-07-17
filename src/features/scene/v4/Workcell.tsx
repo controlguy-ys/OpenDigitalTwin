@@ -21,7 +21,7 @@ import type {
   SpatialEntityIdV4,
   WorkcellProjectV4,
 } from '../../../core/project-v4/types.js'
-import type { CollisionGeometryProxyV4 } from '../../collision/scene-entity-adapter.js'
+import type { CollisionGeometryProxyV4 } from '../../collision/v4/scene-entity-adapter-v4.js'
 import type { SceneIsolationTargetV4 } from '../../interaction/v4/scene-selection.js'
 import {
   RobotFleetV4,

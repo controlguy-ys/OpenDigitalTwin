@@ -13,7 +13,7 @@ import {
   type WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-support.js'
-import type { WorkcellRegistrationV4 } from '../../scene/Workcell.js'
+import type { WorkcellRegistrationV4 } from '../../scene/v4/Workcell.js'
 import { createRobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
 import type { RobotInstanceRegistrationV4 } from '../../robot/v4/RobotInstanceModel.js'
 import { selectSceneRuntimeV4 } from '../../scene/v4/scene-runtime-selector.js'

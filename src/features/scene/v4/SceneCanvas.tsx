@@ -10,7 +10,10 @@ import {
 } from 'react'
 import { useStore } from 'zustand'
 import type { StoreApi } from 'zustand/vanilla'
-import type { WorkcellProjectV4 } from '../../../core/project-v4/index.js'
+import type {
+  RevisionIdV4,
+  WorkcellProjectV4,
+} from '../../../core/project-v4/index.js'
 import type { CoordinateDisplayStoreStateV4 } from '../../frames/v4/coordinate-display-store.js'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
 import type { RobotDefinitionGeometryRepositoryV4 } from '../../robot/v4/robot-definition-geometry-repository.js'
@@ -39,6 +42,12 @@ const NOOP_VIEWPORT_ACTIONS_V4: ViewportRuntimeControllerV4['actions'] = {
 
 export type SceneRenderStatusV4 = 'loading' | 'ready' | 'error'
 
+export interface SceneCameraRequestV4 {
+  readonly id: number
+  readonly projectRevisionId: RevisionIdV4
+  readonly command: 'home' | 'fit-all' | 'focus-selection'
+}
+
 export interface SceneCanvasPropsV4 {
   readonly project: WorkcellProjectV4
   readonly sceneRuntime: SceneRuntimeProjectionV4
@@ -46,6 +55,7 @@ export interface SceneCanvasPropsV4 {
   readonly interaction: StoreApi<InteractionStoreStateV4>
   readonly coordinateDisplay: StoreApi<CoordinateDisplayStoreStateV4>
   readonly viewportPreferences: ViewportPreferenceStoreV4
+  readonly cameraRequest?: SceneCameraRequestV4
   readonly onContextRequest: (request: SceneContextRequestV4) => void
   readonly onStatusChange?: (status: SceneRenderStatusV4) => void
   readonly onRegistration?: (
@@ -65,6 +75,7 @@ export function SceneCanvasV4({
   interaction,
   coordinateDisplay,
   viewportPreferences,
+  cameraRequest,
   onContextRequest,
   onStatusChange,
   onRegistration,
@@ -76,6 +87,7 @@ export function SceneCanvasV4({
   const entityContextHandled = useRef(false)
   const currentRevisionId = useRef(project.revisionId)
   currentRevisionId.current = project.revisionId
+  const handledCameraRequestKey = useRef<string | null>(null)
   const onRegistrationRef = useRef(onRegistration)
   onRegistrationRef.current = onRegistration
   const [registrationState, setRegistrationState] = useState<RevisionRegistrationV4 | null>(null)
@@ -142,6 +154,28 @@ export function SceneCanvasV4({
       setStandardView: (view) => invoke(() => viewportController.actions.setStandardView(view)),
     }
   }, [viewportController, viewportPreferences])
+
+  useEffect(() => {
+    if (
+      cameraRequest === undefined
+      || viewportController === null
+      || cameraRequest.projectRevisionId !== project.revisionId
+    ) return
+    const requestKey = `${cameraRequest.projectRevisionId}:${cameraRequest.id}`
+    if (handledCameraRequestKey.current === requestKey) return
+    handledCameraRequestKey.current = requestKey
+    switch (cameraRequest.command) {
+      case 'home':
+        overlayActions.home()
+        break
+      case 'fit-all':
+        overlayActions.fitAll()
+        break
+      case 'focus-selection':
+        overlayActions.focusSelection()
+        break
+    }
+  }, [cameraRequest, overlayActions, project.revisionId, viewportController])
 
   const handleError = useCallback(() => {
     setRegistrationState(null)

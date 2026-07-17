@@ -181,6 +181,7 @@ function fakeExecutorHarnessV4(
       return Promise.reject(new Error('Unused fake waitForTerminal.'))
     },
     reset() {},
+    shutdown() {},
   })
 
   return harness
@@ -206,6 +207,43 @@ function playbackHarness(notify?: (error: unknown) => void) {
 }
 
 describe('RobotJobPlaybackControllerV4', () => {
+  it('quiesces a scheduled loop and resumes it only for retained running state', async () => {
+    const { scheduler, playback } = playbackHarness()
+    playback.startJob('job-1')
+    expect(scheduler.pendingCount()).toBe(1)
+
+    await playback.quiesce()
+    playback.ensureRunning()
+
+    expect(scheduler.cancelCount).toBe(1)
+    expect(scheduler.pendingCount()).toBe(0)
+
+    playback.resume()
+    playback.resume()
+    expect(scheduler.pendingCount()).toBe(1)
+  })
+
+  it('waits for the current advance to settle before quiesce resolves', async () => {
+    const { scheduler, fake, playback } = playbackHarness()
+    const advancing = deferred<void>()
+    fake.advance = () => advancing.promise
+    playback.startJob('job-1')
+    scheduler.fireNext(10)
+
+    let settled = false
+    const quiesced = playback.quiesce().then(() => { settled = true })
+    await settleController()
+    expect(settled).toBe(false)
+    expect(scheduler.pendingCount()).toBe(0)
+
+    advancing.resolve(undefined)
+    await quiesced
+    expect(scheduler.pendingCount()).toBe(0)
+
+    playback.resume()
+    expect(scheduler.pendingCount()).toBe(1)
+  })
+
   it('runs two Robots through one loop with exact nondecreasing Simulation timestamps', async () => {
     const { scheduler, fake, playback } = playbackHarness()
     scheduler.currentTime = 5
@@ -228,6 +266,19 @@ describe('RobotJobPlaybackControllerV4', () => {
     await settleController()
     expect(fake.advances).toEqual([10, 10])
     expect(scheduler.pendingCount()).toBe(1)
+    playback.dispose()
+  })
+
+  it('does not let the first animation-frame timestamp precede the Job start timestamp', async () => {
+    const { scheduler, fake, playback } = playbackHarness()
+    scheduler.currentTime = 100
+    playback.startJob('job-1')
+
+    scheduler.fireNext(99)
+    await settleController()
+
+    expect(fake.starts).toEqual([{ jobId: 'job-1', simulationMs: 100 }])
+    expect(fake.advances).toEqual([100])
     playback.dispose()
   })
 

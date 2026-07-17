@@ -21,6 +21,7 @@ import type {
   RigidTransformV4,
   Vector3V4,
 } from '../../../core/project-v4/rigid-transform'
+import { normalizeRigidTransformV4 } from '../../../core/project-v4/rigid-transform'
 import {
   createPreparedRobotDefinitionGeometryV4,
   type PreparedRobotDefinitionGeometryV4,
@@ -345,15 +346,32 @@ function disposeResourceSetsV4(resources: {
   return firstError
 }
 
-function canonicalPlainJsonV4(value: unknown): string {
+function canonicalPlainJsonV4(value: unknown, propertyName = ''): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (
+    propertyName === 'quaternion'
+    && Array.isArray(value)
+    && value.length === 4
+    && value.every((component) => typeof component === 'number')
+  ) {
+    try {
+      const normalized = normalizeRigidTransformV4({
+        positionM: [0, 0, 0],
+        quaternion: value as unknown as QuaternionV4,
+      }, '$.definition.quaternion').quaternion
+      return `[${normalized.map((component) => JSON.stringify(component)).join(',')}]`
+    } catch {
+      // Malformed quaternion data remains unequal and is rejected by the Definition guard.
+    }
+  }
   if (Array.isArray(value)) {
-    return `[${value.map(canonicalPlainJsonV4).join(',')}]`
+    return `[${value.map((entry) => canonicalPlainJsonV4(entry)).join(',')}]`
   }
   return `{${Object.keys(value)
     .sort()
     .map((key) => `${JSON.stringify(key)}:${canonicalPlainJsonV4(
       (value as Record<string, unknown>)[key],
+      key,
     )}`)
     .join(',')}}`
 }

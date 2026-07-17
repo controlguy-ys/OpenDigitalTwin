@@ -11,9 +11,14 @@ describe('deployment smoke orchestration', () => {
     )
   })
 
-  it('builds, probes, and cleans up the web deployment', async () => {
+  it('builds, probes, and cleans up the standard Web plus Runtime Gateway deployment', async () => {
     const commands: string[] = []
-    const fetch = vi.fn().mockResolvedValue({ ok: true })
+    const fetch = vi.fn(async (url: string) => url.endsWith('/runtime/readyz')
+      ? new Response(JSON.stringify({ code: 'NO_ACTIVE_REVISION' }), {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        })
+      : new Response('ok'))
 
     await smokeDeployment({
       fetch,
@@ -24,33 +29,42 @@ describe('deployment smoke orchestration', () => {
     })
 
     expect(commands).toEqual([
-      expect.stringMatching(/compose .* build web$/),
+      expect.stringMatching(/compose .* build$/),
       'docker run --rm robotsim-web:local nginx -t',
-      expect.stringMatching(/compose .* up -d --wait --wait-timeout 90 web$/),
+      expect.stringMatching(/compose .* up -d --wait --wait-timeout 90$/),
       expect.stringMatching(/compose .* down --volumes --remove-orphans$/),
     ])
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:18080/healthz')
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:18080/')
+    expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:18080/runtime/healthz')
+    expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:18080/runtime/readyz')
   })
 
-  it('starts and checks the optional connector profile', async () => {
+  it('can run a supplied two-Robot OPC UA Server probe after the Gateway is live', async () => {
     const commands: string[] = []
-    const probeWebSocket = vi.fn().mockResolvedValue(undefined)
+    const probeOpcUaServer = vi.fn().mockResolvedValue(undefined)
 
     await smokeDeployment({
-      includeOpcUa: true,
-      fetch: async () => ({ ok: true }),
-      probeWebSocket,
+      fetch: async (url: string) => url.endsWith('/runtime/readyz')
+        ? new Response(JSON.stringify({ code: 'NO_ACTIVE_REVISION' }), {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          })
+        : new Response('ok'),
+      probeOpcUaServer,
       projectName: 'robotsim-smoke-opcua',
       run: async (command) => { commands.push(command.join(' ')) },
       sleep: async () => undefined,
     })
 
-    expect(commands.some((command) => /--profile opcua .*build/.test(command))).toBe(true)
-    expect(commands.some((command) => /--profile opcua .*up -d/.test(command))).toBe(true)
     expect(commands.some((command) => /up -d --wait --wait-timeout 90/.test(command))).toBe(true)
-    expect(commands.some((command) => /exec -T opcua-connector/.test(command))).toBe(true)
-    expect(probeWebSocket).toHaveBeenCalledWith('ws://127.0.0.1:18080/opcua')
+    expect(commands.some((command) => /--profile opcua/.test(command))).toBe(false)
+    expect(commands.some((command) => /opcua-connector/.test(command))).toBe(false)
+    expect(probeOpcUaServer).toHaveBeenCalledWith({
+      endpointUrl: 'opc.tcp://127.0.0.1:4840',
+      gatewayBaseUrl: 'http://127.0.0.1:18080/runtime',
+      webBaseUrl: 'http://127.0.0.1:18080',
+    })
   })
 
   it('always tears the Compose project down after a failed probe', async () => {

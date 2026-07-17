@@ -153,8 +153,8 @@ describe('geometry collision orchestration', () => {
 
   it('only enables configured Robot self-collision pairs', () => {
     const entities = [
-      entity('robot-link:LINK02', 'robot-link', 0),
-      entity('robot-link:LINK05', 'robot-link', 0.5),
+      entity('robot-link:base-link', 'robot-link', 0),
+      entity('robot-link:tool-tip', 'robot-link', 0.5),
     ]
     const key = pairKey(entities[0]!.id, entities[1]!.id)
 
@@ -167,25 +167,25 @@ describe('geometry collision orchestration', () => {
     ).toHaveLength(1)
   })
 
-  it('rejects adjacent and identical Robot self-pair policy entries', () => {
-    const adjacent = pairKey('robot-link:LINK02', 'robot-link:LINK03')
-    const identical = pairKey('robot-link:LINK02', 'robot-link:LINK02')
+  it('rejects non-Robot and identical Robot self-pair policy entries', () => {
+    const nonRobot = pairKey('object:fixture', 'robot-link:base-link')
+    const identical = pairKey('robot-link:base-link', 'robot-link:base-link')
 
     expect(() =>
       queryGeometryCollisions(
         [
-          entity('robot-link:LINK02', 'robot-link', 0),
-          entity('robot-link:LINK03', 'robot-link', 0.5),
+          entity('robot-link:base-link', 'robot-link', 0),
+          entity('object:fixture', 'object', 0.5),
         ],
-        { ...POLICY, enabledRobotSelfPairs: [adjacent] },
+        { ...POLICY, enabledRobotSelfPairs: [nonRobot] },
       ),
-    ).toThrow(/non-adjacent|self pair/i)
+    ).toThrow(/distinct Robot Link Entity ids/i)
     expect(() =>
       queryGeometryCollisions(
-        [entity('robot-link:LINK02', 'robot-link', 0)],
+        [entity('robot-link:base-link', 'robot-link', 0)],
         { ...POLICY, enabledRobotSelfPairs: [identical] },
       ),
-    ).toThrow(/non-adjacent|self pair/i)
+    ).toThrow(/distinct Robot Link Entity ids/i)
   })
 
   it('collapses Compound Box hits to the most severe Entity-pair finding', () => {

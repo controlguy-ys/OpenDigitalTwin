@@ -75,6 +75,8 @@ function playback() {
     startJob: vi.fn((_jobId: string) => ({ runId: 'run-new' })),
     cancelRobotJob: vi.fn((_robotId: string, _reason: string) => undefined),
     ensureRunning: vi.fn(),
+    quiesce: vi.fn(async () => undefined),
+    resume: vi.fn(),
     dispose: vi.fn(),
   } satisfies RobotJobPlaybackControllerV4
 }

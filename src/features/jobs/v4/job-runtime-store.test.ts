@@ -8,6 +8,7 @@ import {
   projectAtLimit,
 } from '../../../core/project-v4/test-support.js'
 import {
+  buildInitialJobRuntimeStatesV4,
   createJobRuntimeStoreV4,
   type RobotJobRuntimeStateV4,
 } from './job-runtime-store.js'
@@ -24,6 +25,34 @@ function expectProjectError(action: () => unknown, code: string): void {
 }
 
 describe('JobRuntimeStoreV4', () => {
+  it('builds pure initial states and restores an owned checkpoint exactly', () => {
+    const project = { ...projectAtLimit('robots', 2), revisionId: 'revision-checkpoint' }
+    const initial = buildInitialJobRuntimeStatesV4(project)
+    const store = createJobRuntimeStoreV4()
+    store.getState().replaceProject(project)
+    const checkpoint = store.getState().captureCheckpoint()
+    const before = store.getState()
+
+    store.getState().setRobotState({
+      robotId: 'robot-1',
+      jobId: 'job-1',
+      runId: 'run-1',
+      state: 'RUNNING',
+      stepIndex: 0,
+      startedAtSimulationMs: 0,
+      completedAtSimulationMs: null,
+      failureCode: null,
+      message: '',
+    })
+    store.getState().restoreCheckpoint(checkpoint)
+
+    expect(initial).toEqual(before.byRobotId)
+    expect(initial).not.toBe(before.byRobotId)
+    expect(store.getState()).toBe(before)
+    expect(() => createJobRuntimeStoreV4().getState().restoreCheckpoint(checkpoint))
+      .toThrow(/JOB_RUNTIME_CHECKPOINT_INVALID/)
+  })
+
   it('publishes one distinct frozen IDLE state per Robot and exact Project revision', () => {
     const project = { ...projectAtLimit('robots', 2), revisionId: 'revision-jobs-2' }
     const store = createJobRuntimeStoreV4()

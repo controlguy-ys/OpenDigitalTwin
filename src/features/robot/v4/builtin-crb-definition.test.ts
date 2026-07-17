@@ -213,6 +213,19 @@ describe('built-in ABB CRB15000 Definition V4', () => {
     materialDisposals.forEach((dispose) => expect(dispose).toHaveBeenCalledOnce())
   })
 
+  it('accepts the canonical Definition returned by Project V4 validation', async () => {
+    const validated = validateWorkcellProjectV4(builtinProject()).robotDefinitions[0]!
+    const loader: BuiltinCrbGeometryLoaderV4 = {
+      load: vi.fn(async () => loadedRoot()),
+    }
+
+    const prepared = await prepareBuiltinCrbGeometryV4(validated, loader)
+
+    expect(loader.load).toHaveBeenCalledTimes(7)
+    expect(prepared.definitionId).toBe(BUILTIN_CRB_DEFINITION_ID_V4)
+    prepared.dispose()
+  })
+
   it('rejects a non-built-in Definition before invoking the loader', async () => {
     const loader: BuiltinCrbGeometryLoaderV4 = { load: vi.fn() }
     const mismatched = {

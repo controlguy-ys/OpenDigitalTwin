@@ -2,603 +2,704 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react'
 import { useStore } from 'zustand'
-import type { SceneEntityIdV1 } from '../domain/project/scene-state-v1'
-import { useEquipmentStore } from '../features/equipment/equipment-store'
-import { useInteractionStore } from '../features/interaction/interaction-store'
-import type { InteractionRuntimeController } from '../features/interaction/GraspController'
-import { ImportStepDialog } from '../features/import/ImportStepDialog'
-import { stepImportClient } from '../features/import/StepImportClient'
-import { importedGeometryRepository } from '../features/import/imported-geometry-repository'
-import { JointInspector } from '../features/joints/JointInspector'
-import { simulationJointSource } from '../features/joints/SimulationJointSource'
-import { opcUaJointSource } from '../features/joints/OpcUaJointSource'
-import { useRobotStore } from '../features/joints/robot-store'
-import {
-  SceneCanvas,
-  type SceneRenderStatus,
-} from '../features/scene/SceneCanvas'
-import { SceneEntityInspector } from '../features/scene/SceneEntityInspector'
-import {
-  LinearAxisInspector,
-  type LinearAxisCommands,
-} from '../features/scene/LinearAxisInspector'
-import { ManualLinearAxisSource } from '../features/scene/linear-axis-source'
-import type { LinearAxisCommittedStateV1 } from '../features/scene/linear-axis-source'
-import { linearAxisConfigurationIdentity } from '../features/scene/LinearAxisRuntime'
-import { SceneExplorer } from '../features/scene/SceneExplorer'
-import { SceneContextMenu } from '../features/scene/SceneContextMenu'
-import { RobotMountContactEditor } from '../features/scene/RobotMountContactEditor'
-import { Timeline } from '../features/ui/Timeline'
-import { BottomWorkspace } from '../features/ui/BottomWorkspace'
-import { RobotJobList } from '../features/jobs/RobotJobList'
-import { jobCommandService } from '../features/jobs/job-command-service'
-import { RobotImportDialog } from '../features/robot/RobotImportDialog'
-import { RobotConfigurationDialog } from '../features/robot/RobotConfigurationDialog'
-import { useRobotGeometryStore } from '../features/robot/robot-geometry-store'
-import { RobotGeometryDialog } from '../features/robot/RobotGeometryDialog'
-import { AppShell } from './AppShell'
-import { useObjectAssetStore } from '../features/objects/object-asset-store'
-import {
-  projectStore,
-  sceneCommandService,
-  sceneEditorStore,
-  useProjectStore,
-} from '../features/project/project-store-browser'
-import { ProjectMenu } from '../features/project/ProjectMenu'
-import { CoordinateFramesDialog } from '../features/frames/CoordinateFramesDialog'
-import type { RobotRigRegistration } from '../features/robot/RobotModel'
-import { CollisionPanel } from '../features/collision/CollisionPanel'
-import { usePublishedSceneRuntime } from '../features/scene/scene-runtime-selector'
-import { useCollisionStore } from '../features/collision/collision-store'
-import { deleteSceneEntitySafely } from './safe-scene-deletion'
-import type { SceneContextRequest } from '../features/scene/scene-context-request'
-import { MAX_POSES_PER_JOB, MAX_PROJECT_POSES } from '../domain/project/simulation-job-v1'
-import {
-  MAX_OBJECT_INSTANCES,
-  MAX_STEP_OBJECT_ASSETS,
-} from '../domain/project/project-v3'
-import {
-  OperationFeedback,
-  operationFeedbackStore,
-  runOperationWithFeedback,
-} from '../features/ui/OperationFeedback'
-import { createInitialProjectBootstrap } from './initial-project-bootstrap'
 
-type RobotInspectorTab = 'Transform' | 'Mechanics' | 'Geometry' | 'Frames'
-const ROBOT_INSPECTOR_TABS = ['Transform', 'Mechanics', 'Geometry', 'Frames'] as const
+import type {
+  FrameIdV4,
+  RigidTransformV4,
+  RobotIdV4,
+  WorkcellProjectV4,
+} from '../core/project-v4/index.js'
+import { CollisionPanelV4 } from '../features/collision/v4/CollisionPanel.js'
+import type {
+  CollisionGeometryProxyV4,
+} from '../features/collision/v4/scene-entity-adapter-v4.js'
+import {
+  robotIdFromSceneSelectionV4,
+  type SceneSelectionTargetV4,
+} from '../features/interaction/v4/scene-selection.js'
+import { RobotJobListV4 } from '../features/jobs/v4/RobotJobList.js'
+import {
+  browserProjectResourcesV4,
+  type BrowserProjectResourcesV4,
+} from '../features/project/project-store-browser.js'
+import { ProjectMenuV4 } from '../features/project/ProjectMenu.js'
+import type { RobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
+import {
+  createRuntimeGatewayPublisherV4,
+  runtimeGatewayStatePublicationRequiresReactivationV4,
+  type RuntimeGatewayPresentationV4,
+  type RuntimeGatewayPublisherV4,
+  type RuntimeGatewayStatePayloadV4,
+  type RuntimeGatewayStatusV4,
+} from '../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
+import {
+  SceneCanvasV4,
+  type SceneCameraRequestV4,
+  type SceneRenderStatusV4,
+} from '../features/scene/v4/SceneCanvas.js'
+import { SceneContextMenuV4 } from '../features/scene/v4/SceneContextMenu.js'
+import { SceneEntityInspectorV4 } from '../features/scene/v4/SceneEntityInspector.js'
+import { SceneExplorerV4 } from '../features/scene/v4/SceneExplorer.js'
+import type { SceneContextRequestV4 } from '../features/scene/v4/scene-context-request.js'
+import type { WorkcellRegistrationV4 } from '../features/scene/v4/Workcell.js'
+import { BottomWorkspace } from '../features/ui/BottomWorkspace.js'
+import { TimelineV4 } from '../features/ui/v4/Timeline.js'
+import { AppShellV4 } from './AppShell.js'
+import { createInitialProjectBootstrapV4 } from './initial-project-bootstrap.js'
 
-export interface RobotTargetInspectorProps {
-  readonly transform: ReactNode
-  readonly onOpenMechanics: () => void
-  readonly onOpenGeometry: () => void
-  readonly onOpenFrames: () => void
-  readonly mountContact?: ReactNode
+const IDENTITY_POSE_V4: RigidTransformV4 = Object.freeze({
+  positionM: Object.freeze([0, 0, 0] as const),
+  quaternion: Object.freeze([0, 0, 0, 1] as const),
+})
+
+export interface AppPropsV4 {
+  readonly resources?: BrowserProjectResourcesV4
+  readonly gatewayPublisher?: RuntimeGatewayPublisherV4 | null
 }
 
-export function RobotTargetInspector({
-  transform,
-  onOpenMechanics,
-  onOpenGeometry,
-  onOpenFrames,
-  mountContact,
-}: RobotTargetInspectorProps) {
-  const [tab, setTab] = useState<RobotInspectorTab>('Transform')
-  const tabRefs = useRef(new Map<RobotInspectorTab, HTMLButtonElement>())
-  const openEditor = tab === 'Mechanics'
-    ? onOpenMechanics
-    : tab === 'Geometry'
-      ? onOpenGeometry
-      : onOpenFrames
+const browserRuntimeGatewayPublisherV4 = createRuntimeGatewayPublisherV4()
 
-  const selectAndFocusTab = (nextTab: RobotInspectorTab) => {
-    setTab(nextTab)
-    tabRefs.current.get(nextTab)?.focus()
+const IDLE_GATEWAY_PRESENTATION_V4: RuntimeGatewayPresentationV4 = Object.freeze({
+  phase: 'idle',
+  projectRevisionId: null,
+  mode: null,
+  endpointUrl: null,
+  message: null,
+})
+
+interface RevisionQualifiedSceneStatusV4 {
+  readonly projectRevisionId: string | null
+  readonly status: SceneRenderStatusV4
+}
+
+interface RevisionQualifiedContextRequestV4 {
+  readonly projectRevisionId: string
+  readonly request: SceneContextRequestV4
+}
+
+function sourceLabelV4(source: string | null): string | null {
+  if (source === null) return null
+  if (source === 'simulation') return 'Simulation'
+  if (source === 'manual') return 'Manual'
+  return source.startsWith('opcua:') ? 'OPC UA' : source
+}
+
+function nextCameraRequestV4(
+  current: SceneCameraRequestV4 | undefined,
+  projectRevisionId: string,
+  command: SceneCameraRequestV4['command'],
+): SceneCameraRequestV4 {
+  return {
+    id: (current?.id ?? 0) + 1,
+    projectRevisionId,
+    command,
   }
-
-  return (
-    <div className="robot-target-inspector">
-      <div aria-label="Robot Inspector editors" role="tablist">
-        {ROBOT_INSPECTOR_TABS.map((candidate, index) => (
-          <button
-            aria-controls={`robot-${candidate.toLowerCase()}-panel`}
-            aria-selected={tab === candidate}
-            id={`robot-${candidate.toLowerCase()}-tab`}
-            key={candidate}
-            onKeyDown={(event) => {
-              let nextIndex: number | null = null
-              if (event.key === 'Home') nextIndex = 0
-              else if (event.key === 'End') nextIndex = ROBOT_INSPECTOR_TABS.length - 1
-              else if (event.key === 'ArrowRight') {
-                nextIndex = (index + 1) % ROBOT_INSPECTOR_TABS.length
-              } else if (event.key === 'ArrowLeft') {
-                nextIndex = (index - 1 + ROBOT_INSPECTOR_TABS.length) % ROBOT_INSPECTOR_TABS.length
-              }
-              if (nextIndex === null) return
-              event.preventDefault()
-              selectAndFocusTab(ROBOT_INSPECTOR_TABS[nextIndex]!)
-            }}
-            onClick={() => setTab(candidate)}
-            ref={(node) => {
-              if (node === null) tabRefs.current.delete(candidate)
-              else tabRefs.current.set(candidate, node)
-            }}
-            role="tab"
-            tabIndex={tab === candidate ? 0 : -1}
-            type="button"
-          >
-            {candidate}
-          </button>
-        ))}
-      </div>
-      <section
-        aria-label={tab}
-        className="robot-target-inspector-panel"
-        id={`robot-${tab.toLowerCase()}-panel`}
-        role="tabpanel"
-      >
-        {tab === 'Transform' ? <>{transform}{mountContact}</> : (
-          <button onClick={openEditor} type="button">Open {tab} editor</button>
-        )}
-      </section>
-    </div>
-  )
 }
 
-export function clearDeletedLinearAxisEditorState(): void {
-  const editor = sceneEditorStore.getState()
-  editor.select(null)
-  editor.cancelDraft()
-  editor.showAll()
+function projectFrameIdV4(
+  role: 'mcp' | 'world',
+  frames: readonly { readonly id: FrameIdV4; readonly role: string }[],
+): FrameIdV4 | null {
+  return frames.find((frame) => frame.role === role)?.id ?? null
 }
 
-export interface LinearAxisTargetInspectorProps {
-  readonly disabled: boolean
-  readonly source: ManualLinearAxisSource
-  readonly commands?: LinearAxisCommands
-}
-
-export function LinearAxisTargetInspector({
-  disabled,
-  source,
-  commands,
-}: LinearAxisTargetInspectorProps) {
-  return (
-    <div className="linear-axis-target-inspector">
-      <SceneEntityInspector
-        disabled={disabled}
-        entityId="linear-axis:active"
-      />
-      <LinearAxisInspector
-        {...(commands === undefined ? {} : { commands })}
-        disabled={disabled}
-        onDeleted={clearDeletedLinearAxisEditorState}
-        source={source}
-      />
-    </div>
+function runtimeGatewayStatePayloadV4(
+  project: WorkcellProjectV4,
+  registry: RobotRuntimeRegistryV4,
+): RuntimeGatewayStatePayloadV4 {
+  if (registry.projectRevisionId !== project.revisionId) {
+    throw new Error('Runtime Gateway Robot state does not match the active Project revision.')
+  }
+  const definitions = new Map(
+    project.robotDefinitions.map((definition) => [definition.id, definition]),
   )
-}
-
-export function App() {
-  const [sceneStatus, setSceneStatus] =
-    useState<SceneRenderStatus>('loading')
-  const [isImportOpen, setIsImportOpen] = useState(false)
-  const [isRobotImportOpen, setIsRobotImportOpen] = useState(false)
-  const [isRobotConfigurationOpen, setIsRobotConfigurationOpen] = useState(false)
-  const [isRobotGeometryOpen, setIsRobotGeometryOpen] = useState(false)
-  const [isCoordinateFramesOpen, setIsCoordinateFramesOpen] = useState(false)
-  const [robotRig, setRobotRig] = useState<RobotRigRegistration | null>(null)
-  const [viewportContextRequest, setViewportContextRequest] = useState<
-    SceneContextRequest | undefined
-  >(undefined)
-  const [collisionFocusRequest, setCollisionFocusRequest] = useState(0)
-  const [inspectorOpenRequest, setInspectorOpenRequest] = useState(0)
-  const [cameraCommandRequest, setCameraCommandRequest] = useState<
-    Readonly<{ id: number; command: 'fit-all' | 'focus-selection' }> | undefined
-  >(undefined)
-  const [sourceMode, setSourceMode] = useState<'simulation' | 'opcua'>(
-    'simulation',
-  )
-  const interactionControllerRef = useRef<InteractionRuntimeController | null>(
-    null,
-  )
-  const initialProjectBootstrapRef = useRef<
-    ReturnType<typeof createInitialProjectBootstrap> | null
-  >(null)
-  initialProjectBootstrapRef.current ??= createInitialProjectBootstrap(projectStore)
-  const sourceQuality = useRobotStore((state) => state.sourceQuality)
-  const jointAnglesDeg = useRobotStore((state) => state.anglesDeg)
-  const hydrateEquipment = useEquipmentStore((state) => state.hydrate)
-  const hydrateObjectAssets = useObjectAssetStore((state) => state.hydrate)
-  const hydrateRobotGeometry = useRobotGeometryStore((state) => state.hydrate)
-  const selection = useInteractionStore((state) => state.selection)
-  const selectEquipment = useInteractionStore((state) => state.selectEquipment)
-  const selectedSceneEntityId = useStore(
-    sceneEditorStore,
-    (state) => state.selectedEntityId,
-  )
-  const isolatedSceneEntityId = useStore(
-    sceneEditorStore,
-    (state) => state.isolatedEntityId,
-  )
-  const sceneRuntime = usePublishedSceneRuntime()
-  const axisRuntime = sceneRuntime.linearAxis
-  const axisEntityId = axisRuntime?.source.kind === 'linear-axis'
-    ? axisRuntime.entityId
-    : null
-  const linearAxisSource = useMemo(() => {
-    if (
-      axisRuntime?.source.kind !== 'linear-axis' ||
-      axisEntityId === null
-    ) return null
-    return new ManualLinearAxisSource({
-      initialPositionM: axisRuntime.source.currentPositionM,
-      homePositionM: axisRuntime.source.homePositionM,
-      commitPositionM: sceneCommandService.setLinearAxisPosition,
-      commitHome: sceneCommandService.moveLinearAxisHome,
-    })
-  }, [
-    axisEntityId,
-    sceneCommandService.moveLinearAxisHome,
-    sceneCommandService.setLinearAxisPosition,
-  ])
-  const axisConfigurationIdentity = linearAxisConfigurationIdentity(sceneRuntime)
-  const linearAxisCommittedState: LinearAxisCommittedStateV1 | null =
-    axisRuntime?.source.kind === 'linear-axis' && axisConfigurationIdentity !== null
-      ? Object.freeze({
-        axisEntityId: axisRuntime.entityId,
-        configurationIdentity: axisConfigurationIdentity,
-        positionM: axisRuntime.source.currentPositionM,
-        homePositionM: axisRuntime.source.homePositionM,
+  return Object.freeze({
+    projectId: project.projectId,
+    revisionId: project.revisionId,
+    robots: Object.freeze(project.robots.map((robot) => {
+      const runtime = registry.robots[robot.id]
+      const definition = definitions.get(robot.definitionId)
+      if (runtime === undefined || definition === undefined) {
+        throw new Error(`Runtime Gateway Robot ${robot.id} is not published.`)
+      }
+      const jointValues = Object.create(null) as Record<string, number>
+      for (const { id } of definition.joints) {
+        const value = runtime.jointValues[id]
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          throw new Error(`Runtime Gateway Robot ${robot.id} Joint ${id} is invalid.`)
+        }
+        jointValues[id] = value
+      }
+      return Object.freeze({
+        robotId: robot.id,
+        jointValues: Object.freeze(jointValues),
       })
-      : null
-  const activeSnapshot = useProjectStore((state) => state.activeSnapshot)
-  const stepAssetCount = activeSnapshot?.objectAssets.filter(
-    (asset) => asset.sourceKind === 'step',
-  ).length ?? 0
-  const stepImportUnavailableReason = stepAssetCount >= MAX_STEP_OBJECT_ASSETS
-    ? `STEP Asset limit reached: ${stepAssetCount} of ${MAX_STEP_OBJECT_ASSETS}.`
-    : (activeSnapshot?.objectInstances.length ?? 0) >= MAX_OBJECT_INSTANCES
-      ? `Object Instance limit reached: ${activeSnapshot?.objectInstances.length ?? 0} of ${MAX_OBJECT_INSTANCES}.`
-      : undefined
-  const activeJob = activeSnapshot?.simulation.jobs.find(
-    ({ id }) => id === activeSnapshot.simulation.activeJobId,
-  )
-  const totalPoseCount = activeSnapshot?.simulation.jobs.reduce(
-    (count, job) => count + job.poses.length,
-    0,
-  ) ?? 0
-  const savePoseUnavailableReason = activeJob === undefined
-    ? 'Create a Job in Robot Jobs and select it to save a Pose.'
-    : activeJob.poses.length >= MAX_POSES_PER_JOB
-      ? `This Job reached the ${MAX_POSES_PER_JOB} Pose limit.`
-      : totalPoseCount >= MAX_PROJECT_POSES
-        ? `This Project reached the ${MAX_PROJECT_POSES} Pose limit.`
-        : null
-  const collisionCount = useCollisionStore((state) =>
-    state.validationReport?.findings.length ?? state.currentFindings.length)
-  const controlsDisabled = sceneStatus !== 'ready'
-  const jointControlsDisabled = controlsDisabled || sourceMode === 'opcua'
-  const activeJointSource =
-    sourceMode === 'simulation' ? simulationJointSource : opcUaJointSource
+    })),
+  })
+}
 
-  const selectSceneEntity = useCallback((entityId: SceneEntityIdV1) => {
-    sceneEditorStore.getState().select(entityId)
-    if (entityId.startsWith('object:') || entityId.startsWith('equipment:')) {
-      selectEquipment(entityId)
-    } else if (entityId === 'robot:active') {
-      useInteractionStore.getState().selectRobot()
-    } else {
-      useInteractionStore.getState().clearSelection()
-    }
-  }, [selectEquipment])
-  const focusSceneEntity = useCallback((entityId: SceneEntityIdV1) => {
-    selectSceneEntity(entityId)
-    setCameraCommandRequest((current) => ({
-      id: (current?.id ?? 0) + 1,
-      command: 'focus-selection',
-    }))
-  }, [selectSceneEntity])
-  const fitAllSceneEntities = useCallback(() => {
-    setCameraCommandRequest((current) => ({
-      id: (current?.id ?? 0) + 1,
-      command: 'fit-all',
-    }))
-  }, [])
-  const runCreateSceneEntity = useCallback(async (
-    command: () => Promise<SceneEntityIdV1>,
-  ) => {
-    await runOperationWithFeedback(command, selectSceneEntity)
-  }, [selectSceneEntity])
+function readyGatewayPresentationV4(
+  status: RuntimeGatewayStatusV4,
+): RuntimeGatewayPresentationV4 {
+  return Object.freeze({
+    phase: 'ready',
+    projectRevisionId: status.revisionId,
+    mode: status.mode,
+    endpointUrl: status.endpointUrl,
+    message: null,
+  })
+}
+
+function RuntimePendingV4({
+  recoveryRequired,
+  error,
+}: {
+  readonly recoveryRequired: boolean
+  readonly error: string | null
+}): ReactNode {
+  return (
+    <main className="project-v4-pending">
+      <p aria-live="polite" role="status">
+        {recoveryRequired
+          ? 'Project V4 recovery requires a reload.'
+          : 'Synchronizing Project V4 runtime...'}
+      </p>
+      {error === null ? null : <p role="alert">{error}</p>}
+    </main>
+  )
+}
+
+export function App({
+  resources = browserProjectResourcesV4,
+  gatewayPublisher = browserRuntimeGatewayPublisherV4,
+}: AppPropsV4) {
+  const projectState = useStore(resources.projectStore)
+  const runtimeBundle = useStore(resources.runtimeBundle, (state) => state)
+  const robotRuntime = useStore(resources.robots, (state) => state)
+  const jobRuntime = useStore(resources.jobs, (state) => state)
+  const sceneStore = useStore(resources.scene, (state) => state)
+  const interaction = useStore(resources.interaction, (state) => state)
+  const coordinateDisplay = useStore(
+    resources.coordinateDisplay,
+    (state) => state,
+  )
+  const [sceneStatusState, setSceneStatusState] =
+    useState<RevisionQualifiedSceneStatusV4>({
+      projectRevisionId: null,
+      status: 'loading',
+    })
+  const [contextRequestState, setContextRequestState] =
+    useState<RevisionQualifiedContextRequestV4 | null>(null)
+  const [cameraRequest, setCameraRequest] =
+    useState<SceneCameraRequestV4 | undefined>(undefined)
+  const [registration, setRegistration] = useState<{
+    readonly projectRevisionId: string
+    readonly value: WorkcellRegistrationV4
+  } | null>(null)
+  const [collisionOpenRequest, setCollisionOpenRequest] = useState(0)
+  const [commandError, setCommandError] = useState<string | null>(null)
+  const [gatewayPresentation, setGatewayPresentation] =
+    useState<RuntimeGatewayPresentationV4>(IDLE_GATEWAY_PRESENTATION_V4)
+  const bootstrap = useMemo(
+    () => createInitialProjectBootstrapV4(resources.projectStore),
+    [resources.projectStore],
+  )
 
   useEffect(() => {
     let active = true
-    void (async () => {
-      await Promise.all([
-        hydrateEquipment(),
-        hydrateObjectAssets(),
-        hydrateRobotGeometry(),
-      ])
-      await initialProjectBootstrapRef.current!.run(() => active)
-    })().catch((error) => {
-      if (active) operationFeedbackStore.getState().publishError(error)
+    void bootstrap.run(() => active).catch((error: unknown) => {
+      if (!active) return
+      setCommandError(
+        error instanceof Error ? error.message : 'Project V4 bootstrap failed.',
+      )
     })
-
     return () => {
       active = false
     }
-  }, [hydrateEquipment, hydrateObjectAssets, hydrateRobotGeometry])
+  }, [bootstrap])
+
+  const project = projectState.activeProject
+  const revisionId = project?.revisionId ?? null
+  const projectPublicationUsable = projectState.status !== 'loading'
+    && projectState.status !== 'recovery-required'
+  const ready = (
+    projectPublicationUsable
+    && project !== null
+    && runtimeBundle.projectRevisionId === revisionId
+    && runtimeBundle.active?.project.revisionId === revisionId
+    && robotRuntime.projectRevisionId === revisionId
+    && jobRuntime.projectRevisionId === revisionId
+    && sceneStore.projectRevisionId === revisionId
+    && sceneStore.projection?.projectRevisionId === revisionId
+    && interaction.projectRevisionId === revisionId
+    && coordinateDisplay.projectRevisionId === revisionId
+  )
 
   useEffect(() => {
-    if (selection?.kind === 'equipment') {
-      sceneEditorStore.getState().select(selection.entityId)
-    } else if (selection?.kind === 'robot' || selection?.kind === 'robot-link') {
-      sceneEditorStore.getState().select('robot:active')
-    }
-  }, [selection])
-
-  useEffect(() => {
-    const unsubscribe = activeJointSource.subscribe((frame) => {
-      useRobotStore.getState().applyFrame(frame)
+    setContextRequestState(null)
+    setRegistration(null)
+    setSceneStatusState({
+      projectRevisionId: revisionId,
+      status: 'loading',
     })
-    const unsubscribeEquipment =
-      activeJointSource === opcUaJointSource
-        ? opcUaJointSource.subscribeEquipment((values) => {
-            useEquipmentStore.getState().applyOpcUaEquipmentStatuses(values)
-            useObjectAssetStore.getState().applyOpcUaStatuses(values)
-          })
-        : () => undefined
-    void activeJointSource.connect().then(() => {
-      if (activeJointSource === simulationJointSource) {
-        simulationJointSource.setAngles(useRobotStore.getState().anglesDeg)
+    setCameraRequest(undefined)
+    setGatewayPresentation({
+      ...IDLE_GATEWAY_PRESENTATION_V4,
+      projectRevisionId: revisionId,
+    })
+  }, [revisionId])
+
+  useEffect(() => {
+    if (gatewayPublisher === null || project === null || !ready) return
+    const projectRevisionId = project.revisionId
+    if (project.opcUa.mode !== 'off' && project.opcUa.mode !== 'server') {
+      const unsupportedMode = project.opcUa.mode
+      const abortController = new AbortController()
+      let active = true
+      setGatewayPresentation({
+        phase: 'activating',
+        projectRevisionId,
+        mode: null,
+        endpointUrl: null,
+        message: null,
+      })
+      const runtimeOffProject: WorkcellProjectV4 = {
+        ...project,
+        opcUa: {
+          mode: 'off',
+          endpoints: [],
+          mappings: [],
+          actionBindings: [],
+          bridgeRoutes: [],
+        },
       }
-    }).catch((error) => operationFeedbackStore.getState().publishError(error))
+      void gatewayPublisher.activateProject(
+        runtimeOffProject,
+        abortController.signal,
+      ).then((status) => {
+        if (!active) return
+        if (
+          status.projectId !== project.projectId
+          || status.revisionId !== projectRevisionId
+          || status.mode !== 'off'
+        ) {
+          throw new Error('Runtime Gateway did not deactivate the prior OPC UA runtime.')
+        }
+        setGatewayPresentation({
+          phase: 'error',
+          projectRevisionId,
+          mode: null,
+          endpointUrl: null,
+          message: `OPC UA mode ${unsupportedMode} is not supported by this Runtime Gateway.`,
+        })
+      }).catch((error: unknown) => {
+        if (!active) return
+        setGatewayPresentation({
+          phase: 'error',
+          projectRevisionId,
+          mode: null,
+          endpointUrl: null,
+          message: error instanceof Error ? error.message : String(error),
+        })
+      })
+      return () => {
+        active = false
+        abortController.abort()
+      }
+    }
+    const abortController = new AbortController()
+    let active = true
+    let unsubscribeRobots: (() => void) | null = null
+    let observedStatePublish: Promise<RuntimeGatewayStatusV4> | null = null
+    let recoveryPromise: Promise<void> | null = null
+    let stateChangedDuringRecovery = false
+
+    const isCurrentStatus = (status: RuntimeGatewayStatusV4): boolean => (
+      status.projectId === project.projectId
+      && status.revisionId === projectRevisionId
+    )
+    const publishFailure = (error: unknown): void => {
+      if (!active) return
+      setGatewayPresentation({
+        phase: 'error',
+        projectRevisionId,
+        mode: project.opcUa.mode === 'server' ? 'server' : 'off',
+        endpointUrl: null,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+    const publishStatus = (status: RuntimeGatewayStatusV4): boolean => {
+      if (!active) return false
+      if (!isCurrentStatus(status)) {
+        publishFailure(new Error('Runtime Gateway returned a stale Project revision.'))
+        return false
+      }
+      setGatewayPresentation(readyGatewayPresentationV4(status))
+      return true
+    }
+    const currentRobotStatePayload = (): RuntimeGatewayStatePayloadV4 => {
+      const registry = resources.robots.getState()
+      if (registry.projectRevisionId !== projectRevisionId) {
+        throw new Error('Runtime Gateway Robot state does not match the active Project revision.')
+      }
+      return runtimeGatewayStatePayloadV4(project, registry)
+    }
+    const beginSameRevisionRecovery = (): void => {
+      if (!active || recoveryPromise !== null) return
+      setGatewayPresentation({
+        phase: 'activating',
+        projectRevisionId,
+        mode: 'server',
+        endpointUrl: null,
+        message: null,
+      })
+      let retrySucceeded = false
+      const recovery = Promise.resolve().then(async () => {
+        const activationStatus = await gatewayPublisher.activateProject(
+          project,
+          abortController.signal,
+        )
+        if (!publishStatus(activationStatus) || !active) return
+        stateChangedDuringRecovery = false
+        const retryStatus = await gatewayPublisher.publishRobotState(
+          currentRobotStatePayload(),
+          abortController.signal,
+        )
+        retrySucceeded = publishStatus(retryStatus)
+      }).catch(publishFailure)
+      recoveryPromise = recovery
+      void recovery.finally(() => {
+        if (recoveryPromise !== recovery) return
+        recoveryPromise = null
+        if (active && retrySucceeded && stateChangedDuringRecovery) {
+          publishRobotState()
+        }
+      })
+    }
+    const publishRobotState = (): void => {
+      if (!active) return
+      if (recoveryPromise !== null) {
+        stateChangedDuringRecovery = true
+        return
+      }
+      let payload: RuntimeGatewayStatePayloadV4
+      try {
+        payload = currentRobotStatePayload()
+      } catch (error) {
+        publishFailure(error)
+        return
+      }
+      const pending = gatewayPublisher.publishRobotState(
+        payload,
+        abortController.signal,
+      )
+      if (pending === observedStatePublish) return
+      observedStatePublish = pending
+      void pending.then(
+        (status) => {
+          if (observedStatePublish === pending) observedStatePublish = null
+          publishStatus(status)
+        },
+        (error: unknown) => {
+          if (observedStatePublish === pending) observedStatePublish = null
+          if (runtimeGatewayStatePublicationRequiresReactivationV4(error)) {
+            beginSameRevisionRecovery()
+          } else {
+            publishFailure(error)
+          }
+        },
+      )
+    }
+
+    setGatewayPresentation({
+      phase: 'activating',
+      projectRevisionId,
+      mode: project.opcUa.mode === 'server' ? 'server' : 'off',
+      endpointUrl: null,
+      message: null,
+    })
+    void gatewayPublisher.activateProject(
+      project,
+      abortController.signal,
+    ).then((status) => {
+      if (!publishStatus(status) || project.opcUa.mode !== 'server') return
+      if (project.robots.length === 0) return
+      unsubscribeRobots = resources.robots.subscribe(publishRobotState)
+      publishRobotState()
+    }).catch(publishFailure)
 
     return () => {
-      unsubscribe()
-      unsubscribeEquipment()
-      void activeJointSource.disconnect()
+      active = false
+      abortController.abort()
+      unsubscribeRobots?.()
     }
-  }, [activeJointSource])
+  }, [gatewayPublisher, project, ready, resources.robots])
 
-  const handleResetInteraction = useCallback(async () => {
-    const controller = interactionControllerRef.current
-    if (controller === null) {
-      useInteractionStore.getState().resetInteraction()
-      return
+  const issueCameraRequest = useCallback((
+    command: SceneCameraRequestV4['command'],
+  ) => {
+    if (revisionId === null) return
+    setCameraRequest((current) => nextCameraRequestV4(
+      current,
+      revisionId,
+      command,
+    ))
+  }, [revisionId])
+
+  const handleSceneStatusChange = useCallback((
+    status: SceneRenderStatusV4,
+  ) => {
+    if (revisionId === null) return
+    setSceneStatusState((current) => (
+      current.projectRevisionId === revisionId && current.status === status
+        ? current
+        : { projectRevisionId: revisionId, status }
+    ))
+  }, [revisionId])
+
+  const focusSelection = useCallback((selection: SceneSelectionTargetV4) => {
+    resources.interaction.getState().select(selection)
+    issueCameraRequest('focus-selection')
+  }, [issueCameraRequest, resources.interaction])
+
+  const runCommand = useCallback(async (
+    command: () => Promise<unknown>,
+  ): Promise<void> => {
+    setCommandError(null)
+    try {
+      await command()
+    } catch (error) {
+      setCommandError(
+        error instanceof Error ? error.message : 'Project V4 command failed.',
+      )
     }
-    await controller.resetInteraction()
   }, [])
 
-  const handleDeleteSceneEntity = useCallback(
-    (entityId: SceneEntityIdV1) => deleteSceneEntitySafely(entityId, {
-      runtime: sceneRuntime,
-      beginRemoval: (externalId) =>
-        useInteractionStore.getState().beginEquipmentRemoval(externalId),
-      endRemoval: (externalId) =>
-        useInteractionStore.getState().endEquipmentRemoval(externalId),
-      getHeldEntityId: () => useInteractionStore.getState().heldEntityId,
-      releaseHeldEntity: async (externalId) => {
-        const controller = interactionControllerRef.current
-        if (controller === null) {
-          if (useInteractionStore.getState().heldEntityId === externalId) {
-            throw new Error('The held Entity cannot be released while the 3D scene is unavailable.')
-          }
-          return
-        }
-        await controller.releaseHeldEquipment(externalId)
-      },
-      deleteEntity: sceneCommandService.deleteEntity,
-      deleteGroupAndContents: sceneCommandService.deleteGroupAndContents,
-      clearInteractionSelection: (externalId) =>
-        useInteractionStore.getState().clearSelectionForEntity(externalId),
-      clearCollisionPairs: (externalId) => {
-        useInteractionStore.getState().clearCollisionPairsForEntity(externalId)
-      },
-      getSceneSelection: () => sceneEditorStore.getState().selectedEntityId,
-      clearSceneSelection: () => sceneEditorStore.getState().select(null),
-    }),
-    [sceneRuntime],
-  )
+  if (!ready || project === null || runtimeBundle.active === null) {
+    return (
+      <RuntimePendingV4
+        error={projectState.error ?? commandError}
+        recoveryRequired={projectState.status === 'recovery-required'}
+      />
+    )
+  }
+
+  const sceneRuntime = runtimeBundle.active.sceneRuntime
+  const sceneStatus = sceneStatusState.projectRevisionId === project.revisionId
+    ? sceneStatusState.status
+    : 'loading'
+  const contextRequest = (
+    contextRequestState?.projectRevisionId === project.revisionId
+  ) ? contextRequestState.request : null
+  const activeCameraRequest = (
+    cameraRequest?.projectRevisionId === project.revisionId
+  ) ? cameraRequest : undefined
+  const setCurrentContextRequest = (
+    request: SceneContextRequestV4 | null,
+  ): void => {
+    setContextRequestState(request === null ? null : {
+      projectRevisionId: project.revisionId,
+      request,
+    })
+  }
+  const selectedRobotId = robotIdFromSceneSelectionV4(interaction.selection)
+  const selectedJobId = selectedRobotId === null
+    ? null
+    : interaction.selectedJobIdsByRobotId.get(selectedRobotId) ?? null
+  const selectedRobot = selectedRobotId === null
+    ? null
+    : project.robots.find((robot) => robot.id === selectedRobotId) ?? null
+  const placementFrameId = projectFrameIdV4('mcp', project.scene.frames)
+    ?? projectFrameIdV4('world', project.scene.frames)
+  if (placementFrameId === null) {
+    return (
+      <RuntimePendingV4
+        error="Project V4 has no placement Frame."
+        recoveryRequired={false}
+      />
+    )
+  }
+  const selectedGroupId = interaction.selection?.kind === 'scene-group'
+    ? interaction.selection.groupId
+    : null
+  const collisionProxies: readonly CollisionGeometryProxyV4[] =
+    registration?.projectRevisionId === project.revisionId
+      ? registration.value.collisionProxies
+      : []
+  const anyJobRunning = Object.values(jobRuntime.byRobotId)
+    .some((state) => state.state === 'RUNNING')
+  const controlsDisabled = sceneStatus !== 'ready'
+  const currentGatewayPresentation = (
+    gatewayPresentation.projectRevisionId === project.revisionId
+  ) ? gatewayPresentation : {
+      ...IDLE_GATEWAY_PRESENTATION_V4,
+      projectRevisionId: project.revisionId,
+    }
+
+  const openCollision = (selection: SceneSelectionTargetV4): void => {
+    resources.interaction.getState().select(selection)
+    setCurrentContextRequest(null)
+    setCollisionOpenRequest((value) => value + 1)
+  }
 
   return (
     <>
-      {import.meta.env.MODE === 'test' ? (
-        <>
-          <output data-testid="project-semantic-diagnostic" hidden>
-            {activeSnapshot === undefined || activeSnapshot === null
-              ? 'null'
-              : JSON.stringify(activeSnapshot)}
-          </output>
-          <output data-testid="scene-editor-diagnostic" hidden>
-            {isolatedSceneEntityId ?? 'null'}
-          </output>
-          <output data-testid="robot-joint-diagnostic" hidden>
-            {JSON.stringify(jointAnglesDeg)}
-          </output>
-        </>
-      ) : null}
-      <OperationFeedback />
-      <AppShell
-        projectMenu={<ProjectMenu />}
-        assetTree={
-          <SceneExplorer
-            onDelete={handleDeleteSceneEntity}
-            onOpenRobotCollision={() =>
-              setCollisionFocusRequest((value) => value + 1)}
-            onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
-            onOpenRobotMechanics={() => setIsRobotConfigurationOpen(true)}
-            onFitAll={fitAllSceneEntities}
-            onFocus={focusSceneEntity}
-            onOpenAxisSettings={() => {
-              selectSceneEntity('linear-axis:active')
-              setInspectorOpenRequest((value) => value + 1)
-            }}
-            onSelect={selectSceneEntity}
+      {commandError === null ? null : (
+        <p className="operation-feedback" role="alert">{commandError}</p>
+      )}
+      <AppShellV4
+        assetTree={(
+          <SceneExplorerV4
+            commands={resources.sceneCommands}
+            interaction={resources.interaction}
+            onContextRequest={setCurrentContextRequest}
+            onFocus={focusSelection}
+            project={project}
+            runtime={sceneRuntime}
           />
-        }
-        jobTree={<RobotJobList />}
-        bottomRail={
+        )}
+        bottomRail={(
           <BottomWorkspace
-            collision={<CollisionPanel focusRequest={collisionFocusRequest} />}
-            collisionCount={collisionCount}
-            collisionOpenRequest={collisionFocusRequest}
-            timeline={<Timeline
-              disabled={jointControlsDisabled}
-              source={simulationJointSource}
-            />}
-          />
-        }
-        bottomRailOpenRequest={collisionFocusRequest}
-        inspectorOpenRequest={inspectorOpenRequest}
-        controlsDisabled={controlsDisabled}
-        inspector={
-          selectedSceneEntityId === null ? (
-            <JointInspector
-              canSavePose={savePoseUnavailableReason === null}
-              disabled={jointControlsDisabled}
-              onReset={handleResetInteraction}
-              onSavePose={async () => {
-                await jobCommandService.saveCurrentPose(
-                  `Pose ${(activeJob?.poses.length ?? 0) + 1}`,
-                )
-              }}
-              savePoseUnavailableReason={savePoseUnavailableReason ?? undefined}
-              source={simulationJointSource}
-            />
-          ) : selectedSceneEntityId === 'robot:active' ? (
-          <RobotTargetInspector
-              mountContact={(
-                <RobotMountContactEditor
-                  configuration={activeSnapshot?.scene.robotMountContact ?? null}
-                  disabled={controlsDisabled}
-                />
-              )}
-              onOpenFrames={() => setIsCoordinateFramesOpen(true)}
-              onOpenGeometry={() => setIsRobotGeometryOpen(true)}
-              onOpenMechanics={() => setIsRobotConfigurationOpen(true)}
-              transform={
-                <SceneEntityInspector
-                  disabled={controlsDisabled}
-                  entityId={selectedSceneEntityId}
-                />
-              }
-            />
-          ) : selectedSceneEntityId === 'linear-axis:active' ? (
-            linearAxisSource === null ? null : (
-              <LinearAxisTargetInspector
-                disabled={controlsDisabled}
-                source={linearAxisSource}
+            collision={(
+              <CollisionPanelV4
+                jobRunning={anyJobRunning}
+                onFocus={focusSelection}
+                policy={runtimeBundle.active.collisionPolicy}
+                projectRevisionId={project.revisionId}
+                proxies={collisionProxies}
               />
-            )
-          ) : (
-            <SceneEntityInspector
-              disabled={controlsDisabled}
-              entityId={selectedSceneEntityId}
-            />
-          )
-        }
-        onOpenStepImport={() => setIsImportOpen(true)}
-        onOpenRobotImport={() => setIsRobotImportOpen(true)}
+            )}
+            collisionOpenRequest={collisionOpenRequest}
+            timeline={(
+              <TimelineV4
+                commands={resources.jobCommands}
+                disabled={controlsDisabled}
+                jobId={selectedJobId}
+                jobs={resources.jobs}
+                playback={runtimeBundle.active.jobs.playback}
+                project={project}
+                robotId={selectedRobotId}
+              />
+            )}
+          />
+        )}
+        bottomRailOpenRequest={collisionOpenRequest}
+        controlsDisabled={controlsDisabled}
+        inspector={(
+          <SceneEntityInspectorV4
+            interaction={resources.interaction}
+            jobCommands={resources.jobCommands}
+            jobs={resources.jobs}
+            project={project}
+            robots={resources.robots}
+            runtime={sceneRuntime}
+            sceneCommands={resources.sceneCommands}
+            selectedJobId={selectedJobId}
+            selection={interaction.selection}
+          />
+        )}
+        jobTree={(
+          <RobotJobListV4
+            commands={resources.jobCommands}
+            interaction={resources.interaction}
+            jobs={resources.jobs}
+            playback={runtimeBundle.active.jobs.playback}
+            project={project}
+            selectedRobotId={selectedRobotId}
+          />
+        )}
         onCreateBox={() => {
-          void runCreateSceneEntity(() => sceneCommandService.createBox({
-            name: 'Box', dimensionsM: [0.1, 0.1, 0.1], color: '#38BDF8',
+          void runCommand(() => resources.sceneCommands.createBox({
+            name: 'Box',
+            parentFrameId: placementFrameId,
+            localPose: IDENTITY_POSE_V4,
+            dimensionsM: [0.1, 0.1, 0.1],
+            color: '#38BDF8',
+            groupId: selectedGroupId,
           }))
         }}
         onCreateCylinder={() => {
-          void runCreateSceneEntity(() => sceneCommandService.createCylinder({
-            name: 'Cylinder', radiusM: 0.05, heightM: 0.1, color: '#38BDF8',
+          void runCommand(() => resources.sceneCommands.createCylinder({
+            name: 'Cylinder',
+            parentFrameId: placementFrameId,
+            localPose: IDENTITY_POSE_V4,
+            radiusM: 0.05,
+            heightM: 0.1,
+            color: '#38BDF8',
+            groupId: selectedGroupId,
           }))
         }}
         onCreateGroup={() => {
-          void runCreateSceneEntity(() => sceneCommandService.createGroup('Group'))
+          void runCommand(() => resources.sceneCommands.createGroup(
+            'Group',
+            selectedGroupId,
+          ))
         }}
-        linearAxisAvailable={axisRuntime === null}
-        onCreateLinearAxis={() => {
-          void runCreateSceneEntity(async () => {
-            await sceneCommandService.createLinearAxis({
-            direction: 'x', minPositionM: 0, maxPositionM: 2,
-            homePositionM: 0, currentPositionM: 0,
-            carriageEntityId: null, robotEntityId: null,
-            })
-            return 'linear-axis:active'
-          })
-        }}
-        onSourceModeChange={(mode) => {
-          useRobotStore.getState().stopPlayback()
-          setSourceMode(mode)
-        }}
-        sourceMode={sourceMode}
-        sourceQuality={sourceQuality}
-        viewport={
+        projectMenu={(
+          <ProjectMenuV4
+            gateway={currentGatewayPresentation}
+            mutations={resources.mutations}
+            store={resources.projectStore}
+          />
+        )}
+        robotSourceLabel={sourceLabelV4(selectedRobot?.jointSource ?? null)}
+        viewport={(
           <>
-            <SceneCanvas
-              {...(cameraCommandRequest === undefined ? {} : { cameraCommandRequest })}
-              linearAxisCommittedState={linearAxisCommittedState}
-              linearAxisSource={linearAxisSource}
-              onContextMenu={(entityId, position) => {
-                setViewportContextRequest({ entityId, position })
+            <SceneCanvasV4
+              {...(activeCameraRequest === undefined
+                ? {}
+                : { cameraRequest: activeCameraRequest })}
+              coordinateDisplay={resources.coordinateDisplay}
+              geometryRepository={resources.geometry}
+              interaction={resources.interaction}
+              onContextRequest={setCurrentContextRequest}
+              onRegistration={(value) => {
+                setRegistration(value === null ? null : {
+                  projectRevisionId: project.revisionId,
+                  value,
+                })
               }}
-              onStatusChange={setSceneStatus}
-              registerRig={setRobotRig}
-              registerInteractionController={(controller) => {
-                interactionControllerRef.current = controller
-              }}
+              onStatusChange={handleSceneStatusChange}
+              project={project}
+              sceneRuntime={sceneRuntime}
+              viewportPreferences={resources.viewportPreferences}
             />
-            {viewportContextRequest === undefined ? null : (
-              <SceneContextMenu
-                entityId={viewportContextRequest.entityId}
-                onDelete={handleDeleteSceneEntity}
-                onFitAll={fitAllSceneEntities}
-                onFocus={focusSceneEntity}
-                onClose={() => setViewportContextRequest(undefined)}
-                onIsolate={(entityId) => sceneEditorStore.getState().isolate(entityId)}
-                onOpenRobotCollision={() =>
-                  setCollisionFocusRequest((value) => value + 1)}
-                onOpenRobotGeometry={() => setIsRobotGeometryOpen(true)}
-                onOpenRobotMechanics={() => setIsRobotConfigurationOpen(true)}
-                onOpenAxisSettings={() => {
-                  selectSceneEntity('linear-axis:active')
-                  setInspectorOpenRequest((value) => value + 1)
+            {contextRequest === null ? null : (
+              <SceneContextMenuV4
+                commands={resources.sceneCommands}
+                defaultPlacementFrameId={placementFrameId}
+                interaction={resources.interaction}
+                onClose={() => setCurrentContextRequest(null)}
+                onFitAll={() => issueCameraRequest('fit-all')}
+                onFocus={focusSelection}
+                onOpenCollision={openCollision}
+                onOpenMovingFrame={(entityId, frameId) => {
+                  resources.interaction.getState().select({
+                    kind: 'entity-frame',
+                    entityId,
+                    frameId,
+                  })
+                  setCurrentContextRequest(null)
                 }}
-                position={viewportContextRequest.position}
+                onOpenRobotBase={(robotId: RobotIdV4) => {
+                  resources.interaction.getState().select({
+                    kind: 'robot',
+                    robotId,
+                  })
+                  setCurrentContextRequest(null)
+                }}
+                project={project}
+                request={contextRequest}
+                runtime={sceneRuntime}
               />
             )}
           </>
-        }
+        )}
         viewportBusy={sceneStatus === 'loading'}
-      />
-      <ImportStepDialog
-        cache={importedGeometryRepository}
-        client={stepImportClient}
-        commands={sceneCommandService}
-        {...(stepImportUnavailableReason === undefined
-          ? {}
-          : { importUnavailableReason: stepImportUnavailableReason })}
-        onClose={() => setIsImportOpen(false)}
-        onSelect={(id) => selectSceneEntity(`object:${id}`)}
-        open={isImportOpen}
-      />
-      <RobotImportDialog
-        onClose={() => setIsRobotImportOpen(false)}
-        open={isRobotImportOpen}
-      />
-      <RobotConfigurationDialog
-        onClose={() => setIsRobotConfigurationOpen(false)}
-        open={isRobotConfigurationOpen}
-      />
-      <RobotGeometryDialog
-        onClose={() => setIsRobotGeometryOpen(false)}
-        open={isRobotGeometryOpen}
-      />
-      <CoordinateFramesDialog
-        onClose={() => setIsCoordinateFramesOpen(false)}
-        open={isCoordinateFramesOpen}
-        rig={robotRig}
       />
     </>
   )

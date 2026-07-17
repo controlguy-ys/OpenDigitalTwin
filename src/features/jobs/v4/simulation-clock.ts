@@ -13,6 +13,8 @@ export interface RobotJobPlaybackControllerV4 {
   startJob(jobId: RobotJobIdV4): { readonly runId: string }
   cancelRobotJob(robotId: RobotIdV4, reason: string): void
   ensureRunning(): void
+  quiesce(): Promise<void>
+  resume(): void
   dispose(): void
 }
 
@@ -27,9 +29,17 @@ export function createRobotJobPlaybackControllerV4(
   options: RobotJobPlaybackControllerOptionsV4,
 ): RobotJobPlaybackControllerV4 {
   let disposed = false
+  let quiesced = false
   let scheduledHandle: number | null = null
   let scheduleGeneration = 0
   let inFlight: Promise<void> | null = null
+  let lastIssuedSimulationMs: number | null = null
+
+  const nondecreasingSimulationMs = (candidate: number): number => (
+    lastIssuedSimulationMs === null
+      ? candidate
+      : Math.max(lastIssuedSimulationMs, candidate)
+  )
 
   const hasRunningRobot = (): boolean => Object.values(
     options.jobs.getState().byRobotId,
@@ -53,7 +63,13 @@ export function createRobotJobPlaybackControllerV4(
   }
 
   const ensureRunning = (): void => {
-    if (disposed || scheduledHandle !== null || inFlight !== null || !hasRunningRobot()) return
+    if (
+      disposed
+      || quiesced
+      || scheduledHandle !== null
+      || inFlight !== null
+      || !hasRunningRobot()
+    ) return
     const generation = ++scheduleGeneration
     let handle = -1
     handle = options.scheduler.request((simulationMs) => {
@@ -61,7 +77,9 @@ export function createRobotJobPlaybackControllerV4(
       scheduledHandle = null
       let advancing: Promise<void>
       try {
-        advancing = Promise.resolve(options.executor.advanceAll(simulationMs))
+        const issuedSimulationMs = nondecreasingSimulationMs(simulationMs)
+        advancing = Promise.resolve(options.executor.advanceAll(issuedSimulationMs))
+        lastIssuedSimulationMs = issuedSimulationMs
       } catch (error) {
         advancing = Promise.reject(error)
       }
@@ -83,7 +101,9 @@ export function createRobotJobPlaybackControllerV4(
   const controller: RobotJobPlaybackControllerV4 = {
     startJob(jobId) {
       if (disposed) throw new Error('Robot Job playback controller is disposed.')
-      const started = options.executor.startJob(jobId, options.scheduler.now())
+      const simulationMs = nondecreasingSimulationMs(options.scheduler.now())
+      const started = options.executor.startJob(jobId, simulationMs)
+      lastIssuedSimulationMs = simulationMs
       ensureRunning()
       return started
     },
@@ -96,9 +116,26 @@ export function createRobotJobPlaybackControllerV4(
 
     ensureRunning,
 
+    quiesce() {
+      if (disposed) return Promise.resolve()
+      quiesced = true
+      cancelScheduled()
+      const pending = inFlight
+      return pending === null
+        ? Promise.resolve()
+        : pending.then(() => undefined, () => undefined)
+    },
+
+    resume() {
+      if (disposed) return
+      quiesced = false
+      ensureRunning()
+    },
+
     dispose() {
       if (disposed) return
       disposed = true
+      quiesced = true
       cancelScheduled()
     },
   }

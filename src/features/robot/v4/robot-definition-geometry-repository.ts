@@ -122,6 +122,7 @@ export interface RobotDefinitionGeometryPublicationHandleV4 {
 export interface RobotDefinitionGeometryPublicationSnapshotV4 {
   readonly definitionId: RobotDefinitionIdV4
   readonly handle: RobotDefinitionGeometryPublicationHandleV4
+  readonly resolution: 'RESOLVED' | 'UNRESOLVED'
   readonly triangleCount: number
 }
 
@@ -139,6 +140,10 @@ export interface RobotDefinitionGeometryRepositoryV4 {
   stage(
     definition: RobotDefinitionV4,
     geometry: PreparedRobotDefinitionGeometryV4,
+  ): RobotDefinitionGeometryPublicationHandleV4
+  stageUnresolved(
+    definition: RobotDefinitionV4,
+    declaredTriangleCount: number,
   ): RobotDefinitionGeometryPublicationHandleV4
   commitBatch(
     handles: readonly RobotDefinitionGeometryPublicationHandleV4[],
@@ -162,7 +167,9 @@ type PublicationStateV4 = 'STAGED' | 'COMMITTED' | 'ROLLED_BACK' | 'REVOKED'
 interface PublicationGenerationV4 {
   readonly generation: number
   readonly definition: GeometryDefinitionSnapshotV4
-  readonly geometry: PreparedRobotDefinitionGeometryV4
+  readonly geometry: PreparedRobotDefinitionGeometryV4 | null
+  readonly resolution: 'RESOLVED' | 'UNRESOLVED'
+  readonly triangleCount: number
   readonly handle: RobotDefinitionGeometryPublicationHandleV4
   state: PublicationStateV4
   leaseCount: number
@@ -325,6 +332,14 @@ function createLeaseV4(
   generation: PublicationGenerationV4,
   robotId: RobotIdV4,
 ): AcquiredRobotDefinitionGeometryV4 {
+  const geometry = generation.geometry
+  if (geometry === null) {
+    repositoryFailureV4(
+      'ROBOT_GEOMETRY_UNRESOLVED',
+      '$.geometry',
+      'An unresolved Geometry generation cannot be acquired.',
+    )
+  }
   const encodedRobotId = encodeRuntimeIdentitySegmentV4(robotId)
   const instanceRoot = new Group()
   instanceRoot.name = `robot:${encodedRobotId}`
@@ -334,7 +349,7 @@ function createLeaseV4(
     for (const link of generation.definition.links) {
       const linkRoot = new Group()
       linkRoot.name = `robot-link:${encodedRobotId}:${link.encodedId}`
-      const template = generation.geometry.linkTemplates.get(link.id)!
+      const template = geometry.linkTemplates.get(link.id)!
       linkRoot.add(cloneTemplateForLeaseV4(template, mutableMaterials))
       linkRoots.set(link.id, linkRoot)
     }
@@ -362,7 +377,7 @@ function createLeaseV4(
     publicationHandle: generation.handle,
     instanceRoot,
     linkRoots: linkRootsView,
-    sharedGeometry: generation.geometry.sharedGeometry,
+    sharedGeometry: geometry.sharedGeometry,
     release: () => {
       if (released) return
       released = true
@@ -386,6 +401,7 @@ function disposeRetiredGenerationV4(generation: PublicationGenerationV4): void {
     generation.leaseCount === 0
     && (generation.state === 'ROLLED_BACK' || generation.state === 'REVOKED')
   ) {
+    if (generation.geometry === null) return
     const authority = preparedGeometryAuthorityV4.get(generation.geometry)
     if (authority === undefined) {
       repositoryFailureV4(
@@ -450,33 +466,68 @@ export function createRobotDefinitionGeometryRepositoryV4(
     else currentByDefinition.set(definitionId, fallback)
   }
 
+  const createPublication = (
+    definition: RobotDefinitionV4,
+    geometry: PreparedRobotDefinitionGeometryV4 | null,
+    resolution: 'RESOLVED' | 'UNRESOLVED',
+    triangleCount: number,
+  ): RobotDefinitionGeometryPublicationHandleV4 => {
+    const definitionSnapshot = snapshotGeometryDefinitionV4(definition)
+    if (generationCounter >= Number.MAX_SAFE_INTEGER) {
+      repositoryFailureV4(
+        'ROBOT_GEOMETRY_PUBLICATION_GENERATION_EXHAUSTED',
+        '$.generation',
+        'Robot Geometry publication generation cannot be safely incremented.',
+      )
+    }
+    const generation = generationCounter + 1
+    const handle = Object.freeze({
+      kind: 'robot-definition-geometry-publication-v4' as const,
+    })
+    const publication: PublicationGenerationV4 = {
+      generation,
+      definition: definitionSnapshot,
+      geometry,
+      resolution,
+      triangleCount,
+      handle,
+      state: 'STAGED',
+      leaseCount: 0,
+    }
+    generationCounter = generation
+    authorityByHandle.set(handle, publication)
+    return handle
+  }
+
   return {
     stage: (definition, geometry) => {
       const preparedAuthority = validateStageCandidateV4(definition, geometry)
-      const definitionSnapshot = snapshotGeometryDefinitionV4(definition)
-      if (generationCounter >= Number.MAX_SAFE_INTEGER) {
+      const handle = createPublication(
+        definition,
+        geometry,
+        'RESOLVED',
+        geometry.triangleCount,
+      )
+      preparedAuthority.repositoryOwned = true
+      return handle
+    },
+    stageUnresolved: (definition, declaredTriangleCount) => {
+      if (
+        !Number.isSafeInteger(declaredTriangleCount)
+        || declaredTriangleCount < 0
+      ) {
         repositoryFailureV4(
-          'ROBOT_GEOMETRY_PUBLICATION_GENERATION_EXHAUSTED',
-          '$.generation',
-          'Robot Geometry publication generation cannot be safely incremented.',
+          'ROBOT_GEOMETRY_TRIANGLE_COUNT_INVALID',
+          '$.declaredTriangleCount',
+          'Declared unresolved Geometry triangle count must be a non-negative safe integer.',
         )
       }
-      const generation = generationCounter + 1
-      const handle = Object.freeze({
-        kind: 'robot-definition-geometry-publication-v4' as const,
-      })
-      const publication: PublicationGenerationV4 = {
-        generation,
-        definition: definitionSnapshot,
-        geometry,
-        handle,
-        state: 'STAGED',
-        leaseCount: 0,
-      }
-      generationCounter = generation
-      preparedAuthority.repositoryOwned = true
-      authorityByHandle.set(handle, publication)
-      return handle
+      return createPublication(
+        definition,
+        null,
+        'UNRESOLVED',
+        declaredTriangleCount,
+      )
     },
     commitBatch: (handles) => {
       if (handles.length === 0 || new Set(handles).size !== handles.length) {
@@ -527,7 +578,8 @@ export function createRobotDefinitionGeometryRepositoryV4(
         : Object.freeze({
             definitionId,
             handle: generation.handle,
-            triangleCount: generation.geometry.triangleCount,
+            resolution: generation.resolution,
+            triangleCount: generation.triangleCount,
           })
     },
     acquire: (definitionId, robotId, publicationHandle) => {
@@ -537,6 +589,7 @@ export function createRobotDefinitionGeometryRepositoryV4(
       if (
         generation === undefined
         || generation.definition.id !== definitionId
+        || generation.resolution === 'UNRESOLVED'
         || (generation.state !== 'STAGED' && generation.state !== 'COMMITTED')
       ) {
         return null

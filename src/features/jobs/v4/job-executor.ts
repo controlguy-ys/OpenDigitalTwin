@@ -47,6 +47,7 @@ export interface RobotJobExecutorV4 {
   readState(robotId: string): RobotJobRuntimeStateV4
   waitForTerminal(runId: string): Promise<RobotJobTerminalResultV4>
   reset(): void
+  shutdown(reason?: string): void
 }
 
 export interface RobotJobExecutorDependenciesV4 {
@@ -77,6 +78,13 @@ interface ActiveJobSessionV4 {
   } | null
 }
 
+interface JobRunIdentityV4 {
+  readonly robotId: string
+  readonly jobId: string
+  readonly runId: string
+  readonly startedAtSimulationMs: number
+}
+
 function executorFailure(code: string, path: string, message: string): never {
   failProjectV4(code, path, message, 'Correct the Job execution request and try again.')
 }
@@ -103,6 +111,7 @@ export function createRobotJobExecutorV4(
   const sessions = new Map<string, ActiveJobSessionV4>()
   const chains = new Map<string, Promise<void>>()
   const knownRunIds = new Set<string>()
+  const runIdentities = new Map<string, JobRunIdentityV4>()
   const terminalResults = new Map<string, RobotJobTerminalResultV4>()
   const terminalWaiters = new Map<
     string,
@@ -110,8 +119,16 @@ export function createRobotJobExecutorV4(
   >()
   let latestAcceptedSimulationMs: number | null = null
   let resetInProgress = false
+  let shutDown = false
 
   const assertRuntimeMutable = (): void => {
+    if (shutDown) {
+      executorFailure(
+        'JOB_EXECUTOR_DISPOSED',
+        '$.jobRuntime',
+        'Job executor has been shut down and cannot be used again.',
+      )
+    }
     if (resetInProgress) {
       executorFailure(
         'JOB_RUNTIME_RESET_IN_PROGRESS',
@@ -213,6 +230,29 @@ export function createRobotJobExecutorV4(
       failureCode,
       message,
     })
+    return result
+  }
+
+  const settleDetachedTerminal = (
+    identity: JobRunIdentityV4,
+    completedAtSimulationMs: number,
+    message: string,
+  ): RobotJobTerminalResultV4 => {
+    const existing = terminalResults.get(identity.runId)
+    if (existing !== undefined) return existing
+    const result: RobotJobTerminalResultV4 = Object.freeze({
+      robotId: identity.robotId,
+      jobId: identity.jobId,
+      runId: identity.runId,
+      state: 'CANCELLED',
+      completedAtSimulationMs,
+      failureCode: null,
+      message,
+    })
+    terminalResults.set(identity.runId, result)
+    const waiters = terminalWaiters.get(identity.runId) ?? []
+    terminalWaiters.delete(identity.runId)
+    waiters.forEach((resolve) => resolve(result))
     return result
   }
 
@@ -414,6 +454,12 @@ export function createRobotJobExecutorV4(
       }
       latestAcceptedSimulationMs = simulationMs
       knownRunIds.add(runId)
+      runIdentities.set(runId, {
+        robotId: robot.id,
+        jobId: job.id,
+        runId,
+        startedAtSimulationMs: simulationMs,
+      })
       sessions.set(robot.id, session)
       dependencies.jobs.getState().setRobotState({
         robotId: robot.id,
@@ -446,6 +492,7 @@ export function createRobotJobExecutorV4(
     },
 
     readState(robotId) {
+      assertRuntimeMutable()
       return requireRuntimeState(robotId)
     },
 
@@ -495,6 +542,22 @@ export function createRobotJobExecutorV4(
         resetInProgress = false
       }
       if (publicationError !== undefined) throw publicationError
+    },
+
+    shutdown(reason = 'Job executor shut down.') {
+      if (shutDown) return
+      shutDown = true
+      const completedAt = latestAcceptedSimulationMs
+      sessions.clear()
+      chains.clear()
+      for (const identity of runIdentities.values()) {
+        if (terminalResults.has(identity.runId)) continue
+        settleDetachedTerminal(
+          identity,
+          completedAt ?? identity.startedAtSimulationMs,
+          reason,
+        )
+      }
     },
   }
 

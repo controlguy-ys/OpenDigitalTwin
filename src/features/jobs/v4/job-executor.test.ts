@@ -520,6 +520,53 @@ describe('RobotJobExecutorV4', () => {
     expect(robots.getState().robots['robot-A']?.jointValues).toEqual({ 'axis.A': 33 })
   })
 
+  it('shuts down terminally, settles pending waiters, and never republishes captured runtime state', async () => {
+    const gate = deferred<void>()
+    const project = projectForJobs([{
+      id: 'dispose-a', robotId: 'robot-A', steps: [action('hold-a'), pose('axis.A', 100)],
+    }], [robotAction('hold-a', 'robot-A')])
+    const { executor, robots, jobs } = harness(project, { execute: async () => gate.promise })
+    const { runId } = executor.startJob('dispose-a', 50)
+    const waiter = executor.waitForTerminal(runId)
+    const advancing = executor.advanceAll(60)
+    await Promise.resolve()
+    const jobsBeforeShutdown = jobs.getState()
+    const robotsBeforeShutdown = robots.getState()
+
+    executor.shutdown('Project runtime replaced.')
+    executor.shutdown('duplicate shutdown')
+
+    const terminal = await waiter
+    expect(terminal).toMatchObject({
+      robotId: 'robot-A',
+      jobId: 'dispose-a',
+      runId,
+      state: 'CANCELLED',
+      completedAtSimulationMs: 60,
+      failureCode: null,
+      message: 'Project runtime replaced.',
+    })
+    expect(await executor.waitForTerminal(runId)).toBe(terminal)
+    expect(jobs.getState()).toBe(jobsBeforeShutdown)
+    expect(robots.getState()).toBe(robotsBeforeShutdown)
+
+    expectProjectError(() => executor.startJob('dispose-a', 60), 'JOB_EXECUTOR_DISPOSED')
+    await expect(executor.advanceAll(60)).rejects.toMatchObject({
+      code: 'JOB_EXECUTOR_DISPOSED',
+    })
+    expectProjectError(
+      () => executor.cancelRobotJob('robot-A', 'stale cancel'),
+      'JOB_EXECUTOR_DISPOSED',
+    )
+    expectProjectError(() => executor.readState('robot-A'), 'JOB_EXECUTOR_DISPOSED')
+    expectProjectError(() => executor.reset(), 'JOB_EXECUTOR_DISPOSED')
+
+    gate.resolve(undefined)
+    await advancing
+    expect(jobs.getState()).toBe(jobsBeforeShutdown)
+    expect(robots.getState()).toBe(robotsBeforeShutdown)
+  })
+
   it('guards the whole reset transaction and publishes one completion time before notifications', async () => {
     const gateA = deferred<void>()
     const gateB = deferred<void>()

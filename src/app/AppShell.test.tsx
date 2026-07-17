@@ -1,57 +1,21 @@
-import { StrictMode } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { simulationJointSource } from '../features/joints/SimulationJointSource'
-import { useRobotStore } from '../features/joints/robot-store'
-import {
-  projectAtLimit,
-} from '../core/project-v4/test-support.js'
-import {
-  validateWorkcellProjectV4,
-} from '../core/project-v4/index.js'
-import { createInteractionStoreV4 } from '../features/interaction/v4/interaction-store.js'
-import type { JobCommandServiceV4 } from '../features/jobs/v4/job-command-service.js'
-import { RobotJobListV4 } from '../features/jobs/v4/RobotJobList.js'
-import { createJobRuntimeStoreV4 } from '../features/jobs/v4/job-runtime-store.js'
-import type { RobotJobPlaybackControllerV4 } from '../features/jobs/v4/simulation-clock.js'
-import { createRobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
-import type { SceneCommandServiceV4 } from '../features/scene/v4/scene-command-service.js'
-import { SceneEntityInspectorV4 } from '../features/scene/v4/SceneEntityInspector.js'
-import { SceneExplorerV4 } from '../features/scene/v4/SceneExplorer.js'
-import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selector.js'
-import { TimelineV4 } from '../features/ui/v4/Timeline.js'
-import { App, RobotTargetInspector } from './App'
-import { AppShell } from './AppShell'
 
-vi.mock('../features/scene/SceneCanvas', () => ({
-  SceneCanvas: ({
-    onStatusChange,
-  }: {
-    onStatusChange?: (status: 'ready') => void
-  }) => (
-    <button
-      aria-label="Scene ready"
-      onClick={() => {
-        onStatusChange?.('ready')
-      }}
-      type="button"
-    />
-  ),
-}))
+import { AppShellV4 } from './AppShell.js'
 
-describe('AppShell', () => {
+describe('AppShellV4', () => {
   beforeEach(() => {
     localStorage.clear()
-    useRobotStore.getState().reset()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('renders the five industrial workstation regions', () => {
-    render(<AppShell viewport={<div>3D viewport</div>} />)
+  it('renders the five bounded industrial workstation regions', () => {
+    render(<AppShellV4 viewport={<div>3D viewport</div>} />)
+
     expect(screen.getByRole('banner')).toHaveTextContent('RobotSim')
     expect(screen.getByLabelText('Scene Assets')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Scene Objects' })).toBeInTheDocument()
@@ -61,114 +25,76 @@ describe('AppShell', () => {
     expect(screen.getByLabelText('Timeline and Events')).toBeInTheDocument()
   })
 
-  it('opens the responsive drawers and bottom sheet from their controls', async () => {
+  it('exposes only Box, Cylinder, and Group from Add', async () => {
     const user = userEvent.setup()
-    const { getByLabelText, getByRole } = render(
-      <AppShell viewport={<div>3D viewport</div>} />,
+    const createBox = vi.fn()
+    const createCylinder = vi.fn()
+    const createGroup = vi.fn()
+    render(
+      <AppShellV4
+        onCreateBox={createBox}
+        onCreateCylinder={createCylinder}
+        onCreateGroup={createGroup}
+        viewport={<div>3D viewport</div>}
+      />,
     )
 
-    const controls = [
-      getByRole('button', { name: 'Scene Assets drawer' }),
-      getByRole('button', { name: 'Inspector drawer' }),
-      getByRole('button', { name: 'Timeline and Events sheet' }),
-    ]
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Box',
+      'Cylinder',
+      'Group',
+    ])
+    expect(screen.queryByText('Import STEP')).not.toBeInTheDocument()
+    expect(screen.queryByText('Import Robot')).not.toBeInTheDocument()
+    expect(screen.queryByText('Linear Axis')).not.toBeInTheDocument()
 
+    await user.click(screen.getByRole('menuitem', { name: 'Box' }))
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Cylinder' }))
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Group' }))
+
+    expect(createBox).toHaveBeenCalledOnce()
+    expect(createCylinder).toHaveBeenCalledOnce()
+    expect(createGroup).toHaveBeenCalledOnce()
+  })
+
+  it('shows the selected Robot source as read-only text', () => {
+    render(
+      <AppShellV4
+        robotSourceLabel="Simulation"
+        viewport={<div>3D viewport</div>}
+      />,
+    )
+
+    expect(screen.getByText('Joint source: Simulation')).toBeVisible()
+    expect(screen.queryByRole('combobox', { name: 'Joint source' })).not.toBeInTheDocument()
+  })
+
+  it('opens the responsive drawers and bottom sheet from their controls', async () => {
+    const user = userEvent.setup()
+    render(<AppShellV4 viewport={<div>3D viewport</div>} />)
+
+    const controls = [
+      screen.getByRole('button', { name: 'Scene Assets drawer' }),
+      screen.getByRole('button', { name: 'Inspector drawer' }),
+      screen.getByRole('button', { name: 'Timeline and Events sheet' }),
+    ]
     for (const control of controls) {
       expect(control).toHaveAttribute('aria-expanded', 'false')
       await user.click(control)
       expect(control).toHaveAttribute('aria-expanded', 'true')
-      await user.click(control)
-      expect(control).toHaveAttribute('aria-expanded', 'false')
-      await user.click(control)
     }
-
-    expect(getByLabelText('Scene Assets')).toHaveClass('is-open')
-    expect(getByLabelText('Inspector')).toHaveClass('is-open')
-    expect(getByLabelText('Timeline and Events')).toHaveClass('is-open')
-  })
-
-  it('hides collapsed bottom content and restores viewport space on desktop', async () => {
-    const user = userEvent.setup()
-    render(
-      <AppShell
-        bottomRail={<button type="button">Bottom action</button>}
-        viewport={<div>3D viewport</div>}
-      />,
-    )
-
-    const shell = screen.getByLabelText('3D viewport').closest('.app-shell')
-    const control = screen.getByRole('button', { name: 'Timeline and Events sheet' })
-    const rail = screen.getByLabelText('Timeline and Events')
-    const content = screen.getByRole('button', { name: 'Bottom action', hidden: true })
-      .closest('.bottom-rail-content')
-
-    expect(control).toHaveAttribute('aria-expanded', 'false')
-    expect(shell).not.toHaveClass('is-bottom-rail-open')
-    expect(rail).toHaveAttribute('aria-hidden', 'true')
-    expect(content).toHaveAttribute('hidden')
-
-    await user.click(control)
-
-    expect(control).toHaveAttribute('aria-expanded', 'true')
-    expect(shell).toHaveClass('is-bottom-rail-open')
-    expect(rail).toHaveAttribute('aria-hidden', 'false')
-    expect(content).not.toHaveAttribute('hidden')
-    expect(localStorage.getItem('robotsim.bottomDrawerOpen')).toBe('true')
-  })
-
-  it('exposes when scene-dependent controls are not ready', () => {
-    render(<AppShell controlsDisabled viewport={<div>3D viewport</div>} />)
-
-    const viewport = screen.getByLabelText('3D viewport')
-    expect(viewport).toHaveAttribute('aria-busy', 'true')
-    expect(viewport.closest('.app-shell')).toHaveAttribute(
-      'data-controls-disabled',
-      'true',
-    )
-    expect(screen.getByRole('button', { name: 'Add' })).toBeEnabled()
-  })
-
-  it('consolidates imports and primitives in one Add menu', async () => {
-    const user = userEvent.setup()
-    const onOpenStepImport = vi.fn()
-    render(
-      <AppShell
-        onOpenStepImport={onOpenStepImport}
-        viewport={<div>3D viewport</div>}
-      />,
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Add' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Import STEP' }))
-
-    expect(onOpenStepImport).toHaveBeenCalledTimes(1)
-    expect(screen.queryByRole('button', { name: 'Robot Config' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Robot Geometry' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Coordinate Frames' })).not.toBeInTheDocument()
-  })
-
-  it('creates the single manual Linear Axis from the reachable Add menu', async () => {
-    const user = userEvent.setup()
-    const onCreateLinearAxis = vi.fn()
-    render(
-      <AppShell
-        onCreateLinearAxis={onCreateLinearAxis}
-        viewport={<div>3D viewport</div>}
-      />,
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Add' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Linear Axis' }))
-
-    expect(onCreateLinearAxis).toHaveBeenCalledOnce()
+    expect(screen.getByLabelText('Scene Assets')).toHaveClass('is-open')
+    expect(screen.getByLabelText('Inspector')).toHaveClass('is-open')
+    expect(screen.getByLabelText('Timeline and Events')).toHaveClass('is-open')
   })
 
   it('keeps the document fixed while named work areas own scrolling', () => {
     render(
-      <AppShell
-        assetTree={<div>Scene tree</div>}
+      <AppShellV4
         bottomRail={<div>Bottom content</div>}
-        jobTree={<div>Job tree</div>}
         viewport={<div>3D viewport</div>}
       />,
     )
@@ -179,316 +105,36 @@ describe('AppShell', () => {
       height: '100dvh',
       overflow: 'hidden',
     })
-    expect(screen.getByRole('region', { name: 'Robot Jobs' })).toHaveClass('sidebar-pane')
     expect(screen.getByLabelText('Timeline and Events')).toContainElement(
       screen.getByText('Bottom content'),
     )
   })
 
-  it('bounds the complete dark V4 workspace with an adjustable split and theme-only preferences', async () => {
-    const user = userEvent.setup()
-    const robotsSource = projectAtLimit('robots', 8)
-    const entitiesSource = projectAtLimit('spatialEntities', 256)
-    const project = validateWorkcellProjectV4({
-      ...robotsSource,
-      revisionId: 'revision-v4-shell-presentation',
-      spatialEntities: entitiesSource.spatialEntities,
-      jobs: Array.from({ length: 32 }, (_, index) => ({
-        id: `job-${index + 1}`,
-        name: `Job ${index + 1}`,
-        robotId: `robot-${index % 8 + 1}`,
-        steps: [{
-          kind: 'joint-pose' as const,
-          jointValues: { J1: index },
-          speedPercentToNext: 100,
-        }],
-      })),
-    })
-    const robots = createRobotRuntimeRegistryV4()
-    robots.getState().replaceProject(project)
-    const jobs = createJobRuntimeStoreV4()
-    jobs.getState().replaceProject(project)
-    const interaction = createInteractionStoreV4()
-    interaction.getState().replaceProject(project)
-    interaction.getState().select({ kind: 'robot', robotId: 'robot-1' })
-    interaction.getState().selectJob('robot-1', 'job-1')
-    const runtime = selectSceneRuntimeV4(project, robots.getState())
-    const sceneCommands = {} as SceneCommandServiceV4
-    const jobCommands = {} as JobCommandServiceV4
-    const playback: RobotJobPlaybackControllerV4 = {
-      startJob: vi.fn(() => ({ runId: 'unused' })),
-      cancelRobotJob: vi.fn(),
-      ensureRunning: vi.fn(),
-      dispose: vi.fn(),
-    }
-    const projectBefore = JSON.stringify(project)
-    const runtimeBefore = runtime
-    localStorage.setItem('robotsim.theme', 'dark')
-    localStorage.setItem('robotsim.inspectorDrawerOpen', 'true')
-    localStorage.setItem('robotsim.bottomDrawerOpen', 'true')
-    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
-      matches: query === '(prefers-color-scheme: dark)',
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })))
-
+  it('persists the bounded Scene and Job split without changing Project state', () => {
     render(
-      <AppShell
-        assetTree={(
-          <SceneExplorerV4
-            commands={sceneCommands}
-            interaction={interaction}
-            onContextRequest={vi.fn()}
-            onFocus={vi.fn()}
-            project={project}
-            runtime={runtime}
-          />
-        )}
-        bottomRail={(
-          <TimelineV4
-            commands={jobCommands}
-            jobId="job-1"
-            jobs={jobs}
-            playback={playback}
-            project={project}
-            robotId="robot-1"
-          />
-        )}
-        inspector={(
-          <SceneEntityInspectorV4
-            interaction={interaction}
-            jobCommands={jobCommands}
-            jobs={jobs}
-            project={project}
-            robots={robots}
-            runtime={runtime}
-            sceneCommands={sceneCommands}
-            selectedJobId="job-1"
-            selection={{ kind: 'robot', robotId: 'robot-1' }}
-          />
-        )}
-        jobTree={(
-          <RobotJobListV4
-            commands={jobCommands}
-            interaction={interaction}
-            jobs={jobs}
-            playback={playback}
-            project={project}
-            selectedRobotId="robot-1"
-          />
-        )}
-        viewport={<div>V4 3D viewport</div>}
-      />,
-    )
-
-    const shell = screen.getByLabelText('3D viewport').closest('.app-shell')
-    const scenePane = screen.getByRole('region', { name: 'Scene Objects' })
-    const jobPane = screen.getByRole('region', { name: 'Robot Jobs' })
-    expect(shell).toHaveStyle({ height: '100dvh', overflow: 'hidden' })
-    expect(scenePane).toContainElement(screen.getByRole('tree', { name: 'Scene Objects' }))
-    expect(jobPane).toContainElement(screen.getByRole('tree', { name: 'Robot Jobs' }))
-    expect(screen.getByTestId('scene-tree-scroll')).toHaveStyle({
-      minHeight: 0,
-      overflow: 'auto',
-    })
-    expect(jobPane.querySelector('.robot-job-scroll')).toBeInTheDocument()
-    expect(screen.getByLabelText('Inspector')).toContainElement(
-      screen.getByLabelText('Robot inspector'),
-    )
-    expect(screen.getByLabelText('Timeline and Events')).toContainElement(
-      screen.getByRole('heading', { name: 'Timeline' }),
-    )
-    expect(screen.getByRole('button', { name: 'Entity 256' })).toBeInTheDocument()
-    expect(screen.getByRole('treeitem', { name: /Job 25/ })).toBeInTheDocument()
-    expect(screen.getByLabelText('Inspector')).toHaveClass('is-open')
-    expect(screen.getByLabelText('Timeline and Events')).toHaveClass('is-open')
-
-    const divider = screen.getByRole('separator', {
-      name: 'Resize Scene Objects and Robot Jobs',
-    })
-    for (let index = 0; index < 100; index += 1) {
-      fireEvent.keyDown(divider, { key: 'ArrowDown' })
-    }
-    expect(divider).toHaveAttribute('aria-valuenow', '75')
-    for (let index = 0; index < 100; index += 1) {
-      fireEvent.keyDown(divider, { key: 'ArrowUp' })
-    }
-    expect(divider).toHaveAttribute('aria-valuenow', '35')
-
-    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'light')
-    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'system')
-    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
-    expect(JSON.stringify(project)).toBe(projectBefore)
-    expect(runtime).toBe(runtimeBefore)
-  })
-
-  it('persists the draggable 60/40 split only in browser preferences', () => {
-    const activeProject = { simulation: { activeJobId: null, jobs: [] } }
-    const before = JSON.stringify(activeProject)
-    render(
-      <AppShell
+      <AppShellV4
         assetTree={<div>Scene tree</div>}
         jobTree={<div>Job tree</div>}
         viewport={<div>3D viewport</div>}
       />,
     )
-    const sidebar = screen.getByLabelText('Scene Assets')
-    vi.spyOn(sidebar, 'getBoundingClientRect').mockReturnValue({
-      bottom: 100,
-      height: 100,
-      left: 0,
-      right: 248,
-      top: 0,
-      width: 248,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
+    const splitter = screen.getByRole('separator', {
+      name: 'Resize Scene Objects and Robot Jobs',
     })
 
-    const divider = screen.getByRole('separator', { name: 'Resize Scene Objects and Robot Jobs' })
-    fireEvent.pointerDown(divider, { clientY: 60, pointerId: 1 })
-    fireEvent.pointerMove(window, { clientY: 55, pointerId: 1 })
-    fireEvent.pointerUp(window, { pointerId: 1 })
+    fireEvent.keyDown(splitter, { key: 'ArrowDown' })
 
-    expect(divider).toHaveAttribute('aria-valuenow', '55')
-    expect(localStorage.getItem('robotsim.sidebarSplitPercent')).toBe('55')
-    expect(JSON.stringify(activeProject)).toBe(before)
-    expect(JSON.stringify(activeProject)).not.toContain('sidebarSplitPercent')
+    expect(splitter).toHaveAttribute('aria-valuenow', '61')
+    expect(localStorage.getItem('robotsim.sidebarSplitPercent')).toBe('61')
   })
 
-  it('keeps Robot editors out of the permanent top bar', () => {
-    render(<AppShell viewport={<div>3D viewport</div>} />)
-
-    expect(screen.queryByRole('button', { name: 'Coordinate Frames' })).not.toBeInTheDocument()
-  })
-
-  it('moves Robot Mechanics, Geometry, and Frames into target-specific Inspector tabs', async () => {
+  it('separates control gating from the viewport error state and blocks Add', async () => {
     const user = userEvent.setup()
-    const openMechanics = vi.fn()
+    const createBox = vi.fn()
     render(
-      <RobotTargetInspector
-        onOpenFrames={vi.fn()}
-        onOpenGeometry={vi.fn()}
-        onOpenMechanics={openMechanics}
-        transform={<div>Transform editor</div>}
-      />,
-    )
-
-    expect(screen.getByRole('tablist', { name: 'Robot Inspector editors' })).toBeVisible()
-    expect(screen.getByRole('tabpanel', { name: 'Transform' })).toHaveTextContent('Transform editor')
-    await user.click(screen.getByRole('tab', { name: 'Mechanics' }))
-    expect(screen.getByRole('tabpanel', { name: 'Mechanics' })).toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'Open Mechanics editor' }))
-    expect(openMechanics).toHaveBeenCalledOnce()
-  })
-
-  it('uses roving focus for Robot Inspector tabs', async () => {
-    const user = userEvent.setup()
-    render(
-      <RobotTargetInspector
-        onOpenFrames={vi.fn()}
-        onOpenGeometry={vi.fn()}
-        onOpenMechanics={vi.fn()}
-        transform={<div>Transform editor</div>}
-      />,
-    )
-    const transform = screen.getByRole('tab', { name: 'Transform' })
-    const frames = screen.getByRole('tab', { name: 'Frames' })
-
-    transform.focus()
-    await user.keyboard('{ArrowLeft}')
-    expect(frames).toHaveFocus()
-    expect(frames).toHaveAttribute('aria-selected', 'true')
-    await user.keyboard('{Home}')
-    expect(transform).toHaveFocus()
-  })
-
-  it('selects the compact disclosure at exactly 960px and reveals every long-project control', async () => {
-    const user = userEvent.setup()
-    const matchMedia = vi.fn((query: string) => ({
-      matches: query === '(max-width: 1199px)',
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    }))
-    vi.stubGlobal('matchMedia', matchMedia)
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 960 })
-    render(
-      <AppShell
-        projectMenu={(
-          <div aria-label="Project controls" className="project-menu">
-            <span className="project-name">
-              Extremely Long Manufacturing Workcell Project Name That Must Be Bounded
-            </span>
-            <button type="button">Project</button>
-          </div>
-        )}
-        sourceQuality="UNCERTAIN"
-        viewport={<div>3D viewport</div>}
-      />,
-    )
-
-    const disclosure = screen.getByRole('button', { name: 'Top bar controls' })
-    expect(disclosure).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByRole('toolbar', { name: 'Top bar controls' })).not.toBeInTheDocument()
-    await user.click(disclosure)
-    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
-    const toolbar = screen.getByRole('toolbar', { name: 'Top bar controls' })
-    expect(toolbar).toHaveClass('is-open')
-    expect(disclosure.closest('.app-shell')).toHaveClass('is-compact-topbar')
-    expect(matchMedia).toHaveBeenCalledWith('(max-width: 1199px)')
-    expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Project' }))
-    expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Add' }))
-    expect(toolbar).toContainElement(screen.getByRole('combobox', { name: 'Joint source' }))
-    expect(toolbar).toContainElement(screen.getByRole('combobox', { name: 'Theme' }))
-    expect(toolbar).toHaveTextContent('UNCERTAIN')
-    expect(toolbar.querySelector('.project-name')).toHaveTextContent('Extremely Long')
-    expect(document.documentElement).toHaveStyle({ overflow: 'hidden' })
-  })
-
-  it('wires the top-bar action to the accessible import dialog', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-
-    await user.click(screen.getByRole('button', { name: 'Add' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Import STEP' }))
-    expect(screen.getByRole('dialog', { name: 'Import STEP' })).toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'Close import dialog' }))
-    expect(screen.queryByRole('dialog', { name: 'Import STEP' })).not.toBeInTheDocument()
-  })
-
-  it('composes Scene Objects, Robot Jobs, and mutually exclusive bottom tabs in App', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-
-    await user.click(screen.getByRole('button', { name: 'Timeline and Events sheet' }))
-
-    expect(screen.getByRole('region', { name: 'Scene Objects' })).toBeVisible()
-    expect(screen.getByRole('region', { name: 'Robot Jobs' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '+ New Job' })).toBeVisible()
-    expect(screen.getByRole('tabpanel', { name: 'Timeline' })).toBeVisible()
-    expect(screen.queryByRole('tabpanel', { name: 'Collision' })).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('tab', { name: /^Collision/ }))
-    expect(screen.getByRole('tabpanel', { name: 'Collision' })).toBeVisible()
-    expect(screen.queryByRole('tabpanel', { name: 'Timeline' })).not.toBeInTheDocument()
-  })
-
-  it('keeps controls disabled without marking an error fallback as busy', () => {
-    render(
-      <AppShell
+      <AppShellV4
         controlsDisabled
+        onCreateBox={createBox}
         viewport={<div>3D viewport</div>}
         viewportBusy={false}
       />,
@@ -500,71 +146,10 @@ describe('AppShell', () => {
       'data-controls-disabled',
       'true',
     )
-  })
-
-  it('keeps scene-dependent controls gated while the canvas loads', () => {
-    render(<App />)
-
-    const viewport = screen.getByLabelText('3D viewport')
-    expect(viewport).toHaveAttribute('aria-busy', 'true')
-    expect(viewport.closest('.app-shell')).toHaveAttribute(
-      'data-controls-disabled',
-      'true',
-    )
-  })
-
-  it('mounts the inspector and timeline and gates pose capture until a Job exists', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-
-    await user.click(screen.getByRole('button', { name: 'Timeline and Events sheet' }))
-
-    expect(screen.getByRole('heading', { name: 'Inspector' })).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Timeline' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Robot Home' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Save Pose' })).toBeDisabled()
-    expect(screen.getByText(/create a Job/i)).toBeVisible()
-
-    await user.click(screen.getByRole('button', { name: 'Scene ready' }))
-    expect(screen.getByRole('button', { name: 'Robot Home' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
-  })
-
-  it('keeps exactly one live source subscription through StrictMode setup and cleanup', () => {
-    const subscriber = vi.fn()
-    const unsubscribe = useRobotStore.subscribe(subscriber)
-    const view = render(
-      <StrictMode>
-        <App />
-      </StrictMode>,
-    )
-
-    act(() => {
-      simulationJointSource.setAngles([10, 20, 30, 40, 50, 60])
-    })
-    expect(subscriber).toHaveBeenCalledTimes(1)
-    expect(useRobotStore.getState().anglesDeg).toEqual([10, 20, 30, 40, 50, 60])
-
-    view.unmount()
-    act(() => {
-      simulationJointSource.setAngles([0, 0, 0, 0, 0, 0])
-    })
-    expect(subscriber).toHaveBeenCalledTimes(1)
-    unsubscribe()
-  })
-
-  it('renders the current source quality in the top bar', () => {
-    render(
-      <AppShell
-        sourceQuality="STALE"
-        viewport={<div>3D viewport</div>}
-      />,
-    )
-
-    expect(screen.getByRole('status', { name: 'Joint source quality STALE' }))
-      .toHaveTextContent('JOINT STALE')
-    expect(screen.getByRole('banner')).toHaveTextContent('JOINT STALE')
-    expect(screen.getByRole('banner')).not.toHaveTextContent('GOOD')
+    const add = screen.getByRole('button', { name: 'Add' })
+    expect(add).toBeDisabled()
+    await user.click(add)
+    expect(screen.queryByRole('menu', { name: 'Add' })).not.toBeInTheDocument()
+    expect(createBox).not.toHaveBeenCalled()
   })
 })

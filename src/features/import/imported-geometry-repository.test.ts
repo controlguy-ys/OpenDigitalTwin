@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { EquipmentRecord } from '../../domain/equipment/equipment'
 import type { OcctSuccessResult } from '../../lib/cad/occt-types'
-import { ImportedGeometryRepository } from './imported-geometry-repository'
+import {
+  ImportedGeometryRepository,
+  type ImportedGeometrySourceRecord,
+} from './imported-geometry-repository'
 
 const RESULT: OcctSuccessResult = {
   success: true,
@@ -20,29 +22,13 @@ const RESULT: OcctSuccessResult = {
   ],
 }
 
-function importedRecord(id = 'imported-01'): EquipmentRecord {
+function importedRecord(id = 'imported-01'): ImportedGeometrySourceRecord {
   return {
     id,
-    name: 'Imported 01',
-    kind: 'imported',
-    status: 'OFF',
-    transform: {
-      position: [0, 0, 1.2],
-      quaternion: [0, 0, 0, 1],
-      scale: [1, 1, 1],
-    },
-    graspable: false,
-    collisionHalfExtents: [0.1, 0.05, 0.05],
-    stackLightAnchor: null,
+    sourceFileName: 'fixture.step',
     sourceBytes: new Uint8Array([1, 2, 3, 4]).buffer,
-    importMetadata: {
-      sourceFileName: 'fixture.step',
-      detectedUnit: 'unknown',
-      selectedSourceUnit: 'millimeter',
-      postImportScale: 0.001,
-      originMode: 'center',
-      colliderCenter: [0, 0, 0],
-    },
+    postImportScale: 0.001,
+    originMode: 'center',
   }
 }
 
@@ -160,15 +146,15 @@ describe('ImportedGeometryRepository', () => {
     expect(parse).toHaveBeenCalledTimes(2)
   })
 
-  it('rejects incomplete imported persistence metadata before parsing', async () => {
+  it('rejects an empty source before parsing', async () => {
     const parse = vi.fn(async () => RESULT)
     const repository = new ImportedGeometryRepository({ import: parse })
     const record = {
       ...importedRecord(),
-      importMetadata: undefined,
-    } as unknown as EquipmentRecord
+      sourceBytes: new ArrayBuffer(0),
+    }
 
-    await expect(repository.load(record)).rejects.toThrow(/metadata/i)
+    await expect(repository.load(record)).rejects.toThrow(/empty/i)
     expect(parse).not.toHaveBeenCalled()
   })
 })
