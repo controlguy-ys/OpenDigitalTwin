@@ -107,3 +107,14 @@ test('imports and operates the two-Robot V4 sample independently', async ({ page
   await startSelectedRobotJob(page, 'Linear Slide Traverse, 2 steps, 2 Joint Poses')
   await expectNumericValue(jointInput(page, SLIDE_NAME, 'SLIDE_X'), 1)
 })
+
+test('keeps compact edge rails when the desktop Inspector is initially closed', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 700 })
+  await page.goto('/')
+
+  const viewport = page.getByRole('main', { name: '3D viewport' })
+  await expect(viewport).toHaveAttribute('aria-busy', 'false')
+  await expect(page.getByRole('button', { name: 'Inspector drawer' })).toBeVisible()
+  await expect.poll(async () => (await viewport.boundingBox())?.x).toBeCloseTo(48, 0)
+  await expect.poll(async () => (await viewport.boundingBox())?.width).toBeCloseTo(704, 0)
+})

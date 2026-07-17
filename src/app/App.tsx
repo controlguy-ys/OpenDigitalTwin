@@ -45,6 +45,7 @@ import { SceneContextMenuV4 } from '../features/scene/v4/SceneContextMenu.js'
 import { SceneEntityInspectorV4 } from '../features/scene/v4/SceneEntityInspector.js'
 import { SceneExplorerV4 } from '../features/scene/v4/SceneExplorer.js'
 import type { SceneContextRequestV4 } from '../features/scene/v4/scene-context-request.js'
+import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selector.js'
 import type { WorkcellRegistrationV4 } from '../features/scene/v4/Workcell.js'
 import { BottomWorkspace } from '../features/ui/BottomWorkspace.js'
 import { TimelineV4 } from '../features/ui/v4/Timeline.js'
@@ -226,6 +227,11 @@ export function App({
   const revisionId = project?.revisionId ?? null
   const projectPublicationUsable = projectState.status !== 'loading'
     && projectState.status !== 'recovery-required'
+  const liveSceneRuntime = useMemo(() => (
+    project !== null && robotRuntime.projectRevisionId === project.revisionId
+      ? selectSceneRuntimeV4(project, robotRuntime)
+      : null
+  ), [project, robotRuntime])
   const ready = (
     projectPublicationUsable
     && project !== null
@@ -233,6 +239,7 @@ export function App({
     && runtimeBundle.active?.project.revisionId === revisionId
     && robotRuntime.projectRevisionId === revisionId
     && jobRuntime.projectRevisionId === revisionId
+    && liveSceneRuntime !== null
     && sceneStore.projectRevisionId === revisionId
     && sceneStore.projection?.projectRevisionId === revisionId
     && interaction.projectRevisionId === revisionId
@@ -479,7 +486,12 @@ export function App({
     }
   }, [])
 
-  if (!ready || project === null || runtimeBundle.active === null) {
+  if (
+    !ready
+    || project === null
+    || runtimeBundle.active === null
+    || liveSceneRuntime === null
+  ) {
     return (
       <RuntimePendingV4
         error={projectState.error ?? commandError}
@@ -488,7 +500,7 @@ export function App({
     )
   }
 
-  const sceneRuntime = runtimeBundle.active.sceneRuntime
+  const sceneRuntime = liveSceneRuntime
   const sceneStatus = sceneStatusState.projectRevisionId === project.revisionId
     ? sceneStatusState.status
     : 'loading'

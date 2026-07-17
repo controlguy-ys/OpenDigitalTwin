@@ -362,6 +362,19 @@ export function RobotJobListV4({
       {selectedRobotId === null ? (
         <div className="robot-job-scroll">
           <p>Select a Robot to view its Jobs.</p>
+          <div aria-label="Available Robots" className="robot-job-robot-picker">
+            {project.robots.map((robot) => (
+              <button
+                key={robot.id}
+                onClick={() => reportSyncFailure(() => {
+                  interaction.getState().select({ kind: 'robot', robotId: robot.id })
+                })}
+                type="button"
+              >
+                Control {robot.name}
+              </button>
+            ))}
+          </div>
         </div>
       ) : (
         <div className="robot-job-scroll">

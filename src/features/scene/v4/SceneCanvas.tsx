@@ -235,6 +235,14 @@ export function SceneCanvasV4({
             onPointerMissed={() => interaction.getState().clearSelection()}
             shadows="percentage"
           >
+            <ambientLight intensity={0.68} />
+            <directionalLight
+              castShadow
+              intensity={1.8}
+              position={[3.2, -2.4, 5]}
+              shadow-mapSize-height={2048}
+              shadow-mapSize-width={2048}
+            />
             <Suspense fallback={null}>
               <WorkcellV4
                 geometryRepository={geometryRepository}

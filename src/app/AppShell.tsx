@@ -19,6 +19,7 @@ const ASSET_DRAWER_KEY = 'robotsim.assetDrawerOpen'
 const INSPECTOR_DRAWER_KEY = 'robotsim.inspectorDrawerOpen'
 const BOTTOM_DRAWER_KEY = 'robotsim.bottomDrawerOpen'
 const COMPACT_TOP_BAR_QUERY = '(max-width: 1199px)'
+const DESKTOP_WORKSPACE_QUERY = '(min-width: 960px)'
 
 function compactTopBarPreference(): boolean {
   return globalThis.matchMedia?.(COMPACT_TOP_BAR_QUERY).matches ?? false
@@ -35,12 +36,17 @@ function browserNumber(key: string, fallback: number): number {
   }
 }
 
-function browserBoolean(key: string): boolean {
+function browserBoolean(key: string, fallback = false): boolean {
   try {
-    return localStorage.getItem(key) === 'true'
+    const raw = localStorage.getItem(key)
+    return raw === null ? fallback : raw === 'true'
   } catch {
-    return false
+    return fallback
   }
+}
+
+function desktopInspectorPreference(): boolean {
+  return globalThis.matchMedia?.(DESKTOP_WORKSPACE_QUERY).matches ?? false
 }
 
 function persistPreference(key: string, value: string): void {
@@ -89,7 +95,9 @@ export function AppShellV4({
   onCreateGroup,
 }: AppShellPropsV4) {
   const [isAssetRailOpen, setIsAssetRailOpen] = useState(() => browserBoolean(ASSET_DRAWER_KEY))
-  const [isInspectorOpen, setIsInspectorOpen] = useState(() => browserBoolean(INSPECTOR_DRAWER_KEY))
+  const [isInspectorOpen, setIsInspectorOpen] = useState(() => (
+    browserBoolean(INSPECTOR_DRAWER_KEY, desktopInspectorPreference())
+  ))
   const [isBottomRailOpen, setIsBottomRailOpen] = useState(() => browserBoolean(BOTTOM_DRAWER_KEY))
   const [splitPercent, setSplitPercent] = useState(() => clampSplit(browserNumber(SIDEBAR_SPLIT_KEY, 60)))
   const [draggingSplit, setDraggingSplit] = useState(false)
@@ -177,7 +185,7 @@ export function AppShellV4({
 
   return (
     <div
-      className={`app-shell${isCompactTopBar ? ' is-compact-topbar' : ''}${isBottomRailOpen ? ' is-bottom-rail-open' : ''}`}
+      className={`app-shell${isCompactTopBar ? ' is-compact-topbar' : ''}${isInspectorOpen ? ' is-inspector-open' : ''}${isBottomRailOpen ? ' is-bottom-rail-open' : ''}`}
       data-controls-disabled={String(controlsDisabled)}
       style={{
         '--sidebar-split-percent': splitPercent,
@@ -316,6 +324,7 @@ export function AppShellV4({
       <aside
         aria-label="Inspector"
         className={`inspector${isInspectorOpen ? ' is-open' : ''}`}
+        hidden={!isInspectorOpen}
         id="inspector-panel"
       >
         {inspector}

@@ -214,6 +214,25 @@ describe('SceneExplorerV4', () => {
     })
   })
 
+  it('exposes a pointer-operable disclosure for expandable tree rows', async () => {
+    const user = userEvent.setup()
+    renderExplorer()
+
+    const collapse = screen.getByRole('button', { name: 'Collapse Robot 1' })
+    expect(collapse).toHaveAttribute('aria-expanded', 'true')
+    await user.click(collapse)
+
+    expect(screen.queryByRole('treeitem', { name: 'Robot 1 / Link 0' })).not.toBeInTheDocument()
+    const expand = screen.getByRole('button', { name: 'Expand Robot 1' })
+    expect(expand).toHaveAttribute('aria-expanded', 'false')
+    await user.click(expand)
+
+    expect(screen.getByRole('treeitem', { name: 'Robot 1 / Link 0' })).toBeInTheDocument()
+    expect(within(row('Robot 1 / Link 0')).queryByRole('button', {
+      name: /^(Collapse|Expand) /,
+    })).not.toBeInTheDocument()
+  })
+
   it('emits exact structured pointer, keyboard, and empty-space context requests', () => {
     const harness = renderExplorer()
     fireEvent.contextMenu(row('Robot 2 / TCP'), { clientX: 44, clientY: 55 })

@@ -327,6 +327,32 @@ describe('App Project V4 production composition', () => {
     expect(screen.queryByText('Linear Axis')).not.toBeInTheDocument()
   })
 
+  it('projects live Joint writes into the Scene Canvas runtime', async () => {
+    const resources = resourcesForTest()
+    render(<App gatewayPublisher={null} resources={resources} />)
+
+    const jointValue = () => {
+      const runtime = observed.canvas?.sceneRuntime as {
+        readonly entities: ReadonlyMap<string, {
+          readonly kind: string
+          readonly serialPose?: { readonly jointValues: Readonly<Record<string, number>> }
+        }>
+      } | undefined
+      return runtime?.entities.get('robot-default')?.serialPose?.jointValues.J1
+    }
+    expect(jointValue()).toBe(0)
+
+    act(() => {
+      resources.robots.getState().writeJointValues(
+        'robot-default',
+        { J1: 35 },
+        'simulation',
+      )
+    })
+
+    await waitFor(() => expect(jointValue()).toBe(35))
+  })
+
   it('routes primitive creation and revision-qualified Focus and Fit requests', async () => {
     const resources = resourcesForTest()
     const user = userEvent.setup()

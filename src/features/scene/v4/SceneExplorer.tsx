@@ -2,6 +2,7 @@ import type {
   WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
+import { ChevronRight } from 'lucide-react'
 import {
   sameSceneSelectionV4,
   sceneSelectionKeyV4,
@@ -462,8 +463,31 @@ export function SceneExplorerV4({
         tabIndex={focusedKey === node.key ? 0 : -1}
       >
         <div className="scene-tree-row">
+          {hasChildren ? (
+            <button
+              aria-expanded={expanded}
+              aria-label={`${expanded ? 'Collapse' : 'Expand'} ${node.label}`}
+              className="scene-tree-disclosure"
+              onClick={(event) => {
+                event.stopPropagation()
+                focusRow(node.key)
+                updateExpanded(node.key, !expanded)
+              }}
+              onDoubleClick={(event) => event.stopPropagation()}
+              tabIndex={-1}
+              type="button"
+            >
+              <ChevronRight
+                aria-hidden="true"
+                className={expanded ? 'is-expanded' : undefined}
+                size={13}
+                strokeWidth={1.75}
+              />
+            </button>
+          ) : <span aria-hidden="true" className="scene-tree-disclosure-placeholder" />}
           <button
             aria-label={node.label}
+            className="scene-tree-label"
             onClick={() => {
               focusRow(node.key)
               setError(null)
@@ -481,6 +505,7 @@ export function SceneExplorerV4({
           {node.visibilityTarget === null || node.persistedVisible === null ? null : (
             <button
               aria-label={`${node.persistedVisible ? 'Hide' : 'Show'} ${node.label}`}
+              className="scene-tree-visibility"
               data-visibility="true"
               disabled={pendingVisibilityKeys.has(node.key)}
               onClick={(event) => {

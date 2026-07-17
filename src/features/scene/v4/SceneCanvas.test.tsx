@@ -143,6 +143,13 @@ function renderCanvas(
 }
 
 describe('SceneCanvasV4', () => {
+  it('provides one ambient and one directional light for PBR scene materials', () => {
+    const { container } = renderCanvas()
+
+    expect(container.querySelectorAll('ambientlight')).toHaveLength(1)
+    expect(container.querySelectorAll('directionallight')).toHaveLength(1)
+  })
+
   it('composes only injected V4 scene owners with one Grid layer and one selected TCP marker', () => {
     const data = renderCanvas()
 

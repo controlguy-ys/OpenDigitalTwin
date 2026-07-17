@@ -91,6 +91,29 @@ describe('AppShellV4', () => {
     expect(screen.getByLabelText('Timeline and Events')).toHaveClass('is-open')
   })
 
+  it('collapses the desktop Inspector and returns its grid space', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('robotsim.inspectorDrawerOpen', 'true')
+    render(<AppShellV4 inspector={<button type="button">Inspector action</button>} viewport={<div>3D viewport</div>} />)
+
+    const inspector = screen.getByLabelText('Inspector')
+    const shell = inspector.closest('.app-shell')
+    const control = screen.getByRole('button', { name: 'Inspector drawer' })
+    expect(inspector).not.toHaveAttribute('hidden')
+    expect(shell).toHaveClass('is-inspector-open')
+
+    await user.click(control)
+
+    expect(control).toHaveAttribute('aria-expanded', 'false')
+    expect(inspector).toHaveAttribute('hidden')
+    expect(shell).not.toHaveClass('is-inspector-open')
+    expect(localStorage.getItem('robotsim.inspectorDrawerOpen')).toBe('false')
+
+    await user.click(control)
+    expect(inspector).not.toHaveAttribute('hidden')
+    expect(shell).toHaveClass('is-inspector-open')
+  })
+
   it('keeps the document fixed while named work areas own scrolling', () => {
     render(
       <AppShellV4

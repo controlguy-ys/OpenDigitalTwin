@@ -407,6 +407,22 @@ button {
   line-height: 1.4;
 }
 
+.robot-job-robot-picker {
+  display: grid;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.robot-job-robot-picker button {
+  min-height: 30px;
+  padding: 5px 8px;
+  overflow: hidden;
+  font-size: 10px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .robot-job-scroll ul {
   padding: 6px;
   margin: 0;
@@ -559,19 +575,26 @@ button {
   list-style: none;
 }
 
-.scene-tree-scroll > ul {
-  padding-left: 6px;
+.scene-tree-scroll [role='tree'] {
+  padding: 0 8px 8px;
+}
+
+.scene-tree-scroll h3 {
+  margin: 10px 4px 2px;
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .scene-tree-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   gap: 4px;
   align-items: center;
   padding: 2px 6px;
 }
 
-.scene-tree-row button:first-child {
+.scene-tree-label {
   display: flex;
   min-width: 0;
   gap: 6px;
@@ -585,16 +608,75 @@ button {
   border-color: transparent;
 }
 
-.scene-tree-row button:last-child {
+.scene-tree-visibility {
   padding: 4px 5px;
   color: var(--color-muted);
   font-size: 9px;
 }
 
-.scene-tree-scroll [aria-selected='true'] > .scene-tree-row > button:first-child {
+.scene-tree-scroll [aria-selected='true'] > .scene-tree-row > .scene-tree-label {
   color: var(--color-accent);
   background: rgb(56 189 248 / 8%);
   border-color: var(--color-accent);
+}
+
+.scene-tree-disclosure {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  place-items: center;
+}
+
+.scene-tree-disclosure svg {
+  transition: transform 120ms ease;
+}
+
+.scene-tree-disclosure svg.is-expanded {
+  transform: rotate(90deg);
+}
+
+.scene-tree-disclosure-placeholder {
+  width: 24px;
+  height: 1px;
+}
+
+@media (min-width: 960px) {
+  .app-shell:not(.is-inspector-open) {
+    grid-template-columns: 248px minmax(0, 1fr) 0;
+  }
+
+  .drawer-control-right {
+    position: fixed;
+    top: 50%;
+    right: 0;
+    z-index: 6;
+    display: grid;
+    width: 30px;
+    height: 48px;
+    padding: 0;
+    color: var(--color-muted);
+    cursor: pointer;
+    background: var(--color-panel);
+    border: 1px solid var(--color-border);
+    border-right: 0;
+    border-radius: var(--radius) 0 0 var(--radius);
+    transform: translateY(-50%);
+    transition: right 160ms ease;
+    place-items: center;
+  }
+
+  .drawer-control-right.is-open {
+    right: 320px;
+  }
+
+  .drawer-control-right:hover,
+  .drawer-control-right:focus-visible {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
 }
 
 .scene-kind {
