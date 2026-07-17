@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
-import { WebSocket } from 'ws'
 
 const repositoryRoot = resolve(process.env.ROBOTSIM_ROOT ?? process.cwd())
 
@@ -28,25 +27,6 @@ function runCommand(command, options = {}) {
 const delay = (milliseconds) =>
   new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
 
-function probeWebSocketConnection(url) {
-  return new Promise((resolveProbe, rejectProbe) => {
-    const socket = new WebSocket(url)
-    const timeout = setTimeout(() => {
-      socket.terminate()
-      rejectProbe(new Error(`WebSocket probe timed out for ${url}.`))
-    }, 5000)
-    socket.once('open', () => {
-      clearTimeout(timeout)
-      socket.close()
-      resolveProbe()
-    })
-    socket.once('error', (error) => {
-      clearTimeout(timeout)
-      rejectProbe(error)
-    })
-  })
-}
-
 async function waitForHealthy(url, fetchFn, sleep, maxAttempts) {
   let lastError = new Error(`Health probe failed for ${url}.`)
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -63,12 +43,12 @@ async function waitForHealthy(url, fetchFn, sleep, maxAttempts) {
 }
 
 export async function smokeDeployment({
-  includeOpcUa = false,
   run = runCommand,
   fetch: fetchFn = globalThis.fetch,
-  probeWebSocket = probeWebSocketConnection,
+  probeOpcUaServer,
   sleep = delay,
   port = 18080,
+  opcUaPort = 4840,
   projectName = createSmokeProjectName(),
   maxAttempts = 90,
 } = {}) {
@@ -80,20 +60,22 @@ export async function smokeDeployment({
     '--project-directory',
     repositoryRoot,
   ]
-  const profiled = includeOpcUa ? [...compose, '--profile', 'opcua'] : compose
-  const environment = { WEB_PORT: String(port) }
+  const environment = {
+    WEB_PORT: String(port),
+    ROBOTSIM_OPCUA_ADVERTISE_HOST: '127.0.0.1',
+    ROBOTSIM_OPCUA_PORT: String(opcUaPort),
+  }
 
   try {
-    await run([...profiled, 'build', ...(includeOpcUa ? [] : ['web'])], { env: environment })
+    await run([...compose, 'build'], { env: environment })
     await run(['docker', 'run', '--rm', 'robotsim-web:local', 'nginx', '-t'])
     await run([
-      ...profiled,
+      ...compose,
       'up',
       '-d',
       '--wait',
       '--wait-timeout',
       '90',
-      ...(includeOpcUa ? [] : ['web']),
     ], { env: environment })
     await waitForHealthy(
       `http://127.0.0.1:${port}/healthz`,
@@ -103,20 +85,41 @@ export async function smokeDeployment({
     )
     const homeResponse = await fetchFn(`http://127.0.0.1:${port}/`)
     if (!homeResponse.ok) throw new Error('RobotSim root page did not return success.')
-    if (includeOpcUa) {
-      await run([
-        ...profiled,
-        'exec',
-        '-T',
-        'opcua-connector',
-        'node',
-        '-e',
-        "fetch('http://127.0.0.1:8081/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
-      ], { env: environment })
-      await probeWebSocket(`ws://127.0.0.1:${port}/opcua`)
+
+    await waitForHealthy(
+      `http://127.0.0.1:${port}/runtime/healthz`,
+      fetchFn,
+      sleep,
+      maxAttempts,
+    )
+    const preApplyReadiness = await fetchFn(
+      `http://127.0.0.1:${port}/runtime/readyz`,
+    )
+    const preApplyReadinessBody = await preApplyReadiness.json()
+    if (
+      preApplyReadiness.status !== 503
+      || preApplyReadinessBody?.code !== 'NO_ACTIVE_REVISION'
+    ) {
+      throw new Error(
+        'Runtime Gateway readiness must report NO_ACTIVE_REVISION before Project activation.',
+      )
     }
+
+    if (probeOpcUaServer !== undefined) {
+      await probeOpcUaServer({
+        endpointUrl: `opc.tcp://127.0.0.1:${opcUaPort}`,
+        gatewayBaseUrl: `http://127.0.0.1:${port}/runtime`,
+        webBaseUrl: `http://127.0.0.1:${port}`,
+      })
+    }
+  } catch (error) {
+    await run([...compose, 'ps'], { env: environment }).catch(() => undefined)
+    await run([...compose, 'logs', '--no-color', '--tail', '200'], {
+      env: environment,
+    }).catch(() => undefined)
+    throw error
   } finally {
-    await run([...profiled, 'down', '--volumes', '--remove-orphans'], {
+    await run([...compose, 'down', '--volumes', '--remove-orphans'], {
       env: environment,
     })
   }
@@ -125,10 +128,18 @@ export async function smokeDeployment({
 const invokedPath = process.argv[1] === undefined ? '' : resolve(process.argv[1])
 if (invokedPath === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.SMOKE_WEB_PORT ?? 18080)
+  const opcUaPort = Number(process.env.SMOKE_OPCUA_PORT ?? 4840)
   try {
+    if (!Number.isSafeInteger(opcUaPort) || opcUaPort < 1 || opcUaPort > 65_535) {
+      throw new Error('SMOKE_OPCUA_PORT must be an integer from 1 through 65535.')
+    }
+    const probeOpcUaServer = process.argv.includes('--opcua')
+      ? (await import('./runtime-gateway-smoke-client.mjs')).probeDualRobotOpcUaServer
+      : undefined
     await smokeDeployment({
-      includeOpcUa: process.argv.includes('--opcua'),
+      opcUaPort,
       port,
+      probeOpcUaServer,
     })
     console.log(`[deploy] smoke test passed on port ${port}`)
   } catch (error) {

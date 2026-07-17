@@ -1,13 +1,8 @@
-import type { EquipmentRecord } from '../../domain/equipment/equipment'
-import type { ObjectAssetRecordV1 } from '../../domain/project/project'
-import type {
-  ObjectAssetRecordV3,
-  StepObjectAssetRecordV3,
-} from '../../domain/project/object-asset-v3'
 import type { OcctSuccessResult } from '../../lib/cad/occt-types'
 import { stepImportClient } from './StepImportClient'
 import {
   createThreeGroupFromOcct,
+  type ImportOriginMode,
   type ImportedThreeAsset,
   type ThreeImportOptions,
 } from './occt-to-three'
@@ -15,6 +10,14 @@ import {
 export interface StepImportParser {
   /** Implementations must preserve the caller-owned source buffer. */
   import(source: ArrayBuffer | Uint8Array): Promise<OcctSuccessResult>
+}
+
+export interface ImportedGeometrySourceRecord {
+  readonly id: string
+  readonly sourceFileName: string
+  readonly sourceBytes: ArrayBuffer | Uint8Array
+  readonly postImportScale: number
+  readonly originMode: ImportOriginMode
 }
 
 type GeometryConverter = (
@@ -49,7 +52,7 @@ export class ImportedGeometryRepository {
     return this.errors.get(id)
   }
 
-  load(record: EquipmentRecord): Promise<ImportedThreeAsset> {
+  load(record: ImportedGeometrySourceRecord): Promise<ImportedThreeAsset> {
     const cached = this.entries.get(record.id)
     if (cached !== undefined) {
       return Promise.resolve(cached)
@@ -58,19 +61,14 @@ export class ImportedGeometryRepository {
     if (pending !== undefined) {
       return pending
     }
-    if (
-      record.kind !== 'imported' ||
-      record.sourceBytes === undefined ||
-      record.importMetadata === undefined
-    ) {
+    if (record.sourceBytes.byteLength === 0) {
       return Promise.reject(
-        new Error('Imported equipment is missing source bytes or import metadata.'),
+        new Error('Imported geometry source bytes are empty.'),
       )
     }
 
     const epoch = this.epochs.get(record.id) ?? 0
     const sourceBytes = record.sourceBytes
-    const importMetadata = record.importMetadata
     const parsePromise = this.parseTail.then(() => {
       if ((this.epochs.get(record.id) ?? 0) !== epoch) {
         throw new DOMException(
@@ -88,8 +86,8 @@ export class ImportedGeometryRepository {
     const importPromise = parsePromise
       .then((result) =>
         this.convert(result, {
-          postImportScale: importMetadata.postImportScale,
-          originMode: importMetadata.originMode,
+          postImportScale: record.postImportScale,
+          originMode: record.originMode,
         }),
       )
       .then((asset) => {
@@ -126,50 +124,9 @@ export class ImportedGeometryRepository {
     return importPromise
   }
 
-  loadObjectAsset(
-    record: ObjectAssetRecordV1 | StepObjectAssetRecordV3,
-  ): Promise<ImportedThreeAsset> {
-    return this.load({
-      id: record.id,
-      name: record.name,
-      kind: 'imported',
-      status: 'OFF',
-      transform: {
-        position: [0, 0, 0],
-        quaternion: [0, 0, 0, 1],
-        scale: [1, 1, 1],
-      },
-      graspable: false,
-      collisionHalfExtents: [...record.collisionHalfExtents],
-      stackLightAnchor: null,
-      sourceBytes: record.sourceBytes,
-      importMetadata: {
-        sourceFileName: record.sourceFileName,
-        detectedUnit: 'unknown',
-        selectedSourceUnit: 'meter',
-        postImportScale: record.importScale,
-        originMode: record.originMode,
-        colliderCenter: [...record.colliderCenter],
-      },
-    })
-  }
-
-  async restore(records: readonly EquipmentRecord[]): Promise<void> {
+  async restore(records: readonly ImportedGeometrySourceRecord[]): Promise<void> {
     await Promise.allSettled(
-      records
-        .filter((record) => record.kind === 'imported')
-        .map((record) => this.load(record)),
-    )
-  }
-
-  async restoreObjectAssets(
-    records: readonly (ObjectAssetRecordV1 | ObjectAssetRecordV3)[],
-  ): Promise<void> {
-    await Promise.allSettled(
-      records
-        .filter((record): record is ObjectAssetRecordV1 | StepObjectAssetRecordV3 =>
-          !('sourceKind' in record) || record.sourceKind === 'step')
-        .map((record) => this.loadObjectAsset(record)),
+      records.map((record) => this.load(record)),
     )
   }
 

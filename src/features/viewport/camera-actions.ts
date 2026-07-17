@@ -1,5 +1,15 @@
 import { Box3, MathUtils, PerspectiveCamera, Sphere, Vector3 } from 'three'
-import type { ViewportCameraState } from './viewport-preference-store'
+
+export interface ViewportCameraStateLike {
+  readonly position: readonly [number, number, number]
+  readonly target: readonly [number, number, number]
+  readonly quaternion: readonly [number, number, number, number]
+  readonly up: readonly [number, number, number]
+  readonly zoom: number
+  readonly fov: number
+  readonly near: number
+  readonly far: number
+}
 
 export const HOME_CAMERA = Object.freeze({
   position: [2.2, 1.8, 1.7] as const,
@@ -35,7 +45,7 @@ export interface ViewportCameraActions {
 export function captureViewportCameraState(
   camera: PerspectiveCamera,
   controls: OrbitTargetController,
-): ViewportCameraState {
+): ViewportCameraStateLike {
   return {
     position: camera.position.toArray(),
     target: controls.target.toArray(),
@@ -51,7 +61,7 @@ export function captureViewportCameraState(
 export function restoreViewportCameraState(
   camera: PerspectiveCamera,
   controls: OrbitTargetController,
-  state: ViewportCameraState,
+  state: ViewportCameraStateLike,
 ): void {
   camera.position.set(...state.position)
   camera.quaternion.set(...state.quaternion).normalize()

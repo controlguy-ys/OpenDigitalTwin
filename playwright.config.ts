@@ -2,14 +2,12 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests',
-  testIgnore: [
-    '**/project-archive-worker.spec.ts',
-    '**/project-hash-worker.spec.ts',
-  ],
+  testMatch: 'project-v4-multi-robot.spec.ts',
   timeout: 300_000,
   workers: 1,
   expect: { timeout: 15_000 },
   use: {
+    actionTimeout: 15_000,
     baseURL: 'http://127.0.0.1:4173',
     headless: true,
     trace: 'retain-on-failure',

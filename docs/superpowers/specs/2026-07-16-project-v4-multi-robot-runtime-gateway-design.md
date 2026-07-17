@@ -2,11 +2,86 @@
 
 **Date:** 2026-07-16
 
-**Status:** Approved; implementation-ready
+**Status:** Approved roadmap; short-term Off/Server vertical implemented, later
+phases remain pending
 
 **Target:** `main`
 
 **Delivery style:** Deterministic implementation in bounded milestones
+
+## 0. Short-Term Implementation Status (2026-07-17)
+
+This document remains the approved long-term architecture. The current release
+implements a deliberately bounded vertical slice and must not be read as proof
+that every later section is already available.
+
+### Implemented in the Current Slice
+
+- Project V4 is the only active browser Project. Canonical JSON New, Save,
+  Export, Import, reload, revision persistence, and atomic runtime publication
+  replace the former V1-V3 browser/archive lanes.
+- Browser state is keyed by stable Robot ID. The runtime, Scene projection,
+  selection, Jobs, viewport Frames, and collision identities support independent
+  Robot Instances and Definition-driven one-through-sixteen-Joint serial chains.
+- The fixed-six/single-Robot production path, Legacy Project adoption surface,
+  and automatic-nearest grasp runtime have been removed rather than wrapped in
+  compatibility aliases.
+- Per-Robot Simulation Jobs execute ordered Joint Poses with speed-to-next
+  semantics. Runtime replacement shuts down the previous executor and prevents
+  stale Jobs from publishing into a newer Project revision.
+- A revision barrier publishes the active browser runtime only when Project,
+  Robot, Job, Scene, interaction, coordinate-display, and resource registrations
+  match the same revision. Candidate Geometry and Job resources roll back as one
+  runtime bundle on failure.
+- The V4 Scene renders the built-in CRB Definition, general Spatial Entities and
+  primitives, named Frames, and Robot-qualified geometric collision proxies.
+- The short-term Runtime Gateway implements only Project modes `off` and
+  `server`. Its bounded HTTP surface is `GET /healthz`, `GET /readyz`,
+  `GET /runtime/status`, `PUT /runtime/project`, and `POST /runtime/state`.
+  Project activation and multi-Robot state publication are exact-Project/
+  exact-Revision operations.
+- The real `node-opcua` Server exposes read-only `Double` Actual values at
+  `RobotSim/Robots/<robotId>/Joints/<jointId>/Actual`. Anonymous access with
+  `MessageSecurityMode.None` and `SecurityPolicy.None` is intentional only for
+  this explicitly no-security prototype slice; Client writes return
+  `BadNotWritable`.
+- The standard Docker topology starts `web` and `runtime-gateway`. Nginx serves
+  the browser and proxies same-origin `/runtime/`; the Gateway owns HTTP port
+  `8081` and optional OPC UA port `4840`. Both services retain bounded,
+  read-only-container defaults.
+
+### Demonstration Boundary
+
+The checked-in two-Robot sample uses:
+
+1. the rendered built-in ABB CRB15000 with a two-Pose Job; and
+2. a source-only logical one-axis prismatic `RobotDefinition` with a `SLIDE_X`
+   Joint, empty Geometry occurrences, its own two-Pose Job, and its own OPC UA
+   Actual value.
+
+The second instance proves arbitrary Robot identity, independent Joint/Job
+state, prismatic kinematics, and multi-Robot Gateway publication. It is not an
+imported or mechanically confirmed MRb05, contains no rendered STEP mesh, and
+does not prove deterministic assembly extraction. The logical source token is a
+test/demo reference, not a claim that the referenced CAD is bundled.
+
+### Still Roadmap, Not Current Capability
+
+- OPC UA Client and Bridge adapters, Subscriptions, incoming live ownership,
+  visual interpolation, command/result nodes, Lease-based external writes, and
+  Action Bindings.
+- XML domain interchange and XLSX mapping import/export.
+- Runtime Asset resolution for external `asset://` mount paths.
+- Robot Definition authoring UI, single-assembly STEP occurrence mapping,
+  orientation/scale authoring, and operator-confirmed MRb05 mechanics.
+- Explicit Attach/Detach pick-place runtime and Job Action integration.
+- Coordinated multi-Robot sequencing, automatic STEP semantic extraction,
+  physics, IK, Cartesian planning, and production security hardening.
+
+The later Client/Server/Bridge, MRb05, pick/place, interchange, and Lease
+sections below describe approved future phases. Their acceptance criteria are
+not current release claims. Legacy adoption remains excluded until the user
+explicitly requests a new design.
 
 ## 1. Purpose
 
@@ -68,13 +143,13 @@ simulator.
 16. Use heterogeneous Robot Definitions in the final sample: the built-in ABB
     CRB15000 and a Savvy MRb05 created from one external Assembly STEP source.
 
-## 3. Current Baseline and Breaking Boundary
+## 3. Former Baseline and Breaking Boundary
 
-The current Project V3 has one `robot` property, fixed `robot:active` and
+The superseded Project V3 had one `robot` property, fixed `robot:active` and
 `linear-axis:active` Scene IDs, fixed six-angle Job Poses, and one OPC UA
 Endpoint configuration containing exactly `J1` through `J6`.
 
-Relevant current sources are:
+Historical sources removed or replaced by the V4 cutover included:
 
 - `src/domain/project/project-v3.ts`
 - `src/domain/project/scene-state-v1.ts`
@@ -89,12 +164,12 @@ Relevant current sources are:
 - `playwright.config.ts`
 - `compose.yaml`
 
-The current grasp runtime also has one global held Object, selects a nearby
+The former grasp runtime also had one global held Object, selected a nearby
 Object as part of Gripper Close, and detaches toward the Workbench. Project V4
 replaces those behaviors with instance-keyed explicit Attachment constraints;
 it does not retain the automatic-nearest compatibility path.
 
-The current V3 archive embeds content-addressed STEP bytes and the reusable
+The former V3 archive embedded content-addressed STEP bytes and the reusable
 Scene Editor caps unique imported Object STEP Assets at 64. V4 replaces the
 archive's authoritative bytes with logical Asset references and raises the
 approved unique Object STEP Asset limit to 128 while retaining the global byte
@@ -102,7 +177,7 @@ and visible-triangle budgets.
 
 Project V4 replaces these cardinality assumptions. It is not a field-compatible
 extension. A V4 decoder rejects V1, V2, and V3 payloads with
-`PROJECT_SCHEMA_UNSUPPORTED` before mutating the active Project. The current
+`PROJECT_SCHEMA_UNSUPPORTED` before mutating the active Project. The former
 self-contained V3 archive is not silently adopted. An explicit migration or
 vendoring feature can be designed later if requested.
 
@@ -118,9 +193,9 @@ assumptions in the following prior designs:
 Unaffected behavior and regression expectations in those documents remain in
 force.
 
-## 4. Scope
+## 4. Approved Roadmap Scope
 
-### 4.1 In Scope
+### 4.1 Roadmap In Scope
 
 - Project V4 schema, validator, canonical codec, and revision hash.
 - Reusable Robot Definitions and up to eight Robot Instances.
@@ -139,7 +214,7 @@ force.
 - OPC UA state, command, result, diagnostics, and Lease contracts.
 - JSON canonical storage, lossless XML domain interchange, and XLSX mapping
   interchange.
-- Docker Compose profiles, health/readiness checks, performance tests, and the
+- Docker Compose topology, health/readiness checks, performance tests, and the
   final two-Robot browser demonstration.
 
 ### 4.2 Explicitly Out of Scope
@@ -165,34 +240,31 @@ create forces or move Objects.
 
 ```text
 Browser Web Application
-├─ Project and Scene Editor
-├─ Multi-Robot Simulation Runtime
-├─ Robot Jobs and Action Executor
-├─ STEP Analysis and Geometry Mapping UI
-├─ Runtime Interpolation Buffers
-└─ Browser Rendering and Browser Verification
+|- Project and Scene Editor
+|- Multi-Robot Simulation Runtime
+|- Robot Jobs and Action Executor
+|- Browser Rendering and Browser Verification
+`- Roadmap: STEP mapping UI and incoming-state interpolation
                  │
                  │ versioned Project/config and state/command envelopes
                  ▼
 Shared Deterministic Core
-├─ Project V4 schema and canonical codec
-├─ Robot, Frame, Scene, Job, Action, and Mapping validators
-├─ Coordinate transformations
-├─ Mapping/resource budget accounting
-├─ JSON/XML/XLSX conversion
-└─ Stable error/result contracts
+|- Project V4 schema and canonical codec
+|- Robot, Frame, Scene, Job, Action, and Mapping validators
+|- Coordinate transformations
+|- Mapping/resource budget accounting
+|- Stable error/result contracts
+`- Roadmap: XML/XLSX conversion
                  │
                  ▼
 Runtime Gateway
-├─ AssetResolver
-├─ Project revision activation
-├─ RuntimePublisherLease manager
-├─ WebSocket state/command gateway
-└─ OpcUaAdapter
-   ├─ Off
-   ├─ Client: endpoints[] workers
-   ├─ Server: downstream OPC UA namespace
-   └─ Bridge: explicit upstream/downstream routes
+|- Current: Project revision activation and bounded HTTP state publication
+|- Current OpcUaAdapter: Off or read-only Server
+`- Roadmap
+   |- AssetResolver
+   |- RuntimePublisherLease and state/command transport
+   |- Client: endpoints[] workers
+   `- Bridge: explicit upstream/downstream routes
 ```
 
 The Shared Deterministic Core has no Three.js, React, WebSocket, filesystem, or
@@ -204,10 +276,10 @@ authors a Draft, the Core validates it, and the Gateway activates only the exact
 validated `configRevision`.
 
 The standard Docker deployment starts both `web` and `runtime-gateway`; OPC UA
-mode defaults to `Off`. The same Gateway process changes only its `OpcUaAdapter`
-for Client, Server, or Bridge mode. A web-only deployment remains usable for
-`builtin://` Assets and session-local re-selection, but persistent external
-`asset://` resolution requires the Gateway.
+mode defaults to `Off`. The current Gateway changes its `OpcUaAdapter` between
+Off and Server. Client and Bridge are later adapters, not current modes. A
+browser-only development run remains usable for local Simulation; persistent
+external `asset://` resolution is still roadmap work.
 
 ## 6. Project V4 Domain
 

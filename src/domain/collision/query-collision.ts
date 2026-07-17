@@ -1,11 +1,22 @@
 import { broadPhasePairs } from './broad-phase'
 import {
+  canonicalCollisionPairKeyV4,
+  encodeRuntimeIdentitySegmentV4,
+  type CollisionPairKeyV4,
+} from '../../core/robot-runtime/collision-identity'
+import {
   pairKey,
   validateCollisionPolicy,
+  validateCollisionPolicyV4,
   validateGeometryCollisionEntity,
+  validateGeometryCollisionEntityV4,
   type CollisionFinding,
+  type CollisionFindingV4,
   type CollisionPolicy,
+  type CollisionPolicyV4,
   type GeometryCollisionEntity,
+  type GeometryCollisionEntityV4,
+  type WorldObb,
 } from './collision'
 import { queryObbPair, worldObbFromBox } from './obb'
 
@@ -217,6 +228,110 @@ export function queryGeometryCollisionsWithTelemetry(
               ? 'contact' as const
               : 'near' as const,
         }),
+    telemetry: Object.freeze({
+      entityCount: entities.length,
+      boxCount,
+      broadPhaseCandidateCount: broadPhaseCandidates.length,
+      narrowPhaseTestCount,
+      findingCount: findings.length,
+    }),
+  })
+}
+
+export interface CollisionQueryResultV4 {
+  readonly findings: readonly CollisionFindingV4[]
+  readonly telemetry: CollisionQueryTelemetry
+}
+
+function worldObbFromBoxV4(
+  entity: GeometryCollisionEntityV4,
+  box: GeometryCollisionEntityV4['boxes'][number],
+): WorldObb {
+  const shadow: GeometryCollisionEntity = entity.category === 'spatial-entity'
+    ? {
+        ...entity,
+        id: `tool:${encodeRuntimeIdentitySegmentV4(entity.id)}`,
+        category: 'tool',
+        boxes: [box],
+      }
+    : { ...entity, boxes: [box] } as GeometryCollisionEntity
+  const obb = worldObbFromBox(shadow, box)
+  return Object.freeze({ ...obb, entityId: entity.id })
+}
+
+export function queryGeometryCollisionsV4(
+  entities: readonly GeometryCollisionEntityV4[],
+  policy: CollisionPolicyV4,
+  metadata: CollisionQueryMetadata = {},
+): readonly CollisionFindingV4[] {
+  return queryGeometryCollisionsWithTelemetryV4(entities, policy, metadata).findings
+}
+
+export function queryGeometryCollisionsWithTelemetryV4(
+  entityCandidates: readonly GeometryCollisionEntityV4[],
+  policyCandidate: CollisionPolicyV4,
+  metadata: CollisionQueryMetadata = {},
+): CollisionQueryResultV4 {
+  const policy = validateCollisionPolicyV4(policyCandidate)
+  const entities = entityCandidates.map(validateGeometryCollisionEntityV4)
+  validateMetadata(metadata)
+
+  const entitiesById = new Map<string, GeometryCollisionEntityV4>()
+  for (const entity of entities) {
+    if (entitiesById.has(entity.id)) {
+      throw new Error(`Duplicate Collision Entity id: ${entity.id}`)
+    }
+    entitiesById.set(entity.id, entity)
+  }
+  const boxCount = entities.reduce((sum, entity) => sum + entity.boxes.length, 0)
+  if (!policy.enabled) {
+    return Object.freeze({
+      findings: Object.freeze([]),
+      telemetry: Object.freeze({
+        entityCount: entities.length,
+        boxCount,
+        broadPhaseCandidateCount: 0,
+        narrowPhaseTestCount: 0,
+        findingCount: 0,
+      }),
+    })
+  }
+
+  const worldObbs = entities.flatMap((entity) =>
+    entity.boxes.map((box) => worldObbFromBoxV4(entity, box)),
+  )
+  const broadPhaseCandidates = broadPhasePairs(worldObbs, policy.nearMissMarginM)
+  const excluded = new Set<CollisionPairKeyV4>([
+    ...policy.excludedPairKeys,
+    ...policy.intentionalMountPairKeys,
+    ...policy.ignoredContactPairKeys,
+  ])
+  const findingsByPair = new Map<CollisionPairKeyV4, CollisionFindingV4>()
+  let narrowPhaseTestCount = 0
+  for (const [firstObb, secondObb] of broadPhaseCandidates) {
+    const key = canonicalCollisionPairKeyV4(
+      firstObb.entityId as GeometryCollisionEntityV4['id'],
+      secondObb.entityId as GeometryCollisionEntityV4['id'],
+    )
+    if (excluded.has(key)) continue
+    narrowPhaseTestCount += 1
+    const finding = queryObbPair(
+      firstObb,
+      secondObb,
+      policy.nearMissMarginM,
+      metadata,
+    ) as CollisionFindingV4 | null
+    if (finding === null) continue
+    const current = findingsByPair.get(key)
+    if (current === undefined || moreSevere(finding, current)) {
+      findingsByPair.set(key, finding)
+    }
+  }
+  const findings = Object.freeze(
+    [...findingsByPair.values()].sort(compareFindings),
+  )
+  return Object.freeze({
+    findings,
     telemetry: Object.freeze({
       entityCount: entities.length,
       boxCount,

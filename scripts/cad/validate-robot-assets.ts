@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url'
 
 import { Accessor, NodeIO, Primitive, type Mesh } from '@gltf-transform/core'
 
-import { LINK_WORLD_ORIGINS } from '../../src/domain/robot/crb15000'
+import { LINK_WORLD_ORIGINS } from './crb15000-asset-contract'
 import {
   BOUNDS_TOLERANCE_METERS,
   EXPECTED_LINK_PROBES,

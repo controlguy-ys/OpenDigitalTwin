@@ -1,21 +1,21 @@
-import type { ProjectStoreState } from '../features/project/project-store'
+import type { ProjectStoreStateV4 } from '../features/project/v4/project-store-v4.js'
 
-type InitialProjectStoreState = Pick<
-  ProjectStoreState,
-  'activeSnapshot' | 'status' | 'hydrate' | 'newProject'
+type InitialProjectStoreStateV4 = Pick<
+  ProjectStoreStateV4,
+  'activeProject' | 'status' | 'hydrate' | 'newProject'
 >
 
-export interface InitialProjectStore {
-  getState(): InitialProjectStoreState
+export interface InitialProjectStoreV4 {
+  getState(): InitialProjectStoreStateV4
 }
 
-export interface InitialProjectBootstrap {
+export interface InitialProjectBootstrapV4 {
   run(isActive: () => boolean): Promise<void>
 }
 
-export function createInitialProjectBootstrap(
-  store: InitialProjectStore,
-): InitialProjectBootstrap {
+export function createInitialProjectBootstrapV4(
+  store: InitialProjectStoreV4,
+): InitialProjectBootstrapV4 {
   let newProjectPromise: Promise<void> | null = null
 
   return {
@@ -24,7 +24,10 @@ export function createInitialProjectBootstrap(
       if (!isActive()) return
 
       const state = store.getState()
-      if (state.activeSnapshot !== null || state.status !== 'idle') return
+      if (
+        state.activeProject !== null
+        || (state.status !== 'idle' && state.status !== 'ready')
+      ) return
 
       newProjectPromise ??= state.newProject()
       await newProjectPromise

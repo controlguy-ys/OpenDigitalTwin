@@ -10,7 +10,7 @@ import {
   LINK_WORLD_ORIGINS,
   type RobotLinkId,
   type Vector3Tuple,
-} from '../../src/domain/robot/crb15000'
+} from './crb15000-asset-contract'
 import type {
   OcctColor,
   OcctMesh,

@@ -1,11 +1,23 @@
-FROM node:22-alpine
+FROM node:22-alpine AS gateway-build
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm install --global npm@11.4.2 \
+    && npm ci \
+    && npm cache clean --force
+COPY tsconfig.gateway.json ./
+COPY src/core ./src/core
+COPY middleware/runtime-gateway ./middleware/runtime-gateway
+RUN npm run build:gateway
+
+FROM node:22-alpine AS runtime
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install --global npm@11.4.2 \
     && npm ci --omit=dev \
     && npm cache clean --force
-COPY middleware ./middleware
+COPY --from=gateway-build --chown=node:node /app/dist-gateway ./dist-gateway
 USER node
-EXPOSE 4841 8081
-CMD ["node", "middleware/opcua-connector.mjs"]
+EXPOSE 8081 4840
+CMD ["node", "dist-gateway/middleware/runtime-gateway/main.js"]

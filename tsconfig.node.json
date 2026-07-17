@@ -26,6 +26,7 @@
     "vitest.config.ts",
     "scripts",
     "playwright.config.ts",
-    "src/types/**/*.d.ts"
+    "src/types/**/*.d.ts",
+    "middleware/runtime-gateway/**/*.test.ts"
   ]
 }

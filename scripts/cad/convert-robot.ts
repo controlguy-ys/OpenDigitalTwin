@@ -5,10 +5,11 @@ import { pathToFileURL } from 'node:url'
 import createOcct from 'occt-import-js'
 
 import {
-  CRB15000_DEFINITION,
+  CRB15000_LINK_IDS,
+  CRB15000_ROBOT_MODEL_ID,
   LINK_WORLD_ORIGINS,
   type RobotLinkId,
-} from '../../src/domain/robot/crb15000'
+} from './crb15000-asset-contract'
 import type {
   OcctModule,
   OcctSuccessResult,
@@ -17,15 +18,7 @@ import { writeLinkGlb } from './occt-to-gltf'
 
 export { LINK_WORLD_ORIGINS }
 
-export const LINK_IDS = [
-  'LINK00',
-  'LINK01',
-  'LINK02',
-  'LINK03',
-  'LINK04',
-  'LINK05',
-  'LINK06',
-] as const
+export const LINK_IDS = CRB15000_LINK_IDS
 
 export type LinkId = RobotLinkId
 export type Vector3 = readonly [number, number, number]
@@ -269,7 +262,7 @@ export async function convertRobotAssets(
 
   const report = {
     schemaVersion: 1,
-    robotId: CRB15000_DEFINITION.id,
+    robotId: CRB15000_ROBOT_MODEL_ID,
     outputLinearUnit: 'meter',
     tessellation: READ_PARAMETERS,
     boundsToleranceMeters: BOUNDS_TOLERANCE_METERS,

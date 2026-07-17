@@ -8,6 +8,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      runtime-gateway:
+        condition: service_healthy
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -28,22 +31,23 @@ services:
       retries: 3
       start_period: 10s
 
-  opcua-connector:
-    profiles: ["opcua"]
-    image: robotsim-opcua-connector:local
+  runtime-gateway:
+    image: robotsim-runtime-gateway:local
     build:
       context: .
       dockerfile: middleware/Dockerfile
     environment:
-      OPCUA_CONFIG: /app/config/opcua.config.json
-      OPCUA_HEALTH_PORT: "8081"
-    volumes:
-      - "${OPCUA_CONFIG_PATH:-./middleware/opcua.config.json}:/app/config/opcua.config.json:ro"
+      ROBOTSIM_GATEWAY_HOST: "0.0.0.0"
+      ROBOTSIM_GATEWAY_HTTP_PORT: "8081"
+      ROBOTSIM_OPCUA_ADVERTISE_HOST: "${ROBOTSIM_OPCUA_ADVERTISE_HOST:-localhost}"
+      ROBOTSIM_OPCUA_ADVERTISE_PORT: "${ROBOTSIM_OPCUA_PORT:-4840}"
+      ROBOTSIM_OPCUA_PORT: "${ROBOTSIM_OPCUA_PORT:-4840}"
+    ports:
+      - "${ROBOTSIM_OPCUA_PORT:-4840}:${ROBOTSIM_OPCUA_PORT:-4840}"
     restart: unless-stopped
     read_only: true
     tmpfs:
-      - /tmp:size=16m,mode=1777
-      - /home/node/.config:size=16m,uid=1000,gid=1000,mode=0700
+      - /tmp:size=32m,mode=1777
     cap_drop:
       - ALL
     security_opt:

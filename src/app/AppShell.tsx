@@ -6,7 +6,6 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react'
-import type { JointQuality } from '../domain/robot/joint-frame'
 import {
   applyThemePreference,
   DARK_THEME_QUERY,
@@ -14,8 +13,6 @@ import {
   writeThemePreference,
   type ThemePreference,
 } from '../features/ui/theme-preference'
-
-type JointSourceMode = 'simulation' | 'opcua'
 
 const SIDEBAR_SPLIT_KEY = 'robotsim.sidebarSplitPercent'
 const ASSET_DRAWER_KEY = 'robotsim.assetDrawerOpen'
@@ -58,7 +55,7 @@ function clampSplit(value: number): number {
   return Math.min(75, Math.max(35, Math.round(value)))
 }
 
-interface AppShellProps {
+export interface AppShellPropsV4 {
   viewport: ReactNode
   projectMenu?: ReactNode
   assetTree?: ReactNode
@@ -69,19 +66,13 @@ interface AppShellProps {
   inspectorOpenRequest?: number
   controlsDisabled?: boolean
   viewportBusy?: boolean
-  sourceQuality?: JointQuality
-  onOpenStepImport?: () => void
-  onOpenRobotImport?: () => void
+  robotSourceLabel?: string | null
   onCreateBox?: () => void
   onCreateCylinder?: () => void
   onCreateGroup?: () => void
-  onCreateLinearAxis?: () => void
-  linearAxisAvailable?: boolean
-  sourceMode?: JointSourceMode
-  onSourceModeChange?: (mode: JointSourceMode) => void
 }
 
-export function AppShell({
+export function AppShellV4({
   viewport,
   projectMenu,
   assetTree,
@@ -92,17 +83,11 @@ export function AppShell({
   inspectorOpenRequest = 0,
   controlsDisabled = false,
   viewportBusy = controlsDisabled,
-  sourceQuality = 'GOOD',
-  onOpenStepImport,
-  onOpenRobotImport,
+  robotSourceLabel = null,
   onCreateBox,
   onCreateCylinder,
   onCreateGroup,
-  onCreateLinearAxis,
-  linearAxisAvailable = true,
-  sourceMode = 'simulation',
-  onSourceModeChange,
-}: AppShellProps) {
+}: AppShellPropsV4) {
   const [isAssetRailOpen, setIsAssetRailOpen] = useState(() => browserBoolean(ASSET_DRAWER_KEY))
   const [isInspectorOpen, setIsInspectorOpen] = useState(() => browserBoolean(INSPECTOR_DRAWER_KEY))
   const [isBottomRailOpen, setIsBottomRailOpen] = useState(() => browserBoolean(BOTTOM_DRAWER_KEY))
@@ -186,6 +171,7 @@ export function AppShell({
 
   const runAddCommand = (command?: () => void) => {
     setIsAddOpen(false)
+    if (controlsDisabled) return
     command?.()
   }
 
@@ -222,50 +208,26 @@ export function AppShell({
         >
           {projectMenu}
           <span>SIMULATION</span>
-          <span
-            aria-label={`Joint source quality ${sourceQuality}`}
-            aria-live="polite"
-            className="source-quality"
-            data-quality={sourceQuality}
-            role="status"
-          >
-            JOINT {sourceQuality}
-          </span>
-          <label className="joint-source-select">
-            <span>Joint source</span>
-            <select
-              aria-label="Joint source"
-              onChange={(event) =>
-                onSourceModeChange?.(event.currentTarget.value as JointSourceMode)
-              }
-              value={sourceMode}
-            >
-              <option value="simulation">Simulation</option>
-              <option value="opcua">OPC UA</option>
-            </select>
-          </label>
+          {robotSourceLabel === null ? null : (
+            <span className="joint-source-label">
+              Joint source: {robotSourceLabel}
+            </span>
+          )}
           <div className="add-menu">
             <button
               aria-expanded={isAddOpen}
               aria-haspopup="menu"
+              disabled={controlsDisabled}
               onClick={() => setIsAddOpen((open) => !open)}
               type="button"
             >
               Add
             </button>
-            {isAddOpen ? (
+            {isAddOpen && !controlsDisabled ? (
               <div aria-label="Add" role="menu">
-                <button onClick={() => runAddCommand(onOpenStepImport)} role="menuitem" type="button">Import STEP</button>
-                <button onClick={() => runAddCommand(onOpenRobotImport)} role="menuitem" type="button">Import Robot</button>
                 <button onClick={() => runAddCommand(onCreateBox)} role="menuitem" type="button">Box</button>
                 <button onClick={() => runAddCommand(onCreateCylinder)} role="menuitem" type="button">Cylinder</button>
                 <button onClick={() => runAddCommand(onCreateGroup)} role="menuitem" type="button">Group</button>
-                <button
-                  disabled={!linearAxisAvailable}
-                  onClick={() => runAddCommand(onCreateLinearAxis)}
-                  role="menuitem"
-                  type="button"
-                >Linear Axis</button>
               </div>
             ) : null}
           </div>

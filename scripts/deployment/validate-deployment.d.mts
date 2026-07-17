@@ -1,6 +1,6 @@
 export interface DeploymentFiles {
   dockerfile: string
-  connectorDockerfile: string
+  gatewayDockerfile: string
   nginx: string
   compose: string
   dockerignore: string

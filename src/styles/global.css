@@ -711,6 +711,110 @@ button {
   font-size: 10px;
 }
 
+.gateway-mode-control {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.gateway-mode-control select {
+  height: 28px;
+  min-width: 68px;
+  padding-inline: 6px;
+}
+
+.gateway-status {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-status-ready {
+  color: var(--color-running);
+}
+
+.gateway-status-error {
+  color: var(--color-fault);
+}
+
+.scene-entity-inspector-v4 {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 16px 16px;
+  overflow: auto;
+}
+
+.scene-entity-inspector-v4 h2,
+.scene-entity-inspector-v4 p {
+  margin: 0;
+}
+
+.scene-entity-inspector-v4 h2 {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.scene-inspector-section-v4,
+.scene-entity-inspector-v4 label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.scene-entity-inspector-v4 label {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.scene-entity-inspector-v4 input,
+.scene-entity-inspector-v4 select {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 7px;
+  color: var(--color-text);
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.scene-entity-inspector-v4 fieldset {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 10px;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.scene-entity-inspector-v4 button {
+  min-height: 30px;
+  color: var(--color-text);
+  cursor: pointer;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.scene-entity-inspector-v4 button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.scene-entity-inspector-v4 [role='alert'] {
+  color: var(--color-fault);
+  font-size: 10px;
+}
+
 .scene-context-menu {
   position: fixed;
   z-index: 12;
@@ -1110,6 +1214,13 @@ button {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.scene-canvas-surface-v4 {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
 }
 
 .scene-canvas canvas {

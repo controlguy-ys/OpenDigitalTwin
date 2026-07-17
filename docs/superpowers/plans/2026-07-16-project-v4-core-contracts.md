@@ -56,7 +56,7 @@
 **Interfaces:**
 - Produces: `ProjectV4Error`, `failProjectV4`, `RigidTransformV4`, quaternion normalization/composition/inversion, and RPY conversion used by every later plan.
 
-- [ ] **Step 1: Write RED transform and error tests**
+- [x] **Step 1: Write RED transform and error tests**
 
 ```ts
 it('composes RPY degrees as Rz * Ry * Rx without Three.js', () => {
@@ -77,7 +77,7 @@ it('reports a stable code and JSON path', () => {
 })
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```powershell
 npm run test:run -- src/core/project-v4/errors.test.ts src/core/project-v4/rigid-transform.test.ts
@@ -85,7 +85,7 @@ npm run test:run -- src/core/project-v4/errors.test.ts src/core/project-v4/rigid
 
 Expected: FAIL because the Core modules do not exist.
 
-- [ ] **Step 3: Implement the public contracts**
+- [x] **Step 3: Implement the public contracts**
 
 ```ts
 export type Vector3V4 = readonly [number, number, number]
@@ -123,7 +123,7 @@ export function quaternionToRpyDegreesV4(q: QuaternionV4): Vector3V4
 
 Implement Hamilton quaternion multiplication and vector rotation directly. Canonicalize `-0` to `0` and choose a stable quaternion sign (`w > 0`, then Z/Y/X tie break) so equal transforms hash identically.
 
-- [ ] **Step 4: Run GREEN and dependency scan**
+- [x] **Step 4: Run GREEN and dependency scan**
 
 ```powershell
 npm run test:run -- src/core/project-v4
@@ -132,7 +132,7 @@ rg -n "from ['\"](react|three|node:|ws|node-opcua)|window|document" src/core
 
 Expected: tests PASS and `rg` returns no matches.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src/core/project-v4/errors* src/core/project-v4/rigid-transform*
@@ -154,7 +154,7 @@ git commit -m "feat: add project v4 transform core"
 - Consumes: `RigidTransformV4`, `ProjectV4Error`.
 - Produces: `WorkcellProjectV4`, all stable ID aliases/unions, `validateWorkcellProjectV4`, `preflightWorkcellProjectShapeV4`, and exact resource constants.
 
-- [ ] **Step 1: Write RED boundary/reference tests**
+- [x] **Step 1: Write RED boundary/reference tests**
 
 ```ts
 it.each([
@@ -182,7 +182,7 @@ it.each([1, 2, 3])('rejects schema %i without migration', (schemaVersion) => {
 })
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```powershell
 npm run test:run -- src/core/project-v4/validate.test.ts
@@ -190,7 +190,7 @@ npm run test:run -- src/core/project-v4/validate.test.ts
 
 Expected: FAIL because the V4 types/validator are missing.
 
-- [ ] **Step 3: Implement immutable domain types**
+- [x] **Step 3: Implement immutable domain types**
 
 ```ts
 export interface AssetReferenceV4 {
@@ -265,11 +265,11 @@ export interface WorkcellProjectV4 {
 
 Complete the referenced types in the same file. Require every Robot Definition to be referenced, every Joint chain to be one connected serial chain, every axis to normalize, every Joint value to use the correct type-specific units, and every persisted ID to be globally unique.
 
-- [ ] **Step 4: Implement closed validation and deep freeze**
+- [x] **Step 4: Implement closed validation and deep freeze**
 
 Validate dense arrays, exact allowed keys, finite numbers, UTF-8 identifier/name bounds, ISO timestamps, SHA-256, normalized logical URI syntax, all references, Frame graph cycles, Job exact Joint key sets, source/link counts, scene/OPC budgets, and total visible Geometry budgets. Return a deeply frozen clone; never return caller-owned mutable objects.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```powershell
 npm run test:run -- src/core/project-v4
@@ -293,7 +293,7 @@ Expected: all exact/plus-one, reference, cycle, and schema rejection tests PASS.
 **Interfaces:**
 - Produces: `canonicalProjectV4Json`, `canonicalProjectV4Bytes`, `configRevisionForProjectV4`, `StateBatchV1`, `CommandBatchV1`, `CommandRequestV1`, `CommandResultV1`, `RuntimePublisherLeaseV1`, and revision stage/activation envelopes.
 
-- [ ] **Step 1: Write RED canonical/protocol tests**
+- [x] **Step 1: Write RED canonical/protocol tests**
 
 ```ts
 it('produces identical bytes for semantically identical object-key order', async () => {
@@ -307,7 +307,7 @@ it('rejects a state batch carrying an old or positional robot payload', () => {
 })
 ```
 
-- [ ] **Step 2: Implement canonical serialization**
+- [x] **Step 2: Implement canonical serialization**
 
 Sort object keys lexicographically, preserve validated array order, normalize `-0`, reject non-finite values, and emit UTF-8 without whitespace. Do not sort Robot/Job/step arrays because their order is semantic.
 
@@ -317,7 +317,7 @@ export function canonicalProjectV4Bytes(project: WorkcellProjectV4): Uint8Array
 export async function configRevisionForProjectV4(project: WorkcellProjectV4): Promise<string>
 ```
 
-- [ ] **Step 3: Implement versioned envelopes**
+- [x] **Step 3: Implement versioned envelopes**
 
 ```ts
 export interface StateBatchV1 {
@@ -355,7 +355,7 @@ export interface CommandRequestV1 {
 
 Define explicit acknowledgement/execution-state/result unions and validators; never use `unknown` past the decode boundary.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 ```powershell
 npm run test:run -- src/core/project-v4/canonical-json.test.ts src/core/runtime-protocol/v1.test.ts
@@ -381,7 +381,7 @@ git commit -m "feat: add v4 canonical runtime contracts"
 - Consumes: `src/core/project-v4` and `src/core/runtime-protocol` source.
 - Produces: emitted `dist-gateway/middleware/runtime-gateway/main.js`, `build:gateway`, and a typed Off-mode process. P4/P5 add behavior to this process.
 
-- [ ] **Step 1: Write RED configuration tests**
+- [x] **Step 1: Write RED configuration tests**
 
 ```ts
 // @vitest-environment node
@@ -394,7 +394,7 @@ it('validates deployment ports without owning active Project mode', () => {
 })
 ```
 
-- [ ] **Step 2: Add the emitted build configuration**
+- [x] **Step 2: Add the emitted build configuration**
 
 ```json
 {
@@ -423,7 +423,7 @@ Add scripts:
 }
 ```
 
-- [ ] **Step 3: Implement and build the Off-mode scaffold**
+- [x] **Step 3: Implement and build the Off-mode scaffold**
 
 `main.ts` must parse deployment-only environment values, report an effective pre-Apply Off state without storing mode in deployment configuration, start no OPC UA object before an active Project exists, install SIGINT/SIGTERM shutdown, and expose its service construction through a testable factory rather than executing on import.
 
@@ -434,11 +434,11 @@ node dist-gateway/middleware/runtime-gateway/main.js --check-config
 
 Expected: both commands exit 0; no `tsx` runtime is required.
 
-- [ ] **Step 4: Update the Gateway Docker build stage**
+- [x] **Step 4: Update the Gateway Docker build stage**
 
 Use a build stage with dev dependencies to run `npm run build:gateway`, then a production stage with `npm ci --omit=dev` and copied `dist-gateway`. Do not yet replace the current Compose service; P5 owns the production Compose/Nginx cutover after Client, Server, and Bridge behavior exists.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```powershell
 npm run test:run -- middleware/runtime-gateway/deployment-config.test.ts
@@ -466,7 +466,7 @@ git commit -m "build: add typed runtime gateway target"
 - Produces: `ProjectRepositoryV4`, `PreparedProjectRuntimeBundleV4<R>`, `ProjectRuntimeV4<R>`, `PublishedProjectBundleV4`, `ProjectPublicationCoordinatorV4`, and plain canonical JSON import/export.
 - Ownership: P1 owns `PublishedProjectBundleV4`; P2 is the sole owner of `ProjectMutationServiceV4`, which P1 does not define.
 
-- [ ] **Step 1: Write RED codec/repository failure-injection tests**
+- [x] **Step 1: Write RED codec/repository failure-injection tests**
 
 ```ts
 it('exports canonical JSON without STEP bytes or physical paths', async () => {
@@ -492,7 +492,7 @@ it('keeps the old pointer and runtime when candidate apply fails', async () => {
 })
 ```
 
-- [ ] **Step 2: Implement a new V4 database**
+- [x] **Step 2: Implement a new V4 database**
 
 ```ts
 export function encodeProjectV4(project: WorkcellProjectV4): Blob
@@ -518,7 +518,7 @@ export class ProjectDatabaseV4 extends Dexie {
 
 Do not open or migrate `robot-sim-project`; do not create a source-blob table.
 
-- [ ] **Step 3: Implement async publication interfaces**
+- [x] **Step 3: Implement async publication interfaces**
 
 ```ts
 export interface PreparedProjectRuntimeBundleV4<R> {
@@ -563,11 +563,11 @@ export interface ProjectPublicationCoordinatorV4 {
 
 Preserve serialized mutation, expected-revision compare, prepared pointer, compensation, commit-token uniqueness, and recovery-required behavior from the V3 coordinator. The V4 implementation operates on canonical JSON only.
 
-- [ ] **Step 4: Prove rejection and crash recovery**
+- [x] **Step 4: Prove rejection and crash recovery**
 
 Test V1/V2/V3 decode rejection before DB writes, stale expected revision, failure before pointer, failure after pointer with compensation, crash at publishing pointer, restore/finalize, and garbage collection retaining active revision.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```powershell
 npm run test:run -- src/features/project/v4
@@ -582,17 +582,18 @@ git commit -m "feat: persist byte-free project v4 revisions"
 
 **Files:**
 - Create: `src/core/project-v4/core-boundary.test.ts`
+- Create: `middleware/runtime-gateway/core-source-boundary.test.ts`
 - Modify: `package.json`
 - Modify: `docs/superpowers/plans/2026-07-16-project-v4-core-contracts.md`
 
 **Interfaces:**
 - Produces: a green shared Core and persistence lane ready for P2; no browser V4 authoring is exposed yet.
 
-- [ ] **Step 1: Add the dependency-boundary test**
+- [x] **Step 1: Add the dependency-boundary test**
 
 Read every `src/core/**/*.ts` import and fail if it resolves to React, Three.js, Node built-ins, Web APIs, `ws`, or `node-opcua`. Import the Core from one browser test and one Node-environment Gateway test to prove both compiler targets consume the same source.
 
-- [ ] **Step 2: Run the P1 gate**
+- [x] **Step 2: Run the P1 gate**
 
 ```powershell
 npm run test:run -- src/core src/features/project/v4 middleware/runtime-gateway
@@ -604,12 +605,53 @@ git status --short
 
 Expected: PASS; only intentional plan/status edits remain, and untracked CAD folders remain unstaged.
 
-- [ ] **Step 3: Commit the gate evidence**
+- [x] **Step 3: Commit the gate evidence**
 
 Record exact test counts/results in this plan, then:
 
 ```powershell
-git add package.json package-lock.json docs/superpowers/plans/2026-07-16-project-v4-core-contracts.md src/core/project-v4/core-boundary.test.ts
+git add package.json docs/superpowers/plans/2026-07-16-project-v4-core-contracts.md `
+  src/core/project-v4/core-boundary.test.ts `
+  middleware/runtime-gateway/core-source-boundary.test.ts
 git diff --cached --check
 git commit -m "test: prove project v4 core boundary"
 ```
+
+## P1 Gate Evidence - 2026-07-17 (Asia/Seoul)
+
+- Gate commit base/head: base `64543fa34d06e6a4dddde3fa4f482a0a90714f39`;
+  head is the commit containing this section, with message
+  `test: prove project v4 core boundary`. Its SHA is recorded after commit in the
+  ignored Task 6 report and implementation handoff because a commit cannot
+  contain its own hash.
+- Boundary RED preceded both test files: Vitest exited 1 with `No test files
+  found` for the two exact boundary paths. After independent review hardening,
+  Boundary GREEN passed 2 files and 5 tests.
+- The focused P1 gate passed 14 files and 243 tests; the complete repository
+  regression gate passed 136 files and 1,246 tests. Both ran serially.
+- The TypeScript-parser source graph scanned the exact Gateway-emitted Core set:
+  8 production files and 20 module specifiers, with zero external specifiers,
+  unresolved/ambiguous relative specifiers, forbidden platform identifiers,
+  triple-slash/ambient references, parse diagnostics, or AST/preprocess
+  mismatches.
+- A reviewer-supplied synthetic RED proved that the original finite identifier
+  list caught only 5 of 16 browser transport/DOM/state surfaces. The shared
+  analyzer now classifies those surfaces explicitly, rejects all 16 synthetic
+  cases (including `BroadcastChannel`, `MessageChannel`, and `MessagePort`), and
+  separately proves that `globalThis.crypto`, `TextEncoder`, `TextDecoder`, and
+  ordinary ECMAScript globals remain allowed.
+- The default-jsdom browser consumer and explicit Node Gateway consumer both
+  validated the deterministic Project and keyed Runtime Protocol fixture, and
+  both matched the independently derived golden config revision
+  `e679de7f286e2aa5bd2c3e9ca72c32916d527c9b7a68af7a7639dc16ba519969`.
+- Lint, Gateway TypeScript emit, emitted `--check-config`, and the browser
+  production build each exited 0. The emitted smoke reported deployment defaults
+  and a not-ready Off state with no active revision.
+- No generated-output, dependency, report, result, or `.tsbuildinfo` path is
+  tracked; `package-lock.json` did not change. The main checkout's existing
+  untracked CAD directories remained present and unstaged.
+- The production build retained exactly the known warnings: OCCT caused browser
+  externalization notices for `path` and `crypto`, and Vite reported one chunk
+  larger than 500 kB after minification.
+- P1 is a dark foundation only. V4 Core, Gateway, and persistence contracts are
+  verified, but browser V4 authoring remains unexposed until P2.
