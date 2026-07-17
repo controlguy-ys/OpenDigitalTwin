@@ -4,6 +4,7 @@ import {
   MAX_TOTAL_JOB_STEPS_V4,
   failProjectV4,
   validateWorkcellProjectV4,
+  type RobotJobIdV4,
   type RobotJobStepV4,
   type WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
@@ -24,6 +25,11 @@ export interface JobCommandServiceV4 {
   addActionReference(jobId: string, actionId: string): Promise<void>
   moveStep(jobId: string, stepIndex: number, direction: -1 | 1): Promise<void>
   deleteStep(jobId: string, stepIndex: number): Promise<void>
+  setJointPoseSpeed(
+    jobId: RobotJobIdV4,
+    stepIndex: number,
+    speedPercentToNext: number,
+  ): Promise<void>
 }
 
 export interface JobCommandServiceOptionsV4 {
@@ -312,6 +318,35 @@ export function createJobCommandServiceV4(
             ...job,
             steps: job.steps.filter((_step, index) => index !== stepIndex),
           }))
+        },
+      })
+    },
+
+    async setJointPoseSpeed(jobId, stepIndex, speedPercentToNext) {
+      await options.mutations.replaceFromActive({
+        description: `Set Joint-Pose speed for step ${stepIndex} in Job ${jobId}`,
+        mutate(active) {
+          const job = requireJob(active, jobId)
+          assertEditable(active, job.robotId)
+          if (!Number.isSafeInteger(stepIndex) || stepIndex < 0 || stepIndex >= job.steps.length) {
+            commandFailure(
+              'JOB_STEP_INDEX_INVALID',
+              '$.stepIndex',
+              'Step index must address an existing Job step.',
+            )
+          }
+          const step = job.steps[stepIndex]!
+          if (step.kind !== 'joint-pose') {
+            commandFailure(
+              'JOB_STEP_NOT_JOINT_POSE',
+              `$.jobs.${jobId}.steps[${stepIndex}]`,
+              'Only a Joint-Pose step has a speed to the next Joint-Pose.',
+            )
+          }
+          const steps = job.steps.map((candidate, index) => index === stepIndex
+            ? { ...step, speedPercentToNext }
+            : candidate)
+          return validateCandidate(replaceJob(active, jobId, { ...job, steps }))
         },
       })
     },

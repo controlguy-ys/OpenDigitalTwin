@@ -585,4 +585,50 @@ describe('WorkcellV4 dark multi-Robot composition', () => {
     view.unmount()
     repository.revoke(handle)
   })
+
+  it('routes visual isolation without changing complete registration or collision proxies', async () => {
+    const project = v4Project(2)
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const definition = project.robotDefinitions[0]!
+    const handle = repository.stage(definition, preparedV4(project, 12))
+    repository.commitBatch([handle])
+    let registration: WorkcellRegistrationV4 | null = null
+    const common = {
+      geometryRepository: repository,
+      interaction: { onSelect: vi.fn(), onContextMenu: vi.fn() },
+      onRegister: (value: WorkcellRegistrationV4 | null) => {
+        if (value !== null) registration = value
+      },
+      project,
+      sceneRuntime: v4Projection(project),
+    }
+    const view = render(
+      <WorkcellV4
+        {...common}
+        viewIsolation={{ kind: 'robot', robotId: 'robot-1' }}
+      />,
+    )
+    await waitFor(() => expect(registration?.robots.size).toBe(2))
+    expect(registration!.robots.get('robot-1')!.root.visible).toBe(true)
+    expect(registration!.robots.get('robot-2')!.root.visible).toBe(false)
+    expect(registration!.spatialEntities.get('fixture-box')!.visible).toBe(false)
+    const proxyIds = registration!.collisionProxies.map(({ entity }) => entity.id)
+
+    view.rerender(
+      <WorkcellV4
+        {...common}
+        viewIsolation={{ kind: 'spatial-entity', entityId: 'fixture-box' }}
+      />,
+    )
+    await waitFor(() => {
+      expect(registration!.robots.get('robot-1')!.root.visible).toBe(false)
+      expect(registration!.robots.get('robot-2')!.root.visible).toBe(false)
+      expect(registration!.spatialEntities.get('fixture-box')!.visible).toBe(true)
+    })
+    expect(registration!.robots.size).toBe(2)
+    expect(registration!.spatialEntities.size).toBe(1)
+    expect(registration!.collisionProxies.map(({ entity }) => entity.id)).toEqual(proxyIds)
+    view.unmount()
+    repository.revoke(handle)
+  })
 })

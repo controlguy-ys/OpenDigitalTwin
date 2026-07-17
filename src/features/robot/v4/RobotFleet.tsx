@@ -16,6 +16,10 @@ import type {
   SceneRuntimeProjectionV4,
   SceneRuntimeRobotEntityV4,
 } from '../../scene/v4/scene-runtime-selector'
+import type {
+  SceneIsolationTargetV4,
+} from '../../interaction/v4/scene-selection.js'
+import type { WorkcellInteractionHandlersV4 } from '../../scene/v4/scene-context-request.js'
 import {
   RobotInstanceModelV4,
   type RobotInstanceRegistrationV4,
@@ -40,6 +44,8 @@ export interface RobotFleetPropsV4 {
   readonly onRegister: (
     registration: RobotFleetRegistrationV4 | null,
   ) => void
+  readonly interaction?: WorkcellInteractionHandlersV4
+  readonly viewIsolation?: SceneIsolationTargetV4 | null
 }
 
 interface FleetEntryRegistrationV4 {
@@ -106,6 +112,8 @@ export function RobotFleetV4({
   geometryRepository,
   geometryPublications,
   onRegister,
+  interaction,
+  viewIsolation = null,
 }: RobotFleetPropsV4): ReactNode {
   const mounted = useRef(true)
   const registrations = useRef(new Map<RobotIdV4, FleetEntryRegistrationV4>())
@@ -179,6 +187,10 @@ export function RobotFleetV4({
           robot={robot}
           robotId={robot.id}
           runtime={runtime as SceneRuntimeRobotEntityV4}
+          viewVisible={viewIsolation === null || (
+            viewIsolation.kind === 'robot' && viewIsolation.robotId === robot.id
+          )}
+          {...(interaction === undefined ? {} : { interaction })}
         />
       </Fragment>
     )

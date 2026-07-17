@@ -4,6 +4,23 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { simulationJointSource } from '../features/joints/SimulationJointSource'
 import { useRobotStore } from '../features/joints/robot-store'
+import {
+  projectAtLimit,
+} from '../core/project-v4/test-support.js'
+import {
+  validateWorkcellProjectV4,
+} from '../core/project-v4/index.js'
+import { createInteractionStoreV4 } from '../features/interaction/v4/interaction-store.js'
+import type { JobCommandServiceV4 } from '../features/jobs/v4/job-command-service.js'
+import { RobotJobListV4 } from '../features/jobs/v4/RobotJobList.js'
+import { createJobRuntimeStoreV4 } from '../features/jobs/v4/job-runtime-store.js'
+import type { RobotJobPlaybackControllerV4 } from '../features/jobs/v4/simulation-clock.js'
+import { createRobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
+import type { SceneCommandServiceV4 } from '../features/scene/v4/scene-command-service.js'
+import { SceneEntityInspectorV4 } from '../features/scene/v4/SceneEntityInspector.js'
+import { SceneExplorerV4 } from '../features/scene/v4/SceneExplorer.js'
+import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selector.js'
+import { TimelineV4 } from '../features/ui/v4/Timeline.js'
 import { App, RobotTargetInspector } from './App'
 import { AppShell } from './AppShell'
 
@@ -166,6 +183,150 @@ describe('AppShell', () => {
     expect(screen.getByLabelText('Timeline and Events')).toContainElement(
       screen.getByText('Bottom content'),
     )
+  })
+
+  it('bounds the complete dark V4 workspace with an adjustable split and theme-only preferences', async () => {
+    const user = userEvent.setup()
+    const robotsSource = projectAtLimit('robots', 8)
+    const entitiesSource = projectAtLimit('spatialEntities', 256)
+    const project = validateWorkcellProjectV4({
+      ...robotsSource,
+      revisionId: 'revision-v4-shell-presentation',
+      spatialEntities: entitiesSource.spatialEntities,
+      jobs: Array.from({ length: 32 }, (_, index) => ({
+        id: `job-${index + 1}`,
+        name: `Job ${index + 1}`,
+        robotId: `robot-${index % 8 + 1}`,
+        steps: [{
+          kind: 'joint-pose' as const,
+          jointValues: { J1: index },
+          speedPercentToNext: 100,
+        }],
+      })),
+    })
+    const robots = createRobotRuntimeRegistryV4()
+    robots.getState().replaceProject(project)
+    const jobs = createJobRuntimeStoreV4()
+    jobs.getState().replaceProject(project)
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    interaction.getState().select({ kind: 'robot', robotId: 'robot-1' })
+    interaction.getState().selectJob('robot-1', 'job-1')
+    const runtime = selectSceneRuntimeV4(project, robots.getState())
+    const sceneCommands = {} as SceneCommandServiceV4
+    const jobCommands = {} as JobCommandServiceV4
+    const playback: RobotJobPlaybackControllerV4 = {
+      startJob: vi.fn(() => ({ runId: 'unused' })),
+      cancelRobotJob: vi.fn(),
+      ensureRunning: vi.fn(),
+      dispose: vi.fn(),
+    }
+    const projectBefore = JSON.stringify(project)
+    const runtimeBefore = runtime
+    localStorage.setItem('robotsim.theme', 'dark')
+    localStorage.setItem('robotsim.inspectorDrawerOpen', 'true')
+    localStorage.setItem('robotsim.bottomDrawerOpen', 'true')
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: query === '(prefers-color-scheme: dark)',
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })))
+
+    render(
+      <AppShell
+        assetTree={(
+          <SceneExplorerV4
+            commands={sceneCommands}
+            interaction={interaction}
+            onContextRequest={vi.fn()}
+            onFocus={vi.fn()}
+            project={project}
+            runtime={runtime}
+          />
+        )}
+        bottomRail={(
+          <TimelineV4
+            commands={jobCommands}
+            jobId="job-1"
+            jobs={jobs}
+            playback={playback}
+            project={project}
+            robotId="robot-1"
+          />
+        )}
+        inspector={(
+          <SceneEntityInspectorV4
+            interaction={interaction}
+            jobCommands={jobCommands}
+            jobs={jobs}
+            project={project}
+            robots={robots}
+            runtime={runtime}
+            sceneCommands={sceneCommands}
+            selectedJobId="job-1"
+            selection={{ kind: 'robot', robotId: 'robot-1' }}
+          />
+        )}
+        jobTree={(
+          <RobotJobListV4
+            commands={jobCommands}
+            interaction={interaction}
+            jobs={jobs}
+            playback={playback}
+            project={project}
+            selectedRobotId="robot-1"
+          />
+        )}
+        viewport={<div>V4 3D viewport</div>}
+      />,
+    )
+
+    const shell = screen.getByLabelText('3D viewport').closest('.app-shell')
+    const scenePane = screen.getByRole('region', { name: 'Scene Objects' })
+    const jobPane = screen.getByRole('region', { name: 'Robot Jobs' })
+    expect(shell).toHaveStyle({ height: '100dvh', overflow: 'hidden' })
+    expect(scenePane).toContainElement(screen.getByRole('tree', { name: 'Scene Objects' }))
+    expect(jobPane).toContainElement(screen.getByRole('tree', { name: 'Robot Jobs' }))
+    expect(screen.getByTestId('scene-tree-scroll')).toHaveStyle({
+      minHeight: 0,
+      overflow: 'auto',
+    })
+    expect(jobPane.querySelector('.robot-job-scroll')).toBeInTheDocument()
+    expect(screen.getByLabelText('Inspector')).toContainElement(
+      screen.getByLabelText('Robot inspector'),
+    )
+    expect(screen.getByLabelText('Timeline and Events')).toContainElement(
+      screen.getByRole('heading', { name: 'Timeline' }),
+    )
+    expect(screen.getByRole('button', { name: 'Entity 256' })).toBeInTheDocument()
+    expect(screen.getByRole('treeitem', { name: /Job 25/ })).toBeInTheDocument()
+    expect(screen.getByLabelText('Inspector')).toHaveClass('is-open')
+    expect(screen.getByLabelText('Timeline and Events')).toHaveClass('is-open')
+
+    const divider = screen.getByRole('separator', {
+      name: 'Resize Scene Objects and Robot Jobs',
+    })
+    for (let index = 0; index < 100; index += 1) {
+      fireEvent.keyDown(divider, { key: 'ArrowDown' })
+    }
+    expect(divider).toHaveAttribute('aria-valuenow', '75')
+    for (let index = 0; index < 100; index += 1) {
+      fireEvent.keyDown(divider, { key: 'ArrowUp' })
+    }
+    expect(divider).toHaveAttribute('aria-valuenow', '35')
+
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'light')
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'system')
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+    expect(JSON.stringify(project)).toBe(projectBefore)
+    expect(runtime).toBe(runtimeBefore)
   })
 
   it('persists the draggable 60/40 split only in browser preferences', () => {

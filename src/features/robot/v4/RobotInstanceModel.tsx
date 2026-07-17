@@ -1,5 +1,5 @@
 import { Html } from '@react-three/drei/web/Html.js'
-import { createPortal } from '@react-three/fiber'
+import { createPortal, type ThreeEvent } from '@react-three/fiber'
 import {
   useEffect,
   useMemo,
@@ -29,6 +29,7 @@ import {
   type CollisionGeometryProxyV4,
 } from '../../collision/scene-entity-adapter'
 import type { SceneRuntimeRobotEntityV4 } from '../../scene/v4/scene-runtime-selector'
+import type { WorkcellInteractionHandlersV4 } from '../../scene/v4/scene-context-request.js'
 import type {
   AcquiredRobotDefinitionGeometryV4,
   RobotDefinitionGeometryPublicationHandleV4,
@@ -58,6 +59,8 @@ export interface RobotInstanceModelPropsV4 {
   readonly onRegister: (
     registration: RobotInstanceRegistrationV4 | null,
   ) => void
+  readonly interaction?: WorkcellInteractionHandlersV4
+  readonly viewVisible?: boolean
 }
 
 function applyPoseV4(object: Object3D, pose: RigidTransformV4): void {
@@ -196,6 +199,8 @@ export function RobotInstanceModelV4({
   geometryRepository,
   geometryPublication,
   onRegister,
+  interaction,
+  viewVisible = true,
 }: RobotInstanceModelPropsV4): ReactNode {
   const [buildState, setBuildState] = useState<RobotInstanceBuildStateV4 | null>(null)
   const [registration, setRegistration] = useState<RobotInstanceRegistrationV4 | null>(null)
@@ -301,7 +306,7 @@ export function RobotInstanceModelV4({
     if (buildState === null) return
     try {
       applyPoseV4(buildState.root, runtime.worldBasePose)
-      buildState.root.visible = runtime.effectiveVisible
+      buildState.root.visible = runtime.effectiveVisible && viewVisible
       for (const link of definition.links) {
         const pose = runtime.serialPose.linkLocalPoses[link.id]
         const linkObject = buildState.linkObjects.get(link.id)
@@ -336,17 +341,50 @@ export function RobotInstanceModelV4({
     } catch (error) {
       buildState.dispose({ error })
     }
-  }, [buildState, definition, robot.id, runtime])
+  }, [buildState, definition, robot.id, runtime, viewVisible])
 
   if (registration === null) return null
   const overlayFrameId = robot.numericStatus.overlay.frameId
     ?? runtime.selectedTcpFrameId
   const overlayAnchor = registration.frameObjects.get(overlayFrameId)
 
+  const selectionForHit = (hit: Object3D | undefined) => {
+    let current = hit
+    while (current !== undefined && current !== null) {
+      for (const [linkId, linkObject] of registration.linkObjects) {
+        if (linkObject === current) {
+          return { kind: 'robot-link' as const, robotId: robot.id, linkId }
+        }
+      }
+      if (current === registration.root) break
+      current = current.parent ?? undefined
+    }
+    return { kind: 'robot' as const, robotId: robot.id }
+  }
+  const hitFromEvent = (
+    event: ThreeEvent<PointerEvent | MouseEvent>,
+  ): Object3D | undefined => event.object ?? (
+    event.nativeEvent as Event & { readonly object?: Object3D }
+  ).object
+  const interactionProps = interaction === undefined ? {} : {
+    onContextMenu: (event: ThreeEvent<MouseEvent>) => {
+      event.stopPropagation()
+      event.nativeEvent.preventDefault()
+      interaction.onContextMenu(selectionForHit(hitFromEvent(event)), {
+        x: event.nativeEvent.clientX,
+        y: event.nativeEvent.clientY,
+      })
+    },
+    onPointerDown: (event: ThreeEvent<PointerEvent>) => {
+      event.stopPropagation()
+      interaction.onSelect(selectionForHit(hitFromEvent(event)))
+    },
+  }
+
   return (
     <>
-      <primitive object={registration.root} />
-      {robot.numericStatus.overlay.visible && overlayAnchor !== undefined
+      <primitive object={registration.root} {...interactionProps} />
+      {viewVisible && robot.numericStatus.overlay.visible && overlayAnchor !== undefined
         ? createPortal(
             <NumericStatusOverlayV4
               name={robot.name}

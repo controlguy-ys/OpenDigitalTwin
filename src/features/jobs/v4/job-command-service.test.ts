@@ -253,6 +253,91 @@ describe('JobCommandServiceV4', () => {
     }
   })
 
+  it.each([1, 100])('persists Joint-Pose speed %s by replacing only that step', async (speed) => {
+    const originalAction = action('action-1')
+    const originalPose = pose({ J1: 10 }, 50)
+    const project = withJobs(makeMinimalWorkcellProjectV4(), [{
+      id: 'job-a',
+      name: 'A',
+      robotId: 'robot-1',
+      steps: [originalAction, originalPose],
+    }], [robotAction('action-1')])
+    const harness = commandHarness(project)
+
+    await runOne(harness, () => harness.service.setJointPoseSpeed('job-a', 1, speed))
+
+    expect(harness.mutations.active.jobs[0]?.steps).toEqual([
+      originalAction,
+      pose({ J1: 10 }, speed),
+    ])
+  })
+
+  it.each([0, 101])('rejects Joint-Pose speed %s inside the queued recipe', async (speed) => {
+    const project = withJobs(makeMinimalWorkcellProjectV4(), [{
+      id: 'job-a', name: 'A', robotId: 'robot-1', steps: [pose()],
+    }])
+    const harness = commandHarness(project)
+
+    await rejectOne(
+      harness,
+      () => harness.service.setJointPoseSpeed('job-a', 0, speed),
+      'PROJECT_VALUE_INVALID',
+    )
+  })
+
+  it('rejects an Action-reference speed edit without adding a speed field', async () => {
+    const project = withJobs(makeMinimalWorkcellProjectV4(), [{
+      id: 'job-a', name: 'A', robotId: 'robot-1', steps: [action('action-1')],
+    }], [robotAction('action-1')])
+    const harness = commandHarness(project)
+
+    await rejectOne(
+      harness,
+      () => harness.service.setJointPoseSpeed('job-a', 0, 50),
+      'JOB_STEP_NOT_JOINT_POSE',
+    )
+    expect(harness.mutations.active.jobs[0]?.steps[0]).toEqual(action('action-1'))
+  })
+
+  it('blocks a speed edit for its running Robot but not for an unrelated running Robot', async () => {
+    const project = withJobs(twoRobotProject(), [
+      { id: 'job-a', name: 'A', robotId: 'robot-1', steps: [pose()] },
+      { id: 'job-b', name: 'B', robotId: 'robot-2', steps: [pose()] },
+    ])
+    const blocked = commandHarness(project)
+    setRunning(blocked, 'robot-1', 'job-a')
+    await rejectOne(
+      blocked,
+      () => blocked.service.setJointPoseSpeed('job-a', 0, 25),
+      'ROBOT_JOB_EDIT_WHILE_RUNNING',
+    )
+
+    const independent = commandHarness(project)
+    setRunning(independent, 'robot-1', 'job-a')
+    await runOne(
+      independent,
+      () => independent.service.setJointPoseSpeed('job-b', 0, 25),
+    )
+    expect(independent.mutations.active.jobs[1]?.steps[0]).toEqual(pose({ J1: 0 }, 25))
+  })
+
+  it('rechecks the current queued Project before changing a Joint-Pose speed', async () => {
+    const initial = withJobs(makeMinimalWorkcellProjectV4(), [{
+      id: 'job-a', name: 'A', robotId: 'robot-1', steps: [pose()],
+    }])
+    const changed = withJobs(initial, [{
+      id: 'job-a', name: 'A', robotId: 'robot-1', steps: [action('action-1')],
+    }], [robotAction('action-1')])
+    const harness = commandHarness(initial)
+
+    await rejectOne(
+      harness,
+      () => harness.service.setJointPoseSpeed('job-a', 0, 25),
+      'JOB_STEP_NOT_JOINT_POSE',
+      changed,
+    )
+  })
+
   it('accepts compatible Robot and ownerless detach Actions and rejects another Robot Action', async () => {
     const source = projectAtLimit('spatialEntities', 1)
     const robot1 = source.robots[0]!
@@ -464,6 +549,7 @@ describe('JobCommandServiceV4', () => {
     ['add action', (service: JobCommandServiceV4) => service.addActionReference('job-a', 'action-1')],
     ['move step', (service: JobCommandServiceV4) => service.moveStep('job-a', 0, 1)],
     ['delete step', (service: JobCommandServiceV4) => service.deleteStep('job-a', 0)],
+    ['set pose speed', (service: JobCommandServiceV4) => service.setJointPoseSpeed('job-a', 0, 50)],
   ] as const
 
   it.each(runningCommands)('rejects %s for a running Robot', async (_name, invoke) => {

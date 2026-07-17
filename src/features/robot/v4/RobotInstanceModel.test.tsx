@@ -1,5 +1,11 @@
 import { StrictMode } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import {
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
   BoxGeometry,
@@ -350,5 +356,65 @@ describe('RobotInstanceModelV4', () => {
     repository.revoke(handle)
     expect(source.disposeResources).toHaveBeenCalledOnce()
     consoleError.mockRestore()
+  })
+
+  it('emits qualified Link/Robot interactions and isolates visuals without changing proxies', async () => {
+    const { definition, robot } = fixture()
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const source = preparedFor(definition)
+    const handle = repository.stage(definition, source.resource)
+    repository.commitBatch([handle])
+    const onSelect = vi.fn()
+    const onContextMenu = vi.fn()
+    let registration: RobotInstanceRegistrationV4 | null = null
+    const common = {
+      definition,
+      geometryPublication: repository.readCurrent(definition.id)!,
+      geometryRepository: repository,
+      interaction: { onSelect, onContextMenu },
+      onRegister: (value: RobotInstanceRegistrationV4 | null) => {
+        if (value !== null) registration = value
+      },
+      robot,
+      runtime: runtime(robot, definition, 0, 0, 12),
+    }
+    const view = render(<RobotInstanceModelV4 {...common} viewVisible />)
+    await waitFor(() => expect(registration).not.toBeNull())
+    const primitive = view.container.querySelector('primitive')!
+
+    const linkEvent = createEvent.pointerDown(primitive)
+    Object.defineProperty(linkEvent, 'object', {
+      value: registration!.linkObjects.get('L1'),
+    })
+    fireEvent(primitive, linkEvent)
+    expect(onSelect).toHaveBeenCalledWith({
+      kind: 'robot-link',
+      robotId: robot.id,
+      linkId: 'L1',
+    })
+
+    const contextEvent = createEvent.contextMenu(primitive, {
+      clientX: 14,
+      clientY: 28,
+    })
+    Object.defineProperty(contextEvent, 'object', {
+      value: registration!.root.getObjectByName('robot-geometry-unresolved')
+        ?? registration!.root,
+    })
+    fireEvent(primitive, contextEvent)
+    expect(onContextMenu).toHaveBeenCalledWith(
+      { kind: 'robot', robotId: robot.id },
+      { x: 14, y: 28 },
+    )
+
+    const proxyIds = registration!.collisionProxies.map(({ entity }) => entity.id)
+    view.rerender(<RobotInstanceModelV4 {...common} viewVisible={false} />)
+    await waitFor(() => expect(registration!.root.visible).toBe(false))
+    expect(registration!.collisionProxies.map(({ entity }) => entity.id)).toEqual(proxyIds)
+    expect(screen.queryByRole('status', { name: 'Robot 1 numeric status' }))
+      .not.toBeInTheDocument()
+
+    view.unmount()
+    repository.revoke(handle)
   })
 })

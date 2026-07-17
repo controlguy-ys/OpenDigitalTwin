@@ -1,5 +1,11 @@
 import { StrictMode } from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import {
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
   BoxGeometry,
@@ -790,5 +796,87 @@ describe('SpatialEntitySceneV4', () => {
     expect(materialDispose).toHaveBeenCalledTimes(project.spatialEntities.length * 2)
     geometryDispose.mockRestore()
     materialDispose.mockRestore()
+  })
+
+  it('isolates Spatial visuals and emits exact identity without changing registration or proxies', async () => {
+    const source = spatialProject()
+    const project: WorkcellProjectV4 = {
+      ...source,
+      revisionId: 'spatial-isolation-revision',
+      sceneGroups: [
+        ...source.sceneGroups,
+        { id: 'group-root', name: 'Root', parentGroupId: null, visible: true },
+        { id: 'group-child', name: 'Child', parentGroupId: 'group-root', visible: true },
+      ],
+      spatialEntities: source.spatialEntities.map((candidate) => (
+        candidate.id === 'box-entity'
+          ? { ...candidate, groupId: 'group-root' }
+          : candidate.id === 'cylinder-entity'
+            ? { ...candidate, groupId: 'group-child' }
+            : candidate
+      )),
+    }
+    const onSelect = vi.fn()
+    const onContextMenu = vi.fn()
+    let registration: SpatialEntitySceneRegistrationV4 | null = null
+    const common = {
+      interaction: { onSelect, onContextMenu },
+      onRegister: (value: SpatialEntitySceneRegistrationV4 | null) => {
+        if (value !== null) registration = value
+      },
+      project,
+      sceneRuntime: runtimeFor(project),
+    }
+    const view = render(
+      <SpatialEntitySceneV4
+        {...common}
+        viewIsolation={{ kind: 'scene-group', groupId: 'group-root' }}
+      />,
+    )
+    await waitFor(() => expect(registration?.roots.size).toBe(3))
+    expect(registration!.roots.get('box-entity')!.visible).toBe(true)
+    expect(registration!.roots.get('cylinder-entity')!.visible).toBe(true)
+    expect(registration!.roots.get('asset-entity')!.visible).toBe(false)
+    expect(screen.getByRole('status', { name: 'box-entity numeric status' })).toBeVisible()
+    expect(screen.queryByRole('status', { name: 'asset-entity numeric status' }))
+      .not.toBeInTheDocument()
+
+    const primitive = view.container.querySelectorAll('primitive')[0]!
+    fireEvent(primitive, createEvent.pointerDown(primitive))
+    expect(onSelect).toHaveBeenCalledWith({
+      kind: 'spatial-entity',
+      entityId: 'box-entity',
+    })
+    fireEvent.contextMenu(primitive, { clientX: 31, clientY: 47 })
+    expect(onContextMenu).toHaveBeenCalledWith(
+      { kind: 'spatial-entity', entityId: 'box-entity' },
+      { x: 31, y: 47 },
+    )
+
+    const proxyIds = registration!.collisionProxies.map(({ entity }) => entity.id)
+    view.rerender(
+      <SpatialEntitySceneV4
+        {...common}
+        viewIsolation={{ kind: 'robot', robotId: 'robot-1' }}
+      />,
+    )
+    await waitFor(() => {
+      expect([...registration!.roots.values()].every(({ visible }) => !visible)).toBe(true)
+    })
+    expect(registration!.roots.size).toBe(3)
+    expect(registration!.collisionProxies.map(({ entity }) => entity.id)).toEqual(proxyIds)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+
+    view.rerender(
+      <SpatialEntitySceneV4
+        {...common}
+        viewIsolation={{ kind: 'spatial-entity', entityId: 'asset-entity' }}
+      />,
+    )
+    await waitFor(() => {
+      expect(registration!.roots.get('asset-entity')!.visible).toBe(true)
+      expect(registration!.roots.get('box-entity')!.visible).toBe(false)
+    })
+    view.unmount()
   })
 })

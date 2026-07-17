@@ -1,5 +1,5 @@
 import { Html } from '@react-three/drei/web/Html.js'
-import { createPortal } from '@react-three/fiber'
+import { createPortal, type ThreeEvent } from '@react-three/fiber'
 import {
   useEffect,
   useRef,
@@ -24,6 +24,7 @@ import {
   type Vector3V4,
 } from '../../../core/project-v4/rigid-transform'
 import type {
+  SceneGroupIdV4,
   SpatialEntityIdV4,
   SpatialEntityV4,
   WorkcellProjectV4,
@@ -33,6 +34,8 @@ import {
   spatialEntityCollisionProxyV4,
   type CollisionGeometryProxyV4,
 } from '../../collision/scene-entity-adapter'
+import type { SceneIsolationTargetV4 } from '../../interaction/v4/scene-selection.js'
+import type { WorkcellInteractionHandlersV4 } from './scene-context-request.js'
 import type {
   SceneRuntimeProjectionV4,
   SceneRuntimeSpatialEntityV4,
@@ -49,6 +52,8 @@ export interface SpatialEntityScenePropsV4 {
   readonly onRegister: (
     registration: SpatialEntitySceneRegistrationV4 | null,
   ) => void
+  readonly interaction?: WorkcellInteractionHandlersV4
+  readonly viewIsolation?: SceneIsolationTargetV4 | null
 }
 
 interface LocalBoundsV4 {
@@ -328,6 +333,7 @@ function projectRuntimeStateV4(
   resources: SpatialSceneResourcesV4,
   project: WorkcellProjectV4,
   sceneRuntime: SceneRuntimeProjectionV4,
+  viewIsolation: SceneIsolationTargetV4 | null,
 ): Omit<SpatialRenderStateV4, 'resources'> {
   if (sceneRuntime.projectRevisionId !== project.revisionId) {
     throw new Error('Spatial Entity Scene runtime and Project revisions must match.')
@@ -346,7 +352,9 @@ function projectRuntimeStateV4(
     }
     const spatialRuntime = runtime as SceneRuntimeSpatialEntityV4
     applyPoseV4(record.root, spatialRuntime.worldPose)
-    record.root.visible = spatialRuntime.effectiveVisible
+    const viewVisible = spatialRuntime.effectiveVisible
+      && spatialEntityVisibleInIsolationV4(project, entity, viewIsolation)
+    record.root.visible = viewVisible
     if (!spatialRuntime.effectiveVisible) continue
 
     visibleRoots.set(entity.id, record.root)
@@ -356,7 +364,7 @@ function projectRuntimeStateV4(
       effectiveVisible: true,
     })
     if (proxy !== null) proxies.push(proxy)
-    if (entity.numericStatus.overlay.visible) {
+    if (viewVisible && entity.numericStatus.overlay.visible) {
       if (entity.numericStatus.overlay.frameId === null) {
         record.overlayAnchor.position.set(
           record.bounds.center[0],
@@ -390,6 +398,32 @@ function projectRuntimeStateV4(
   }
 }
 
+function groupContainsV4(
+  project: WorkcellProjectV4,
+  descendantId: SceneGroupIdV4 | null,
+  ancestorId: SceneGroupIdV4,
+): boolean {
+  let currentId = descendantId
+  while (currentId !== null) {
+    if (currentId === ancestorId) return true
+    currentId = project.sceneGroups.find(({ id }) => id === currentId)?.parentGroupId ?? null
+  }
+  return false
+}
+
+function spatialEntityVisibleInIsolationV4(
+  project: WorkcellProjectV4,
+  entity: SpatialEntityV4,
+  isolation: SceneIsolationTargetV4 | null,
+): boolean {
+  if (isolation === null) return true
+  if (isolation.kind === 'spatial-entity') return isolation.entityId === entity.id
+  if (isolation.kind === 'scene-group') {
+    return groupContainsV4(project, entity.groupId, isolation.groupId)
+  }
+  return false
+}
+
 function NumericStatusOverlayV4({
   name,
   value,
@@ -407,6 +441,8 @@ export function SpatialEntitySceneV4({
   project,
   sceneRuntime,
   onRegister,
+  interaction,
+  viewIsolation = null,
 }: SpatialEntityScenePropsV4): ReactNode {
   const [resources, setResources] = useState<SpatialSceneResourcesV4 | null>(null)
   const [renderState, setRenderState] = useState<SpatialRenderStateV4 | null>(null)
@@ -447,7 +483,12 @@ export function SpatialEntitySceneV4({
       : null
     let projected: Omit<SpatialRenderStateV4, 'resources'>
     try {
-      projected = projectRuntimeStateV4(resources, project, sceneRuntime)
+      projected = projectRuntimeStateV4(
+        resources,
+        project,
+        sceneRuntime,
+        viewIsolation,
+      )
     } catch (error) {
       let failure: AttemptFailureV4 = { present: true, value: error }
       if (previousActive !== null) {
@@ -487,14 +528,29 @@ export function SpatialEntitySceneV4({
       failure = disposeResourcesV4(resources, failure)
       throw failure.value
     }
-  }, [onRegister, project, resourceSignature, resources, sceneRuntime])
+  }, [onRegister, project, resourceSignature, resources, sceneRuntime, viewIsolation])
 
   if (renderState === null || renderState.resources.disposed) return null
   return (
     <>
-      {[...renderState.registration.roots].map(([entityId, root]) => (
-        <primitive key={entityId} object={root} />
-      ))}
+      {[...renderState.registration.roots].map(([entityId, root]) => {
+        const selection = { kind: 'spatial-entity' as const, entityId }
+        const interactionProps = interaction === undefined ? {} : {
+          onContextMenu: (event: ThreeEvent<MouseEvent>) => {
+            event.stopPropagation()
+            event.nativeEvent.preventDefault()
+            interaction.onContextMenu(selection, {
+              x: event.nativeEvent.clientX,
+              y: event.nativeEvent.clientY,
+            })
+          },
+          onPointerDown: (event: ThreeEvent<PointerEvent>) => {
+            event.stopPropagation()
+            interaction.onSelect(selection)
+          },
+        }
+        return <primitive key={entityId} object={root} {...interactionProps} />
+      })}
       {renderState.overlays.map(({ anchor, name, value }) => (
         <FragmentOverlayV4
           anchor={anchor}

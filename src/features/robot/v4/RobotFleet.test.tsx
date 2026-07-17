@@ -289,4 +289,66 @@ describe('RobotFleetV4', () => {
     expect(source.resource.lifecycleState).toBe('DISPOSED')
     consoleError.mockRestore()
   })
+
+  it('isolates only Robot visuals while retaining the complete visible Fleet registration', async () => {
+    const project = twoRobotProject()
+    const repository = createRobotDefinitionGeometryRepositoryV4()
+    const source = prepared(project)
+    const definition = project.robotDefinitions[0]!
+    const handle = repository.stage(definition, source.resource)
+    repository.commitBatch([handle])
+    let registration: RobotFleetRegistrationV4 | null = null
+    const common = {
+      geometryPublications: new Map([[
+        definition.id,
+        repository.readCurrent(definition.id)!,
+      ]]),
+      geometryRepository: repository,
+      interaction: { onSelect: vi.fn(), onContextMenu: vi.fn() },
+      onRegister: (value: RobotFleetRegistrationV4 | null) => {
+        if (value !== null) registration = value
+      },
+      project,
+      sceneRuntime: projection(project),
+    }
+    const view = render(
+      <RobotFleetV4
+        {...common}
+        viewIsolation={{ kind: 'robot', robotId: 'robot-a' }}
+      />,
+    )
+    await waitFor(() => expect(registration?.robots.size).toBe(2))
+    const robotA = registration!.robots.get('robot-a')!
+    const robotB = registration!.robots.get('robot-b')!
+    expect(robotA.root.visible).toBe(true)
+    expect(robotB.root.visible).toBe(false)
+    const proxyCount = [...registration!.robots.values()].reduce(
+      (sum, robotRegistration) => sum + robotRegistration.collisionProxies.length,
+      0,
+    )
+
+    view.rerender(
+      <RobotFleetV4
+        {...common}
+        viewIsolation={{ kind: 'scene-group', groupId: 'unrelated-group' }}
+      />,
+    )
+    await waitFor(() => {
+      expect(robotA.root.visible).toBe(false)
+      expect(robotB.root.visible).toBe(false)
+    })
+    expect(registration!.robots.size).toBe(2)
+    expect([...registration!.robots.values()].reduce(
+      (sum, robotRegistration) => sum + robotRegistration.collisionProxies.length,
+      0,
+    )).toBe(proxyCount)
+
+    view.rerender(<RobotFleetV4 {...common} viewIsolation={null} />)
+    await waitFor(() => {
+      expect(robotA.root.visible).toBe(true)
+      expect(robotB.root.visible).toBe(true)
+    })
+    view.unmount()
+    repository.revoke(handle)
+  })
 })
