@@ -54,6 +54,7 @@ import {
   type ShellLayoutControllerV4,
 } from '../features/ui/v4/shell-layout-controller.js'
 import { initialShellLayoutBoundsV4 } from '../features/ui/v4/shell-layout-geometry.js'
+import type { ShellDockV4 } from '../features/ui/v4/shell-layout-store.js'
 import { AppShellV4 } from './AppShell.js'
 import { createInitialProjectBootstrapV4 } from './initial-project-bootstrap.js'
 
@@ -95,7 +96,7 @@ const INACTIVE_SHELL_LAYOUT_SNAPSHOT_V4: ShellLayoutControllerSnapshotV4 = Objec
   overlays: Object.freeze({ sidebarOpen: false, inspectorOpen: false, bottomOpen: false }),
   resolved: Object.freeze({ sidebarWidthPx: 248, inspectorWidthPx: 320, bottomHeightPx: 160, viewportWidthPx: 620 }),
   safeAreaInsets: Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 }),
-  isDockVisible: (dock) => dock === 'sidebar' || dock === 'inspector',
+  isDockVisible: (dock: ShellDockV4) => dock === 'sidebar' || dock === 'inspector',
   isRibbonExpanded: () => true,
 })
 
