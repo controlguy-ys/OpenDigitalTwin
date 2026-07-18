@@ -13,6 +13,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 
 import { validateStateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
+import type { WorkcellProjectV4 } from '../../src/core/project-v4/index.js'
 import { makeMinimalWorkcellProjectV4 } from '../../src/core/project-v4/test-support.js'
 import {
   compileOpcUaClientReadPlanV1,
@@ -33,7 +34,7 @@ async function eventually(
   }
 }
 
-function projectWithEntityPoseMapping() {
+function projectWithEntityPoseMapping(): WorkcellProjectV4 {
   const project = makeMinimalWorkcellProjectV4()
   const endpointId = 'endpoint-live'
   const entityId = 'box-live'
@@ -113,7 +114,7 @@ function projectWithEntityPoseMapping() {
   }
 }
 
-function projectWithEntityStatusMapping() {
+function projectWithEntityStatusMapping(): WorkcellProjectV4 {
   const project = projectWithEntityPoseMapping()
   const endpointId = project.opcUa.endpoints[0]!.endpointId
   return {
