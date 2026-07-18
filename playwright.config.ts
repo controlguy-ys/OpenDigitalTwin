@@ -2,7 +2,6 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: 'project-v4-multi-robot.spec.ts',
   timeout: 300_000,
   workers: 1,
   expect: { timeout: 15_000 },

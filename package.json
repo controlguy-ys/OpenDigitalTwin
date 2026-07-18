@@ -29,8 +29,9 @@
     "deploy:smoke": "node scripts/deployment/smoke-deployment.mjs",
     "deploy:smoke:opcua": "node scripts/deployment/smoke-deployment.mjs --opcua",
     "test:e2e:v4": "playwright test tests/project-v4-multi-robot.spec.ts",
-    "test:e2e": "npm run test:e2e:v4",
-    "verify": "npm run lint && npm run test:run && npm run cad:validate && npm run deploy:validate && npm run build:gateway && node dist-gateway/middleware/runtime-gateway/main.js --check-config && npm run build && npm run test:e2e:v4"
+    "test:e2e:viewport": "playwright test tests/viewport-context-viewcube.spec.ts",
+    "test:e2e": "npm run test:e2e:v4 && npm run test:e2e:viewport",
+    "verify": "npm run lint && npm run test:run && npm run cad:validate && npm run deploy:validate && npm run build:gateway && node dist-gateway/middleware/runtime-gateway/main.js --check-config && npm run build && npm run test:e2e"
   },
   "dependencies": {
     "@react-three/drei": "10.7.7",
