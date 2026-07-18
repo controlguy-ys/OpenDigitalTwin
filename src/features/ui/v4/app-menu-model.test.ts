@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest'
 
 import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-registry.js'
 import type { AppCommandV4 } from '../../commands/v4/app-command.js'
-import { buildAppMenuModelV4 } from './app-menu-model.js'
+import { APP_MENU_SECTIONS_V4, buildAppMenuModelV4 } from './app-menu-model.js'
 
 function command(id: string, section: AppCommandV4['section'], visible = true): AppCommandV4 {
   return { id, label: id, section, kind: 'action', visible, enabled: true, execute() {} }
 }
 
 describe('buildAppMenuModelV4', () => {
+  it('freezes every canonical section descriptor', () => {
+    expect(APP_MENU_SECTIONS_V4.every((section) => Object.isFrozen(section))).toBe(true)
+  })
   it('keeps placement order, submenus, separators, and cross-section ids', () => {
     const commands = [
       command('project.new', 'project'), command('project.save', 'project'), command('project.import', 'project'), command('project.export', 'project'), command('project.sample.dual', 'project'),

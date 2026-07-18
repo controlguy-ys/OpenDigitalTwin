@@ -3,10 +3,10 @@ import type { AppCommandRegistryV4 } from '../../commands/v4/app-command-registr
 import { APP_COMMAND_PLACEMENTS_BY_SECTION_V4 } from '../../../app/v4/app-command-composition.js'
 
 export const APP_MENU_SECTIONS_V4 = Object.freeze([
-  { id: 'project', label: 'Project' }, { id: 'home', label: 'Home' },
-  { id: 'model', label: 'Model' }, { id: 'job', label: 'Job' },
-  { id: 'simulation', label: 'Simulation' }, { id: 'connectivity', label: 'Connectivity' },
-  { id: 'view', label: 'View' }, { id: 'help', label: 'Help' },
+  Object.freeze({ id: 'project', label: 'Project' }), Object.freeze({ id: 'home', label: 'Home' }),
+  Object.freeze({ id: 'model', label: 'Model' }), Object.freeze({ id: 'job', label: 'Job' }),
+  Object.freeze({ id: 'simulation', label: 'Simulation' }), Object.freeze({ id: 'connectivity', label: 'Connectivity' }),
+  Object.freeze({ id: 'view', label: 'View' }), Object.freeze({ id: 'help', label: 'Help' }),
 ] as const)
 
 export type AppMenuNodeV4 =

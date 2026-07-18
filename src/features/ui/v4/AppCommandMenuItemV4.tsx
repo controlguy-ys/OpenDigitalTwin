@@ -40,6 +40,7 @@ export const AppCommandMenuItemV4: ForwardRefExoticComponent<
       title={title}
       data-pending={pending || undefined}
       data-destructive={command.destructive === true || undefined}
+      data-menu-direct="true"
       onClick={() => { if (!disabled) void invoke().then((outcome) => onOutcome(commandId, outcome)) }}
       onKeyDown={(event) => { if (disabled && (event.key === 'Enter' || event.key === ' ')) event.preventDefault() }}
     >

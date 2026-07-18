@@ -50,4 +50,10 @@ describe('AppCommandMenuItemV4', () => {
     const { container } = render(<AppCommandMenuItemV4 commandBindings={bindings(hidden)} commandId="hidden" onOutcome={vi.fn()} />)
     expect(container).toBeEmptyDOMElement()
   })
+
+  it('uses action and radio roles with checked state only on stateful commands', () => {
+    const radio: AppCommandV4 = { id: 'radio', label: 'Server', section: 'connectivity', kind: 'radio', visible: true, enabled: true, checked: false, execute() {} }
+    render(<AppCommandMenuItemV4 commandBindings={bindings(radio)} commandId="radio" onOutcome={vi.fn()} />)
+    expect(screen.getByRole('menuitemradio', { name: 'Server' })).toHaveAttribute('aria-checked', 'false')
+  })
 })

@@ -7,7 +7,9 @@ const SECTIONS: readonly AppCommandSectionV4[] = Object.freeze(['project', 'home
 interface ParsedShortcut { readonly key: string; readonly ctrl: boolean; readonly alt: boolean; readonly shift: boolean; readonly meta: boolean }
 function parseShortcut(value: string | undefined): ParsedShortcut | null {
   if (value === undefined) return null
-  const parts = value.split('+').map((part) => part.trim()).filter(Boolean)
+  const rawParts = value.split('+')
+  if (rawParts.some((part) => part.trim() === '')) return null
+  const parts = rawParts.map((part) => part.trim())
   if (parts.length === 0) return null
   let ctrl = false; let alt = false; let shift = false; let meta = false; let key: string | null = null
   for (const part of parts) {
@@ -24,7 +26,14 @@ function parseShortcut(value: string | undefined): ParsedShortcut | null {
 function isEditable(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
   const tag = target.closest('input, textarea, select')
-  return tag !== null || target.closest('[contenteditable]:not([contenteditable="false"])') !== null
+  if (tag !== null) return true
+  let current: Element | null = target
+  while (current !== null) {
+    const value = current.getAttribute('contenteditable')
+    if (value !== null) return value !== 'false'
+    current = current.parentElement
+  }
+  return false
 }
 export function createAppShortcutDispatcherV4(options: {
   readonly target: Pick<Window, 'addEventListener' | 'removeEventListener'>
@@ -33,8 +42,9 @@ export function createAppShortcutDispatcherV4(options: {
   let disposed = false
   const listener = (event: KeyboardEvent): void => {
     if (disposed || event.defaultPrevented || event.repeat || event.isComposing || isEditable(event.target)) return
+    const registry = options.bindings.getRegistry()
     const state = options.bindings.runtime.getState()
-    const candidates = SECTIONS.flatMap((section) => options.bindings.getRegistry().list(section)).filter((command) => {
+    const candidates = SECTIONS.flatMap((section) => registry.list(section)).filter((command) => {
       const parsed = parseShortcut(command.shortcut)
       return parsed !== null && parsed.key === event.key.toLowerCase()
         && parsed.ctrl === event.ctrlKey && parsed.alt === event.altKey && parsed.shift === event.shiftKey && parsed.meta === event.metaKey

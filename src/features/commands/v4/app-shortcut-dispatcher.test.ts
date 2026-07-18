@@ -56,4 +56,15 @@ describe('createAppShortcutDispatcherV4', () => {
     runtime.replaceRegistry(createAppCommandRegistryV4([{ id: 'view.home', label: 'After', section: 'view', kind: 'action', visible: true, enabled: true, shortcut: 'H', execute: after }]))
     const event = new KeyboardEvent('keydown', { key: 'H', cancelable: true }); const stop = vi.spyOn(event, 'stopPropagation'); listener!(event); await vi.waitFor(() => expect(after).toHaveBeenCalledTimes(1)); expect(before).not.toHaveBeenCalled(); expect(stop).not.toHaveBeenCalled()
   })
+
+  it('honors nested contenteditable false islands while blocking effective editable targets', async () => {
+    let listener: ((event: KeyboardEvent) => void) | null = null; const execute = vi.fn()
+    const runtime = createAppCommandRuntimeV4(createAppCommandRegistryV4([{ id: 'view.home', label: 'Home', section: 'view', kind: 'action', visible: true, enabled: true, shortcut: 'H', execute }]))
+    createAppShortcutDispatcherV4({ target: { addEventListener: vi.fn((_name, callback) => { listener = callback as (event: KeyboardEvent) => void }), removeEventListener: vi.fn() }, bindings: createAppCommandBindingsV4(runtime) })
+    const editable = document.createElement('div'); editable.setAttribute('contenteditable', 'true'); const child = document.createElement('span'); editable.append(child)
+    const blocked = new KeyboardEvent('keydown', { key: 'h', cancelable: true }); Object.defineProperty(blocked, 'target', { value: child }); listener!(blocked)
+    const island = document.createElement('span'); island.setAttribute('contenteditable', 'false'); editable.append(island)
+    const allowed = new KeyboardEvent('keydown', { key: 'h', cancelable: true }); Object.defineProperty(allowed, 'target', { value: island }); listener!(allowed)
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1)); expect(blocked.defaultPrevented).toBe(false)
+  })
 })
