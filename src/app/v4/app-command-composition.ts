@@ -235,7 +235,7 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
     projectCommand(context, 'project.save', 'Save Project', true, () => context.actions.project.saveProject(), 'Ctrl+S'),
     projectCommand(context, 'project.import', 'Import Project', false, () => context.actions.project.importProject()),
     projectCommand(context, 'project.export', 'Export Project', true, () => context.actions.project.exportProject()),
-    projectCommand(context, 'project.sample.dual', 'Dual-Robot Sample', true, () => context.actions.project.loadDualRobotSample()),
+    projectCommand(context, 'project.sample.dual', 'Dual-Robot Technical Demo', true, () => context.actions.project.loadDualRobotSample()),
     ...composeSceneContextCommandsV4({ project: context.project, interaction: context.interaction, scene: context.scene, prompt: context.prompt, presentation: contextualPresentation(context) }),
     activeRobotCommand(context, 'robot.home', 'Robot Home', (robotId) => context.robotOperator.home(robotId), (robotId) => context.robotOperator.canHome(robotId)),
     activeRobotCommand(context, 'robot.gripper.open', 'Open Gripper', (robotId) => context.robotOperator.setGripper(robotId, 'OPEN')),

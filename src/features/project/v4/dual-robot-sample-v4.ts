@@ -5,6 +5,7 @@ import {
   type RigidTransformV4,
   type RobotDefinitionV4,
   type RobotInstanceV4,
+  type RobotJobStepV4,
   type WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import {
@@ -25,6 +26,7 @@ const SLIDE_DEFINITION_ID_V4 = 'definition-sample-linear-slide'
 const SLIDE_JOINT_ID_V4 = 'SLIDE_X'
 const SLIDE_SOURCE_ID_V4 = 'builtin-sample-linear-slide-source'
 const CRB_JOB_ID_V4 = 'job-sample-crb'
+const CRB_TECHNICAL_DEMO_JOB_ID_V4 = 'job-sample-crb-technical-demo'
 const SLIDE_JOB_ID_V4 = 'job-sample-linear-slide'
 const OPC_UA_ENDPOINT_ID_V4 = 'endpoint-sample-server'
 const CRB_MAPPING_ID_V4 = 'mapping-sample-crb-j1'
@@ -40,6 +42,7 @@ export const DUAL_ROBOT_SAMPLE_IDS_V4 = Object.freeze({
   slideDefinitionId: SLIDE_DEFINITION_ID_V4,
   slideJointId: SLIDE_JOINT_ID_V4,
   crbJobId: CRB_JOB_ID_V4,
+  crbTechnicalDemoJobId: CRB_TECHNICAL_DEMO_JOB_ID_V4,
   slideJobId: SLIDE_JOB_ID_V4,
   opcUaEndpointId: OPC_UA_ENDPOINT_ID_V4,
   crbMappingId: CRB_MAPPING_ID_V4,
@@ -61,6 +64,37 @@ function numericStatusV4(): NumericStatusV4 {
     sourceOwnership: 'simulation',
     overlay: { visible: false, frameId: null },
   }
+}
+
+type JointPoseStepV4 = Extract<RobotJobStepV4, { readonly kind: 'joint-pose' }>
+
+function crbJointPoseV4(
+  jointValues: readonly [number, number, number, number, number, number],
+  speedPercentToNext: number,
+): JointPoseStepV4 {
+  const [J1, J2, J3, J4, J5, J6] = jointValues
+  return {
+    kind: 'joint-pose',
+    jointValues: { J1, J2, J3, J4, J5, J6 },
+    speedPercentToNext,
+  }
+}
+
+function createCrbTechnicalDemoStepsV4(): readonly JointPoseStepV4[] {
+  return [
+    crbJointPoseV4([0, 0, 0, 0, 0, 0], 20),
+    crbJointPoseV4([20, -15, -20, 10, 15, 0], 25),
+    crbJointPoseV4([40, -30, -40, 20, 25, 30], 30),
+    crbJointPoseV4([60, -20, -55, 45, 10, 60], 35),
+    crbJointPoseV4([35, 5, -45, 70, -20, 90], 25),
+    crbJointPoseV4([0, 20, -30, 90, -35, 120], 30),
+    crbJointPoseV4([-35, 5, -45, 70, -20, 90], 35),
+    crbJointPoseV4([-60, -20, -55, 45, 10, 60], 25),
+    crbJointPoseV4([-40, -30, -40, 20, 25, 30], 30),
+    crbJointPoseV4([-20, -15, -20, 10, 15, 0], 25),
+    crbJointPoseV4([0, -10, -10, -20, 10, -30], 20),
+    crbJointPoseV4([0, 0, 0, 0, 0, 0], 100),
+  ]
 }
 
 function createSourceOnlySlideDefinitionV4(): RobotDefinitionV4 {
@@ -249,7 +283,7 @@ export function createDualRobotSampleV4(
     projectId: options.projectId,
     revisionId: options.revisionId,
     metadata: {
-      name: 'Dual Robot Simulation Sample',
+      name: 'Dual Robot Technical Demo',
       createdAt: options.nowIso,
       updatedAt: options.nowIso,
     },
@@ -287,6 +321,12 @@ export function createDualRobotSampleV4(
     spatialEntities: [],
     sceneGroups: [],
     jobs: [
+      {
+        id: CRB_TECHNICAL_DEMO_JOB_ID_V4,
+        name: 'CRB 12-Pose Technical Demo',
+        robotId: CRB_ROBOT_ID_V4,
+        steps: createCrbTechnicalDemoStepsV4(),
+      },
       {
         id: CRB_JOB_ID_V4,
         name: 'CRB Sweep',

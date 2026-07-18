@@ -60,6 +60,58 @@ describe('TimelineV4', () => {
     expect(screen.getByRole('status', { name: 'Timeline runtime' })).toHaveTextContent('Gripper unavailable')
   })
 
+  it('clamps terminal progress to the final visible step', () => {
+    const state = harness()
+    state.jobs.getState().setRobotState({
+      ...running(),
+      state: 'SUCCEEDED',
+      stepIndex: 3,
+      completedAtSimulationMs: 90,
+    })
+    render(timeline(state))
+
+    const steps = within(screen.getByRole('list', { name: 'Job steps' }))
+      .getAllByRole('listitem')
+    expect(screen.getByRole('status', { name: 'Timeline runtime' }))
+      .toHaveTextContent('Step 3 of 3')
+    expect(screen.getByRole('status', { name: 'Timeline runtime' }))
+      .not.toHaveTextContent('Step 4 of 3')
+    expect(steps[2]).toHaveAttribute('aria-current', 'step')
+  })
+
+  it('keeps the current runtime step inside the horizontal Timeline viewport', async () => {
+    const scrollIntoView = vi.fn()
+    const previous = HTMLElement.prototype.scrollIntoView
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+    try {
+      const state = harness()
+      state.jobs.getState().setRobotState(running())
+      render(timeline(state))
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({
+        block: 'nearest',
+        inline: 'nearest',
+      }))
+
+      scrollIntoView.mockClear()
+      act(() => state.jobs.getState().setRobotState({ ...running(), stepIndex: 1 }))
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({
+        block: 'nearest',
+        inline: 'nearest',
+      }))
+      const steps = within(screen.getByRole('list', { name: 'Job steps' }))
+        .getAllByRole('listitem')
+      expect(steps[1]).toHaveAttribute('aria-current', 'step')
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        value: previous,
+      })
+    }
+  })
+
   it('keeps local speed, move, and delete authoring mapped to exact stored steps', async () => {
     const user = userEvent.setup(); const state = harness(); render(timeline(state))
     const speed = screen.getByRole('spinbutton', { name: 'Step 1 speed to next Joint Pose' })

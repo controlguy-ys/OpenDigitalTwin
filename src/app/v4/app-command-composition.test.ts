@@ -391,7 +391,7 @@ describe('composeAppCommandsV4', () => {
       ['project.save', 'Ctrl+S'], ['view.home', 'H'], ['view.focusSelection', 'F'],
     ])
     expect(all.filter(({ section }) => section === 'project').map(({ id, label }) => [id, label])).toEqual([
-      ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Sample'],
+      ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Technical Demo'],
     ])
     expect(all.filter(({ section }) => section === 'connectivity').map(({ id, label }) => [id, label])).toEqual([
       ['connectivity.mode.off', 'Off'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.details.open', 'Gateway Details'],
@@ -405,7 +405,7 @@ describe('composeAppCommandsV4', () => {
       { id: 'project.save', label: 'Save Project', section: 'project' },
       { id: 'project.import', label: 'Import Project', section: 'project' },
       { id: 'project.export', label: 'Export Project', section: 'project' },
-      { id: 'project.sample.dual', label: 'Dual-Robot Sample', section: 'project' },
+      { id: 'project.sample.dual', label: 'Dual-Robot Technical Demo', section: 'project' },
       { id: 'scene.rename', label: 'Rename', section: 'home' },
       { id: 'scene.pose.copy', label: 'Copy Pose', section: 'home' },
       { id: 'scene.pose.paste', label: 'Paste Pose', section: 'home' },

@@ -789,7 +789,7 @@ export function App({
         },
         loadDualRobotSample: async () => {
           await resources.mutations.replaceFromActive({
-            description: 'Load dual-Robot sample',
+            description: 'Load dual-Robot technical demo',
             mutate: (active) => createDualRobotSampleV4({
               projectId: active.projectId,
               revisionId: active.revisionId,

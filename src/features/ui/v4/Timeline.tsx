@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Play, Square, Trash2 } from 'lucide-react'
-import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type {
   RobotIdV4,
   RobotJobIdV4,
@@ -75,6 +75,7 @@ export function TimelineV4({
   const [pendingCommand, setPendingCommand] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const pendingCommandTokenRef = useRef<symbol | null>(null)
+  const stepElementsRef = useRef(new Map<number, HTMLLIElement>())
   const running = runtime?.state === 'RUNNING'
   const authoringDisabled = disabled || running || pendingCommand !== null
   const startBlockedByAuthoring = authoringDisabled || pendingCommandTokenRef.current !== null
@@ -112,6 +113,19 @@ export function TimelineV4({
     && runtime.stepIndex !== null
     ? runtime.stepIndex
     : null
+  const displayedRuntimeStep = runtimeStep === null || totalSteps === 0
+    ? null
+    : Math.min(runtimeStep, totalSteps - 1)
+
+  useEffect(() => {
+    if (displayedRuntimeStep === null || job === null) return
+    const stepElement = stepElementsRef.current.get(displayedRuntimeStep)
+    if (typeof stepElement?.scrollIntoView !== 'function') return
+    stepElement.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    })
+  }, [displayedRuntimeStep, job?.id])
 
   return (
     <div className="timeline timeline-v4">
@@ -161,7 +175,9 @@ export function TimelineV4({
       {runtime === null ? null : (
         <p aria-label="Timeline runtime" role="status">
           {runtime.state}
-          {runtimeStep === null ? null : ` · Step ${runtimeStep + 1} of ${totalSteps}`}
+          {displayedRuntimeStep === null
+            ? null
+            : ` · Step ${displayedRuntimeStep + 1} of ${totalSteps}`}
           {runtime.message.length === 0 ? null : ` · ${runtime.message}`}
         </p>
       )}
@@ -175,9 +191,13 @@ export function TimelineV4({
                 && job.steps.slice(index + 1).some((candidate) => candidate.kind === 'joint-pose')
               return (
                 <li
-                  aria-current={runtimeStep === index ? 'step' : undefined}
+                  aria-current={displayedRuntimeStep === index ? 'step' : undefined}
                   className="timeline-pose"
                   key={`${job.id}:${index}`}
+                  ref={(node) => {
+                    if (node === null) stepElementsRef.current.delete(index)
+                    else stepElementsRef.current.set(index, node)
+                  }}
                 >
                   <span>Step {index + 1}</span>
                   {step.kind === 'joint-pose' ? (

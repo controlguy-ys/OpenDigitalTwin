@@ -79,8 +79,13 @@ export async function probeDualRobotOpcUaServer({
   try {
     const page = await browser.newPage()
     await page.goto(webBaseUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByRole('button', { name: 'Load dual-Robot sample' }).click()
-    await page.getByText('Dual Robot Simulation Sample', { exact: true }).waitFor()
+    await page.getByRole('menuitem', { name: 'Project', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Samples', exact: true }).click()
+    await page.getByRole('menuitem', {
+      name: 'Dual-Robot Technical Demo',
+      exact: true,
+    }).click()
+    await page.getByText('Dual Robot Technical Demo', { exact: true }).waitFor()
     await page.getByLabel('OPC UA Server mode').selectOption('server')
     const gatewayBadge = page.getByLabel('Runtime Gateway status')
     try {

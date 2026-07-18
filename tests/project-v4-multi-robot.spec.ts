@@ -88,7 +88,7 @@ test('imports and operates the two-Robot V4 sample independently', async ({ page
     .toHaveAttribute('aria-busy', 'false')
   await importProject(page, project, 'dual-robot-sample-v4.json')
 
-  await expect(page.getByText('Dual Robot Simulation Sample', { exact: true })).toBeVisible()
+  await expect(page.getByText('Dual Robot Technical Demo', { exact: true })).toBeVisible()
   await expect(page.getByRole('main', { name: '3D viewport' }))
     .toHaveAttribute('aria-busy', 'false')
   await ensurePanelVisible(page, 'Scene Assets', 'Scene Assets drawer')
@@ -112,8 +112,40 @@ test('imports and operates the two-Robot V4 sample independently', async ({ page
 
   await selectRobot(sceneTree, CRB_NAME)
   await expectNumericValue(jointInput(page, CRB_NAME, 'J1'), crbJ1Before)
-  await startSelectedRobotJob(page, 'CRB Sweep, 2 steps, 2 Joint Poses')
-  await expectNumericValue(jointInput(page, CRB_NAME, 'J1'), 35)
+  const technicalDemo = page
+    .getByRole('tree', { name: 'Robot Jobs' })
+    .getByRole('treeitem', {
+      name: 'CRB 12-Pose Technical Demo, 12 steps, 12 Joint Poses',
+      exact: true,
+    })
+  await expect(technicalDemo).toBeVisible()
+  await technicalDemo.click()
+  await expect(technicalDemo).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('button', { name: 'Open Timeline', exact: true }).click()
+  await expect(page.getByRole('region', { name: 'Bottom Workspace' })).toBeVisible()
+  await expect(page.locator('.timeline-track ol[aria-label="Job steps"] > li')).toHaveCount(12)
+
+  const crbStatus = page.getByRole('status', { name: 'Robot Job state' })
+  const crbStart = page
+    .getByRole('region', { name: 'Robot Jobs' })
+    .getByRole('button', { name: 'Start Job' })
+  await expect(crbStart).toBeEnabled()
+  await crbStart.click()
+  await expect(crbStatus).toContainText('RUNNING')
+  await expect.poll(async () => Number(await crbJ1.inputValue()), {
+    intervals: [50],
+    timeout: 5_000,
+  }).toBeGreaterThan(50)
+  await expect.poll(async () => Number(await crbJ1.inputValue()), {
+    intervals: [50],
+    timeout: 8_000,
+  }).toBeLessThan(-50)
+  await expect(crbStatus).toContainText('SUCCEEDED', { timeout: 20_000 })
+  await expect(page.getByRole('status', { name: 'Timeline runtime' }))
+    .toContainText('SUCCEEDED · Step 12 of 12')
+  for (const jointId of ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']) {
+    await expectNumericValue(jointInput(page, CRB_NAME, jointId), 0)
+  }
 
   await selectRobot(sceneTree, SLIDE_NAME)
   await expectNumericValue(jointInput(page, SLIDE_NAME, 'SLIDE_X'), 0.6)
