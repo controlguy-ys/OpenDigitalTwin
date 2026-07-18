@@ -152,8 +152,13 @@ describe('useAppCommandV4', () => {
   })
 
   it('switches fields and the stable callback to a changed command ID', async () => {
-    const saveExecute = vi.fn()
-    const exportExecute = vi.fn()
+    const saveExecution = deferred<void>()
+    const saveExecute = vi.fn(() => saveExecution.promise)
+    let exportAttempt = 0
+    const exportExecute = vi.fn(() => {
+      exportAttempt += 1
+      if (exportAttempt === 1) throw new Error('Export failed.')
+    })
     const runtime = createAppCommandRuntimeV4(createAppCommandRegistryV4([
       command('project.save', { label: 'Save', execute: saveExecute }),
       command('project.export', { label: 'Export', execute: exportExecute }),
@@ -161,6 +166,8 @@ describe('useAppCommandV4', () => {
     const bindings = createAppCommandBindingsV4(runtime)
     const invocations: Promise<unknown>[] = []
     const callbacks: Array<() => Promise<unknown>> = []
+    const saveInvocation = runtime.invoke('project.save')
+    await runtime.invoke('project.export')
     const view = render(
       <Probe
         bindings={bindings}
@@ -170,6 +177,8 @@ describe('useAppCommandV4', () => {
       />,
     )
     const initialCallback = callbacks.at(-1)
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveAttribute('data-pending', 'true')
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveAttribute('data-error', '')
 
     view.rerender(
       <Probe
@@ -179,11 +188,16 @@ describe('useAppCommandV4', () => {
         onInvoke={(value) => invocations.push(value)}
       />,
     )
-    expect(screen.getByRole('button', { name: 'Export' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Export' })).toHaveAttribute('data-pending', 'false')
+    expect(screen.getByRole('button', { name: 'Export' })).toHaveAttribute('data-error', 'Export failed.')
     expect(callbacks.at(-1)).not.toBe(initialCallback)
     fireEvent.click(screen.getByRole('button', { name: 'Export' }))
     await act(async () => { await invocations[0] })
-    expect(saveExecute).not.toHaveBeenCalled()
-    expect(exportExecute).toHaveBeenCalledOnce()
+    expect(saveExecute).toHaveBeenCalledOnce()
+    expect(exportExecute).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      saveExecution.resolve()
+      await saveInvocation
+    })
   })
 })

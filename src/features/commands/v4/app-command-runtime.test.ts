@@ -229,6 +229,53 @@ describe('createAppCommandRuntimeV4', () => {
     await invocation
   })
 
+  it('does not leak mutable snapshot collections through forEach callback arguments', async () => {
+    const execution = deferred<void>()
+    const runtime = runtimeFor([
+      command('project.save', { execute: () => execution.promise }),
+      command('project.export', { execute: () => { throw new Error('Export failed.') } }),
+    ])
+    const saveInvocation = runtime.invoke('project.save')
+    await runtime.invoke('project.export')
+    const snapshot = runtime.getState()
+
+    snapshot.pendingCommandIds.forEach((_value, _key, collection) => {
+      const leaked = collection as unknown as Set<string>
+      expect(() => leaked.add('poison.pending')).toThrow()
+    })
+    snapshot.errorByCommandId.forEach((_value, _key, collection) => {
+      const leaked = collection as unknown as Map<string, string>
+      expect(() => leaked.set('poison.error', 'poison')).toThrow()
+    })
+
+    expect(runtime.getState()).toBe(snapshot)
+    expect([...snapshot.pendingCommandIds]).toEqual(['project.save'])
+    expect([...snapshot.errorByCommandId]).toEqual([
+      ['project.export', 'Export failed.'],
+    ])
+    execution.resolve()
+    await saveInvocation
+  })
+
+  it('notifies each captured subscriber once when listeners mutate subscription during publication', () => {
+    const runtime = runtimeFor([])
+    let reentrantCalls = 0
+    let unsubscribe: () => void = () => undefined
+    const reentrantListener = () => {
+      reentrantCalls += 1
+      unsubscribe()
+      if (reentrantCalls < 4) unsubscribe = runtime.subscribe(reentrantListener)
+    }
+    unsubscribe = runtime.subscribe(reentrantListener)
+    const stableListener = vi.fn()
+    runtime.subscribe(stableListener)
+
+    runtime.replaceRegistry(createAppCommandRegistryV4([]))
+
+    expect(reentrantCalls).toBe(1)
+    expect(stableListener).toHaveBeenCalledOnce()
+  })
+
   it('stops observing after idempotent disposal while accepted invocations retain their outcome', async () => {
     const execution = deferred<void>()
     const runtime = runtimeFor([command('project.save', { execute: () => execution.promise })])

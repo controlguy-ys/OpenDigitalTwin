@@ -23,35 +23,70 @@ export interface AppCommandBindingsV4 {
 }
 
 function readonlySet<T>(values: ReadonlySet<T>): ReadonlySet<T> {
-  const target = new Set(values)
-  return new Proxy(target, {
-    get(current, property) {
-      if (property === 'add' || property === 'delete' || property === 'clear') {
-        return () => { throw new TypeError('Command runtime snapshots are read-only.') }
-      }
-      const value = Reflect.get(current, property, current)
-      return typeof value === 'function' ? value.bind(current) : value
+  const snapshotValues = new Set(values)
+  let view: ReadonlySet<T>
+  view = Object.freeze({
+    get size() {
+      return snapshotValues.size
     },
-    set: () => false,
-    defineProperty: () => false,
-    deleteProperty: () => false,
-  }) as unknown as ReadonlySet<T>
+    has(value: T) {
+      return snapshotValues.has(value)
+    },
+    entries() {
+      return snapshotValues.entries()
+    },
+    keys() {
+      return snapshotValues.keys()
+    },
+    values() {
+      return snapshotValues.values()
+    },
+    forEach(
+      callback: (value: T, value2: T, set: ReadonlySet<T>) => void,
+      thisArg?: unknown,
+    ) {
+      for (const value of snapshotValues) callback.call(thisArg, value, value, view)
+    },
+    [Symbol.iterator]() {
+      return snapshotValues[Symbol.iterator]()
+    },
+  })
+  return view
 }
 
 function readonlyMap<K, V>(values: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
-  const target = new Map(values)
-  return new Proxy(target, {
-    get(current, property) {
-      if (property === 'set' || property === 'delete' || property === 'clear') {
-        return () => { throw new TypeError('Command runtime snapshots are read-only.') }
-      }
-      const value = Reflect.get(current, property, current)
-      return typeof value === 'function' ? value.bind(current) : value
+  const snapshotValues = new Map(values)
+  let view: ReadonlyMap<K, V>
+  view = Object.freeze({
+    get size() {
+      return snapshotValues.size
     },
-    set: () => false,
-    defineProperty: () => false,
-    deleteProperty: () => false,
-  }) as unknown as ReadonlyMap<K, V>
+    get(key: K) {
+      return snapshotValues.get(key)
+    },
+    has(key: K) {
+      return snapshotValues.has(key)
+    },
+    entries() {
+      return snapshotValues.entries()
+    },
+    keys() {
+      return snapshotValues.keys()
+    },
+    values() {
+      return snapshotValues.values()
+    },
+    forEach(
+      callback: (value: V, key: K, map: ReadonlyMap<K, V>) => void,
+      thisArg?: unknown,
+    ) {
+      for (const [key, value] of snapshotValues) callback.call(thisArg, value, key, view)
+    },
+    [Symbol.iterator]() {
+      return snapshotValues[Symbol.iterator]()
+    },
+  })
+  return view
 }
 
 function normalizeError(error: unknown): string {
@@ -80,7 +115,8 @@ export function createAppCommandRuntimeV4(
   function publish(): void {
     if (disposed) return
     state = createState()
-    for (const listener of listeners) listener()
+    const currentListeners = Array.from(listeners)
+    for (const listener of currentListeners) listener()
   }
 
   function settle(commandId: string, error: string | null): void {
