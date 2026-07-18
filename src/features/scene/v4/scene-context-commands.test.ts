@@ -52,6 +52,7 @@ function sceneService(): SceneCommandServiceV4 {
     setSpatialEntityGroup: vi.fn(async () => undefined),
     setRobotBase: vi.fn(async () => undefined), setSelectedToolFrames: vi.fn(async () => undefined),
     setSceneFrameLocalPose: vi.fn(async () => undefined), setMovingFrame: vi.fn(async () => undefined),
+    configureSpatialEntityOpcUaBinding: vi.fn(async () => undefined), takeSpatialEntityManualControl: vi.fn(async () => undefined),
     setNumericStatus: vi.fn(async () => undefined), setStatusOverlayVisible: vi.fn(async () => undefined),
     reparentGroup: vi.fn(async () => undefined), ungroup: vi.fn(async () => undefined),
     deleteSpatialEntity: vi.fn(async () => undefined), deleteGroupAndContents: vi.fn(async () => undefined),

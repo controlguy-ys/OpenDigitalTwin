@@ -146,6 +146,68 @@ function inspectorProject(): WorkcellProjectV4 {
   })
 }
 
+function boundInspectorProject(): WorkcellProjectV4 {
+  const source = inspectorProject()
+  const entityId = 'platform'
+  const endpointId = 'endpoint-platform'
+  const frameId = 'platform-opcua-frame'
+  return validateWorkcellProjectV4({
+    ...source,
+    spatialEntities: source.spatialEntities.map((candidate) => (
+      candidate.id !== entityId ? candidate : {
+        ...candidate,
+        parentFrameId: frameId,
+        localPose: pose(),
+        transformOwner: `opcua:${endpointId}` as const,
+        numericStatus: { ...candidate.numericStatus, sourceOwnership: `opcua:${endpointId}` as const },
+        movingFrames: [...candidate.movingFrames, {
+          frameId,
+          name: 'Platform OPC UA Frame',
+          parentFrameId: 'fixture-frame',
+          localPose: pose(0.1, 0.2, 0.3),
+          sourceOwnership: `opcua:${endpointId}` as const,
+        }],
+      }
+    )),
+    opcUa: {
+      mode: 'client',
+      endpoints: [{
+        endpointId,
+        name: 'Platform endpoint',
+        endpointUrl: 'opc.tcp://127.0.0.1:4840',
+        enabled: true,
+        publishingIntervalMs: 100,
+        reconnectDelayMs: 1_000,
+      }],
+      mappings: [{
+        id: 'mapping-platform-pose',
+        endpointId,
+        direction: 'read',
+        coherenceGroupId: 'entity-platform-pose',
+        sourceOwnership: `opcua:${endpointId}` as const,
+        interpolationMode: 'shortest-quaternion',
+        coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw',
+        leaves: ([
+          ['positionM', 0], ['positionM', 1], ['positionM', 2],
+          ['rpyDegrees', 0], ['rpyDegrees', 1], ['rpyDegrees', 2],
+        ] as const).map(([root, index]) => ({
+          leafPath: [root, index],
+          nodeId: `ns=2;s=Platform.${root}.${index}`,
+          projectTarget: { type: 'entity-frame' as const, entityId, frameId },
+          opcUaDataType: 'Double' as const,
+          projectDataType: 'number' as const,
+          scale: 1,
+          offset: 0,
+          unit: root === 'positionM' ? 'metre' : 'degree',
+          required: true,
+        })),
+      }],
+      actionBindings: [],
+      bridgeRoutes: [],
+    },
+  })
+}
+
 function sceneCommands(overrides: Partial<SceneCommandServiceV4> = {}): SceneCommandServiceV4 {
   return {
     createBox: vi.fn(async () => 'new-box'),
@@ -159,6 +221,8 @@ function sceneCommands(overrides: Partial<SceneCommandServiceV4> = {}): SceneCom
     setSelectedToolFrames: vi.fn(async () => undefined),
     setSceneFrameLocalPose: vi.fn(async () => undefined),
     setMovingFrame: vi.fn(async () => undefined),
+    configureSpatialEntityOpcUaBinding: vi.fn(async () => undefined),
+    takeSpatialEntityManualControl: vi.fn(async () => undefined),
     setNumericStatus: vi.fn(async () => undefined),
     setStatusOverlayVisible: vi.fn(async () => undefined),
     reparentGroup: vi.fn(async () => undefined),
@@ -469,6 +533,55 @@ describe('SceneEntityInspectorV4', () => {
     expect(screen.getByLabelText('Numeric Status')).toBeDisabled()
     expect(screen.getByLabelText('Entity Group')).toBeEnabled()
     expect(screen.getByLabelText('Status Overlay Visible')).toBeEnabled()
+  })
+
+  it('authors a compact OPC UA pose binding from the Spatial Entity inspector', async () => {
+    const user = userEvent.setup()
+    const harness = renderInspector({ kind: 'spatial-entity', entityId: 'platform' })
+
+    expect(screen.getByText('OPC UA Pose Binding')).toBeVisible()
+    expect(screen.getByLabelText('OPC UA Endpoint URL')).toHaveValue('opc.tcp://127.0.0.1:4840')
+    expect(screen.getByLabelText('OPC UA Publishing Interval (ms)')).toHaveValue(100)
+    expect(screen.getByLabelText('OPC UA Position Unit')).toHaveValue('m')
+    await user.type(screen.getByLabelText('OPC UA X Node ID'), 'ns=2;s=Platform.X')
+    await user.type(screen.getByLabelText('OPC UA Y Node ID'), 'ns=2;s=Platform.Y')
+    await user.type(screen.getByLabelText('OPC UA Z Node ID'), 'ns=2;s=Platform.Z')
+    await user.type(screen.getByLabelText('OPC UA Roll Node ID'), 'ns=2;s=Platform.Roll')
+    await user.type(screen.getByLabelText('OPC UA Pitch Node ID'), 'ns=2;s=Platform.Pitch')
+    await user.type(screen.getByLabelText('OPC UA Yaw Node ID'), 'ns=2;s=Platform.Yaw')
+    await user.type(screen.getByLabelText('OPC UA Status Node ID'), 'ns=2;s=Platform.Status')
+    await user.click(screen.getByRole('button', { name: 'Bind OPC UA Pose' }))
+
+    await waitFor(() => expect(harness.commands.configureSpatialEntityOpcUaBinding).toHaveBeenCalledOnce())
+    expect(harness.commands.configureSpatialEntityOpcUaBinding).toHaveBeenCalledWith({
+      entityId: 'platform',
+      endpointUrl: 'opc.tcp://127.0.0.1:4840',
+      publishingIntervalMs: 100,
+      positionUnit: 'm',
+      nodeIds: {
+        x: 'ns=2;s=Platform.X', y: 'ns=2;s=Platform.Y', z: 'ns=2;s=Platform.Z',
+        roll: 'ns=2;s=Platform.Roll', pitch: 'ns=2;s=Platform.Pitch', yaw: 'ns=2;s=Platform.Yaw',
+      },
+      numericStatusNodeId: 'ns=2;s=Platform.Status',
+    })
+  })
+
+  it('force-locks bound Entity pose fields and exposes manual takeover', async () => {
+    const user = userEvent.setup()
+    const harness = renderInspector(
+      { kind: 'spatial-entity', entityId: 'platform' },
+      sceneCommands(),
+      boundInspectorProject(),
+    )
+
+    expect(screen.getByLabelText('Entity Local Position X (mm)')).toBeDisabled()
+    await user.click(screen.getByText('OPC UA Pose Binding'))
+    expect(screen.getByText(/OPC UA pose overrides manual XYZ\/RPY and move gizmo while bound/i)).toBeVisible()
+    expect(screen.getByText(/Bound to opc\.tcp:\/\/127\.0\.0\.1:4840/i)).toBeVisible()
+    expect(screen.getByLabelText('OPC UA X Node ID')).toHaveValue('ns=2;s=Platform.positionM.0')
+    await user.click(screen.getByRole('button', { name: 'Take Manual Control' }))
+    await waitFor(() => expect(harness.commands.takeSpatialEntityManualControl)
+      .toHaveBeenCalledWith('platform'))
   })
 
   it('preserves dirty Entity drafts across an equivalent fresh runtime projection', async () => {

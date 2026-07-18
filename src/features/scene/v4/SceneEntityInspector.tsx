@@ -28,6 +28,7 @@ import {
   useInspectorCommandV4,
 } from './RobotBaseInspector.js'
 import { MovingFrameInspectorV4 } from './MovingFrameInspector.js'
+import { selectSpatialEntityOpcUaBindingV4 } from './spatial-entity-opcua-binding.js'
 import {
   rigidTransformFromTransformDraftV4,
   transformDraftFromRigidTransformV4,
@@ -299,12 +300,22 @@ function SpatialEntityInspectorV4({
     ? entity.numericStatus.value
     : runtimeEntity?.numericStatus ?? entity?.numericStatus.value ?? 0
   const overlayVisibleSource = entity?.numericStatus.overlay.visible ?? false
+  const opcUaBinding = selectSpatialEntityOpcUaBindingV4(project, entityId)
+  const boundEndpoint = opcUaBinding === null
+    ? null
+    : project.opcUa.endpoints.find(({ endpointId }) => endpointId === opcUaBinding.endpointId) ?? null
   const [draft, setDraft] = useState<TransformDraftV4>(() => (
     transformDraftFromRigidTransformV4(localPoseSource)
   ))
   const [groupId, setGroupId] = useState<SceneGroupIdV4 | null>(groupIdSource)
   const [status, setStatus] = useState(String(statusSource))
   const [overlayVisible, setOverlayVisible] = useState(overlayVisibleSource)
+  const [opcUaEndpointUrl, setOpcUaEndpointUrl] = useState('opc.tcp://127.0.0.1:4840')
+  const [opcUaInterval, setOpcUaInterval] = useState('100')
+  const [opcUaPositionUnit, setOpcUaPositionUnit] = useState<'m' | 'mm'>('m')
+  const [opcUaNodes, setOpcUaNodes] = useState({
+    x: '', y: '', z: '', roll: '', pitch: '', yaw: '', status: '',
+  })
 
   const reset = (): void => {
     if (entity === undefined) return
@@ -330,12 +341,63 @@ function SpatialEntityInspectorV4({
     setOverlayVisible(overlayVisibleSource)
   }, [entityId, overlayVisibleSource])
 
+  useEffect(() => {
+    if (boundEndpoint === null) return
+    setOpcUaEndpointUrl(boundEndpoint.endpointUrl)
+    setOpcUaInterval(String(boundEndpoint.publishingIntervalMs))
+  }, [boundEndpoint?.endpointId, boundEndpoint?.endpointUrl, boundEndpoint?.publishingIntervalMs])
+
+  useEffect(() => {
+    if (opcUaBinding === null) return
+    const poseMapping = project.opcUa.mappings.find(({ id }) => id === opcUaBinding.poseMappingId)
+    const statusMapping = opcUaBinding.statusMappingId === null
+      ? null
+      : project.opcUa.mappings.find(({ id }) => id === opcUaBinding.statusMappingId) ?? null
+    if (poseMapping === undefined) return
+    const nodeAt = (root: string, index: number): string => (
+      poseMapping.leaves.find((leaf) => (
+        leaf.leafPath[0] === root && leaf.leafPath[1] === index
+      ))?.nodeId ?? ''
+    )
+    setOpcUaPositionUnit(poseMapping.leaves[0]?.scale === 0.001 ? 'mm' : 'm')
+    setOpcUaNodes({
+      x: nodeAt('positionM', 0), y: nodeAt('positionM', 1), z: nodeAt('positionM', 2),
+      roll: nodeAt('rpyDegrees', 0), pitch: nodeAt('rpyDegrees', 1), yaw: nodeAt('rpyDegrees', 2),
+      status: statusMapping?.leaves[0]?.nodeId ?? '',
+    })
+  }, [project.revisionId, opcUaBinding?.poseMappingId, opcUaBinding?.statusMappingId])
+
   if (entity === undefined || runtimeEntity === null) {
     return <p role="status">Spatial Entity is unavailable.</p>
   }
 
   const poseEditable = entity.transformOwner === 'manual'
   const statusEditable = entity.numericStatus.sourceOwnership === 'manual'
+  const setOpcUaNode = (key: keyof typeof opcUaNodes, value: string): void => {
+    setOpcUaNodes((current) => ({ ...current, [key]: value }))
+  }
+  const submitOpcUaBinding = (): void => {
+    const publishingIntervalMs = Number(opcUaInterval)
+    if (!Number.isSafeInteger(publishingIntervalMs) || publishingIntervalMs < 50) {
+      command.reportError(new Error('OPC UA publishing interval must be a whole number of at least 50 ms.'))
+      return
+    }
+    command.run(() => commands.configureSpatialEntityOpcUaBinding({
+      entityId,
+      endpointUrl: opcUaEndpointUrl,
+      publishingIntervalMs,
+      positionUnit: opcUaPositionUnit,
+      nodeIds: {
+        x: opcUaNodes.x,
+        y: opcUaNodes.y,
+        z: opcUaNodes.z,
+        roll: opcUaNodes.roll,
+        pitch: opcUaNodes.pitch,
+        yaw: opcUaNodes.yaw,
+      },
+      ...(opcUaNodes.status.trim().length === 0 ? {} : { numericStatusNodeId: opcUaNodes.status }),
+    }))
+  }
   const submit = (): void => {
     let localPose = entity.localPose
     if (poseEditable) {
@@ -387,6 +449,81 @@ function SpatialEntityInspectorV4({
         onChange={setDraft}
         prefix="Entity Local"
       />
+      <details className="scene-entity-opcua-binding-v4">
+        <summary>OPC UA Pose Binding</summary>
+        {opcUaBinding === null ? null : (
+          <p>Bound to {boundEndpoint?.endpointUrl ?? opcUaBinding.endpointId} ({entity.transformOwner}).</p>
+        )}
+        <p>OPC UA pose overrides manual XYZ/RPY and move gizmo while bound.</p>
+        <label>
+          <span>Endpoint URL</span>
+          <input
+            aria-label="OPC UA Endpoint URL"
+            disabled={command.pending}
+            onChange={(event) => setOpcUaEndpointUrl(event.currentTarget.value)}
+            value={opcUaEndpointUrl}
+          />
+        </label>
+        <label>
+          <span>Publishing Interval (ms)</span>
+          <input
+            aria-label="OPC UA Publishing Interval (ms)"
+            disabled={command.pending}
+            min="50"
+            onChange={(event) => setOpcUaInterval(event.currentTarget.value)}
+            type="number"
+            value={opcUaInterval}
+          />
+        </label>
+        <label>
+          <span>Position Unit</span>
+          <select
+            aria-label="OPC UA Position Unit"
+            disabled={command.pending}
+            onChange={(event) => setOpcUaPositionUnit(event.currentTarget.value as 'm' | 'mm')}
+            value={opcUaPositionUnit}
+          >
+            <option value="m">m</option>
+            <option value="mm">mm</option>
+          </select>
+        </label>
+        {([
+          ['x', 'X'], ['y', 'Y'], ['z', 'Z'], ['roll', 'Roll'], ['pitch', 'Pitch'], ['yaw', 'Yaw'],
+        ] as const).map(([key, label]) => (
+          <label key={key}>
+            <span>{label} Node ID</span>
+            <input
+              aria-label={`OPC UA ${label} Node ID`}
+              disabled={command.pending}
+              onChange={(event) => setOpcUaNode(key, event.currentTarget.value)}
+              value={opcUaNodes[key]}
+            />
+          </label>
+        ))}
+        <label>
+          <span>Status Node ID</span>
+          <input
+            aria-label="OPC UA Status Node ID"
+            disabled={command.pending}
+            onChange={(event) => setOpcUaNode('status', event.currentTarget.value)}
+            value={opcUaNodes.status}
+          />
+        </label>
+        <div>
+          <button disabled={command.pending} onClick={submitOpcUaBinding} type="button">
+            {opcUaBinding === null ? 'Bind OPC UA Pose' : 'Update OPC UA Pose'}
+          </button>
+          {opcUaBinding === null ? null : (
+            <button
+              disabled={command.pending}
+              onClick={() => command.run(() => commands.takeSpatialEntityManualControl(entityId))}
+              type="button"
+            >
+              Take Manual Control
+            </button>
+          )}
+        </div>
+      </details>
       <label>
         <span>Group</span>
         <select

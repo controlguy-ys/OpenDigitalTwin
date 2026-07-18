@@ -3,6 +3,7 @@ import {
   MAX_SCENE_GROUPS_V4,
   MAX_SPATIAL_ENTITIES_V4,
   ProjectV4Error,
+  composeRigidTransformV4,
   validateWorkcellProjectV4,
   type FrameDefinitionV4,
   type RigidTransformV4,
@@ -19,6 +20,7 @@ import {
   createSceneCommandServiceV4,
   type SceneCommandServiceV4,
 } from './scene-command-service.js'
+import { selectSpatialEntityOpcUaBindingV4 } from './spatial-entity-opcua-binding.js'
 
 const IDENTITY: RigidTransformV4 = {
   positionM: [0, 0, 0],
@@ -28,6 +30,32 @@ const IDENTITY: RigidTransformV4 = {
 const EDITED_POSE: RigidTransformV4 = {
   positionM: [1, 2, 3],
   quaternion: [0, 0, 0, 1],
+}
+
+const OPC_UA_POSE_NODES = {
+  x: 'ns=2;s=Object.X',
+  y: 'ns=2;s=Object.Y',
+  z: 'ns=2;s=Object.Z',
+  roll: 'ns=2;s=Object.Roll',
+  pitch: 'ns=2;s=Object.Pitch',
+  yaw: 'ns=2;s=Object.Yaw',
+} as const
+
+function opcUaBindingCommand(entityId: string, overrides: Partial<{
+  endpointUrl: string
+  publishingIntervalMs: number
+  positionUnit: 'm' | 'mm'
+  nodeIds: typeof OPC_UA_POSE_NODES
+  numericStatusNodeId: string | undefined
+}> = {}) {
+  return {
+    entityId,
+    endpointUrl: 'opc.tcp://127.0.0.1:4840',
+    publishingIntervalMs: 100,
+    positionUnit: 'm' as const,
+    nodeIds: OPC_UA_POSE_NODES,
+    ...overrides,
+  }
 }
 
 interface PendingMutation {
@@ -161,6 +189,28 @@ function authoredProject(): WorkcellProjectV4 {
       entity('root-object', { groupId: 'root-group' }),
       entity('loose-object'),
     ],
+  })
+}
+
+function projectWithAssetEntity(): WorkcellProjectV4 {
+  const source = authoredProject()
+  return validateWorkcellProjectV4({
+    ...source,
+    spatialEntities: [...source.spatialEntities, entity('asset-object', {
+      geometry: {
+        kind: 'asset',
+        assetReferenceId: source.assetReferences[0]!.id,
+        occurrenceKey: 'asset-object-occurrence',
+        sourceConvention: {
+          linearUnit: 'meter',
+          sourceToMeters: 1,
+          orientation: { mode: 'up-axis', upAxis: 'z' },
+        },
+        originMode: 'source',
+        statistics: { vertices: 0, triangles: 0, meshes: 0, materials: 0 },
+        collisionBoxes: [],
+      },
+    })],
   })
 }
 
@@ -712,6 +762,172 @@ describe('SceneCommandServiceV4', () => {
       () => harness.service.deleteSpatialEntity('loose-object'),
       'SPATIAL_ENTITY_NOT_REMOVABLE',
     )
+  })
+
+  it.each(['loose-object', 'platform', 'asset-object'] as const)(
+    'binds the %s Spatial Entity through an owned moving frame without inspecting geometry',
+    async (entityId) => {
+      const harness = commandHarness(entityId === 'asset-object' ? projectWithAssetEntity() : authoredProject(), [
+        'endpoint-object', 'frame-object', 'mapping-object',
+      ])
+
+      await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+        opcUaBindingCommand(entityId),
+      ))
+
+      const entity = harness.mutations.active.spatialEntities.find(({ id }) => id === entityId)!
+      const frame = entity.movingFrames.find(({ frameId }) => frameId === 'frame-object')!
+      const mapping = harness.mutations.active.opcUa.mappings.find(({ id }) => id === 'mapping-object')!
+      expect(entity).toMatchObject({
+        parentFrameId: 'frame-object',
+        localPose: IDENTITY,
+        transformOwner: 'opcua:endpoint-object',
+      })
+      expect(frame).toMatchObject({
+        parentFrameId: 'world',
+        sourceOwnership: 'opcua:endpoint-object',
+      })
+      expect(mapping).toMatchObject({
+        endpointId: 'endpoint-object',
+        direction: 'read',
+        sourceOwnership: 'opcua:endpoint-object',
+        coherenceGroupId: `entity:${entityId}:pose`,
+        interpolationMode: 'shortest-quaternion',
+        coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw',
+      })
+      expect(mapping.leaves).toHaveLength(6)
+      expect(mapping.leaves.map(({ leafPath }) => leafPath)).toEqual([
+        ['positionM', 0], ['positionM', 1], ['positionM', 2],
+        ['rpyDegrees', 0], ['rpyDegrees', 1], ['rpyDegrees', 2],
+      ])
+      expect(mapping.leaves.every((leaf) => (
+        leaf.projectTarget.type === 'entity-frame'
+        && leaf.projectTarget.entityId === entityId
+        && leaf.projectTarget.frameId === 'frame-object'
+      ))).toBe(true)
+    },
+  )
+
+  it('uses millimetre position scaling and independently binds entity Status', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-object', 'frame-object', 'mapping-object', 'mapping-status',
+    ])
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object', {
+        positionUnit: 'mm',
+        numericStatusNodeId: 'ns=2;s=Object.Status',
+      }),
+    ))
+
+    const [poseMapping, statusMapping] = harness.mutations.active.opcUa.mappings
+    expect(poseMapping!.leaves.slice(0, 3).map(({ scale, unit }) => ({ scale, unit }))).toEqual([
+      { scale: 0.001, unit: 'millimetre' },
+      { scale: 0.001, unit: 'millimetre' },
+      { scale: 0.001, unit: 'millimetre' },
+    ])
+    expect(statusMapping).toMatchObject({
+      id: 'mapping-status',
+      coherenceGroupId: null,
+      leaves: [{ projectTarget: { type: 'entity-status', entityId: 'loose-object' } }],
+    })
+    expect(harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object')?.numericStatus)
+      .toMatchObject({ sourceOwnership: 'opcua:endpoint-object' })
+  })
+
+  it('reconfigures a Spatial Entity with stable IDs and no duplicate endpoint, frame, or mapping', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-object', 'frame-object', 'mapping-object', 'unexpected-id',
+    ])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object', { publishingIntervalMs: 250 }),
+    ))
+
+    expect(harness.mutations.active.opcUa.endpoints).toEqual([
+      expect.objectContaining({ endpointId: 'endpoint-object', publishingIntervalMs: 250 }),
+    ])
+    expect(harness.mutations.active.opcUa.mappings).toHaveLength(1)
+    expect(harness.mutations.active.opcUa.mappings[0]).toMatchObject({ id: 'mapping-object' })
+    expect(harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object')?.movingFrames)
+      .toEqual([expect.objectContaining({ frameId: 'frame-object' })])
+  })
+
+  it('selects one Spatial Entity OPC UA transform binding by Entity, frame, endpoint, and mapping IDs', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-object', 'frame-object', 'mapping-object',
+    ])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+
+    expect(selectSpatialEntityOpcUaBindingV4(harness.mutations.active, 'loose-object')).toEqual({
+      entityId: 'loose-object',
+      frameId: 'frame-object',
+      endpointId: 'endpoint-object',
+      poseMappingId: 'mapping-object',
+      statusMappingId: null,
+    })
+    expect(selectSpatialEntityOpcUaBindingV4(harness.mutations.active, 'platform')).toBeNull()
+  })
+
+  it('takes manual control by merging the persisted moving-frame baseline into the Entity pose', async () => {
+    const source = authoredProject()
+    const moved = validateWorkcellProjectV4({
+      ...source,
+      spatialEntities: source.spatialEntities.map((candidate) => (
+        candidate.id === 'loose-object'
+          ? { ...candidate, parentFrameId: 'fixture-frame', localPose: EDITED_POSE }
+          : candidate
+      )),
+    })
+    const harness = commandHarness(moved, ['endpoint-object', 'frame-object', 'mapping-object'])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    const bound = harness.mutations.active
+    const bindingFrame = bound.spatialEntities.find(({ id }) => id === 'loose-object')!.movingFrames[0]!
+    const runtimeLikeBaseline: RigidTransformV4 = { positionM: [0.2, 0, 0], quaternion: [0, 0, 0, 1] }
+    harness.mutations.active = validateWorkcellProjectV4({
+      ...bound,
+      spatialEntities: bound.spatialEntities.map((candidate) => (
+        candidate.id === 'loose-object'
+          ? { ...candidate, localPose: EDITED_POSE, movingFrames: [{ ...bindingFrame, localPose: runtimeLikeBaseline }] }
+          : candidate
+      )),
+    })
+
+    await runOne(harness, () => harness.service.takeSpatialEntityManualControl('loose-object'))
+
+    expect(harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object')).toMatchObject({
+      parentFrameId: 'fixture-frame',
+      localPose: composeRigidTransformV4(runtimeLikeBaseline, EDITED_POSE),
+      transformOwner: 'manual',
+      numericStatus: { sourceOwnership: 'manual' },
+      movingFrames: [],
+    })
+    expect(harness.mutations.active.opcUa.mappings).toEqual([])
+    expect(harness.mutations.active.opcUa.endpoints).toHaveLength(1)
+  })
+
+  it('removes bound Entity mappings before individual and group deletion validation', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-object', 'frame-object', 'mapping-object',
+      'endpoint-child', 'frame-child', 'mapping-child',
+    ])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    await runOne(harness, () => harness.service.deleteSpatialEntity('loose-object'))
+    expect(harness.mutations.active.opcUa.mappings).toEqual([])
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('child-object'),
+    ))
+    await runOne(harness, () => harness.service.deleteGroupAndContents('child-group'))
+    expect(harness.mutations.active.opcUa.mappings).toEqual([])
   })
 
   it('accepts exact Entity and Group limits and rejects one more deterministic create ID', async () => {

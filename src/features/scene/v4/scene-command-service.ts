@@ -1,5 +1,6 @@
 import {
   CYLINDER_RADIAL_SEGMENTS_V4,
+  composeRigidTransformV4,
   failProjectV4,
   validateWorkcellProjectV4,
   type FrameIdV4,
@@ -12,6 +13,7 @@ import {
 } from '../../../core/project-v4/index.js'
 import type { PersistedVisibilityTargetV4 } from '../../interaction/v4/scene-selection.js'
 import type { ProjectMutationPortV4 } from '../../project/v4/project-mutation-port.js'
+import { selectSpatialEntityOpcUaBindingV4 } from './spatial-entity-opcua-binding.js'
 
 export interface CreateBoxCommandV4 {
   readonly name: string
@@ -57,6 +59,22 @@ export interface MovingFrameEditV4 {
   readonly localPose: RigidTransformV4
 }
 
+export interface ConfigureSpatialEntityOpcUaBindingCommandV4 {
+  readonly entityId: SpatialEntityIdV4
+  readonly endpointUrl: string
+  readonly publishingIntervalMs: number
+  readonly positionUnit: 'm' | 'mm'
+  readonly nodeIds: Readonly<{
+    x: string
+    y: string
+    z: string
+    roll: string
+    pitch: string
+    yaw: string
+  }>
+  readonly numericStatusNodeId?: string | undefined
+}
+
 type StatusTargetV4 =
   | { readonly kind: 'robot'; readonly robotId: RobotIdV4 }
   | { readonly kind: 'spatial-entity'; readonly entityId: SpatialEntityIdV4 }
@@ -89,6 +107,10 @@ export interface SceneCommandServiceV4 {
     localPose: RigidTransformV4,
   ): Promise<void>
   setMovingFrame(command: MovingFrameEditV4): Promise<void>
+  configureSpatialEntityOpcUaBinding(
+    command: ConfigureSpatialEntityOpcUaBindingCommandV4,
+  ): Promise<void>
+  takeSpatialEntityManualControl(entityId: SpatialEntityIdV4): Promise<void>
   setNumericStatus(target: StatusTargetV4, value: number): Promise<void>
   setStatusOverlayVisible(target: StatusTargetV4, visible: boolean): Promise<void>
   reparentGroup(
@@ -238,6 +260,65 @@ function assertManualStatus(sourceOwnership: string, path: string): void {
       `Numeric Status is owned by ${sourceOwnership}, not manual authoring.`,
     )
   }
+}
+
+const IDENTITY_POSE_V4: RigidTransformV4 = {
+  positionM: [0, 0, 0],
+  quaternion: [0, 0, 0, 1],
+}
+
+function opcUaModeForSpatialEntityBinding(
+  mode: WorkcellProjectV4['opcUa']['mode'],
+): WorkcellProjectV4['opcUa']['mode'] {
+  if (mode === 'off') return 'client'
+  if (mode === 'server') return 'bridge'
+  return mode
+}
+
+function mappingTargetsAnyEntity(
+  mapping: WorkcellProjectV4['opcUa']['mappings'][number],
+  entityIds: ReadonlySet<SpatialEntityIdV4>,
+): boolean {
+  return mapping.leaves.some((leaf) => (
+    (leaf.projectTarget.type === 'entity-frame' || leaf.projectTarget.type === 'entity-status')
+    && entityIds.has(leaf.projectTarget.entityId)
+  ))
+}
+
+function withoutEntityOpcUaMappings(
+  project: WorkcellProjectV4,
+  entityIds: ReadonlySet<SpatialEntityIdV4>,
+): WorkcellProjectV4['opcUa']['mappings'] {
+  return project.opcUa.mappings.filter((mapping) => !mappingTargetsAnyEntity(mapping, entityIds))
+}
+
+function poseMappingLeaves(
+  entityId: SpatialEntityIdV4,
+  frameId: FrameIdV4,
+  nodeIds: ConfigureSpatialEntityOpcUaBindingCommandV4['nodeIds'],
+  positionUnit: ConfigureSpatialEntityOpcUaBindingCommandV4['positionUnit'],
+) {
+  const positionScale = positionUnit === 'mm' ? 0.001 : 1
+  const positionUnitName = positionUnit === 'mm' ? 'millimetre' : 'metre'
+  const target = { type: 'entity-frame' as const, entityId, frameId }
+  return [
+    ['positionM', 0, nodeIds.x, positionScale, positionUnitName],
+    ['positionM', 1, nodeIds.y, positionScale, positionUnitName],
+    ['positionM', 2, nodeIds.z, positionScale, positionUnitName],
+    ['rpyDegrees', 0, nodeIds.roll, 1, 'degree'],
+    ['rpyDegrees', 1, nodeIds.pitch, 1, 'degree'],
+    ['rpyDegrees', 2, nodeIds.yaw, 1, 'degree'],
+  ].map(([root, index, nodeId, scale, unit]) => ({
+    leafPath: [root as string, index as number],
+    nodeId: nodeId as string,
+    projectTarget: target,
+    opcUaDataType: 'Double' as const,
+    projectDataType: 'number' as const,
+    scale: scale as number,
+    offset: 0,
+    unit: unit as string,
+    required: true,
+  }))
 }
 
 function primitiveEntity(
@@ -613,6 +694,160 @@ export function createSceneCommandServiceV4(
       })
     },
 
+    async configureSpatialEntityOpcUaBinding(command) {
+      const snapshot = {
+        entityId: command.entityId,
+        endpointUrl: command.endpointUrl,
+        publishingIntervalMs: command.publishingIntervalMs,
+        positionUnit: command.positionUnit,
+        nodeIds: { ...command.nodeIds },
+        numericStatusNodeId: command.numericStatusNodeId,
+      }
+      await options.mutations.replaceFromActive({
+        description: `Configure OPC UA binding for Spatial Entity ${snapshot.entityId}`,
+        mutate(active) {
+          const entity = requireEntity(active, snapshot.entityId)
+          const existing = selectSpatialEntityOpcUaBindingV4(active, entity.id)
+          if (entity.transformOwner !== 'manual' && existing === null) {
+            commandFailure(
+              'SPATIAL_ENTITY_TRANSFORM_OWNERSHIP_CONFLICT',
+              `$.spatialEntities.${entity.id}.transformOwner`,
+              `Spatial Entity transform is owned by ${entity.transformOwner}.`,
+            )
+          }
+          const matchingEndpoint = active.opcUa.endpoints.find((endpoint) => (
+            endpoint.endpointUrl === snapshot.endpointUrl
+          ))
+          const endpointId = existing?.endpointId ?? matchingEndpoint?.endpointId ?? options.createId()
+          const frameId = existing?.frameId ?? options.createId()
+          const poseMappingId = existing?.poseMappingId ?? options.createId()
+          const statusMappingId = snapshot.numericStatusNodeId === undefined
+            ? null
+            : existing?.statusMappingId ?? options.createId()
+          const owner = `opcua:${endpointId}` as const
+          const endpoint = {
+            endpointId,
+            name: `OPC UA ${entity.name}`,
+            endpointUrl: snapshot.endpointUrl,
+            enabled: true,
+            publishingIntervalMs: snapshot.publishingIntervalMs,
+            reconnectDelayMs: 1_000,
+          }
+          const baselineFrame = existing === null ? {
+            frameId,
+            name: `${entity.name} OPC UA Frame`,
+            parentFrameId: entity.parentFrameId,
+            localPose: clonePose(entity.localPose),
+            sourceOwnership: owner,
+          } : null
+          const poseMapping = {
+            id: poseMappingId,
+            endpointId,
+            direction: 'read' as const,
+            publishingIntervalMs: snapshot.publishingIntervalMs,
+            coherenceGroupId: `entity:${entity.id}:pose`,
+            sourceOwnership: owner,
+            interpolationMode: 'shortest-quaternion' as const,
+            coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw' as const,
+            leaves: poseMappingLeaves(entity.id, frameId, snapshot.nodeIds, snapshot.positionUnit),
+          }
+          const statusMapping = statusMappingId === null ? null : {
+            id: statusMappingId,
+            endpointId,
+            direction: 'read' as const,
+            publishingIntervalMs: snapshot.publishingIntervalMs,
+            coherenceGroupId: null,
+            sourceOwnership: owner,
+            interpolationMode: 'none' as const,
+            coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw' as const,
+            leaves: [{
+              leafPath: [],
+              nodeId: snapshot.numericStatusNodeId!,
+              projectTarget: { type: 'entity-status' as const, entityId: entity.id },
+              opcUaDataType: 'Double' as const,
+              projectDataType: 'number' as const,
+              scale: 1,
+              offset: 0,
+              unit: 'number',
+              required: true,
+            }],
+          }
+          const oldBindingMappingIds = new Set(
+            [existing?.poseMappingId, existing?.statusMappingId].filter((id): id is string => id !== null && id !== undefined),
+          )
+          return validateCandidate({
+            ...active,
+            spatialEntities: active.spatialEntities.map((candidate) => (
+              candidate.id !== entity.id ? candidate : {
+                ...candidate,
+                parentFrameId: frameId,
+                localPose: IDENTITY_POSE_V4,
+                transformOwner: owner,
+                numericStatus: {
+                  ...candidate.numericStatus,
+                  sourceOwnership: statusMapping === null ? 'manual' : owner,
+                },
+                movingFrames: existing === null
+                  ? [...candidate.movingFrames, baselineFrame!]
+                  : candidate.movingFrames.map((frame) => (
+                      frame.frameId === frameId ? { ...frame, sourceOwnership: owner } : frame
+                    )),
+              }
+            )),
+            opcUa: {
+              ...active.opcUa,
+              mode: opcUaModeForSpatialEntityBinding(active.opcUa.mode),
+              endpoints: active.opcUa.endpoints.some(({ endpointId: id }) => id === endpointId)
+                ? active.opcUa.endpoints.map((candidate) => (
+                    candidate.endpointId === endpointId ? endpoint : candidate
+                  ))
+                : [...active.opcUa.endpoints, endpoint],
+              mappings: [
+                ...active.opcUa.mappings.filter(({ id }) => !oldBindingMappingIds.has(id)),
+                poseMapping,
+                ...(statusMapping === null ? [] : [statusMapping]),
+              ],
+            },
+          })
+        },
+      })
+    },
+
+    async takeSpatialEntityManualControl(entityId) {
+      await options.mutations.replaceFromActive({
+        description: `Take manual control of Spatial Entity ${entityId}`,
+        mutate(active) {
+          const entity = requireEntity(active, entityId)
+          const binding = selectSpatialEntityOpcUaBindingV4(active, entity.id)
+          if (binding === null) {
+            commandFailure(
+              'SPATIAL_ENTITY_OPCUA_BINDING_NOT_FOUND',
+              `$.spatialEntities.${entity.id}`,
+              'Spatial Entity does not have one complete OPC UA transform binding.',
+            )
+          }
+          const frame = entity.movingFrames.find(({ frameId }) => frameId === binding.frameId)!
+          return validateCandidate({
+            ...active,
+            spatialEntities: active.spatialEntities.map((candidate) => (
+              candidate.id !== entity.id ? candidate : {
+                ...candidate,
+                parentFrameId: frame.parentFrameId,
+                localPose: composeRigidTransformV4(frame.localPose, candidate.localPose),
+                transformOwner: 'manual',
+                numericStatus: { ...candidate.numericStatus, sourceOwnership: 'manual' },
+                movingFrames: candidate.movingFrames.filter(({ frameId }) => frameId !== binding.frameId),
+              }
+            )),
+            opcUa: {
+              ...active.opcUa,
+              mappings: withoutEntityOpcUaMappings(active, new Set([entity.id])),
+            },
+          })
+        },
+      })
+    },
+
     async setNumericStatus(target, value) {
       const snapshot = { ...target } as StatusTargetV4
       await options.mutations.replaceFromActive({
@@ -718,6 +953,10 @@ export function createSceneCommandServiceV4(
           return validateCandidate({
             ...active,
             spatialEntities: active.spatialEntities.filter(({ id }) => id !== target.id),
+            opcUa: {
+              ...active.opcUa,
+              mappings: withoutEntityOpcUaMappings(active, new Set([target.id])),
+            },
           })
         },
       })
@@ -759,6 +998,10 @@ export function createSceneCommandServiceV4(
             ...active,
             spatialEntities: active.spatialEntities.filter(({ id }) => !contentIds.has(id)),
             sceneGroups: active.sceneGroups.filter(({ id }) => !descendantIds.has(id)),
+            opcUa: {
+              ...active.opcUa,
+              mappings: withoutEntityOpcUaMappings(active, contentIds),
+            },
           })
         },
       })
