@@ -1,5 +1,6 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import {
   canonicalCollisionPairKeyV4,
@@ -52,6 +53,19 @@ function policy(overrides: Partial<CollisionPolicyV4> = {}): CollisionPolicyV4 {
     intentionalMountPairKeys: new Set(),
     ignoredContactPairKeys: new Set(),
     ...overrides,
+  }
+}
+
+function queryResult() {
+  return {
+    findings: [],
+    telemetry: {
+      entityCount: 1,
+      boxCount: 1,
+      broadPhaseCandidateCount: 0,
+      narrowPhaseTestCount: 0,
+      findingCount: 0,
+    },
   }
 }
 
@@ -170,5 +184,49 @@ describe('CollisionPanelV4', () => {
     )
     await user.click(screen.getByRole('button', { name: 'Validate Collision' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Collision query unavailable')
+  })
+
+  it('keeps a live controller through StrictMode effect replay, accepts replacement, and disposes on actual unmount', async () => {
+    const user = userEvent.setup()
+    let resolveFirst!: (value: ReturnType<typeof queryResult>) => void
+    let resolveLate!: (value: ReturnType<typeof queryResult>) => void
+    const first = new Promise<ReturnType<typeof queryResult>>((resolve) => { resolveFirst = resolve })
+    const late = new Promise<ReturnType<typeof queryResult>>((resolve) => { resolveLate = resolve })
+    const query = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(late)
+    const robot = proxy(robotLinkCollisionIdV4('robot-strict', 'base'), 'robot-link')
+    const view = render(
+      <StrictMode>
+        <CollisionPanelV4
+          onFocus={vi.fn()}
+          policy={policy()}
+          projectRevisionId="strict-a"
+          proxies={[robot]}
+          query={query}
+        />
+      </StrictMode>,
+    )
+    await user.click(screen.getByRole('button', { name: 'Validate Collision' }))
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Validating...' })).toBeDisabled()
+    await act(async () => { resolveFirst(queryResult()) })
+    expect(await screen.findByText('Collisions 0')).toBeVisible()
+
+    view.rerender(
+      <StrictMode>
+        <CollisionPanelV4
+          onFocus={vi.fn()}
+          policy={policy()}
+          projectRevisionId="strict-b"
+          proxies={[robot]}
+          query={query}
+        />
+      </StrictMode>,
+    )
+    await user.click(screen.getByRole('button', { name: 'Validate Collision' }))
+    expect(query).toHaveBeenCalledTimes(2)
+    view.unmount()
+    await act(async () => { resolveLate(queryResult()) })
+    await Promise.resolve()
+    expect(document.querySelector('[aria-label="Geometry Collision"]')).toBeNull()
   })
 })

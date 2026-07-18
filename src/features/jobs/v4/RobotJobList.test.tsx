@@ -712,4 +712,26 @@ describe('RobotJobListV4', () => {
     await waitFor(() => expect(promptPort.requestText).toHaveBeenCalledOnce())
     expect(commands.renameJob).not.toHaveBeenCalled()
   })
+
+  it('renders required-name prompt rejection locally without invoking Job rename', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    const commands = commandService()
+    const promptPort: UserPromptPortV4 = {
+      requestText: vi.fn(async () => { throw new Error('Job name is required.') }),
+    }
+    render(
+      <RobotJobListV4
+        {...state}
+        commands={commands}
+        playback={playbackController()}
+        promptPort={promptPort}
+        selectedRobotId="robot-A"
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Job name is required.'))
+    expect(commands.renameJob).not.toHaveBeenCalled()
+  })
 })

@@ -10,7 +10,7 @@ export interface CreateBrowserProjectFileCommandPortOptionsV4 {
 
 function sanitizeProjectFileNameV4(fileName: string): string {
   const withoutControlCharacters = Array.from(fileName, (character) => (
-    character.charCodeAt(0) < 32 ? '_' : character
+    character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127 ? '_' : character
   )).join('')
   const normalized = withoutControlCharacters
     .replace(/[<>:"/\\|?*]/g, '_')

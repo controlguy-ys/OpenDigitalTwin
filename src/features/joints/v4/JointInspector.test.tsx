@@ -512,4 +512,21 @@ describe('JointInspectorV4', () => {
     expect(operator.home).toHaveBeenCalledWith('robot-a')
     expect(operator.setGripper).toHaveBeenCalledWith('robot-a', 'CLOSED')
   })
+
+  it('keeps local Save Pose pending and error presentation around an injected operator rejection', async () => {
+    const user = userEvent.setup()
+    const project = makeProject([{ id: 'axis-a' }], {
+      jobs: [{ id: 'job-a', name: 'Job A', robotId: 'robot-a', steps: [] }],
+    })
+    let reject!: (reason: unknown) => void
+    const operator: RobotOperatorCommandServiceV4 = {
+      canHome: () => true, home: vi.fn(), setGripper: vi.fn(), canSavePose: () => true,
+      savePose: vi.fn(() => new Promise<void>((_resolve, nextReject) => { reject = nextReject })),
+    }
+    makeHarness(project, 'job-a', operator)
+    await user.click(screen.getByRole('button', { name: 'Save Pose' }))
+    expect(screen.getByRole('button', { name: 'Saving Pose' })).toBeDisabled()
+    reject(new Error('save rejected'))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('save rejected'))
+  })
 })

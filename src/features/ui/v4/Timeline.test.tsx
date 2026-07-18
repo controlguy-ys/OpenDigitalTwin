@@ -428,4 +428,17 @@ describe('TimelineV4', () => {
     await user.click(screen.getByRole('button', { name: 'Start Job' }))
     expect(operator.start).toHaveBeenCalledWith('robot-A', 'job-A')
   })
+
+  it('delegates Stop for only the explicit running Robot through an injected Job operator', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    act(() => state.jobs.getState().setRobotState(runningRobotState()))
+    const operator: JobOperatorServiceV4 = {
+      canStart: vi.fn(() => false), start: vi.fn(async () => undefined),
+      canCancel: vi.fn((robotId) => robotId === 'robot-A'), cancel: vi.fn(async () => undefined),
+    }
+    render(<TimelineV4 {...state} jobId="job-A" jobOperator={operator} robotId="robot-A" />)
+    await user.click(screen.getByRole('button', { name: 'Stop Job' }))
+    expect(operator.cancel).toHaveBeenCalledWith('robot-A')
+  })
 })

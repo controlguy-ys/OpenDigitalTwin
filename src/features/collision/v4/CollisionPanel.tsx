@@ -68,11 +68,18 @@ export function CollisionPanelV4({
   }
   const controller = controllerRef.current
   const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState)
+  const cleanupGenerationRef = useRef(0)
 
   useEffect(() => {
+    cleanupGenerationRef.current += 1
     controller.replaceInput({ projectRevisionId, policy, proxies, jobRunning, query })
   }, [controller, jobRunning, policy, projectRevisionId, proxies, query])
-  useEffect(() => () => controller.dispose(), [controller])
+  useEffect(() => () => {
+    const cleanupGeneration = ++cleanupGenerationRef.current
+    queueMicrotask(() => {
+      if (cleanupGeneration === cleanupGenerationRef.current) controller.dispose()
+    })
+  }, [controller])
 
   const collisions = state.result?.findings.filter(({ kind }) => kind === 'collision').length ?? 0
   const nearMisses = state.result?.findings.filter(({ kind }) => kind === 'near-miss').length ?? 0
