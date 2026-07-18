@@ -202,6 +202,37 @@ describe('ShellLayoutStoreV4', () => {
     })
   })
 
+  it('normalizes compact Inspector and all narrow dock visibility to closed across reloads', () => {
+    const storage = new MemoryStorage()
+    storage.values.set(WORKSPACE_PREFERENCES_STORAGE_KEY_V1, JSON.stringify({
+      ...defaults,
+      modes: {
+        ...defaults.modes,
+        compact: {
+          ...defaults.modes.compact,
+          dockVisible: { ...defaults.modes.compact.dockVisible, inspector: true },
+        },
+        narrow: {
+          ...defaults.modes.narrow,
+          dockVisible: { sidebar: true, inspector: true, bottom: true },
+        },
+      },
+    }))
+
+    const first = createShellLayoutStoreV4({ storage })
+    const persisted = storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY_V1)!
+    const second = createShellLayoutStoreV4({ storage })
+
+    expect(first.getState().preferences.modes.compact.dockVisible.inspector).toBe(false)
+    expect(first.getState().preferences.modes.narrow.dockVisible).toEqual({
+      sidebar: false,
+      inspector: false,
+      bottom: false,
+    })
+    expect(persisted).toContain('"inspector":false')
+    expect(second.getState().preferences).toEqual(first.getState().preferences)
+  })
+
   it('tolerates storage read, write, and legacy cleanup exceptions', () => {
     const storage = {
       getItem: () => { throw new Error('read blocked') },

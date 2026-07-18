@@ -2,11 +2,17 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { createBrowserProjectResourcesV4 } from '../features/project/project-store-browser.js'
+import { createShellLayoutStoreV4, type ShellLayoutStoreV4 } from '../features/ui/v4/shell-layout-store.js'
+import { BottomWorkspace } from '../features/ui/BottomWorkspace.js'
 import { AppShellV4 } from './AppShell.js'
 
 describe('AppShellV4', () => {
+  let shellLayoutStore: ShellLayoutStoreV4
+
   beforeEach(() => {
     localStorage.clear()
+    shellLayoutStore = createShellLayoutStoreV4({ storage: localStorage })
   })
 
   afterEach(() => {
@@ -14,7 +20,7 @@ describe('AppShellV4', () => {
   })
 
   it('renders the five bounded industrial workstation regions', () => {
-    render(<AppShellV4 viewport={<div>3D viewport</div>} />)
+    render(<AppShellV4 shellLayoutStore={shellLayoutStore} viewport={<div>3D viewport</div>} />)
 
     expect(screen.getByRole('banner')).toHaveTextContent('RobotSim')
     expect(screen.getByLabelText('Scene Assets')).toBeInTheDocument()
@@ -35,6 +41,7 @@ describe('AppShellV4', () => {
         onCreateBox={createBox}
         onCreateCylinder={createCylinder}
         onCreateGroup={createGroup}
+        shellLayoutStore={shellLayoutStore}
         viewport={<div>3D viewport</div>}
       />,
     )
@@ -64,6 +71,7 @@ describe('AppShellV4', () => {
     render(
       <AppShellV4
         robotSourceLabel="Simulation"
+        shellLayoutStore={shellLayoutStore}
         viewport={<div>3D viewport</div>}
       />,
     )
@@ -74,7 +82,12 @@ describe('AppShellV4', () => {
 
   it('opens the responsive drawers and bottom sheet from their controls', async () => {
     const user = userEvent.setup()
-    render(<AppShellV4 viewport={<div>3D viewport</div>} />)
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: query === '(max-width: 1199px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })))
+    render(<AppShellV4 shellLayoutStore={shellLayoutStore} viewport={<div>3D viewport</div>} />)
 
     const controls = [
       screen.getByRole('button', { name: 'Scene Assets drawer' }),
@@ -93,8 +106,7 @@ describe('AppShellV4', () => {
 
   it('collapses the desktop Inspector and returns its grid space', async () => {
     const user = userEvent.setup()
-    localStorage.setItem('robotsim.inspectorDrawerOpen', 'true')
-    render(<AppShellV4 inspector={<button type="button">Inspector action</button>} viewport={<div>3D viewport</div>} />)
+    render(<AppShellV4 inspector={<button type="button">Inspector action</button>} shellLayoutStore={shellLayoutStore} viewport={<div>3D viewport</div>} />)
 
     const inspector = screen.getByLabelText('Inspector')
     const shell = inspector.closest('.app-shell')
@@ -107,7 +119,8 @@ describe('AppShellV4', () => {
     expect(control).toHaveAttribute('aria-expanded', 'false')
     expect(inspector).toHaveAttribute('hidden')
     expect(shell).not.toHaveClass('is-inspector-open')
-    expect(localStorage.getItem('robotsim.inspectorDrawerOpen')).toBe('false')
+    expect(shellLayoutStore.getState().preferences.modes.wide.dockVisible.inspector).toBe(false)
+    expect(localStorage.getItem('robotsim.inspectorDrawerOpen')).toBeNull()
 
     await user.click(control)
     expect(inspector).not.toHaveAttribute('hidden')
@@ -118,6 +131,7 @@ describe('AppShellV4', () => {
     render(
       <AppShellV4
         bottomRail={<div>Bottom content</div>}
+        shellLayoutStore={shellLayoutStore}
         viewport={<div>3D viewport</div>}
       />,
     )
@@ -138,6 +152,7 @@ describe('AppShellV4', () => {
       <AppShellV4
         assetTree={<div>Scene tree</div>}
         jobTree={<div>Job tree</div>}
+        shellLayoutStore={shellLayoutStore}
         viewport={<div>3D viewport</div>}
       />,
     )
@@ -148,7 +163,8 @@ describe('AppShellV4', () => {
     fireEvent.keyDown(splitter, { key: 'ArrowDown' })
 
     expect(splitter).toHaveAttribute('aria-valuenow', '61')
-    expect(localStorage.getItem('robotsim.sidebarSplitPercent')).toBe('61')
+    expect(shellLayoutStore.getState().preferences.sidebar.sceneJobSplitPercent).toBe(61)
+    expect(localStorage.getItem('robotsim.sidebarSplitPercent')).toBeNull()
   })
 
   it('separates control gating from the viewport error state and blocks Add', async () => {
@@ -158,6 +174,7 @@ describe('AppShellV4', () => {
       <AppShellV4
         controlsDisabled
         onCreateBox={createBox}
+        shellLayoutStore={shellLayoutStore}
         viewport={<div>3D viewport</div>}
         viewportBusy={false}
       />,
@@ -174,5 +191,50 @@ describe('AppShellV4', () => {
     await user.click(add)
     expect(screen.queryByRole('menu', { name: 'Add' })).not.toBeInTheDocument()
     expect(createBox).not.toHaveBeenCalled()
+  })
+
+  it('keeps migrated preferences in rendered Shell and Bottom consumers without recreating legacy keys', async () => {
+    const user = userEvent.setup()
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: query === '(min-width: 960px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })))
+    localStorage.clear()
+    localStorage.setItem('robotsim.assetDrawerOpen', 'true')
+    localStorage.setItem('robotsim.inspectorDrawerOpen', 'false')
+    localStorage.setItem('robotsim.bottomDrawerOpen', 'true')
+    localStorage.setItem('robotsim.sidebarSplitPercent', '67')
+    localStorage.setItem('robotsim.bottomWorkspaceTab', 'collision')
+    localStorage.setItem('robotsim.theme', 'dark')
+    const resources = createBrowserProjectResourcesV4({
+      resolveDefinitionGeometry: async () => null,
+    })
+
+    render(
+      <AppShellV4
+        bottomRail={<BottomWorkspace collision="Collision" shellLayoutStore={resources.shellLayoutStore} timeline="Timeline" />}
+        shellLayoutStore={resources.shellLayoutStore}
+        viewport={<div>3D viewport</div>}
+      />,
+    )
+
+    expect(screen.getByLabelText('Inspector')).toHaveAttribute('hidden')
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '67')
+    expect(screen.getByRole('tabpanel', { name: 'Collision' })).toBeVisible()
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+
+    fireEvent.keyDown(screen.getByRole('separator'), { key: 'ArrowDown' })
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'light')
+    await user.click(screen.getByRole('tab', { name: 'Timeline' }))
+
+    expect(resources.shellLayoutStore.getState().preferences).toMatchObject({
+      sidebar: { sceneJobSplitPercent: 68 },
+      bottom: { activeTab: 'timeline' },
+      theme: 'light',
+    })
+    expect([...Array(localStorage.length).keys()].map((index) => localStorage.key(index))).toEqual([
+      'robotsim.workspace-preferences.v1',
+    ])
   })
 })

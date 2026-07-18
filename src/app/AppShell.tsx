@@ -6,18 +6,18 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react'
+import { useStore } from 'zustand'
 import {
   applyThemePreference,
   DARK_THEME_QUERY,
-  readThemePreference,
-  writeThemePreference,
   type ThemePreference,
 } from '../features/ui/theme-preference'
+import type {
+  ShellDockV4,
+  ShellLayoutModeV4,
+  ShellLayoutStoreV4,
+} from '../features/ui/v4/shell-layout-store.js'
 
-const SIDEBAR_SPLIT_KEY = 'robotsim.sidebarSplitPercent'
-const ASSET_DRAWER_KEY = 'robotsim.assetDrawerOpen'
-const INSPECTOR_DRAWER_KEY = 'robotsim.inspectorDrawerOpen'
-const BOTTOM_DRAWER_KEY = 'robotsim.bottomDrawerOpen'
 const COMPACT_TOP_BAR_QUERY = '(max-width: 1199px)'
 const DESKTOP_WORKSPACE_QUERY = '(min-width: 960px)'
 
@@ -25,43 +25,24 @@ function compactTopBarPreference(): boolean {
   return globalThis.matchMedia?.(COMPACT_TOP_BAR_QUERY).matches ?? false
 }
 
-function browserNumber(key: string, fallback: number): number {
-  try {
-    const raw = localStorage.getItem(key)
-    if (raw === null) return fallback
-    const parsed = Number(raw)
-    return Number.isFinite(parsed) ? parsed : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function browserBoolean(key: string, fallback = false): boolean {
-  try {
-    const raw = localStorage.getItem(key)
-    return raw === null ? fallback : raw === 'true'
-  } catch {
-    return fallback
-  }
-}
-
 function desktopInspectorPreference(): boolean {
   return globalThis.matchMedia?.(DESKTOP_WORKSPACE_QUERY).matches ?? false
-}
-
-function persistPreference(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    // Browser preferences are optional and never affect Project content.
-  }
 }
 
 function clampSplit(value: number): number {
   return Math.min(75, Math.max(35, Math.round(value)))
 }
 
+function compatibilityLayoutModeV4(
+  compact: boolean,
+  desktop: boolean,
+): ShellLayoutModeV4 {
+  if (!compact) return 'wide'
+  return desktop ? 'compact' : 'narrow'
+}
+
 export interface AppShellPropsV4 {
+  readonly shellLayoutStore: ShellLayoutStoreV4
   viewport: ReactNode
   projectMenu?: ReactNode
   assetTree?: ReactNode
@@ -79,6 +60,7 @@ export interface AppShellPropsV4 {
 }
 
 export function AppShellV4({
+  shellLayoutStore,
   viewport,
   projectMenu,
   assetTree,
@@ -94,28 +76,46 @@ export function AppShellV4({
   onCreateCylinder,
   onCreateGroup,
 }: AppShellPropsV4) {
-  const [isAssetRailOpen, setIsAssetRailOpen] = useState(() => browserBoolean(ASSET_DRAWER_KEY))
-  const [isInspectorOpen, setIsInspectorOpen] = useState(() => (
-    browserBoolean(INSPECTOR_DRAWER_KEY, desktopInspectorPreference())
-  ))
-  const [isBottomRailOpen, setIsBottomRailOpen] = useState(() => browserBoolean(BOTTOM_DRAWER_KEY))
-  const [splitPercent, setSplitPercent] = useState(() => clampSplit(browserNumber(SIDEBAR_SPLIT_KEY, 60)))
+  const preferences = useStore(shellLayoutStore, (state) => state.preferences)
+  const [isTransientAssetRailOpen, setIsTransientAssetRailOpen] = useState(false)
+  const [isTransientInspectorOpen, setIsTransientInspectorOpen] = useState(false)
+  const [isTransientBottomRailOpen, setIsTransientBottomRailOpen] = useState(false)
   const [draggingSplit, setDraggingSplit] = useState(false)
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [isCompactControlsOpen, setIsCompactControlsOpen] = useState(false)
   const [isCompactTopBar, setIsCompactTopBar] = useState(compactTopBarPreference)
-  const [theme, setTheme] = useState<ThemePreference>(readThemePreference)
+  const [isDesktopWorkspace, setIsDesktopWorkspace] = useState(desktopInspectorPreference)
   const assetRailRef = useRef<HTMLElement>(null)
+  const layoutMode = compatibilityLayoutModeV4(
+    isCompactTopBar,
+    isDesktopWorkspace,
+  )
+  const isAssetRailOpen = layoutMode === 'narrow'
+    ? isTransientAssetRailOpen
+    : preferences.modes[layoutMode].dockVisible.sidebar
+  const isInspectorOpen = layoutMode === 'wide'
+    ? preferences.modes.wide.dockVisible.inspector
+    : isTransientInspectorOpen
+  const isBottomRailOpen = layoutMode === 'narrow'
+    ? isTransientBottomRailOpen
+    : preferences.modes[layoutMode].dockVisible.bottom
+  const splitPercent = preferences.sidebar.sceneJobSplitPercent
 
   useEffect(() => {
     if (globalThis.matchMedia === undefined) return
-    const media = globalThis.matchMedia(COMPACT_TOP_BAR_QUERY)
+    const compactMedia = globalThis.matchMedia(COMPACT_TOP_BAR_QUERY)
+    const desktopMedia = globalThis.matchMedia(DESKTOP_WORKSPACE_QUERY)
     const updateMode = () => {
-      setIsCompactTopBar(media.matches)
-      if (!media.matches) setIsCompactControlsOpen(false)
+      setIsCompactTopBar(compactMedia.matches)
+      setIsDesktopWorkspace(desktopMedia.matches)
+      if (!compactMedia.matches) setIsCompactControlsOpen(false)
     }
-    media.addEventListener?.('change', updateMode)
-    return () => media.removeEventListener?.('change', updateMode)
+    compactMedia.addEventListener?.('change', updateMode)
+    desktopMedia.addEventListener?.('change', updateMode)
+    return () => {
+      compactMedia.removeEventListener?.('change', updateMode)
+      desktopMedia.removeEventListener?.('change', updateMode)
+    }
   }, [])
 
   useEffect(() => {
@@ -131,24 +131,27 @@ export function AppShellV4({
 
   useEffect(() => {
     if (bottomRailOpenRequest <= 0) return
-    setIsBottomRailOpen(true)
-    persistPreference(BOTTOM_DRAWER_KEY, 'true')
-  }, [bottomRailOpenRequest])
+    if (layoutMode === 'narrow') setIsTransientBottomRailOpen(true)
+    else shellLayoutStore.getState().setDockedVisible(layoutMode, 'bottom', true)
+  }, [bottomRailOpenRequest, layoutMode, shellLayoutStore])
 
   useEffect(() => {
     if (inspectorOpenRequest <= 0) return
-    setIsInspectorOpen(true)
-    persistPreference(INSPECTOR_DRAWER_KEY, 'true')
-  }, [inspectorOpenRequest])
+    if (layoutMode === 'wide') {
+      shellLayoutStore.getState().setDockedVisible('wide', 'inspector', true)
+    } else {
+      setIsTransientInspectorOpen(true)
+    }
+  }, [inspectorOpenRequest, layoutMode, shellLayoutStore])
 
   useEffect(() => {
-    applyThemePreference(theme)
-    if (theme !== 'system' || globalThis.matchMedia === undefined) return
+    applyThemePreference(preferences.theme)
+    if (preferences.theme !== 'system' || globalThis.matchMedia === undefined) return
     const media = globalThis.matchMedia(DARK_THEME_QUERY)
     const handleChange = () => applyThemePreference('system')
     media.addEventListener?.('change', handleChange)
     return () => media.removeEventListener?.('change', handleChange)
-  }, [theme])
+  }, [preferences.theme])
 
   useEffect(() => {
     if (!draggingSplit) return
@@ -156,8 +159,7 @@ export function AppShellV4({
       const bounds = assetRailRef.current?.getBoundingClientRect()
       if (bounds === undefined || bounds.height <= 0) return
       const next = clampSplit((event.clientY - bounds.top) / bounds.height * 100)
-      setSplitPercent(next)
-      persistPreference(SIDEBAR_SPLIT_KEY, String(next))
+      shellLayoutStore.getState().setSceneJobSplit(next)
     }
     const finish = () => setDraggingSplit(false)
     window.addEventListener('pointermove', handlePointerMove)
@@ -166,15 +168,18 @@ export function AppShellV4({
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', finish)
     }
-  }, [draggingSplit])
+  }, [draggingSplit, shellLayoutStore])
 
-  const setDrawer = (
-    setter: (open: boolean) => void,
-    key: string,
-    open: boolean,
-  ) => {
-    setter(open)
-    persistPreference(key, String(open))
+  const setDrawer = (dock: ShellDockV4, open: boolean) => {
+    if (layoutMode === 'wide' || (
+      layoutMode === 'compact' && (dock === 'sidebar' || dock === 'bottom')
+    )) {
+      shellLayoutStore.getState().setDockedVisible(layoutMode, dock, open)
+      return
+    }
+    if (dock === 'sidebar') setIsTransientAssetRailOpen(open)
+    else if (dock === 'inspector') setIsTransientInspectorOpen(open)
+    else setIsTransientBottomRailOpen(open)
   }
 
   const runAddCommand = (command?: () => void) => {
@@ -244,11 +249,11 @@ export function AppShellV4({
             <select
               aria-label="Theme"
               onChange={(event) => {
-                const preference = event.currentTarget.value as ThemePreference
-                setTheme(preference)
-                writeThemePreference(preference)
+                shellLayoutStore.getState().setTheme(
+                  event.currentTarget.value as ThemePreference,
+                )
               }}
-              value={theme}
+              value={preferences.theme}
             >
               <option value="system">System</option>
               <option value="light">Light</option>
@@ -262,7 +267,7 @@ export function AppShellV4({
         aria-expanded={isAssetRailOpen}
         aria-label="Scene Assets drawer"
         className={`drawer-control drawer-control-left${isAssetRailOpen ? ' is-open' : ''}`}
-        onClick={() => setDrawer(setIsAssetRailOpen, ASSET_DRAWER_KEY, !isAssetRailOpen)}
+        onClick={() => setDrawer('sidebar', !isAssetRailOpen)}
         type="button"
       >
         <PanelLeft aria-hidden="true" size={16} strokeWidth={1.75} />
@@ -272,7 +277,7 @@ export function AppShellV4({
         aria-expanded={isInspectorOpen}
         aria-label="Inspector drawer"
         className={`drawer-control drawer-control-right${isInspectorOpen ? ' is-open' : ''}`}
-        onClick={() => setDrawer(setIsInspectorOpen, INSPECTOR_DRAWER_KEY, !isInspectorOpen)}
+        onClick={() => setDrawer('inspector', !isInspectorOpen)}
         type="button"
       >
         <PanelRight aria-hidden="true" size={16} strokeWidth={1.75} />
@@ -282,7 +287,7 @@ export function AppShellV4({
         aria-expanded={isBottomRailOpen}
         aria-label="Timeline and Events sheet"
         className={`drawer-control sheet-control${isBottomRailOpen ? ' is-open' : ''}`}
-        onClick={() => setDrawer(setIsBottomRailOpen, BOTTOM_DRAWER_KEY, !isBottomRailOpen)}
+        onClick={() => setDrawer('bottom', !isBottomRailOpen)}
         type="button"
       >
         <ChevronDown aria-hidden="true" size={16} strokeWidth={1.75} />
@@ -307,8 +312,7 @@ export function AppShellV4({
             if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
             event.preventDefault()
             const next = clampSplit(splitPercent + (event.key === 'ArrowDown' ? 1 : -1))
-            setSplitPercent(next)
-            persistPreference(SIDEBAR_SPLIT_KEY, String(next))
+            shellLayoutStore.getState().setSceneJobSplit(next)
           }}
           onPointerDown={() => setDraggingSplit(true)}
           role="separator"

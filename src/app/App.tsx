@@ -582,6 +582,7 @@ export function App({
               />
             )}
             collisionOpenRequest={collisionOpenRequest}
+            shellLayoutStore={resources.shellLayoutStore}
             timeline={(
               <TimelineV4
                 commands={resources.jobCommands}
@@ -655,6 +656,7 @@ export function App({
           />
         )}
         robotSourceLabel={sourceLabelV4(activeRobot?.jointSource ?? null)}
+        shellLayoutStore={resources.shellLayoutStore}
         viewport={(
           <>
             <SceneCanvasV4

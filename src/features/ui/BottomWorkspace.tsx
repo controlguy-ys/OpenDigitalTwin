@@ -1,18 +1,13 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { useStore } from 'zustand'
 
-export type BottomWorkspaceTab = 'timeline' | 'collision'
+import type { BottomWorkspaceTabV4 } from './v4/bottom-workspace-tab.js'
+import type { ShellLayoutStoreV4 } from './v4/shell-layout-store.js'
 
-const STORAGE_KEY = 'robotsim.bottomWorkspaceTab'
-
-function readTab(): BottomWorkspaceTab {
-  try {
-    return localStorage.getItem(STORAGE_KEY) === 'collision' ? 'collision' : 'timeline'
-  } catch {
-    return 'timeline'
-  }
-}
+export type BottomWorkspaceTab = BottomWorkspaceTabV4
 
 export interface BottomWorkspaceProps {
+  readonly shellLayoutStore: ShellLayoutStoreV4
   readonly timeline?: ReactNode
   readonly collision?: ReactNode
   readonly collisionCount?: number
@@ -20,32 +15,26 @@ export interface BottomWorkspaceProps {
 }
 
 export function BottomWorkspace({
+  shellLayoutStore,
   timeline = null,
   collision = null,
   collisionCount = 0,
   collisionOpenRequest = 0,
 }: BottomWorkspaceProps) {
-  const [activeTab, setActiveTab] = useState<BottomWorkspaceTab>(readTab)
+  const activeTab = useStore(
+    shellLayoutStore,
+    (state) => state.preferences.bottom.activeTab,
+  )
   const timelineTabRef = useRef<HTMLButtonElement>(null)
   const collisionTabRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (collisionOpenRequest <= 0) return
-    setActiveTab('collision')
-    try {
-      localStorage.setItem(STORAGE_KEY, 'collision')
-    } catch {
-      // Browser preferences are optional and never affect Project content.
-    }
-  }, [collisionOpenRequest])
+    shellLayoutStore.getState().setBottomTab('collision')
+  }, [collisionOpenRequest, shellLayoutStore])
 
-  const selectTab = (tab: BottomWorkspaceTab) => {
-    setActiveTab(tab)
-    try {
-      localStorage.setItem(STORAGE_KEY, tab)
-    } catch {
-      // Browser preferences are optional and never affect Project content.
-    }
+  const selectTab = (tab: BottomWorkspaceTabV4) => {
+    shellLayoutStore.getState().setBottomTab(tab)
   }
 
   const selectAndFocus = (tab: BottomWorkspaceTab) => {
@@ -55,7 +44,7 @@ export function BottomWorkspace({
   }
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    let next: BottomWorkspaceTab | null = null
+    let next: BottomWorkspaceTabV4 | null = null
     if (event.key === 'Home') next = 'timeline'
     else if (event.key === 'End') next = 'collision'
     else if (event.key === 'ArrowRight') {

@@ -105,8 +105,17 @@ function normalizePreferences(value: unknown): ShellWorkspacePreferencesV1 | nul
     version: 1,
     modes: {
       wide: modeOrDefault(modes.wide, defaults.modes.wide),
-      compact: modeOrDefault(modes.compact, defaults.modes.compact),
-      narrow: modeOrDefault(modes.narrow, defaults.modes.narrow),
+      compact: {
+        ...modeOrDefault(modes.compact, defaults.modes.compact),
+        dockVisible: {
+          ...modeOrDefault(modes.compact, defaults.modes.compact).dockVisible,
+          inspector: false,
+        },
+      },
+      narrow: {
+        ...modeOrDefault(modes.narrow, defaults.modes.narrow),
+        dockVisible: { sidebar: false, inspector: false, bottom: false },
+      },
     },
     sidebar: {
       widthPx: numberOrDefault(sidebar.widthPx, defaults.sidebar.widthPx, 220, 420),
