@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { ProjectV4Error } from '../../core/project-v4/index.js'
+import { createBrowserProjectFileCommandPortV4 } from './v4/project-file-command-port.js'
+import { createBrowserUserPromptPortV4 } from '../ui/v4/user-prompt-port.js'
 import { ProjectDatabaseV4 } from './v4/project-v4-db.js'
 import {
   createBrowserProjectResourcesV4,
@@ -68,6 +70,27 @@ afterEach(async () => {
 })
 
 describe('browser Project V4 resource root', () => {
+  it('owns independent injectable Project-file and User-prompt ports', () => {
+    const first = createResources()
+    const second = createResources()
+    const projectFiles = createBrowserProjectFileCommandPortV4()
+    const userPrompt = createBrowserUserPromptPortV4({ prompt: () => null })
+    const injected = createBrowserProjectResourcesV4({
+      database: createDatabase(),
+      nowIso: () => '2026-07-17T00:00:00.000Z',
+      createId: deterministicIds(),
+      resolveDefinitionGeometry: async () => null,
+      animationScheduler: { now: () => 0, request: () => 1, cancel: () => undefined },
+      projectFiles,
+      userPrompt,
+    })
+
+    expect(first.projectFiles).not.toBe(second.projectFiles)
+    expect(first.userPrompt).not.toBe(second.userPrompt)
+    expect(injected.projectFiles).toBe(projectFiles)
+    expect(injected.userPrompt).toBe(userPrompt)
+  })
+
   it('publishes New through one revision-qualified public resource graph', async () => {
     const resources = createResources()
 
@@ -193,12 +216,14 @@ describe('browser Project V4 resource root', () => {
       'jobCommands',
       'jobs',
       'mutations',
+      'projectFiles',
       'projectStore',
       'robots',
       'runtimeBundle',
       'scene',
       'sceneCommands',
       'shellLayoutStore',
+      'userPrompt',
       'viewportPreferences',
     ])
     expect(resources).not.toHaveProperty('rawRobots')

@@ -47,6 +47,10 @@ import {
   createShellLayoutStoreV4,
   type ShellLayoutStoreV4,
 } from '../ui/v4/shell-layout-store.js'
+import {
+  createBrowserUserPromptPortV4,
+  type UserPromptPortV4,
+} from '../ui/v4/user-prompt-port.js'
 import { createBrowserProjectRuntimeV4 } from './v4/browser-project-runtime-v4.js'
 import {
   createBrowserRuntimeBundleStoreV4,
@@ -67,6 +71,10 @@ import {
   type ProjectStoreV4,
 } from './v4/project-store-v4.js'
 import { createRuntimePublicationBarrierV4 } from './v4/runtime-publication-barrier-v4.js'
+import {
+  createBrowserProjectFileCommandPortV4,
+  type ProjectFileCommandPortV4,
+} from './v4/project-file-command-port.js'
 import type { CoordinateDisplayStoreStateV4 } from '../frames/v4/coordinate-display-store.js'
 import type { InteractionStoreStateV4 } from '../interaction/v4/interaction-store.js'
 import type { JobCommandServiceV4 } from '../jobs/v4/job-command-service.js'
@@ -86,6 +94,8 @@ export interface BrowserProjectResourcesV4 {
   readonly runtimeBundle: StoreApi<BrowserRuntimeBundleStoreStateV4>
   readonly sceneCommands: SceneCommandServiceV4
   readonly jobCommands: JobCommandServiceV4
+  readonly projectFiles: ProjectFileCommandPortV4
+  readonly userPrompt: UserPromptPortV4
 }
 
 export interface BrowserProjectResourcesOptionsV4 {
@@ -97,6 +107,8 @@ export interface BrowserProjectResourcesOptionsV4 {
     project: WorkcellProjectV4,
     definition: RobotDefinitionV4,
   ) => Promise<PreparedRobotDefinitionGeometryV4 | null>
+  readonly projectFiles?: ProjectFileCommandPortV4
+  readonly userPrompt?: UserPromptPortV4
 }
 
 function browserAnimationSchedulerV4(): AnimationFrameSchedulerV4 {
@@ -125,6 +137,8 @@ export function createBrowserProjectResourcesV4(
   const createId = options.createId ?? (() => crypto.randomUUID())
   const animationScheduler = options.animationScheduler
     ?? browserAnimationSchedulerV4()
+  const projectFiles = options.projectFiles ?? createBrowserProjectFileCommandPortV4()
+  const userPrompt = options.userPrompt ?? createBrowserUserPromptPortV4()
 
   const rawRobots = createRobotRuntimeRegistryV4()
   const rawJobs = createJobRuntimeStoreV4()
@@ -254,6 +268,8 @@ export function createBrowserProjectResourcesV4(
     runtimeBundle,
     sceneCommands,
     jobCommands,
+    projectFiles,
+    userPrompt,
   })
 }
 
