@@ -1,74 +1,46 @@
 import { ChevronDown, PanelLeft, PanelRight } from 'lucide-react'
 import {
+  useCallback,
   useEffect,
-  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
 } from 'react'
-import { useStore } from 'zustand'
+
 import {
   applyThemePreference,
   DARK_THEME_QUERY,
   type ThemePreference,
 } from '../features/ui/theme-preference'
-import type {
-  ShellDockV4,
-  ShellLayoutModeV4,
-  ShellLayoutStoreV4,
-} from '../features/ui/v4/shell-layout-store.js'
-
-const COMPACT_TOP_BAR_QUERY = '(max-width: 1199px)'
-const DESKTOP_WORKSPACE_QUERY = '(min-width: 960px)'
-
-function compactTopBarPreference(): boolean {
-  return globalThis.matchMedia?.(COMPACT_TOP_BAR_QUERY).matches ?? false
-}
-
-function desktopInspectorPreference(): boolean {
-  return globalThis.matchMedia?.(DESKTOP_WORKSPACE_QUERY).matches ?? false
-}
-
-function clampSplit(value: number): number {
-  return Math.min(75, Math.max(35, Math.round(value)))
-}
-
-function compatibilityLayoutModeV4(
-  compact: boolean,
-  desktop: boolean,
-): ShellLayoutModeV4 {
-  if (!compact) return 'wide'
-  return desktop ? 'compact' : 'narrow'
-}
+import { DockResizeHandleV4 } from '../features/ui/v4/DockResizeHandleV4.js'
+import type { ShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
+import { isSceneJobResizeAvailableV4 } from '../features/ui/v4/shell-layout-geometry.js'
+import { useShellLayoutObserverV4 } from '../features/ui/v4/use-shell-layout-observer.js'
 
 export interface AppShellPropsV4 {
-  readonly shellLayoutStore: ShellLayoutStoreV4
-  viewport: ReactNode
-  projectMenu?: ReactNode
-  assetTree?: ReactNode
-  jobTree?: ReactNode
-  inspector?: ReactNode
-  bottomRail?: ReactNode
-  bottomRailOpenRequest?: number
-  inspectorOpenRequest?: number
-  controlsDisabled?: boolean
-  viewportBusy?: boolean
-  robotSourceLabel?: string | null
-  onCreateBox?: () => void
-  onCreateCylinder?: () => void
-  onCreateGroup?: () => void
+  readonly shellLayoutController: ShellLayoutControllerV4
+  readonly viewport: ReactNode
+  readonly projectMenu?: ReactNode
+  readonly assetTree?: ReactNode
+  readonly jobTree?: ReactNode
+  readonly inspector?: ReactNode
+  readonly bottomRail?: ReactNode
+  readonly controlsDisabled?: boolean
+  readonly viewportBusy?: boolean
+  readonly robotSourceLabel?: string | null
+  readonly onCreateBox?: () => void
+  readonly onCreateCylinder?: () => void
+  readonly onCreateGroup?: () => void
 }
 
 export function AppShellV4({
-  shellLayoutStore,
+  shellLayoutController,
   viewport,
   projectMenu,
   assetTree,
   jobTree,
   inspector,
   bottomRail,
-  bottomRailOpenRequest = 0,
-  inspectorOpenRequest = 0,
   controlsDisabled = false,
   viewportBusy = controlsDisabled,
   robotSourceLabel = null,
@@ -76,47 +48,43 @@ export function AppShellV4({
   onCreateCylinder,
   onCreateGroup,
 }: AppShellPropsV4) {
-  const preferences = useStore(shellLayoutStore, (state) => state.preferences)
-  const [isTransientAssetRailOpen, setIsTransientAssetRailOpen] = useState(false)
-  const [isTransientInspectorOpen, setIsTransientInspectorOpen] = useState(false)
-  const [isTransientBottomRailOpen, setIsTransientBottomRailOpen] = useState(false)
-  const [draggingSplit, setDraggingSplit] = useState(false)
+  const { snapshot, workspaceRef } = useShellLayoutObserverV4(shellLayoutController)
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [isCompactControlsOpen, setIsCompactControlsOpen] = useState(false)
-  const [isCompactTopBar, setIsCompactTopBar] = useState(compactTopBarPreference)
-  const [isDesktopWorkspace, setIsDesktopWorkspace] = useState(desktopInspectorPreference)
-  const assetRailRef = useRef<HTMLElement>(null)
-  const layoutMode = compatibilityLayoutModeV4(
-    isCompactTopBar,
-    isDesktopWorkspace,
+  const [assetRail, setAssetRail] = useState<HTMLElement | null>(null)
+  const [sidebarContentHeightPx, setSidebarContentHeightPx] = useState(0)
+  const setAssetRailRef = useCallback((element: HTMLElement | null) => setAssetRail(element), [])
+  const isCompactTopBar = snapshot.mode !== 'wide'
+  const isAssetRailOpen = snapshot.isDockVisible('sidebar')
+  const isInspectorOpen = snapshot.isDockVisible('inspector')
+  const isBottomRailOpen = snapshot.isDockVisible('bottom')
+  const splitPercent = snapshot.preferences.sidebar.sceneJobSplitPercent
+  const showSidebarDockHandle = (snapshot.mode === 'wide' || snapshot.mode === 'compact')
+    && isAssetRailOpen
+  const showInspectorDockHandle = snapshot.mode === 'wide' && isInspectorOpen
+  const showBottomDockHandle = (snapshot.mode === 'wide' || snapshot.mode === 'compact')
+    && isBottomRailOpen
+  const showSceneJobHandle = isAssetRailOpen && isSceneJobResizeAvailableV4(
+    snapshot.mode,
+    sidebarContentHeightPx,
   )
-  const isAssetRailOpen = layoutMode === 'narrow'
-    ? isTransientAssetRailOpen
-    : preferences.modes[layoutMode].dockVisible.sidebar
-  const isInspectorOpen = layoutMode === 'wide'
-    ? preferences.modes.wide.dockVisible.inspector
-    : isTransientInspectorOpen
-  const isBottomRailOpen = layoutMode === 'narrow'
-    ? isTransientBottomRailOpen
-    : preferences.modes[layoutMode].dockVisible.bottom
-  const splitPercent = preferences.sidebar.sceneJobSplitPercent
-
-  useEffect(() => {
-    if (globalThis.matchMedia === undefined) return
-    const compactMedia = globalThis.matchMedia(COMPACT_TOP_BAR_QUERY)
-    const desktopMedia = globalThis.matchMedia(DESKTOP_WORKSPACE_QUERY)
-    const updateMode = () => {
-      setIsCompactTopBar(compactMedia.matches)
-      setIsDesktopWorkspace(desktopMedia.matches)
-      if (!compactMedia.matches) setIsCompactControlsOpen(false)
-    }
-    compactMedia.addEventListener?.('change', updateMode)
-    desktopMedia.addEventListener?.('change', updateMode)
-    return () => {
-      compactMedia.removeEventListener?.('change', updateMode)
-      desktopMedia.removeEventListener?.('change', updateMode)
-    }
-  }, [])
+  const splitReferenceHeightPx = sidebarContentHeightPx > 0
+    ? sidebarContentHeightPx
+    : Math.max(1, snapshot.bounds.workspaceHeightPx)
+  const shellClassName = `app-shell${isCompactTopBar ? ' is-compact-topbar' : ''}${isAssetRailOpen ? ' is-asset-rail-open' : ''}${isInspectorOpen ? ' is-inspector-open' : ''}${isBottomRailOpen ? ' is-bottom-rail-open' : ''}`
+  const shellVariables = {
+    '--sidebar-width': `${snapshot.mode === 'narrow'
+      ? snapshot.preferences.sidebar.widthPx
+      : snapshot.resolved.sidebarWidthPx}px`,
+    '--inspector-width': `${snapshot.mode === 'wide'
+      ? snapshot.resolved.inspectorWidthPx
+      : snapshot.preferences.inspector.widthPx}px`,
+    '--bottom-height': `${snapshot.resolved.bottomHeightPx}px`,
+    '--sidebar-split-percent': splitPercent,
+    '--ribbon-height': '0px',
+    height: '100dvh',
+    overflow: 'hidden',
+  } as CSSProperties
 
   useEffect(() => {
     const previousRootOverflow = document.documentElement.style.overflow
@@ -130,58 +98,33 @@ export function AppShellV4({
   }, [])
 
   useEffect(() => {
-    if (bottomRailOpenRequest <= 0) return
-    if (layoutMode === 'narrow') setIsTransientBottomRailOpen(true)
-    else shellLayoutStore.getState().setDockedVisible(layoutMode, 'bottom', true)
-  }, [bottomRailOpenRequest, layoutMode, shellLayoutStore])
-
-  useEffect(() => {
-    if (inspectorOpenRequest <= 0) return
-    if (layoutMode === 'wide') {
-      shellLayoutStore.getState().setDockedVisible('wide', 'inspector', true)
-    } else {
-      setIsTransientInspectorOpen(true)
-    }
-  }, [inspectorOpenRequest, layoutMode, shellLayoutStore])
-
-  useEffect(() => {
-    applyThemePreference(preferences.theme)
-    if (preferences.theme !== 'system' || globalThis.matchMedia === undefined) return
+    applyThemePreference(snapshot.preferences.theme)
+    if (snapshot.preferences.theme !== 'system' || globalThis.matchMedia === undefined) return
     const media = globalThis.matchMedia(DARK_THEME_QUERY)
     const handleChange = () => applyThemePreference('system')
     media.addEventListener?.('change', handleChange)
     return () => media.removeEventListener?.('change', handleChange)
-  }, [preferences.theme])
+  }, [snapshot.preferences.theme])
 
   useEffect(() => {
-    if (!draggingSplit) return
-    const handlePointerMove = (event: PointerEvent) => {
-      const bounds = assetRailRef.current?.getBoundingClientRect()
-      if (bounds === undefined || bounds.height <= 0) return
-      const next = clampSplit((event.clientY - bounds.top) / bounds.height * 100)
-      shellLayoutStore.getState().setSceneJobSplit(next)
-    }
-    const finish = () => setDraggingSplit(false)
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', finish)
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', finish)
-    }
-  }, [draggingSplit, shellLayoutStore])
+    if (!isCompactTopBar) setIsCompactControlsOpen(false)
+  }, [isCompactTopBar])
 
-  const setDrawer = (dock: ShellDockV4, open: boolean) => {
-    if (layoutMode === 'wide' || (
-      layoutMode === 'compact' && (dock === 'sidebar' || dock === 'bottom')
-    )) {
-      shellLayoutStore.getState().setDockedVisible(layoutMode, dock, open)
-      return
-    }
-    if (dock === 'sidebar') setIsTransientAssetRailOpen(open)
-    else if (dock === 'inspector') setIsTransientInspectorOpen(open)
-    else setIsTransientBottomRailOpen(open)
+  useEffect(() => {
+    if (assetRail === null || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.find((candidate) => candidate.target === assetRail) ?? entries[0]
+      if (entry !== undefined && entry.contentRect.height > 0) {
+        setSidebarContentHeightPx(entry.contentRect.height)
+      }
+    })
+    observer.observe(assetRail)
+    return () => observer.disconnect()
+  }, [assetRail])
+
+  const setDrawer = (dock: 'sidebar' | 'inspector' | 'bottom', open: boolean) => {
+    shellLayoutController.setDockVisible(dock, open)
   }
-
   const runAddCommand = (command?: () => void) => {
     setIsAddOpen(false)
     if (controlsDisabled) return
@@ -190,13 +133,10 @@ export function AppShellV4({
 
   return (
     <div
-      className={`app-shell${isCompactTopBar ? ' is-compact-topbar' : ''}${isInspectorOpen ? ' is-inspector-open' : ''}${isBottomRailOpen ? ' is-bottom-rail-open' : ''}`}
+      className={shellClassName}
       data-controls-disabled={String(controlsDisabled)}
-      style={{
-        '--sidebar-split-percent': splitPercent,
-        height: '100dvh',
-        overflow: 'hidden',
-      } as CSSProperties}
+      data-layout-mode={snapshot.mode}
+      style={shellVariables}
     >
       <header className="top-bar">
         <strong>RobotSim</strong>
@@ -222,9 +162,7 @@ export function AppShellV4({
           {projectMenu}
           <span>SIMULATION</span>
           {robotSourceLabel === null ? null : (
-            <span className="joint-source-label">
-              Joint source: {robotSourceLabel}
-            </span>
+            <span className="joint-source-label">Joint source: {robotSourceLabel}</span>
           )}
           <div className="add-menu">
             <button
@@ -248,12 +186,10 @@ export function AppShellV4({
             <span>Theme</span>
             <select
               aria-label="Theme"
-              onChange={(event) => {
-                shellLayoutStore.getState().setTheme(
-                  event.currentTarget.value as ThemePreference,
-                )
-              }}
-              value={preferences.theme}
+              onChange={(event) => shellLayoutController.setTheme(
+                event.currentTarget.value as ThemePreference,
+              )}
+              value={snapshot.preferences.theme}
             >
               <option value="system">System</option>
               <option value="light">Light</option>
@@ -283,64 +219,103 @@ export function AppShellV4({
         <PanelRight aria-hidden="true" size={16} strokeWidth={1.75} />
       </button>
       <button
-        aria-controls="timeline-events-panel"
+        aria-controls="timeline-collision-panel"
         aria-expanded={isBottomRailOpen}
-        aria-label="Timeline and Events sheet"
+        aria-label="Bottom Workspace sheet"
         className={`drawer-control sheet-control${isBottomRailOpen ? ' is-open' : ''}`}
         onClick={() => setDrawer('bottom', !isBottomRailOpen)}
         type="button"
       >
         <ChevronDown aria-hidden="true" size={16} strokeWidth={1.75} />
       </button>
-      <aside
-        aria-label="Scene Assets"
-        className={`asset-rail${isAssetRailOpen ? ' is-open' : ''}`}
-        id="scene-assets-panel"
-        ref={assetRailRef}
-      >
-        <section aria-label="Scene Objects" className="sidebar-pane scene-objects-pane">
-          {assetTree}
-        </section>
-        <div
-          aria-label="Resize Scene Objects and Robot Jobs"
-          aria-orientation="horizontal"
-          aria-valuemax={75}
-          aria-valuemin={35}
-          aria-valuenow={splitPercent}
-          className="sidebar-divider"
-          onKeyDown={(event) => {
-            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-            event.preventDefault()
-            const next = clampSplit(splitPercent + (event.key === 'ArrowDown' ? 1 : -1))
-            shellLayoutStore.getState().setSceneJobSplit(next)
-          }}
-          onPointerDown={() => setDraggingSplit(true)}
-          role="separator"
-          tabIndex={0}
-        />
-        <section aria-label="Robot Jobs" className="sidebar-pane robot-jobs-pane">
-          {jobTree}
-        </section>
-      </aside>
-      <main aria-busy={viewportBusy} aria-label="3D viewport" className="viewport">
-        {viewport}
-      </main>
-      <aside
-        aria-label="Inspector"
-        className={`inspector${isInspectorOpen ? ' is-open' : ''}`}
-        hidden={!isInspectorOpen}
-        id="inspector-panel"
-      >
-        {inspector}
-      </aside>
-      <section
-        aria-hidden={!isBottomRailOpen}
-        aria-label="Timeline and Events"
-        className={`bottom-rail${isBottomRailOpen ? ' is-open' : ''}`}
-        id="timeline-events-panel"
-      >
-        <div className="bottom-rail-content" hidden={!isBottomRailOpen}>{bottomRail}</div>
-      </section>
+      <div className="studio-workspace" ref={workspaceRef}>
+        <aside
+          aria-label="Scene Assets"
+          className={`asset-rail${isAssetRailOpen ? ' is-open' : ''}`}
+          hidden={!isAssetRailOpen}
+          id="scene-assets-panel"
+          ref={setAssetRailRef}
+        >
+          <section aria-label="Scene Objects" className="sidebar-pane scene-objects-pane">{assetTree}</section>
+          {showSceneJobHandle ? (
+            <DockResizeHandleV4
+              direction={1}
+              keyboardStep={1}
+              label="Resize Scene Objects and Robot Jobs"
+              max={75}
+              min={35}
+              onChange={(value) => shellLayoutController.setSceneJobSplit(value)}
+              onReset={() => shellLayoutController.setSceneJobSplit(60)}
+              orientation="horizontal"
+              value={splitPercent}
+              valueFromPointerDelta={(start, deltaPx) => start + deltaPx / splitReferenceHeightPx * 100}
+            />
+          ) : null}
+          <section aria-label="Robot Jobs" className="sidebar-pane robot-jobs-pane">{jobTree}</section>
+        </aside>
+        {showSidebarDockHandle ? (
+          <DockResizeHandleV4
+            direction={1}
+            keyboardStep={8}
+            label="Resize Scene Assets"
+            max={420}
+            min={220}
+            onChange={(value) => shellLayoutController.setDockSize('sidebar', value)}
+            onReset={() => shellLayoutController.setDockSize('sidebar', 248)}
+            orientation="vertical"
+            value={snapshot.preferences.sidebar.widthPx}
+            valueFromPointerDelta={(start, deltaPx) => start + deltaPx}
+          />
+        ) : null}
+        <div className="studio-center-column">
+          <main aria-busy={viewportBusy} aria-label="3D viewport" className="viewport">{viewport}</main>
+          {showBottomDockHandle ? (
+            <DockResizeHandleV4
+              direction={-1}
+              keyboardStep={8}
+              label="Resize Bottom Workspace"
+              max={Math.max(120, snapshot.bounds.workspaceHeightPx * 0.45)}
+              min={120}
+              onChange={(value) => shellLayoutController.setDockSize('bottom', value)}
+              onReset={() => shellLayoutController.setDockSize('bottom', 160)}
+              orientation="horizontal"
+              value={snapshot.preferences.bottom.heightPx}
+              valueFromPointerDelta={(start, deltaPx) => start + deltaPx}
+            />
+          ) : null}
+          <section
+            aria-hidden={!isBottomRailOpen}
+            aria-label="Bottom Workspace"
+            className={`bottom-rail${isBottomRailOpen ? ' is-open' : ''}`}
+            hidden={!isBottomRailOpen}
+            id="timeline-collision-panel"
+          >
+            <div className="bottom-rail-content">{bottomRail}</div>
+          </section>
+        </div>
+        {showInspectorDockHandle ? (
+          <DockResizeHandleV4
+            direction={-1}
+            keyboardStep={8}
+            label="Resize Inspector"
+            max={480}
+            min={280}
+            onChange={(value) => shellLayoutController.setDockSize('inspector', value)}
+            onReset={() => shellLayoutController.setDockSize('inspector', 320)}
+            orientation="vertical"
+            value={snapshot.preferences.inspector.widthPx}
+            valueFromPointerDelta={(start, deltaPx) => start + deltaPx}
+          />
+        ) : null}
+        <aside
+          aria-label="Inspector"
+          className={`inspector${isInspectorOpen ? ' is-open' : ''}`}
+          hidden={!isInspectorOpen}
+          id="inspector-panel"
+        >
+          {inspector}
+        </aside>
+      </div>
     </div>
   )
 }

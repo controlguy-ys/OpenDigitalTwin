@@ -23,6 +23,7 @@ import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selecto
 import { createSceneRuntimeStoreV4 } from '../features/scene/v4/scene-runtime-store.js'
 import { createViewportPreferenceStoreV4 } from '../features/viewport/v4/viewport-preference-store.js'
 import { createShellLayoutStoreV4 } from '../features/ui/v4/shell-layout-store.js'
+import type { ShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
 import { App } from './App.js'
 
 const observed = vi.hoisted(() => ({
@@ -33,6 +34,7 @@ const observed = vi.hoisted(() => ({
   timeline: null as null | Record<string, unknown>,
   contextMenuProjectRevisions: [] as string[],
   shellControlsDisabled: [] as boolean[],
+  shellLayoutControllers: [] as ShellLayoutControllerV4[],
 }))
 
 vi.mock('./AppShell.js', async (importOriginal) => {
@@ -41,6 +43,10 @@ vi.mock('./AppShell.js', async (importOriginal) => {
     ...actual,
     AppShellV4: (props: Parameters<typeof actual.AppShellV4>[0]) => {
       observed.shellControlsDisabled.push(props.controlsDisabled ?? false)
+      const controller = (props as Parameters<typeof actual.AppShellV4>[0] & {
+        readonly shellLayoutController?: ShellLayoutControllerV4
+      }).shellLayoutController
+      if (controller !== undefined) observed.shellLayoutControllers.push(controller)
       return <actual.AppShellV4 {...props} />
     },
   }
@@ -262,6 +268,7 @@ describe('App Project V4 production composition', () => {
     observed.timeline = null
     observed.contextMenuProjectRevisions.length = 0
     observed.shellControlsDisabled.length = 0
+    observed.shellLayoutControllers.length = 0
     localStorage.clear()
   })
 
@@ -329,7 +336,7 @@ describe('App Project V4 production composition', () => {
     expect(screen.getByTestId('timeline-v4')).toBeInTheDocument()
     expect(screen.queryByTestId('collision-v4')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', {
-      name: 'Timeline and Events sheet',
+      name: 'Bottom Workspace sheet',
     }))
     await user.click(screen.getByRole('tab', { name: /^Collision/ }))
     expect(screen.getByTestId('collision-v4')).toBeInTheDocument()
@@ -425,7 +432,7 @@ describe('App Project V4 production composition', () => {
       name: 'Register collision proxies',
     }))
     await user.click(screen.getByRole('button', {
-      name: 'Timeline and Events sheet',
+      name: 'Bottom Workspace sheet',
     }))
     await user.click(screen.getByRole('tab', { name: /^Collision/ }))
     await waitFor(() => expect(observed.collision?.proxies).toEqual([
@@ -436,6 +443,29 @@ describe('App Project V4 production composition', () => {
     await user.click(screen.getByRole('button', { name: 'Open Collision' }))
 
     expect(screen.getByRole('tabpanel', { name: 'Collision' })).toBeVisible()
+  })
+
+  it('owns one Shell controller that opens the controlled Collision tab immediately', async () => {
+    const resources = resourcesForTest()
+    const user = userEvent.setup()
+    const view = render(<App gatewayPublisher={null} resources={resources} />)
+
+    const controller = observed.shellLayoutControllers.at(-1)
+    expect(controller).toBeDefined()
+    expect(observed.shellLayoutControllers.every((candidate) => candidate === controller)).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Empty context' }))
+    await user.click(screen.getByRole('button', { name: 'Open Collision' }))
+
+    expect(resources.interaction.getState().selection).toEqual({
+      kind: 'robot',
+      robotId: 'robot-default',
+    })
+    expect(controller?.getState().preferences.bottom.activeTab).toBe('collision')
+    expect(controller?.getState().isDockVisible('bottom')).toBe(true)
+
+    view.unmount()
+    expect(() => controller?.setDockVisible('bottom', false)).not.toThrow()
   })
 
   it('drops a camera request from the previous Project revision', async () => {

@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react'
 import { useStore } from 'zustand'
@@ -47,6 +48,8 @@ import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selecto
 import type { WorkcellRegistrationV4 } from '../features/scene/v4/Workcell.js'
 import { BottomWorkspace } from '../features/ui/BottomWorkspace.js'
 import { TimelineV4 } from '../features/ui/v4/Timeline.js'
+import { createShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
+import { initialShellLayoutBoundsV4 } from '../features/ui/v4/shell-layout-geometry.js'
 import { AppShellV4 } from './AppShell.js'
 import { createInitialProjectBootstrapV4 } from './initial-project-bootstrap.js'
 
@@ -186,6 +189,18 @@ export function App({
     resources.coordinateDisplay,
     (state) => state,
   )
+  const shellLayoutController = useMemo(() => createShellLayoutControllerV4({
+    preferencesStore: resources.shellLayoutStore,
+    initialBounds: initialShellLayoutBoundsV4(
+      document.documentElement.clientWidth,
+      document.documentElement.clientHeight,
+    ),
+  }), [resources.shellLayoutStore])
+  const shellLayoutSnapshot = useSyncExternalStore(
+    shellLayoutController.subscribe,
+    shellLayoutController.getState,
+    shellLayoutController.getState,
+  )
   const [sceneStatusState, setSceneStatusState] =
     useState<RevisionQualifiedSceneStatusV4>({
       projectRevisionId: null,
@@ -199,7 +214,6 @@ export function App({
     readonly projectRevisionId: string
     readonly value: WorkcellRegistrationV4
   } | null>(null)
-  const [collisionOpenRequest, setCollisionOpenRequest] = useState(0)
   const [commandError, setCommandError] = useState<string | null>(null)
   const [gatewayPresentation, setGatewayPresentation] =
     useState<RuntimeGatewayPresentationV4>(IDLE_GATEWAY_PRESENTATION_V4)
@@ -220,6 +234,8 @@ export function App({
       active = false
     }
   }, [bootstrap])
+
+  useEffect(() => () => shellLayoutController.dispose(), [shellLayoutController])
 
   const project = projectState.activeProject
   const revisionId = project?.revisionId ?? null
@@ -551,7 +567,8 @@ export function App({
   const openCollision = (selection: SceneSelectionTargetV4): void => {
     resources.interaction.getState().select(selection)
     setCurrentContextRequest(null)
-    setCollisionOpenRequest((value) => value + 1)
+    shellLayoutController.setBottomTab('collision')
+    shellLayoutController.setDockVisible('bottom', true)
   }
 
   return (
@@ -572,6 +589,7 @@ export function App({
         )}
         bottomRail={(
           <BottomWorkspace
+            activeTab={shellLayoutSnapshot.preferences.bottom.activeTab}
             collision={(
               <CollisionPanelV4
                 jobRunning={anyJobRunning}
@@ -581,8 +599,7 @@ export function App({
                 proxies={collisionProxies}
               />
             )}
-            collisionOpenRequest={collisionOpenRequest}
-            shellLayoutStore={resources.shellLayoutStore}
+            onActiveTabChange={shellLayoutController.setBottomTab}
             timeline={(
               <TimelineV4
                 commands={resources.jobCommands}
@@ -596,7 +613,6 @@ export function App({
             )}
           />
         )}
-        bottomRailOpenRequest={collisionOpenRequest}
         controlsDisabled={controlsDisabled}
         inspector={(
           <SceneEntityInspectorV4
@@ -655,8 +671,8 @@ export function App({
             store={resources.projectStore}
           />
         )}
+        shellLayoutController={shellLayoutController}
         robotSourceLabel={sourceLabelV4(activeRobot?.jointSource ?? null)}
-        shellLayoutStore={resources.shellLayoutStore}
         viewport={(
           <>
             <SceneCanvasV4

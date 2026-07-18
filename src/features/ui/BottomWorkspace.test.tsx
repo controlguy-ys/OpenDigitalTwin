@@ -1,26 +1,40 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, expect, it } from 'vitest'
-import { createShellLayoutStoreV4, type ShellLayoutStoreV4 } from './v4/shell-layout-store.js'
+import { useState } from 'react'
+import { beforeEach, expect, it, vi } from 'vitest'
 import { BottomWorkspace } from './BottomWorkspace'
-
-let shellLayoutStore: ShellLayoutStoreV4
+import type { BottomWorkspaceTabV4 } from './v4/bottom-workspace-tab.js'
 
 beforeEach(() => {
   localStorage.clear()
-  shellLayoutStore = createShellLayoutStoreV4({ storage: localStorage })
 })
 
-it('shows only one bottom workspace panel at a time and persists its active tab', async () => {
-  const user = userEvent.setup()
-  render(
+function ControlledBottomWorkspace({
+  initialTab = 'timeline',
+  onActiveTabChange,
+}: {
+  readonly initialTab?: BottomWorkspaceTabV4
+  readonly onActiveTabChange?: (tab: BottomWorkspaceTabV4) => void
+}) {
+  const [activeTab, setActiveTab] = useState<BottomWorkspaceTabV4>(initialTab)
+  return (
     <BottomWorkspace
+      activeTab={activeTab}
       collision={<div>Collision content</div>}
       collisionCount={3}
-      shellLayoutStore={shellLayoutStore}
+      onActiveTabChange={(tab) => {
+        onActiveTabChange?.(tab)
+        setActiveTab(tab)
+      }}
       timeline={<div>Timeline content</div>}
-    />,
+    />
   )
+}
+
+it('shows one controlled bottom workspace panel at a time and emits one tab selection', async () => {
+  const user = userEvent.setup()
+  const onActiveTabChange = vi.fn()
+  render(<ControlledBottomWorkspace onActiveTabChange={onActiveTabChange} />)
 
   expect(screen.getByRole('tabpanel', { name: 'Timeline' })).toBeVisible()
   expect(screen.queryByRole('tabpanel', { name: 'Collision' })).not.toBeInTheDocument()
@@ -29,16 +43,18 @@ it('shows only one bottom workspace panel at a time and persists its active tab'
   await user.click(screen.getByRole('tab', { name: 'Collision 3' }))
   expect(screen.getByRole('tabpanel', { name: 'Collision' })).toBeVisible()
   expect(screen.queryByRole('tabpanel', { name: 'Timeline' })).not.toBeInTheDocument()
-  expect(shellLayoutStore.getState().preferences.bottom.activeTab).toBe('collision')
+  expect(onActiveTabChange).toHaveBeenCalledOnce()
+  expect(onActiveTabChange).toHaveBeenCalledWith('collision')
   expect(localStorage.getItem('robotsim.bottomWorkspaceTab')).toBeNull()
-  expect(localStorage.getItem('robotsim.workspace-preferences.v1')).not.toBeNull()
+  expect(localStorage.getItem('robotsim.workspace-preferences.v1')).toBeNull()
 })
 
 it('uses roving focus and standard horizontal tab keyboard navigation', async () => {
   const user = userEvent.setup()
-  render(<BottomWorkspace collision="Collision" shellLayoutStore={shellLayoutStore} timeline="Timeline" />)
+  const onActiveTabChange = vi.fn()
+  render(<ControlledBottomWorkspace onActiveTabChange={onActiveTabChange} />)
   const timeline = screen.getByRole('tab', { name: 'Timeline' })
-  const collision = screen.getByRole('tab', { name: 'Collision 0' })
+  const collision = screen.getByRole('tab', { name: 'Collision 3' })
 
   expect(timeline).toHaveAttribute('tabindex', '0')
   expect(collision).toHaveAttribute('tabindex', '-1')
@@ -52,4 +68,5 @@ it('uses roving focus and standard horizontal tab keyboard navigation', async ()
   expect(collision).toHaveFocus()
   await user.keyboard('{ArrowRight}')
   expect(timeline).toHaveFocus()
+  expect(onActiveTabChange).toHaveBeenCalledTimes(4)
 })

@@ -15,8 +15,12 @@
   --radius: 6px;
   --top-bar-height: 48px;
   --asset-rail-width: 248px;
+  --sidebar-width: 248px;
   --inspector-width: 320px;
-  --bottom-rail-height: 240px;
+  --bottom-height: 160px;
+  --bottom-rail-height: var(--bottom-height);
+  --workspace-divider-size: 6px;
+  --ribbon-height: 0px;
 }
 
 :root[data-theme='light'] {

@@ -1,40 +1,29 @@
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
-import { useStore } from 'zustand'
+import { useRef, type KeyboardEvent, type ReactNode } from 'react'
 
 import type { BottomWorkspaceTabV4 } from './v4/bottom-workspace-tab.js'
-import type { ShellLayoutStoreV4 } from './v4/shell-layout-store.js'
 
 export type BottomWorkspaceTab = BottomWorkspaceTabV4
 
 export interface BottomWorkspaceProps {
-  readonly shellLayoutStore: ShellLayoutStoreV4
+  readonly activeTab: BottomWorkspaceTabV4
+  readonly onActiveTabChange: (tab: BottomWorkspaceTabV4) => void
   readonly timeline?: ReactNode
   readonly collision?: ReactNode
   readonly collisionCount?: number
-  readonly collisionOpenRequest?: number
 }
 
 export function BottomWorkspace({
-  shellLayoutStore,
+  activeTab,
+  onActiveTabChange,
   timeline = null,
   collision = null,
   collisionCount = 0,
-  collisionOpenRequest = 0,
 }: BottomWorkspaceProps) {
-  const activeTab = useStore(
-    shellLayoutStore,
-    (state) => state.preferences.bottom.activeTab,
-  )
   const timelineTabRef = useRef<HTMLButtonElement>(null)
   const collisionTabRef = useRef<HTMLButtonElement>(null)
 
-  useEffect(() => {
-    if (collisionOpenRequest <= 0) return
-    shellLayoutStore.getState().setBottomTab('collision')
-  }, [collisionOpenRequest, shellLayoutStore])
-
   const selectTab = (tab: BottomWorkspaceTabV4) => {
-    shellLayoutStore.getState().setBottomTab(tab)
+    onActiveTabChange(tab)
   }
 
   const selectAndFocus = (tab: BottomWorkspaceTab) => {

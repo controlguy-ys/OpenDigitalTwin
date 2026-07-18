@@ -35,26 +35,17 @@ button {
 .app-shell {
   display: grid;
   width: 100%;
-  height: 100vh;
   height: 100dvh;
+  min-height: 0;
   overflow: hidden;
   background: var(--color-canvas);
-  grid-template-areas:
-    'top top top'
-    'assets viewport inspector'
-    'bottom bottom bottom';
-  grid-template-columns: 248px minmax(0, 1fr) 320px;
-  grid-template-rows: 48px minmax(0, 1fr) 0;
-}
-
-.app-shell.is-bottom-rail-open {
-  grid-template-rows: 48px minmax(0, 1fr) var(--bottom-rail-height);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: var(--top-bar-height) minmax(0, 1fr);
 }
 
 .top-bar {
   z-index: 3;
   display: flex;
-  grid-area: top;
   align-items: center;
   gap: 12px;
   min-width: 0;
@@ -322,7 +313,6 @@ button {
 
 .asset-rail {
   display: grid;
-  grid-area: assets;
   grid-template-rows:
     minmax(0, calc(var(--sidebar-split-percent, 60) * 1%))
     7px
@@ -641,42 +631,6 @@ button {
 .scene-tree-disclosure-placeholder {
   width: 24px;
   height: 1px;
-}
-
-@media (min-width: 960px) {
-  .app-shell:not(.is-inspector-open) {
-    grid-template-columns: 248px minmax(0, 1fr) 0;
-  }
-
-  .drawer-control-right {
-    position: fixed;
-    top: 50%;
-    right: 0;
-    z-index: 6;
-    display: grid;
-    width: 30px;
-    height: 48px;
-    padding: 0;
-    color: var(--color-muted);
-    cursor: pointer;
-    background: var(--color-panel);
-    border: 1px solid var(--color-border);
-    border-right: 0;
-    border-radius: var(--radius) 0 0 var(--radius);
-    transform: translateY(-50%);
-    transition: right 160ms ease;
-    place-items: center;
-  }
-
-  .drawer-control-right.is-open {
-    right: 320px;
-  }
-
-  .drawer-control-right:hover,
-  .drawer-control-right:focus-visible {
-    color: var(--color-accent);
-    border-color: var(--color-accent);
-  }
 }
 
 .scene-kind {
@@ -1273,7 +1227,6 @@ button {
 .viewport {
   position: relative;
   display: grid;
-  grid-area: viewport;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1496,7 +1449,6 @@ button {
 }
 
 .inspector {
-  grid-area: inspector;
   border-left: 1px solid var(--color-border);
 }
 
@@ -2060,7 +2012,6 @@ button {
 
 .bottom-rail {
   z-index: 3;
-  grid-area: bottom;
   border-top: 1px solid var(--color-border);
 }
 
@@ -2268,173 +2219,6 @@ button {
   clip-path: inset(50%);
 }
 
-@media (max-width: 959.98px) {
-  .app-shell,
-  .app-shell.is-bottom-rail-open {
-    grid-template-areas:
-      'top top top'
-      'asset-edge viewport inspector-edge'
-      'bottom bottom bottom';
-    grid-template-columns: 48px minmax(0, 1fr) 48px;
-    grid-template-rows: 48px minmax(0, 1fr) 0;
-  }
-
-  .app-shell::before,
-  .app-shell::after {
-    position: fixed;
-    top: 48px;
-    bottom: 64px;
-    z-index: 1;
-    width: 48px;
-    content: '';
-    background: var(--color-panel);
-    pointer-events: none;
-  }
-
-  .app-shell::before {
-    left: 0;
-    border-right: 1px solid var(--color-border);
-  }
-
-  .app-shell::after {
-    right: 0;
-    border-left: 1px solid var(--color-border);
-  }
-
-  .drawer-control {
-    position: fixed;
-    z-index: 5;
-    display: grid;
-    width: 48px;
-    height: 48px;
-    padding: 0;
-    color: var(--color-muted);
-    cursor: pointer;
-    background: var(--color-panel);
-    border: 0;
-    place-items: center;
-  }
-
-  .drawer-control:hover {
-    color: var(--color-accent);
-    background: var(--color-canvas);
-  }
-
-  .drawer-control:focus-visible {
-    color: var(--color-accent);
-    outline: 2px solid var(--color-accent);
-    outline-offset: -3px;
-  }
-
-  .drawer-control-left,
-  .drawer-control-right {
-    top: 48px;
-    transition: left 160ms ease, right 160ms ease;
-  }
-
-  .drawer-control-left {
-    left: 0;
-    border-right: 1px solid var(--color-border);
-  }
-
-  .drawer-control-left.is-open {
-    left: 200px;
-  }
-
-  .drawer-control-right {
-    right: 0;
-    border-left: 1px solid var(--color-border);
-  }
-
-  .drawer-control-right.is-open {
-    right: 272px;
-  }
-
-  .sheet-control {
-    right: 0;
-    bottom: 0;
-    height: 64px;
-    border-left: 1px solid var(--color-border);
-  }
-
-  .sheet-control.is-open {
-    bottom: 0;
-  }
-
-  .sheet-control svg {
-    transition: transform 160ms ease;
-  }
-
-  .sheet-control:not(.is-open) svg {
-    transform: rotate(180deg);
-  }
-
-  .asset-rail,
-  .inspector {
-    position: fixed;
-    top: 48px;
-    bottom: 64px;
-    z-index: 4;
-    visibility: hidden;
-    pointer-events: none;
-    transition: transform 160ms ease;
-  }
-
-  .asset-rail {
-    left: 0;
-    width: 248px;
-    transform: translateX(-100%);
-  }
-
-  .inspector {
-    right: 0;
-    width: 320px;
-    transform: translateX(100%);
-  }
-
-  .asset-rail.is-open,
-  .inspector.is-open {
-    visibility: visible;
-    pointer-events: auto;
-    transform: translateX(0);
-  }
-
-  .bottom-rail {
-    position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 4;
-    height: 128px;
-    transform: translateY(100%);
-    transition: transform 160ms ease;
-  }
-
-  .bottom-rail.is-open {
-    transform: translateY(0);
-  }
-
-  .sheet-control.is-open {
-    bottom: 96px;
-  }
-
-  .collision-panel {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto;
-    min-width: 0;
-  }
-
-  .collision-panel-header {
-    grid-column: 1;
-    flex-wrap: wrap;
-  }
-
-  .bottom-rail:not(.is-open) .bottom-rail-content {
-    visibility: hidden;
-    pointer-events: none;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .scene-progress-value,
   .drawer-control-left,
@@ -2479,3 +2263,299 @@ button {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* The controller owns every structural workspace mode.  Component media rules
+   above remain limited to compact controls and dialogs. */
+.app-shell {
+  display: grid;
+  grid-template-rows: var(--top-bar-height) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-canvas);
+}
+
+.app-shell > .top-bar {
+  grid-area: auto;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.studio-workspace {
+  position: relative;
+  display: grid;
+  grid-row: 2;
+  grid-template-columns:
+    var(--sidebar-dock-width, var(--sidebar-width))
+    var(--sidebar-divider-width, var(--workspace-divider-size))
+    minmax(0, 1fr)
+    var(--inspector-divider-width, var(--workspace-divider-size))
+    var(--inspector-dock-width, var(--inspector-width));
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.studio-workspace > .asset-rail {
+  grid-area: auto;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.studio-workspace > [aria-label='Resize Scene Assets'] {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.studio-center-column {
+  display: grid;
+  grid-column: 3;
+  grid-row: 1;
+  grid-template-rows:
+    minmax(0, 1fr)
+    var(--bottom-divider-height, 0px)
+    var(--bottom-dock-height, 0px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.studio-center-column > .viewport {
+  grid-area: auto;
+  grid-row: 1;
+}
+
+.studio-center-column > [aria-label='Resize Bottom Workspace'] {
+  grid-row: 2;
+}
+
+.studio-center-column > .bottom-rail {
+  display: block;
+  grid-area: auto;
+  grid-row: 3;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+  border-top: 1px solid var(--color-border);
+}
+
+.studio-workspace > [aria-label='Resize Inspector'] {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.studio-workspace > .inspector {
+  grid-area: auto;
+  grid-column: 5;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden auto;
+  border-left: 1px solid var(--color-border);
+}
+
+.app-shell[data-layout-mode='wide'] {
+  --sidebar-dock-width: var(--sidebar-width);
+  --sidebar-divider-width: var(--workspace-divider-size);
+  --inspector-dock-width: var(--inspector-width);
+  --inspector-divider-width: var(--workspace-divider-size);
+}
+
+.app-shell[data-layout-mode='wide']:not(.is-inspector-open) {
+  --inspector-dock-width: 0px;
+  --inspector-divider-width: 0px;
+}
+
+.app-shell[data-layout-mode='wide']:not(.is-asset-rail-open) {
+  --sidebar-dock-width: 0px;
+  --sidebar-divider-width: 0px;
+}
+
+.app-shell[data-layout-mode='wide'].is-bottom-rail-open,
+.app-shell[data-layout-mode='compact'].is-bottom-rail-open {
+  --bottom-dock-height: var(--bottom-height);
+  --bottom-divider-height: var(--workspace-divider-size);
+}
+
+.app-shell[data-layout-mode='compact'] {
+  --sidebar-dock-width: var(--sidebar-width);
+  --sidebar-divider-width: var(--workspace-divider-size);
+  --inspector-dock-width: 0px;
+  --inspector-divider-width: 0px;
+}
+
+.app-shell[data-layout-mode='compact']:not(.is-asset-rail-open) {
+  --sidebar-dock-width: 0px;
+  --sidebar-divider-width: 0px;
+}
+
+.app-shell[data-layout-mode='compact'] .inspector,
+.app-shell[data-layout-mode='narrow'] .inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 12;
+  width: min(var(--inspector-width), 100%);
+  background: var(--color-panel);
+  box-shadow: -8px 0 24px rgb(0 0 0 / 18%);
+}
+
+.app-shell[data-layout-mode='narrow'] .studio-workspace {
+  display: block;
+}
+
+.app-shell[data-layout-mode='narrow'] .studio-center-column {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  grid-column: auto;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.app-shell[data-layout-mode='narrow'] .asset-rail,
+.app-shell[data-layout-mode='narrow'] .inspector {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 12;
+  width: min(var(--sidebar-width), calc(100% - 24px));
+  background: var(--color-panel);
+  box-shadow: 8px 0 24px rgb(0 0 0 / 18%);
+}
+
+.app-shell[data-layout-mode='narrow'] .asset-rail { left: 0; }
+.app-shell[data-layout-mode='narrow'] .inspector {
+  right: 0;
+  left: auto;
+  width: min(var(--inspector-width), calc(100% - 24px));
+  box-shadow: -8px 0 24px rgb(0 0 0 / 18%);
+}
+
+.app-shell[data-layout-mode='narrow'] .bottom-rail {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 12;
+  height: min(var(--bottom-height), calc(100% - 72px));
+  background: var(--color-panel);
+  box-shadow: 0 -8px 24px rgb(0 0 0 / 18%);
+}
+
+.app-shell[data-layout-mode='narrow'] .studio-center-column > .bottom-rail {
+  grid-row: auto;
+}
+
+.studio-workspace > [role='separator'] {
+  z-index: 6;
+  cursor: col-resize;
+  background: var(--color-border);
+  border: 0;
+}
+
+.studio-workspace > [role='separator']:hover,
+.studio-workspace > [role='separator']:focus-visible,
+.asset-rail > [role='separator']:hover,
+.asset-rail > [role='separator']:focus-visible {
+  background: var(--color-accent);
+  outline: none;
+}
+
+.studio-center-column > [role='separator'],
+.asset-rail > [role='separator'] {
+  cursor: row-resize;
+}
+
+.asset-rail {
+  display: grid;
+  grid-template-rows:
+    minmax(0, calc(var(--sidebar-split-percent, 60) * 1%))
+    var(--workspace-divider-size)
+    minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-panel);
+  border-right: 1px solid var(--color-border);
+}
+
+.asset-rail > [role='separator'] {
+  min-height: 0;
+  cursor: row-resize;
+  background: var(--color-border);
+  border-block: 2px solid var(--color-panel);
+}
+
+.sidebar-pane,
+.bottom-rail-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.bottom-rail-content {
+  height: 100%;
+  overflow: hidden auto;
+}
+
+.viewport,
+.bottom-workspace {
+  container-type: inline-size;
+}
+
+.viewport {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bottom-workspace {
+  min-width: 0;
+  min-height: 0;
+}
+
+.collision-panel {
+  min-width: 0;
+}
+
+@container (max-width: 640px) {
+  .collision-panel {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+  }
+
+  .collision-panel-header {
+    grid-column: 1;
+    flex-wrap: wrap;
+  }
+}
+
+.app-shell[data-layout-mode='wide'] .drawer-control-left,
+.app-shell[data-layout-mode='compact'] .drawer-control-left,
+.app-shell[data-layout-mode='narrow'] .drawer-control-left,
+.app-shell[data-layout-mode='wide'] .drawer-control-right,
+.app-shell[data-layout-mode='compact'] .drawer-control-right,
+.app-shell[data-layout-mode='narrow'] .drawer-control-right,
+.app-shell[data-layout-mode='wide'] .sheet-control,
+.app-shell[data-layout-mode='compact'] .sheet-control,
+.app-shell[data-layout-mode='narrow'] .sheet-control {
+  position: absolute;
+  z-index: 20;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--color-muted);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  place-items: center;
+}
+
+.drawer-control-left { top: calc(var(--top-bar-height) + 8px); left: 8px; }
+.drawer-control-right { top: calc(var(--top-bar-height) + 8px); right: 8px; }
+.sheet-control { right: 8px; bottom: 8px; }

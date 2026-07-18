@@ -1,240 +1,174 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createBrowserProjectResourcesV4 } from '../features/project/project-store-browser.js'
+import { createShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
+import { initialShellLayoutBoundsV4 } from '../features/ui/v4/shell-layout-geometry.js'
 import { createShellLayoutStoreV4, type ShellLayoutStoreV4 } from '../features/ui/v4/shell-layout-store.js'
-import { BottomWorkspace } from '../features/ui/BottomWorkspace.js'
+import type { ShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
 import { AppShellV4 } from './AppShell.js'
+
+class TestResizeObserver {
+  static instances: TestResizeObserver[] = []
+  readonly observed = new Set<Element>()
+  readonly disconnect = vi.fn()
+  readonly callback: ResizeObserverCallback
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback
+    TestResizeObserver.instances.push(this)
+  }
+  observe = (target: Element) => this.observed.add(target)
+  deliver(target: Element, width: number, height: number) {
+    this.callback([{
+      target,
+      contentRect: { width, height },
+    } as ResizeObserverEntry], this as unknown as ResizeObserver)
+  }
+}
 
 describe('AppShellV4', () => {
   let shellLayoutStore: ShellLayoutStoreV4
+  let shellLayoutController: ShellLayoutControllerV4
 
   beforeEach(() => {
     localStorage.clear()
+    TestResizeObserver.instances = []
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
     shellLayoutStore = createShellLayoutStoreV4({ storage: localStorage })
+    shellLayoutController = createShellLayoutControllerV4({
+      preferencesStore: shellLayoutStore,
+      initialBounds: initialShellLayoutBoundsV4(1440, 800),
+    })
   })
 
   afterEach(() => {
+    shellLayoutController.dispose()
     vi.unstubAllGlobals()
   })
 
-  it('renders the five bounded industrial workstation regions', () => {
-    render(<AppShellV4 shellLayoutStore={shellLayoutStore} viewport={<div>3D viewport</div>} />)
-
-    expect(screen.getByRole('banner')).toHaveTextContent('RobotSim')
-    expect(screen.getByLabelText('Scene Assets')).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Scene Objects' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Robot Jobs' })).toBeInTheDocument()
-    expect(screen.getByLabelText('3D viewport')).toBeInTheDocument()
-    expect(screen.getByLabelText('Inspector')).toBeInTheDocument()
-    expect(screen.getByLabelText('Timeline and Events')).toBeInTheDocument()
-  })
-
-  it('exposes only Box, Cylinder, and Group from Add', async () => {
-    const user = userEvent.setup()
-    const createBox = vi.fn()
-    const createCylinder = vi.fn()
-    const createGroup = vi.fn()
-    render(
+  function renderShell(props: Partial<Parameters<typeof AppShellV4>[0]> = {}) {
+    return render(
       <AppShellV4
-        onCreateBox={createBox}
-        onCreateCylinder={createCylinder}
-        onCreateGroup={createGroup}
-        shellLayoutStore={shellLayoutStore}
+        shellLayoutController={shellLayoutController}
         viewport={<div>3D viewport</div>}
+        {...props}
       />,
     )
+  }
+
+  function workspace(): HTMLElement {
+    return document.querySelector('.studio-workspace') as HTMLElement
+  }
+
+  it('renders a controller-owned central viewport workspace with Bottom below that column', () => {
+    renderShell({ bottomRail: <div>Bottom content</div> })
+
+    const shell = screen.getByLabelText('3D viewport').closest('.app-shell')!
+    const center = shell.querySelector('.studio-center-column')!
+    const bottom = screen.getByLabelText('Bottom Workspace')
+    expect(shell).toHaveAttribute('data-layout-mode', 'wide')
+    expect(screen.getByLabelText('Scene Assets')).toBeInTheDocument()
+    expect(screen.getByLabelText('Inspector')).toBeInTheDocument()
+    expect(center).toContainElement(bottom)
+    expect(bottom.parentElement).toBe(center)
+    expect(bottom).toHaveAttribute('aria-hidden', 'true')
+    expect(workspace()).toBe(TestResizeObserver.instances[0]?.observed.values().next().value)
+  })
+
+  it('retains the bounded Add controls and controller-owned Theme preference', async () => {
+    const user = userEvent.setup()
+    const createBox = vi.fn()
+    renderShell({ onCreateBox: createBox })
 
     await user.click(screen.getByRole('button', { name: 'Add' }))
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
-      'Box',
-      'Cylinder',
-      'Group',
+      'Box', 'Cylinder', 'Group',
     ])
-    expect(screen.queryByText('Import STEP')).not.toBeInTheDocument()
-    expect(screen.queryByText('Import Robot')).not.toBeInTheDocument()
-    expect(screen.queryByText('Linear Axis')).not.toBeInTheDocument()
-
     await user.click(screen.getByRole('menuitem', { name: 'Box' }))
-    await user.click(screen.getByRole('button', { name: 'Add' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Cylinder' }))
-    await user.click(screen.getByRole('button', { name: 'Add' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Group' }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'dark')
 
     expect(createBox).toHaveBeenCalledOnce()
-    expect(createCylinder).toHaveBeenCalledOnce()
-    expect(createGroup).toHaveBeenCalledOnce()
+    expect(shellLayoutController.getState().preferences.theme).toBe('dark')
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
   })
 
-  it('shows the selected Robot source as read-only text', () => {
-    render(
-      <AppShellV4
-        robotSourceLabel="Simulation"
-        shellLayoutStore={shellLayoutStore}
-        viewport={<div>3D viewport</div>}
-      />,
-    )
+  it('uses one observed workspace width for wide, compact, narrow, and restored layout modes', () => {
+    renderShell()
+    const observer = TestResizeObserver.instances[0]!
+    const target = workspace()
 
-    expect(screen.getByText('Joint source: Simulation')).toBeVisible()
-    expect(screen.queryByRole('combobox', { name: 'Joint source' })).not.toBeInTheDocument()
+    act(() => observer.deliver(target, 1199, 700))
+    expect(screen.getByLabelText('3D viewport').closest('.app-shell')).toHaveAttribute('data-layout-mode', 'compact')
+    expect(screen.getByLabelText('Inspector')).toHaveAttribute('hidden')
+    act(() => shellLayoutController.setDockVisible('inspector', true))
+    expect(screen.getByLabelText('Inspector')).not.toHaveAttribute('hidden')
+
+    act(() => observer.deliver(target, 959, 700))
+    expect(screen.getByLabelText('3D viewport').closest('.app-shell')).toHaveAttribute('data-layout-mode', 'narrow')
+    expect(screen.getByLabelText('Inspector')).toHaveAttribute('hidden')
+
+    act(() => observer.deliver(target, 1440, 700))
+    expect(screen.getByLabelText('3D viewport').closest('.app-shell')).toHaveAttribute('data-layout-mode', 'wide')
+    expect(shellLayoutController.getState().preferences.sidebar.widthPx).toBe(248)
+    expect(shellLayoutController.getState().preferences.inspector.widthPx).toBe(320)
   })
 
-  it('opens the responsive drawers and bottom sheet from their controls', async () => {
+  it('uses controller effective docks and renders only applicable dock resize handles', async () => {
     const user = userEvent.setup()
-    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
-      matches: query === '(max-width: 1199px)',
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })))
-    render(<AppShellV4 shellLayoutStore={shellLayoutStore} viewport={<div>3D viewport</div>} />)
+    renderShell()
 
-    const controls = [
-      screen.getByRole('button', { name: 'Scene Assets drawer' }),
-      screen.getByRole('button', { name: 'Inspector drawer' }),
-      screen.getByRole('button', { name: 'Timeline and Events sheet' }),
-    ]
-    for (const control of controls) {
-      expect(control).toHaveAttribute('aria-expanded', 'false')
-      await user.click(control)
-      expect(control).toHaveAttribute('aria-expanded', 'true')
-    }
-    expect(screen.getByLabelText('Scene Assets')).toHaveClass('is-open')
-    expect(screen.getByLabelText('Inspector')).toHaveClass('is-open')
-    expect(screen.getByLabelText('Timeline and Events')).toHaveClass('is-open')
+    expect(screen.getByRole('separator', { name: 'Resize Scene Assets' })).toBeVisible()
+    expect(screen.getByRole('separator', { name: 'Resize Inspector' })).toBeVisible()
+    expect(screen.queryByRole('separator', { name: 'Resize Bottom Workspace' })).not.toBeInTheDocument()
+
+    const sceneHandle = screen.getByRole('separator', { name: 'Resize Scene Assets' })
+    await user.click(screen.getByRole('button', { name: 'Inspector drawer' }))
+    expect(screen.getByLabelText('Inspector')).toHaveAttribute('hidden')
+    await user.keyboard('{Escape}')
+    fireEvent.keyDown(sceneHandle, { key: 'ArrowRight' })
+    expect(shellLayoutController.getState().preferences.sidebar.widthPx).toBe(256)
+    fireEvent.doubleClick(sceneHandle)
+    expect(shellLayoutController.getState().preferences.sidebar.widthPx).toBe(248)
+
+    act(() => shellLayoutController.setBounds(1199, 700))
+    expect(screen.queryByRole('separator', { name: 'Resize Inspector' })).not.toBeInTheDocument()
+    act(() => shellLayoutController.setBounds(959, 700))
+    expect(screen.queryByRole('separator', { name: 'Resize Scene Assets' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('separator', { name: 'Resize Bottom Workspace' })).not.toBeInTheDocument()
   })
 
-  it('collapses the desktop Inspector and returns its grid space', async () => {
-    const user = userEvent.setup()
-    render(<AppShellV4 inspector={<button type="button">Inspector action</button>} shellLayoutStore={shellLayoutStore} viewport={<div>3D viewport</div>} />)
-
-    const inspector = screen.getByLabelText('Inspector')
-    const shell = inspector.closest('.app-shell')
-    const control = screen.getByRole('button', { name: 'Inspector drawer' })
-    expect(inspector).not.toHaveAttribute('hidden')
-    expect(shell).toHaveClass('is-inspector-open')
-
-    await user.click(control)
-
-    expect(control).toHaveAttribute('aria-expanded', 'false')
-    expect(inspector).toHaveAttribute('hidden')
-    expect(shell).not.toHaveClass('is-inspector-open')
-    expect(shellLayoutStore.getState().preferences.modes.wide.dockVisible.inspector).toBe(false)
-    expect(localStorage.getItem('robotsim.inspectorDrawerOpen')).toBeNull()
-
-    await user.click(control)
-    expect(inspector).not.toHaveAttribute('hidden')
-    expect(shell).toHaveClass('is-inspector-open')
+  it('keeps the Scene and Job split controller-owned, clamped, and reset independently', () => {
+    renderShell({ assetTree: <div>Scene tree</div>, jobTree: <div>Job tree</div> })
+    const split = screen.getByRole('separator', { name: 'Resize Scene Objects and Robot Jobs' })
+    fireEvent.keyDown(split, { key: 'ArrowDown' })
+    expect(shellLayoutController.getState().preferences.sidebar.sceneJobSplitPercent).toBe(61)
+    fireEvent.doubleClick(split)
+    expect(shellLayoutController.getState().preferences.sidebar.sceneJobSplitPercent).toBe(60)
+    expect(shellLayoutController.getState().preferences.sidebar.widthPx).toBe(248)
   })
 
-  it('keeps the document fixed while named work areas own scrolling', () => {
-    render(
-      <AppShellV4
-        bottomRail={<div>Bottom content</div>}
-        shellLayoutStore={shellLayoutStore}
-        viewport={<div>3D viewport</div>}
-      />,
-    )
+  it('keeps a narrow Scene and Job separator only at the 360-pixel content threshold', () => {
+    renderShell()
+    const assetRail = screen.getByLabelText('Scene Assets')
+    const assetObserver = TestResizeObserver.instances.find((candidate) => candidate.observed.has(assetRail))!
 
+    act(() => shellLayoutController.setBounds(959, 700))
+    act(() => shellLayoutController.setDockVisible('sidebar', true))
+    act(() => assetObserver.deliver(assetRail, 248, 360))
+    expect(screen.getByRole('separator', { name: 'Resize Scene Objects and Robot Jobs' })).toBeInTheDocument()
+
+    act(() => assetObserver.deliver(assetRail, 248, 359))
+    expect(screen.queryByRole('separator', { name: 'Resize Scene Objects and Robot Jobs' })).not.toBeInTheDocument()
+    expect(shellLayoutController.getState().preferences.sidebar.sceneJobSplitPercent).toBe(60)
+  })
+
+  it('keeps named work areas internal while document root overflow remains locked', () => {
+    renderShell({ bottomRail: <div>Bottom content</div> })
     expect(document.documentElement).toHaveStyle({ overflow: 'hidden' })
     expect(document.body).toHaveStyle({ overflow: 'hidden' })
     expect(screen.getByLabelText('3D viewport').closest('.app-shell')).toHaveStyle({
       height: '100dvh',
       overflow: 'hidden',
     })
-    expect(screen.getByLabelText('Timeline and Events')).toContainElement(
-      screen.getByText('Bottom content'),
-    )
-  })
-
-  it('persists the bounded Scene and Job split without changing Project state', () => {
-    render(
-      <AppShellV4
-        assetTree={<div>Scene tree</div>}
-        jobTree={<div>Job tree</div>}
-        shellLayoutStore={shellLayoutStore}
-        viewport={<div>3D viewport</div>}
-      />,
-    )
-    const splitter = screen.getByRole('separator', {
-      name: 'Resize Scene Objects and Robot Jobs',
-    })
-
-    fireEvent.keyDown(splitter, { key: 'ArrowDown' })
-
-    expect(splitter).toHaveAttribute('aria-valuenow', '61')
-    expect(shellLayoutStore.getState().preferences.sidebar.sceneJobSplitPercent).toBe(61)
-    expect(localStorage.getItem('robotsim.sidebarSplitPercent')).toBeNull()
-  })
-
-  it('separates control gating from the viewport error state and blocks Add', async () => {
-    const user = userEvent.setup()
-    const createBox = vi.fn()
-    render(
-      <AppShellV4
-        controlsDisabled
-        onCreateBox={createBox}
-        shellLayoutStore={shellLayoutStore}
-        viewport={<div>3D viewport</div>}
-        viewportBusy={false}
-      />,
-    )
-
-    const viewport = screen.getByLabelText('3D viewport')
-    expect(viewport).toHaveAttribute('aria-busy', 'false')
-    expect(viewport.closest('.app-shell')).toHaveAttribute(
-      'data-controls-disabled',
-      'true',
-    )
-    const add = screen.getByRole('button', { name: 'Add' })
-    expect(add).toBeDisabled()
-    await user.click(add)
-    expect(screen.queryByRole('menu', { name: 'Add' })).not.toBeInTheDocument()
-    expect(createBox).not.toHaveBeenCalled()
-  })
-
-  it('keeps migrated preferences in rendered Shell and Bottom consumers without recreating legacy keys', async () => {
-    const user = userEvent.setup()
-    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
-      matches: query === '(min-width: 960px)',
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })))
-    localStorage.clear()
-    localStorage.setItem('robotsim.assetDrawerOpen', 'true')
-    localStorage.setItem('robotsim.inspectorDrawerOpen', 'false')
-    localStorage.setItem('robotsim.bottomDrawerOpen', 'true')
-    localStorage.setItem('robotsim.sidebarSplitPercent', '67')
-    localStorage.setItem('robotsim.bottomWorkspaceTab', 'collision')
-    localStorage.setItem('robotsim.theme', 'dark')
-    const resources = createBrowserProjectResourcesV4({
-      resolveDefinitionGeometry: async () => null,
-    })
-
-    render(
-      <AppShellV4
-        bottomRail={<BottomWorkspace collision="Collision" shellLayoutStore={resources.shellLayoutStore} timeline="Timeline" />}
-        shellLayoutStore={resources.shellLayoutStore}
-        viewport={<div>3D viewport</div>}
-      />,
-    )
-
-    expect(screen.getByLabelText('Inspector')).toHaveAttribute('hidden')
-    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '67')
-    expect(screen.getByRole('tabpanel', { name: 'Collision' })).toBeVisible()
-    expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
-
-    fireEvent.keyDown(screen.getByRole('separator'), { key: 'ArrowDown' })
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'light')
-    await user.click(screen.getByRole('tab', { name: 'Timeline' }))
-
-    expect(resources.shellLayoutStore.getState().preferences).toMatchObject({
-      sidebar: { sceneJobSplitPercent: 68 },
-      bottom: { activeTab: 'timeline' },
-      theme: 'light',
-    })
-    expect([...Array(localStorage.length).keys()].map((index) => localStorage.key(index))).toEqual([
-      'robotsim.workspace-preferences.v1',
-    ])
   })
 })
