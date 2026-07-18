@@ -112,6 +112,38 @@ function projectWithEntityPoseMapping() {
   }
 }
 
+function projectWithEntityStatusMapping() {
+  const project = projectWithEntityPoseMapping()
+  const endpointId = project.opcUa.endpoints[0]!.endpointId
+  return {
+    ...project,
+    opcUa: {
+      ...project.opcUa,
+      mappings: [...project.opcUa.mappings, {
+        id: 'mapping-live-status',
+        endpointId,
+        direction: 'read' as const,
+        publishingIntervalMs: 100,
+        coherenceGroupId: null,
+        sourceOwnership: `opcua:${endpointId}` as const,
+        interpolationMode: 'none' as const,
+        coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw' as const,
+        leaves: [{
+          leafPath: [],
+          nodeId: 'ns=2;s=Box/Status',
+          projectTarget: { type: 'entity-status' as const, entityId: 'box-live' },
+          opcUaDataType: 'Double' as const,
+          projectDataType: 'number' as const,
+          scale: 1,
+          offset: 0,
+          unit: 'state',
+          required: true,
+        }],
+      }],
+    },
+  }
+}
+
 describe('OPC UA client adapter V1', () => {
   it('compiles enabled read mappings and excludes disabled or write-only routes', () => {
     const project = projectWithEntityPoseMapping()
@@ -204,6 +236,52 @@ describe('OPC UA client adapter V1', () => {
       statusCode: 'BadNoCommunication',
       value: { positionM: [0, 0.5, 0.6] },
     })
+  })
+
+  it('emits a scalar value for an entity-status mapping with a root leaf path', () => {
+    const project = projectWithEntityStatusMapping()
+    const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
+    const batches: unknown[] = []
+    const assembler = createOpcUaClientSnapshotAssemblerV1({
+      project,
+      endpoint,
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      nowMs: () => 1000,
+      publish: (batch) => { batches.push(batch) },
+    })
+
+    assembler.accept('ns=2;s=Box/Status', 7, 'Good', 900)
+
+    expect(validateStateBatchV1(batches[0]).values).toContainEqual(expect.objectContaining({
+      mappingId: 'mapping-live-status',
+      value: 7,
+      unit: 'state',
+      quality: 'GOOD',
+    }))
+  })
+
+  it('includes every currently-ready mapping when an independent status leaf updates', () => {
+    const project = projectWithEntityStatusMapping()
+    const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
+    const batches: unknown[] = []
+    const assembler = createOpcUaClientSnapshotAssemblerV1({
+      project,
+      endpoint,
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      nowMs: () => 1000,
+      publish: (batch) => { batches.push(batch) },
+    })
+    for (const [index, nodeId] of endpoint.nodeIds.entries()) {
+      if (nodeId === 'ns=2;s=Box/Status') continue
+      assembler.accept(nodeId, index === 0 ? 1000 : 0, 'Good', 900 + index)
+    }
+
+    assembler.accept('ns=2;s=Box/Status', 3, 'Good', 1000)
+
+    expect(validateStateBatchV1(batches.at(-1)).values.map(({ mappingId }) => mappingId).sort())
+      .toEqual(['mapping-live-pose', 'mapping-live-status'])
   })
 
   it('subscribes to a local OPC UA server and emits a StateBatch without waiting for every leaf to change again', async () => {

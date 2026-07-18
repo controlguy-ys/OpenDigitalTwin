@@ -88,6 +88,9 @@ interface EndpointRuntimeV1 {
   subscription: ClientSubscription | null
   group: ClientMonitoredItemGroup | null
   reconnectTimer: NodeJS.Timeout | null
+  recovery: Promise<void> | null
+  connectTask: Promise<void> | null
+  generation: number
   stopped: boolean
   connecting: boolean
   connected: boolean
@@ -220,9 +223,12 @@ function mappingValue(
   mapping: CompiledOpcUaClientMappingV1,
   samples: readonly LeafSampleV1[],
 ): RuntimeMappedValueV1 {
+  const rootScalar = mapping.leaves.length === 1 && mapping.leaves[0]!.leafPath.length === 0
   const structured: Record<string, RuntimeScalarOrStructureV1> = {}
-  for (let index = 0; index < mapping.leaves.length; index += 1) {
-    setLeafAtPath(structured, mapping.leaves[index]!.leafPath, samples[index]!.value)
+  if (!rootScalar) {
+    for (let index = 0; index < mapping.leaves.length; index += 1) {
+      setLeafAtPath(structured, mapping.leaves[index]!.leafPath, samples[index]!.value)
+    }
   }
   const firstTarget = mapping.leaves[0]?.projectTarget
   const isEntityPose = firstTarget?.type === 'entity-frame'
@@ -230,7 +236,9 @@ function mappingValue(
     && mapping.leaves.every((leaf) => leaf.projectTarget.type === 'entity-frame')
     && Array.isArray(structured.positionM)
     && Array.isArray(structured.rpyDegrees)
-  const value: RuntimeScalarOrStructureV1 = isEntityPose
+  const value: RuntimeScalarOrStructureV1 = rootScalar
+    ? samples[0]!.value
+    : isEntityPose
     ? {
         positionM: structured.positionM as readonly number[],
         quaternion: rpyDegreesToRuntimeQuaternionV1(structured.rpyDegrees as [number, number, number]),
@@ -265,8 +273,6 @@ export function createOpcUaClientSnapshotAssemblerV1(
     accept(nodeId: string, input: unknown, statusCode: string, sourceTimestampMs: number) {
       const references = referencesByNodeId.get(nodeId)
       if (references === undefined) return
-      const published: RuntimeMappedValueV1[] = []
-      let latestSourceTimestampMs = sourceTimestampMs
       for (const reference of references) {
         const leaf = reference.mapping.leaves[reference.index]!
         const scalar = scalarFromLeaf(leaf, input)
@@ -278,13 +284,18 @@ export function createOpcUaClientSnapshotAssemblerV1(
         })
         const samples = samplesByMapping.get(reference.mapping.id)!
         samples[reference.index] = sample
+      }
+      const published: RuntimeMappedValueV1[] = []
+      let latestSourceTimestampMs = sourceTimestampMs
+      for (const mapping of options.endpoint.mappings) {
+        const samples = samplesByMapping.get(mapping.id)!
         if (samples.some((candidate) => candidate === undefined)) continue
         const coherent = samples as LeafSampleV1[]
         latestSourceTimestampMs = Math.max(
           latestSourceTimestampMs,
           ...coherent.map((candidate) => candidate.sourceTimestampMs),
         )
-        published.push(mappingValue(reference.mapping, coherent))
+        published.push(mappingValue(mapping, coherent))
       }
       if (published.length === 0) return
       sequence += 1
@@ -323,6 +334,18 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
   runtime.client = null
   if (client !== null) await client.disconnect().catch(() => undefined)
   runtime.connected = false
+}
+
+async function closeDetachedConnection(
+  client: OPCUAClient,
+  session: ClientSession | null,
+  subscription: ClientSubscription | null,
+  group: ClientMonitoredItemGroup | null,
+): Promise<void> {
+  if (group !== null) await group.terminate().catch(() => undefined)
+  if (subscription !== null) await subscription.terminate().catch(() => undefined)
+  if (session !== null) await session.close().catch(() => undefined)
+  await client.disconnect().catch(() => undefined)
 }
 
 function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
@@ -365,6 +388,9 @@ export function createOpcUaClientAdapterV1(
       subscription: null,
       group: null,
       reconnectTimer: null,
+      recovery: null,
+      connectTask: null,
+      generation: 0,
       stopped: true,
       connecting: false,
       connected: false,
@@ -373,16 +399,51 @@ export function createOpcUaClientAdapterV1(
   }
 
   function scheduleReconnect(runtime: EndpointRuntimeV1): void {
-    if (runtime.stopped || runtime.reconnectTimer !== null) return
+    if (
+      runtime.stopped
+      || runtime.reconnectTimer !== null
+      || runtime.recovery !== null
+      || runtime.connecting
+      || runtime.connected
+    ) return
     runtime.reconnectTimer = setTimeout(() => {
       runtime.reconnectTimer = null
-      void connect(runtime)
+      startConnect(runtime)
     }, runtime.plan.reconnectDelayMs)
   }
 
+  function startConnect(runtime: EndpointRuntimeV1): void {
+    if (runtime.connectTask !== null) return
+    const task = connect(runtime)
+    runtime.connectTask = task
+    void task.finally(() => {
+      if (runtime.connectTask === task) runtime.connectTask = null
+    })
+  }
+
+  function recover(runtime: EndpointRuntimeV1, error: unknown): void {
+    if (runtime.stopped || runtime.recovery !== null) return
+    runtime.lastError = error instanceof Error ? error.message : String(error)
+    runtime.connected = false
+    runtime.generation += 1
+    const recovery = closeRuntime(runtime).catch(() => undefined)
+    runtime.recovery = recovery
+    void recovery.finally(() => {
+      if (runtime.recovery !== recovery) return
+      runtime.recovery = null
+      if (!runtime.stopped) scheduleReconnect(runtime)
+    })
+  }
+
   async function connect(runtime: EndpointRuntimeV1): Promise<void> {
-    if (runtime.stopped || runtime.connecting || runtime.connected) return
+    if (
+      runtime.stopped
+      || runtime.connecting
+      || runtime.connected
+      || runtime.recovery !== null
+    ) return
     runtime.connecting = true
+    const generation = runtime.generation
     const candidate = createClient({
       endpointId: runtime.plan.endpointId,
       name: runtime.plan.endpointId,
@@ -392,13 +453,21 @@ export function createOpcUaClientAdapterV1(
       reconnectDelayMs: runtime.plan.reconnectDelayMs,
     })
     runtime.client = candidate
+    let session: ClientSession | null = null
+    let subscription: ClientSubscription | null = null
+    let group: ClientMonitoredItemGroup | null = null
+    const active = () => (
+      !runtime.stopped
+      && runtime.generation === generation
+      && runtime.client === candidate
+    )
     try {
       await withTimeout(candidate.connect(runtime.plan.endpointUrl), CONNECT_TIMEOUT_MS)
-      if (runtime.stopped) return
-      const session = await candidate.createSession()
-      if (runtime.stopped) { await session.close(); return }
+      if (!active()) return
+      session = await candidate.createSession()
+      if (!active()) return
       runtime.session = session
-      const subscription = await session.createSubscription2({
+      subscription = await session.createSubscription2({
         requestedPublishingInterval: runtime.plan.publishingIntervalMs,
         requestedLifetimeCount: 60,
         requestedMaxKeepAliveCount: 10,
@@ -406,12 +475,14 @@ export function createOpcUaClientAdapterV1(
         publishingEnabled: true,
         priority: 0,
       })
+      if (!active()) return
       runtime.subscription = subscription
-      const group = await subscription.monitorItems(
+      group = await subscription.monitorItems(
         runtime.plan.nodeIds.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value })),
         { samplingInterval: runtime.plan.publishingIntervalMs, queueSize: 1, discardOldest: true },
         TimestampsToReturn.Both,
       )
+      if (!active()) return
       runtime.group = group
       group.on('changed', (_item, dataValue, index) => {
         const nodeId = runtime.plan.nodeIds[index]
@@ -423,21 +494,26 @@ export function createOpcUaClientAdapterV1(
       })
       group.on('err', (message) => { runtime.lastError = message })
       group.on('terminated', () => {
-        runtime.connected = false
-        if (!runtime.stopped) scheduleReconnect(runtime)
+        if (active()) recover(runtime, new Error('OPC_UA_MONITORED_GROUP_TERMINATED'))
       })
       candidate.on('connection_lost', () => {
-        runtime.connected = false
-        if (!runtime.stopped) scheduleReconnect(runtime)
+        if (active()) recover(runtime, new Error('OPC_UA_CONNECTION_LOST'))
       })
       runtime.connected = true
       runtime.lastError = null
     } catch (error) {
-      runtime.lastError = error instanceof Error ? error.message : String(error)
-      await closeRuntime(runtime)
-      if (!runtime.stopped) scheduleReconnect(runtime)
+      if (active()) recover(runtime, error)
     } finally {
       runtime.connecting = false
+      if (!active()) {
+        await closeDetachedConnection(candidate, session, subscription, group)
+      }
+      if (
+        !runtime.stopped
+        && runtime.recovery === null
+        && !runtime.connected
+        && runtime.reconnectTimer === null
+      ) scheduleReconnect(runtime)
     }
   }
 
@@ -451,12 +527,17 @@ export function createOpcUaClientAdapterV1(
     start: () => enqueue(async () => {
       for (const runtime of runtimes.values()) {
         runtime.stopped = false
-        void connect(runtime)
+        runtime.lastError = null
+        startConnect(runtime)
       }
     }),
     stop: () => enqueue(async () => {
       await Promise.all([...runtimes.values()].map(async (runtime) => {
         runtime.stopped = true
+        runtime.generation += 1
+        await closeRuntime(runtime)
+        await runtime.recovery
+        await runtime.connectTask
         await closeRuntime(runtime)
       }))
     }),
