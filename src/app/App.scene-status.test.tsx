@@ -111,7 +111,9 @@ function resourcesForSceneStatusTest(): BrowserProjectResourcesV4 {
 
   return {
     projectStore,
-    mutations: {} as BrowserProjectResourcesV4['mutations'],
+    mutations: {
+      readPublished: vi.fn(() => null),
+    } as unknown as BrowserProjectResourcesV4['mutations'],
     robots,
     jobs,
     scene,
