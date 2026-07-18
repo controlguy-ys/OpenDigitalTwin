@@ -57,7 +57,7 @@ vi.mock('./SpatialEntityTransformControls.js', async () => {
   return {
     SpatialEntityTransformControlsV4: (props: Record<string, unknown>) => {
       const instance = React.useRef<object>({})
-      transformControlsCapture.props = props
+      transformControlsCapture.props = { ...props }
       transformControlsCapture.instances.set(
         props.entityId as string,
         instance.current,
@@ -1297,6 +1297,61 @@ describe('SpatialEntitySceneV4', () => {
       act(() => { fiberCapture.frame?.() })
 
       expect(childRoot.position.x).toBeCloseTo(2.5)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('passes the live parent and effective child world poses to a selected manual child gizmo', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(5_000)
+    fiberCapture.frame = null
+    transformControlsCapture.props = null
+    try {
+      const source = liveSpatialProject()
+      const project = validateWorkcellProjectV4({
+        ...source,
+        spatialEntities: [
+          ...source.spatialEntities,
+          {
+            ...entity('child-entity', {
+              kind: 'box', dimensionsM: [0.2, 0.2, 0.2], color: '#aabbcc',
+            }),
+            parentFrameId: 'box-entity-motion',
+            localPose: { positionM: [0.5, 0, 0], quaternion: [0, 0, 0, 1] },
+          },
+        ],
+      })
+      const objectRuntime = createObjectRuntimeStateV4(project)
+      expect(objectRuntime.ingest(liveBatch(1, 1), 5_000)).toBe(true)
+      render(
+        <SpatialEntitySceneV4
+          gizmoFrame="parent"
+          objectRuntime={objectRuntime}
+          onCommitLocalPose={vi.fn(async () => undefined)}
+          onRegister={() => undefined}
+          project={project}
+          sceneRuntime={runtimeFor(project)}
+          selection={{ kind: 'spatial-entity', entityId: 'child-entity' }}
+        />,
+      )
+      await waitFor(() => expect(transformControlsCapture.props).toMatchObject({
+        entityId: 'child-entity',
+        parentWorldPose: { positionM: [1, 0, 0] },
+        persistedWorldPose: { positionM: [1.5, 0, 0] },
+      }))
+
+      vi.setSystemTime(5_100)
+      expect(objectRuntime.ingest(liveBatch(2, 2), 5_100)).toBe(true)
+      vi.setSystemTime(5_200)
+      expect(objectRuntime.ingest(liveBatch(3, 3), 5_200)).toBe(true)
+      vi.setSystemTime(5_350)
+      act(() => { fiberCapture.frame?.() })
+
+      await waitFor(() => expect(transformControlsCapture.props).toMatchObject({
+        parentWorldPose: { positionM: [2.5, 0, 0] },
+        persistedWorldPose: { positionM: [3, 0, 0] },
+      }))
     } finally {
       vi.useRealTimers()
     }

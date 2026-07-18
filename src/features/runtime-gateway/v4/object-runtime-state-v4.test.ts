@@ -301,6 +301,23 @@ describe('ObjectRuntimeStateV4', () => {
     expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 6_101)?.quality).toBe('STALE')
   })
 
+  it('keeps Pose and Status freshness clocks independent while only Status continues to update', () => {
+    const runtime = createObjectRuntimeStateV4(mappedProject())
+    const status = {
+      mappingId: 'mapping-box-status', coherenceGroupId: null, value: 42,
+      unit: 'number', quality: 'GOOD' as const, statusCode: 'Good',
+    }
+    expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1), status]), 5_000)).toBe(true)
+    expect(runtime.ingest(batch(2, [{ ...status, value: 43 }]), 5_100)).toBe(true)
+    expect(runtime.ingest(batch(3, [{ ...status, value: 44 }]), 5_200)).toBe(true)
+    expect(runtime.ingest(batch(4, [{ ...status, value: 45 }]), 5_300)).toBe(true)
+
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 6_001))
+      .toEqual(expect.objectContaining({ quality: 'STALE', statusCode: 'BadNoCommunication' }))
+    expect(runtime.readEntityStatus('box-live', 6_001))
+      .toEqual(expect.objectContaining({ value: 45, quality: 'GOOD', statusCode: 'Good' }))
+  })
+
   it('drops batches for another Project, Revision, or Endpoint', () => {
     const runtime = createObjectRuntimeStateV4(mappedProject())
     expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)], { projectId: 'other' }), 5_100)).toBe(false)

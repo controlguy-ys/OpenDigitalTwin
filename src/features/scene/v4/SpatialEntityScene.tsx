@@ -356,6 +356,7 @@ function createSceneResourcesV4(
 export interface SpatialEntityEffectiveTransformRuntimeV4 {
   update(nowMs: number): void
   readEntityWorldPose(entityId: SpatialEntityIdV4): RigidTransformV4
+  readFrameWorldPose(frameId: FrameIdV4): RigidTransformV4
   isEntityDynamicallyDriven(entityId: SpatialEntityIdV4): boolean
 }
 
@@ -448,6 +449,11 @@ export function createSpatialEntityEffectiveTransformRuntimeV4(
     update,
     readEntityWorldPose(entityId: SpatialEntityIdV4) {
       return entityWorldPoses.get(entityId)?.pose ?? persistedEntityPose(entityId)
+    },
+    readFrameWorldPose(frameId: FrameIdV4) {
+      return frameWorldPoses.get(frameId)?.pose
+        ?? sceneRuntime.globalFrames.get(frameId)?.worldPose
+        ?? IDENTITY_POSE_V4
     },
     isEntityDynamicallyDriven(entityId: SpatialEntityIdV4) {
       return entityWorldPoses.get(entityId)?.dynamic ?? false
@@ -778,7 +784,7 @@ export function SpatialEntitySceneV4({
             const runtime = sceneRuntime.entities.get(selection.entityId)
             const parentWorldPose = entity === undefined
               ? undefined
-              : sceneRuntime.globalFrames.get(entity.parentFrameId)?.worldPose
+              : effectiveTransforms.readFrameWorldPose(entity.parentFrameId)
             return entity?.transformOwner === 'manual'
               && root !== undefined
               && runtime?.kind === 'spatial-entity'
@@ -793,7 +799,7 @@ export function SpatialEntitySceneV4({
                     onCommitLocalPose={onCommitLocalPose}
                     onDraggingChange={onDraggingChange ?? (() => undefined)}
                     parentWorldPose={parentWorldPose}
-                    persistedWorldPose={runtime.worldPose}
+                    persistedWorldPose={effectiveTransforms.readEntityWorldPose(entity.id)}
                   />
                 )
               : null

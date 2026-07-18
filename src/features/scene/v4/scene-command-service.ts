@@ -882,13 +882,14 @@ export function createSceneCommandServiceV4(
             opcUa: {
               ...active.opcUa,
               mode: opcUaModeForSpatialEntityBinding(active.opcUa.mode),
-              endpoints: currentEndpoint?.endpointId === endpointId && !currentEndpointIsShared
-                ? active.opcUa.endpoints.map((candidate) => (
-                    candidate.endpointId === endpointId ? endpoint : candidate
-                  ))
-                : active.opcUa.endpoints.some(({ endpointId: id }) => id === endpointId)
-                  ? active.opcUa.endpoints
-                  : [...active.opcUa.endpoints, endpoint],
+              endpoints: active.opcUa.endpoints.some(({ endpointId: id }) => id === endpointId)
+                ? active.opcUa.endpoints.map((candidate) => {
+                    if (candidate.endpointId !== endpointId) return candidate
+                    // A shared endpoint is shared configuration: a rebinding
+                    // may revive it, but must not overwrite its peer settings.
+                    return currentEndpointIsShared ? { ...candidate, enabled: true } : endpoint
+                  })
+                : [...active.opcUa.endpoints, endpoint],
               mappings: [
                 ...mappingsWithoutStatus,
                 poseMapping,

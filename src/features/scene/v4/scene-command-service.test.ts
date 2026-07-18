@@ -1069,6 +1069,39 @@ describe('SceneCommandServiceV4', () => {
       .toMatchObject({ transformOwner: 'opcua:endpoint-private' })
   })
 
+  it('re-enables an already-bound shared endpoint without retargeting the other Entity binding', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-shared', 'frame-a', 'mapping-a', 'frame-b', 'mapping-b',
+    ])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('platform'),
+    ))
+    harness.mutations.active = validateWorkcellProjectV4({
+      ...harness.mutations.active,
+      opcUa: {
+        ...harness.mutations.active.opcUa,
+        endpoints: harness.mutations.active.opcUa.endpoints.map((endpoint) => (
+          endpoint.endpointId === 'endpoint-shared' ? { ...endpoint, enabled: false } : endpoint
+        )),
+      },
+    })
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object', { publishingIntervalMs: 250 }),
+    ))
+
+    expect(harness.mutations.active.opcUa.endpoints).toEqual([
+      expect.objectContaining({ endpointId: 'endpoint-shared', enabled: true, publishingIntervalMs: 100 }),
+    ])
+    expect(harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object'))
+      .toMatchObject({ transformOwner: 'opcua:endpoint-shared' })
+    expect(harness.mutations.active.spatialEntities.find(({ id }) => id === 'platform'))
+      .toMatchObject({ transformOwner: 'opcua:endpoint-shared' })
+  })
+
   it('clears Status independently while retaining pose and retains configured Status through manual takeover', async () => {
     const harness = commandHarness(authoredProject(), [
       'endpoint-object', 'frame-object', 'mapping-object', 'mapping-status',

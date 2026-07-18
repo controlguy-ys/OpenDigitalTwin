@@ -418,7 +418,7 @@ describe('OPC UA client adapter V1', () => {
     }))
   })
 
-  it('includes every currently-ready mapping when an independent status leaf updates', () => {
+  it('publishes only the independently changed ready mapping so a status heartbeat cannot refresh pose timing', () => {
     const project = projectWithEntityStatusMapping()
     const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
     const batches: unknown[] = []
@@ -437,8 +437,16 @@ describe('OPC UA client adapter V1', () => {
 
     assembler.accept('ns=2;s=Box/Status', 3, 'Good', 1000)
 
-    expect(validateStateBatchV1(batches.at(-1)).values.map(({ mappingId }) => mappingId).sort())
-      .toEqual(['mapping-live-pose', 'mapping-live-status'])
+    expect(validateStateBatchV1(batches.at(-1)).values.map(({ mappingId }) => mappingId))
+      .toEqual(['mapping-live-status'])
+
+    assembler.accept('ns=2;s=Box/Status', 4, 'Good', 1_100)
+    expect(validateStateBatchV1(batches.at(-1)).values.map(({ mappingId }) => mappingId))
+      .toEqual(['mapping-live-status'])
+
+    assembler.accept('ns=2;s=Box/X', 2_000, 'Good', 1_200)
+    expect(validateStateBatchV1(batches.at(-1)).values.map(({ mappingId }) => mappingId))
+      .toEqual(['mapping-live-pose'])
   })
 
   it('subscribes to a local OPC UA server and emits a StateBatch without waiting for every leaf to change again', async () => {

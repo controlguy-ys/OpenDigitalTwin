@@ -296,6 +296,7 @@ export function createOpcUaClientSnapshotAssemblerV1(
     accept(nodeId: string, input: unknown, statusCode: string, sourceTimestampMs: number) {
       const references = referencesByNodeId.get(nodeId)
       if (references === undefined) return
+      const changedMappingIds = new Set<string>()
       for (const reference of references) {
         const leaf = reference.mapping.leaves[reference.index]!
         const scalar = scalarFromLeaf(leaf, input)
@@ -310,6 +311,7 @@ export function createOpcUaClientSnapshotAssemblerV1(
               statusCode: scalar === null ? 'BadTypeMismatch' : statusCode,
               sourceTimestampMs,
             })
+            changedMappingIds.add(reference.mapping.id)
           }
           continue
         }
@@ -319,10 +321,12 @@ export function createOpcUaClientSnapshotAssemblerV1(
           statusCode,
           sourceTimestampMs,
         })
+        changedMappingIds.add(reference.mapping.id)
       }
       const published: RuntimeMappedValueV1[] = []
-      let latestSourceTimestampMs = sourceTimestampMs
+      let latestSourceTimestampMs = 0
       for (const mapping of options.endpoint.mappings) {
+        if (!changedMappingIds.has(mapping.id)) continue
         const samples = samplesByMapping.get(mapping.id)!
         if (samples.some((candidate) => candidate === undefined)) continue
         const coherent = samples as LeafSampleV1[]

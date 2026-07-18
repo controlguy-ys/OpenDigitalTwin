@@ -327,6 +327,10 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
   }
 
   const activateRevision = (projectId: string, configRevision: string): void => {
+    if (
+      activeRevision?.projectId === projectId
+      && activeRevision.configRevision === configRevision
+    ) return
     activeRevision = Object.freeze({ projectId, configRevision })
     lastSourceSequenceByEndpoint.clear()
     wireSequenceByEndpoint.clear()

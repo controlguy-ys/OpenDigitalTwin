@@ -358,6 +358,24 @@ describe('StateBatchHubV1', () => {
     })
   })
 
+  it('keeps source and browser wire sequences monotonic across same-revision recovery for an already-open socket', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(socket)
+    hub.publish(batch(1))
+    socket.complete()
+
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(2, { values: [mappedValue(20)] }))
+
+    expect(socket.sentSequences()).toEqual([1, 2])
+    expect(socket.sentBatches()[1]).toMatchObject({
+      sequence: 2,
+      values: [expect.objectContaining({ mappingId: 'mapping-20' })],
+    })
+  })
+
   it('replays each endpoint latest snapshot in deterministic order under bounded socket backpressure', () => {
     const hub = createStateBatchHubV1()
     const socket = new ControlledSocket()
