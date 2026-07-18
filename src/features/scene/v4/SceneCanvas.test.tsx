@@ -213,6 +213,15 @@ describe('SceneCanvasV4', () => {
     expect(fireEvent(document, nativeMenu)).toBe(false)
   })
 
+  it('keeps the Drei Cube in the existing Canvas runtime with zero safe-area insets by default', () => {
+    const { container } = renderCanvas()
+
+    expect(container.querySelectorAll('[data-testid="r3f-canvas"]')).toHaveLength(1)
+    expect(capture.runtime).toMatchObject({
+      safeAreaInsets: { top: 0, right: 0, bottom: 0, left: 0 },
+    })
+  })
+
   it('clears selection and requests context for a stationary empty click', () => {
     const data = renderCanvas()
     const surface = screen.getByTestId('scene-canvas-surface')

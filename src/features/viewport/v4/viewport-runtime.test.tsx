@@ -1,4 +1,5 @@
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import {
   BoxGeometry,
@@ -6,6 +7,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   PerspectiveCamera,
+  Vector3,
 } from 'three'
 import {
   validateWorkcellProjectV4,
@@ -23,6 +25,7 @@ import { createViewportPreferenceStoreV4 } from './viewport-preference-store.js'
 
 const viewportHarness = vi.hoisted(() => ({
   camera: null as unknown,
+  gizmoProps: null as Record<string, unknown> | null,
   orbitProps: null as Record<string, unknown> | null,
 }))
 
@@ -35,7 +38,13 @@ vi.mock('@react-three/fiber', () => ({
 vi.mock('@react-three/drei/core/OrbitControls.js', async () => {
   const React = await import('react')
   const { Vector3 } = await import('three')
-  const controls = { target: new Vector3(), update: vi.fn() }
+  const controls = {
+    target: new Vector3(),
+    update: vi.fn(() => {
+      const onChange = viewportHarness.orbitProps?.onChange as (() => void) | undefined
+      onChange?.()
+    }),
+  }
   return {
     OrbitControls: React.forwardRef((props: Record<string, unknown>, ref) => {
       viewportHarness.orbitProps = props
@@ -44,6 +53,17 @@ vi.mock('@react-three/drei/core/OrbitControls.js', async () => {
     }),
   }
 })
+
+vi.mock('@react-three/drei/core/GizmoHelper.js', async () => {
+  return { GizmoHelper: ({ children }: { readonly children: ReactNode }) => <>{children}</> }
+})
+
+vi.mock('@react-three/drei/core/GizmoViewcube.js', () => ({
+  GizmoViewcube: (props: Record<string, unknown>) => {
+    viewportHarness.gizmoProps = props
+    return null
+  },
+}))
 
 function entity(id: string, groupId: string | null, x: number): SpatialEntityV4 {
   return {
@@ -299,5 +319,49 @@ describe('viewport bound resolvers V4', () => {
     )
     await waitFor(() => expect(viewportHarness.orbitProps).not.toBeNull())
     expect(viewportHarness.orbitProps).not.toHaveProperty('maxDistance')
+  })
+
+  it('persists one camera state through Orbit change for valid Cube directions only', async () => {
+    const project = projectFixture()
+    const preferences = createViewportPreferenceStoreV4(null)
+    const setCameraState = vi.spyOn(preferences.getState(), 'setCameraState')
+    viewportHarness.camera = new PerspectiveCamera()
+    viewportHarness.gizmoProps = null
+    viewportHarness.orbitProps = null
+    render(
+      <ViewportRuntimeV4
+        onRegister={vi.fn()}
+        preferences={preferences}
+        project={project}
+        registration={registration()}
+        runtime={runtime(project)}
+        selection={null}
+      />,
+    )
+    await waitFor(() => {
+      expect(viewportHarness.orbitProps).not.toBeNull()
+      expect(viewportHarness.gizmoProps).not.toBeNull()
+    })
+    setCameraState.mockClear()
+    const onClick = (viewportHarness.gizmoProps as unknown as Record<string, unknown>).onClick as (event: {
+      readonly face: { readonly normal: Vector3 }
+      readonly object: { readonly position: Vector3 }
+      stopPropagation(): void
+    }) => null
+
+    act(() => onClick({
+      face: { normal: new Vector3(0, 0, 1) },
+      object: { position: new Vector3() },
+      stopPropagation: vi.fn(),
+    }))
+    expect(setCameraState).toHaveBeenCalledTimes(1)
+
+    setCameraState.mockClear()
+    act(() => onClick({
+      face: { normal: new Vector3(Number.NaN, 0, 0) },
+      object: { position: new Vector3() },
+      stopPropagation: vi.fn(),
+    }))
+    expect(setCameraState).not.toHaveBeenCalled()
   })
 })

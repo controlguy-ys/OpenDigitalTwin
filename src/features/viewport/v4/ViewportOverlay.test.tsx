@@ -58,14 +58,36 @@ describe('ViewportOverlayV4', () => {
       />,
     )
 
-    expect(screen.getByLabelText('World view cube')).toHaveAttribute('data-reference', 'world')
     expect(screen.getByRole('button', { name: 'Focus Selection' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Home View' }))
     await user.click(screen.getByRole('button', { name: 'Fit All' }))
-    await user.click(screen.getByRole('button', { name: 'Top view' }))
+    await user.selectOptions(screen.getByLabelText('View orientation'), 'top')
     expect(camera.home).toHaveBeenCalledOnce()
     expect(camera.fitAll).toHaveBeenCalledOnce()
     expect(camera.setStandardView).toHaveBeenCalledWith('top')
+  })
+
+  it('routes the accessible fallback through the same standard-view action without mutating Project state', async () => {
+    const user = userEvent.setup()
+    const data = fixture()
+    const camera = actions()
+    const projectIdentity = data.project
+    render(
+      <ViewportOverlayV4
+        actions={camera}
+        canFocusSelection
+        display={data.display}
+        preferences={data.preferences}
+        project={data.project}
+        runtime={data.runtime}
+        selection={null}
+      />,
+    )
+
+    await user.selectOptions(screen.getByLabelText('View orientation'), 'bottom')
+    expect(camera.setStandardView).toHaveBeenCalledOnce()
+    expect(camera.setStandardView).toHaveBeenCalledWith('bottom')
+    expect(data.project).toBe(projectIdentity)
   })
 
   it('toggles exactly Grid, World, MCP, Base, and TCP browser view layers', async () => {

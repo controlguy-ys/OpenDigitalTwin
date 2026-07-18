@@ -5,8 +5,8 @@ import type { WorkcellProjectV4 } from '../../../core/project-v4/index.js'
 import type { CoordinateDisplayStoreStateV4 } from '../../frames/v4/coordinate-display-store.js'
 import type { SceneSelectionV4 } from '../../interaction/v4/scene-selection.js'
 import type { SceneRuntimeProjectionV4 } from '../../scene/v4/scene-runtime-selector.js'
-import { ViewCube } from '../ViewCube.js'
 import { CoordinateStatusBarV4 } from './CoordinateStatusBar.js'
+import { ViewOrientationControlV4 } from './ViewOrientationControl.js'
 import type {
   ViewportLayerV4,
   ViewportPreferenceStoreV4,
@@ -47,7 +47,6 @@ export function ViewportOverlayV4({
   return (
     <div className="viewport-overlay viewport-overlay-v4">
       <div aria-label="Camera controls" className="viewport-camera-controls">
-        <ViewCube setStandardView={actions.setStandardView} />
         <div className="viewport-camera-actions">
           <button
             aria-label="Home View"
@@ -68,6 +67,7 @@ export function ViewportOverlayV4({
             title="Frame selected visible Project entity"
             type="button"
           >Focus</button>
+          <ViewOrientationControlV4 onSelect={actions.setStandardView} />
         </div>
       </div>
       <div aria-label="Coordinate layers" className="viewport-layer-controls">

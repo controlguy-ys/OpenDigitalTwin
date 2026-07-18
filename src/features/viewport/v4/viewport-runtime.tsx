@@ -30,11 +30,17 @@ import {
   createViewportCameraActions,
   restoreViewportCameraState,
   type StandardWorldView,
+  type WorldViewDirectionV4,
 } from '../camera-actions.js'
+import { WorldViewCubeV4 } from './WorldViewCube.js'
 import type {
   ViewportCameraStateV4,
   ViewportPreferenceStoreV4,
 } from './viewport-preference-store.js'
+import {
+  ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
+  type ViewportSafeAreaInsetsV4,
+} from './viewport-safe-area.js'
 
 export interface ViewportRuntimeControllerV4 {
   readonly actions: {
@@ -260,6 +266,7 @@ export interface ViewportRuntimePropsV4 {
   readonly selection: SceneSelectionV4
   readonly preferences: ViewportPreferenceStoreV4
   readonly onRegister: (controller: ViewportRuntimeControllerV4 | null) => void
+  readonly safeAreaInsets?: ViewportSafeAreaInsetsV4
 }
 
 export function ViewportRuntimeV4({
@@ -269,6 +276,7 @@ export function ViewportRuntimeV4({
   selection,
   preferences,
   onRegister,
+  safeAreaInsets = ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
 }: ViewportRuntimePropsV4): ReactNode {
   const camera = useThree((state) => state.camera)
   const [controls, setControls] = useState<ComponentRef<typeof OrbitControls> | null>(null)
@@ -325,19 +333,31 @@ export function ViewportRuntimeV4({
     return () => onRegister(null)
   }, [camera, cameraActions, controls, onRegister, resolvers])
 
+  const handleControlsChange = useCallback((): void => {
+    if (!(camera instanceof PerspectiveCamera) || controls === null) return
+    preferences.getState().setCameraState(
+      captureViewportCameraState(camera, controls) as ViewportCameraStateV4,
+    )
+  }, [camera, controls, preferences])
+
+  const handleCubeDirection = useCallback((direction: WorldViewDirectionV4): void => {
+    cameraActions?.setWorldDirection(direction)
+  }, [cameraActions])
+
   return (
-    <OrbitControls
-      enableDamping
-      makeDefault
-      minDistance={0.8}
-      onChange={() => {
-        if (!(camera instanceof PerspectiveCamera) || controls === null) return
-        preferences.getState().setCameraState(
-          captureViewportCameraState(camera, controls) as ViewportCameraStateV4,
-        )
-      }}
-      ref={registerControls}
-      target={storedTarget}
-    />
+    <>
+      <OrbitControls
+        enableDamping
+        makeDefault
+        minDistance={0.8}
+        onChange={handleControlsChange}
+        ref={registerControls}
+        target={storedTarget}
+      />
+      <WorldViewCubeV4
+        onDirection={handleCubeDirection}
+        safeAreaInsets={safeAreaInsets}
+      />
+    </>
   )
 }

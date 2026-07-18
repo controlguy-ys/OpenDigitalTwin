@@ -26,6 +26,10 @@ import {
   ViewportRuntimeV4,
   type ViewportRuntimeControllerV4,
 } from '../../viewport/v4/viewport-runtime.js'
+import {
+  ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
+  type ViewportSafeAreaInsetsV4,
+} from '../../viewport/v4/viewport-safe-area.js'
 import { SceneErrorBoundary } from '../SceneErrorBoundary.js'
 import {
   WorkcellV4,
@@ -57,6 +61,7 @@ export interface SceneCanvasPropsV4 {
   readonly interaction: StoreApi<InteractionStoreStateV4>
   readonly coordinateDisplay: StoreApi<CoordinateDisplayStoreStateV4>
   readonly viewportPreferences: ViewportPreferenceStoreV4
+  readonly safeAreaInsets?: ViewportSafeAreaInsetsV4
   readonly cameraRequest?: SceneCameraRequestV4
   readonly onContextRequest: (request: SceneContextRequestV4) => void
   readonly onStatusChange?: (status: SceneRenderStatusV4) => void
@@ -77,6 +82,7 @@ export function SceneCanvasV4({
   interaction,
   coordinateDisplay,
   viewportPreferences,
+  safeAreaInsets = ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
   cameraRequest,
   onContextRequest,
   onStatusChange,
@@ -320,6 +326,7 @@ export function SceneCanvasV4({
                 project={project}
                 registration={registration}
                 runtime={sceneRuntime}
+                safeAreaInsets={safeAreaInsets}
                 selection={selection}
               />
             </Suspense>
