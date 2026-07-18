@@ -159,7 +159,13 @@ function labels(): string[] {
 
 describe('SceneContextMenuV4', () => {
   it('renders the exact command matrix without deferred or forbidden features', () => {
+    const applicationRoot = document.createElement('div')
+    applicationRoot.id = 'root'
+    document.body.append(applicationRoot)
     const harness = renderMenu(null)
+    expect(screen.getByRole('menu', { name: 'Scene actions' })).toBeVisible()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(document.getElementById('root')).not.toHaveAttribute('inert')
     expect(labels()).toEqual([
       'Create Group', 'Create Box', 'Create Cylinder', 'Fit All', 'Show All',
     ])
@@ -227,6 +233,7 @@ describe('SceneContextMenuV4', () => {
       expect(screen.queryByText(/Mechanics|Geometry|STEP Import|Linear Axis|Automatic Grasp|Attach|Detach/i))
         .not.toBeInTheDocument()
     }
+    applicationRoot.remove()
   })
 
   it('creates deterministic empty-space primitives and keeps Fit/Show All non-Project', async () => {
@@ -475,32 +482,6 @@ describe('SceneContextMenuV4', () => {
     expect(screen.getByRole('menuitem', { name: 'Hide' })).toBeVisible()
   })
 
-  it('keeps Tab trapped while an async action disables every menu item', async () => {
-    const user = userEvent.setup()
-    let resolveVisibility!: () => void
-    const harness = renderMenu({ kind: 'robot', robotId: 'robot-1' })
-    harness.commands.spies.setPersistedVisibility.mockImplementationOnce(() => (
-      new Promise<undefined>((resolve) => { resolveVisibility = () => resolve(undefined) })
-    ))
-    await user.click(screen.getByRole('menuitem', { name: 'Hide' }))
-    await waitFor(() => expect(harness.commands.spies.setPersistedVisibility).toHaveBeenCalledOnce())
-
-    const menu = screen.getByRole('menu')
-    await waitFor(() => expect(menu).toHaveFocus())
-    expect(menu.dispatchEvent(new KeyboardEvent('keydown', {
-      bubbles: true,
-      cancelable: true,
-      key: 'Tab',
-    }))).toBe(false)
-    expect(menu).toHaveFocus()
-
-    await act(async () => {
-      resolveVisibility()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-  })
-
   it('dispatches one action command for two synchronous activations', async () => {
     let resolveVisibility!: () => void
     const harness = renderMenu({ kind: 'robot', robotId: 'robot-1' })
@@ -523,7 +504,7 @@ describe('SceneContextMenuV4', () => {
     expect(harness.commands.spies.setPersistedVisibility).toHaveBeenCalledOnce()
   })
 
-  it('clamps placement, traps focus, roves, closes on Escape, and restores focus', async () => {
+  it('closes on Escape and restores the focused trigger', async () => {
     const user = userEvent.setup()
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
       bottom: 0,
@@ -580,11 +561,231 @@ describe('SceneContextMenuV4', () => {
     expect(screen.getByRole('menuitem', { name: 'Create Box' })).toHaveFocus()
     await user.keyboard('{End}')
     expect(screen.getByRole('menuitem', { name: 'Show All' })).toHaveFocus()
-    await user.keyboard('{Tab}')
+    await user.keyboard('{Home}')
     expect(screen.getByRole('menuitem', { name: 'Create Group' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('closes on Tab and restores the focused trigger', async () => {
+    const user = userEvent.setup()
+    const workcell = project()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(workcell)
+    const commands = commandHarness()
+
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(true)} type="button">Open menu</button>
+          {!open ? null : (
+            <SceneContextMenuV4
+              commands={commands.service}
+              defaultPlacementFrameId="mcp"
+              interaction={interaction}
+              onClose={() => setOpen(false)}
+              onFitAll={vi.fn()}
+              onFocus={vi.fn()}
+              onOpenCollision={vi.fn()}
+              onOpenMovingFrame={vi.fn()}
+              onOpenRobotBase={vi.fn()}
+              project={workcell}
+              request={{ selection: null, position: { x: 10, y: 20 } }}
+              runtime={runtime(workcell)}
+            />
+          )}
+        </>
+      )
+    }
+
+    render(<Harness />)
+    const trigger = screen.getByRole('button', { name: 'Open menu' })
+    await user.click(trigger)
+    await user.keyboard('{Tab}')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('closes on Shift+Tab and restores the focused trigger', async () => {
+    const user = userEvent.setup()
+    const workcell = project()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(workcell)
+    const commands = commandHarness()
+
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(true)} type="button">Open menu</button>
+          {!open ? null : (
+            <SceneContextMenuV4
+              commands={commands.service}
+              defaultPlacementFrameId="mcp"
+              interaction={interaction}
+              onClose={() => setOpen(false)}
+              onFitAll={vi.fn()}
+              onFocus={vi.fn()}
+              onOpenCollision={vi.fn()}
+              onOpenMovingFrame={vi.fn()}
+              onOpenRobotBase={vi.fn()}
+              project={workcell}
+              request={{ selection: null, position: { x: 10, y: 20 } }}
+              runtime={runtime(workcell)}
+            />
+          )}
+        </>
+      )
+    }
+
+    render(<Harness />)
+    const trigger = screen.getByRole('button', { name: 'Open menu' })
+    await user.click(trigger)
     await user.keyboard('{Shift>}{Tab}{/Shift}')
-    expect(screen.getByRole('menuitem', { name: 'Show All' })).toHaveFocus()
-    await user.keyboard('{Home}{Escape}')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('closes on outside pointerdown without restoring focus', async () => {
+    const user = userEvent.setup()
+    const workcell = project()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(workcell)
+    const commands = commandHarness()
+
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(true)} type="button">Open menu</button>
+          <button type="button">Outside control</button>
+          {!open ? null : (
+            <SceneContextMenuV4
+              commands={commands.service}
+              defaultPlacementFrameId="mcp"
+              interaction={interaction}
+              onClose={() => setOpen(false)}
+              onFitAll={vi.fn()}
+              onFocus={vi.fn()}
+              onOpenCollision={vi.fn()}
+              onOpenMovingFrame={vi.fn()}
+              onOpenRobotBase={vi.fn()}
+              project={workcell}
+              request={{ selection: null, position: { x: 10, y: 20 } }}
+              runtime={runtime(workcell)}
+            />
+          )}
+        </>
+      )
+    }
+
+    render(<Harness />)
+    await user.click(screen.getByRole('button', { name: 'Open menu' }))
+    const outside = screen.getByRole('button', { name: 'Outside control' })
+    await user.click(outside)
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(outside).toHaveFocus()
+  })
+
+  it('closes after a resolved action and restores the focused trigger', async () => {
+    const user = userEvent.setup()
+    const workcell = project()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(workcell)
+    const commands = commandHarness()
+
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(true)} type="button">Open menu</button>
+          {!open ? null : (
+            <SceneContextMenuV4
+              commands={commands.service}
+              defaultPlacementFrameId="mcp"
+              interaction={interaction}
+              onClose={() => setOpen(false)}
+              onFitAll={vi.fn()}
+              onFocus={vi.fn()}
+              onOpenCollision={vi.fn()}
+              onOpenMovingFrame={vi.fn()}
+              onOpenRobotBase={vi.fn()}
+              project={workcell}
+              request={{ selection: null, position: { x: 10, y: 20 } }}
+              runtime={runtime(workcell)}
+            />
+          )}
+        </>
+      )
+    }
+
+    render(<Harness />)
+    const trigger = screen.getByRole('button', { name: 'Open menu' })
+    await user.click(trigger)
+    await user.click(screen.getByRole('menuitem', { name: 'Create Group' }))
+    await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+  })
+
+  it('keeps the menu open with an inline alert after a rejected action', async () => {
+    const user = userEvent.setup()
+    const harness = renderMenu({ kind: 'spatial-entity', entityId: 'entity-a' })
+    harness.commands.spies.setPersistedVisibility.mockRejectedValueOnce(new Error('Hide rejected'))
+
+    await user.click(screen.getByRole('menuitem', { name: 'Hide' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Hide rejected')
+    expect(screen.getByRole('menu')).toBeVisible()
+  })
+
+  it('keeps the original focus owner when a replacement request closes on Escape', async () => {
+    const user = userEvent.setup()
+    const workcell = project()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(workcell)
+    const commands = commandHarness()
+    const initialRequest = { selection: null, position: { x: 10, y: 20 } }
+    const replacementRequest = {
+      selection: { kind: 'robot' as const, robotId: 'robot-1' },
+      position: { x: 30, y: 40 },
+    }
+    let menuRequest: typeof initialRequest | typeof replacementRequest | null = null
+    let rerenderTree!: () => void
+    const closeMenu = () => {
+      menuRequest = null
+      rerenderTree()
+    }
+    const tree = () => (
+      <>
+        <button type="button">Open menu</button>
+        {menuRequest === null ? null : (
+          <SceneContextMenuV4
+            commands={commands.service}
+            defaultPlacementFrameId="mcp"
+            interaction={interaction}
+            onClose={closeMenu}
+            onFitAll={vi.fn()}
+            onFocus={vi.fn()}
+            onOpenCollision={vi.fn()}
+            onOpenMovingFrame={vi.fn()}
+            onOpenRobotBase={vi.fn()}
+            project={workcell}
+            request={menuRequest}
+            runtime={runtime(workcell)}
+          />
+        )}
+      </>
+    )
+    const rendered = render(tree())
+    rerenderTree = () => rendered.rerender(tree())
+    const trigger = screen.getByRole('button', { name: 'Open menu' })
+    trigger.focus()
+    menuRequest = initialRequest
+    rerenderTree()
+    menuRequest = replacementRequest
+    rerenderTree()
+    await user.keyboard('{Escape}')
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
   })

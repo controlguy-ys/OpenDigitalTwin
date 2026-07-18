@@ -899,7 +899,7 @@ button {
 
 .scene-context-menu {
   position: fixed;
-  z-index: 12;
+  z-index: 1200;
   display: grid;
   min-width: 190px;
   max-height: calc(100vh - 16px);
@@ -907,6 +907,7 @@ button {
   overflow: auto;
   background: var(--color-panel);
   border: 1px solid var(--color-border);
+  border-radius: 6px;
   box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
 }
 
@@ -916,17 +917,6 @@ button {
   font-size: 10px;
   text-align: left;
   border-color: transparent;
-}
-
-.scene-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: grid;
-  padding: 16px;
-  background: rgb(3 8 13 / 46%);
-  pointer-events: auto;
-  place-items: center;
 }
 
 .scene-confirmation {

@@ -535,14 +535,17 @@ export function SceneContextMenuV4(props: SceneContextMenuPropsV4): ReactNode {
   const menuRef = useRef<HTMLDivElement>(null)
   const activeRequestRef = useRef(request)
   const pendingActionTokenRef = useRef<symbol | null>(null)
-  const returnFocusRef = useRef<HTMLElement | null>(
-    typeof document === 'undefined' || !(document.activeElement instanceof HTMLElement)
-      ? null
-      : document.activeElement,
-  )
+  const focusOwnerRef = useRef<HTMLElement | null>(null)
+  const restoreFocusOnCloseRef = useRef(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [position, setPosition] = useState(request.position)
+
+  useLayoutEffect(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      focusOwnerRef.current = document.activeElement
+    }
+  }, [])
 
   useLayoutEffect(() => {
     activeRequestRef.current = request
@@ -562,12 +565,12 @@ export function SceneContextMenuV4(props: SceneContextMenuPropsV4): ReactNode {
   }, [pending, request])
 
   useEffect(() => {
-    const applicationRoot = document.getElementById('root')
-    const previousInert = applicationRoot?.inert ?? false
-    if (applicationRoot !== null) applicationRoot.inert = true
     return () => {
-      if (applicationRoot !== null) applicationRoot.inert = previousInert
-      returnFocusRef.current?.focus()
+      if (restoreFocusOnCloseRef.current && focusOwnerRef.current?.isConnected) {
+        focusOwnerRef.current.focus()
+      }
+      restoreFocusOnCloseRef.current = false
+      focusOwnerRef.current = null
     }
   }, [])
 
@@ -588,6 +591,16 @@ export function SceneContextMenuV4(props: SceneContextMenuPropsV4): ReactNode {
     return () => window.removeEventListener('resize', measurePosition)
   }, [measurePosition])
 
+  useEffect(() => {
+    const closeOnOutsidePointerDown = (event: PointerEvent): void => {
+      if (event.target instanceof Node && menuRef.current?.contains(event.target)) return
+      restoreFocusOnCloseRef.current = false
+      onClose()
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown, true)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true)
+  }, [onClose])
+
   const runAction = (action: MenuActionV4): void => {
     if (pendingActionTokenRef.current !== null || action.disabled === true) return
     const actionRequest = request
@@ -603,6 +616,7 @@ export function SceneContextMenuV4(props: SceneContextMenuPropsV4): ReactNode {
           && activeRequestRef.current === actionRequest
           && result !== false
         ) {
+          restoreFocusOnCloseRef.current = true
           onClose()
         }
       })
@@ -626,18 +640,19 @@ export function SceneContextMenuV4(props: SceneContextMenuPropsV4): ReactNode {
     if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
+      restoreFocusOnCloseRef.current = true
+      onClose()
+      return
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      event.stopPropagation()
+      restoreFocusOnCloseRef.current = true
       onClose()
       return
     }
     const items = enabledMenuItemsV4(menuRef.current)
-    if (items.length === 0) {
-      if (event.key === 'Tab') {
-        event.preventDefault()
-        event.stopPropagation()
-        menuRef.current?.focus()
-      }
-      return
-    }
+    if (items.length === 0) return
     const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement)
     let nextIndex: number | null = null
     if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1 + items.length) % items.length
@@ -645,11 +660,6 @@ export function SceneContextMenuV4(props: SceneContextMenuPropsV4): ReactNode {
       nextIndex = (currentIndex - 1 + items.length) % items.length
     } else if (event.key === 'Home') nextIndex = 0
     else if (event.key === 'End') nextIndex = items.length - 1
-    else if (event.key === 'Tab') {
-      nextIndex = event.shiftKey
-        ? (currentIndex - 1 + items.length) % items.length
-        : (currentIndex + 1 + items.length) % items.length
-    }
     if (nextIndex === null) return
     event.preventDefault()
     event.stopPropagation()
@@ -659,43 +669,33 @@ export function SceneContextMenuV4(props: SceneContextMenuPropsV4): ReactNode {
   const staleError = target.kind === 'stale'
     ? 'The requested Scene target is no longer available in this Project revision.'
     : null
-  const overlay = (
+  const menu = (
     <div
-      aria-label="Scene context actions"
-      aria-modal="true"
-      className="scene-modal-backdrop scene-context-backdrop-v4"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      role="dialog"
+      aria-label="Scene actions"
+      className="scene-context-menu scene-context-menu-v4"
+      onKeyDown={onMenuKeyDown}
+      ref={menuRef}
+      role="menu"
+      style={{ left: position.x, top: position.y }}
+      tabIndex={-1}
     >
-      <div
-        aria-label="Scene actions"
-        className="scene-context-menu scene-context-menu-v4"
-        onKeyDown={onMenuKeyDown}
-        ref={menuRef}
-        role="menu"
-        style={{ left: position.x, top: position.y }}
-        tabIndex={-1}
-      >
-        {actions.map((action) => (
-          <button
-            disabled={pending || action.disabled === true}
-            key={action.label}
-            onClick={() => runAction(action)}
-            role="menuitem"
-            tabIndex={-1}
-            type="button"
-          >
-            {action.label}
-          </button>
-        ))}
-        {staleError === null && error === null ? null : (
-          <p role="alert">{error ?? staleError}</p>
-        )}
-      </div>
+      {actions.map((action) => (
+        <button
+          disabled={pending || action.disabled === true}
+          key={action.label}
+          onClick={() => runAction(action)}
+          role="menuitem"
+          tabIndex={-1}
+          type="button"
+        >
+          {action.label}
+        </button>
+      ))}
+      {staleError === null && error === null ? null : (
+        <p role="alert">{error ?? staleError}</p>
+      )}
     </div>
   )
 
-  return createPortal(overlay, document.body)
+  return createPortal(menu, document.body)
 }
