@@ -1,7 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { DockResizeHandleV4 } from './DockResizeHandleV4.js'
+import { createShellLayoutStoreV4 } from './shell-layout-store.js'
+import { initialShellLayoutBoundsV4, isSceneJobResizeAvailableV4 } from './shell-layout-geometry.js'
+import { createShellLayoutControllerV4 } from './shell-layout-controller.js'
 
 function renderHandle(overrides: Partial<React.ComponentProps<typeof DockResizeHandleV4>> = {}) {
   const onChange = vi.fn()
@@ -20,6 +24,45 @@ function renderHandle(overrides: Partial<React.ComponentProps<typeof DockResizeH
     {...overrides}
   />)
   return { onChange, onReset, handle: screen.getByRole('separator', { name: overrides.label ?? 'Resize sidebar' }) }
+}
+
+class MemoryStorage {
+  writes = 0
+  getItem() { return null }
+  setItem() { this.writes += 1 }
+  removeItem() {}
+}
+
+function SceneJobResizeHarness({
+  controller,
+  contentHeightPx,
+}: {
+  controller: ReturnType<typeof createShellLayoutControllerV4>
+  contentHeightPx: number
+}) {
+  const [, refresh] = useState(0)
+  if (!isSceneJobResizeAvailableV4(controller.getState().mode, contentHeightPx)) {
+    return <div data-testid="scene-job-handle-hidden" />
+  }
+  const percent = controller.getState().preferences.sidebar.sceneJobSplitPercent
+  return <DockResizeHandleV4
+    direction={1}
+    keyboardStep={5}
+    label="Resize scene and jobs"
+    max={75}
+    min={35}
+    onChange={(next) => {
+      controller.setSceneJobSplit(next)
+      refresh((value) => value + 1)
+    }}
+    onReset={() => {
+      controller.setSceneJobSplit(60)
+      refresh((value) => value + 1)
+    }}
+    orientation="horizontal"
+    value={percent}
+    valueFromPointerDelta={(start, delta) => start + delta / contentHeightPx * 100}
+  />
 }
 
 describe('DockResizeHandleV4', () => {
@@ -74,5 +117,34 @@ describe('DockResizeHandleV4', () => {
     fireEvent.pointerDown(handle, { button: 0, clientX: 0, pointerId: 9 })
     fireEvent.pointerMove(handle, { clientX: 36, pointerId: 9 })
     expect(onChange).toHaveBeenCalledWith(70)
+  })
+
+  it('integrates a horizontal Scene-to-Job handle with the real controller, 35/75 clamping, and a 60-only reset', () => {
+    const storage = new MemoryStorage()
+    const store = createShellLayoutStoreV4({ storage })
+    const controller = createShellLayoutControllerV4({
+      preferencesStore: store,
+      initialBounds: initialShellLayoutBoundsV4(1440, 900),
+    })
+    controller.setDockSize('sidebar', 300)
+    controller.setBounds(959, 900)
+    const view = render(<SceneJobResizeHarness contentHeightPx={360} controller={controller} />)
+    const handle = screen.getByRole('separator', { name: 'Resize scene and jobs' })
+    expect(handle).toHaveAttribute('aria-orientation', 'horizontal')
+    fireEvent.pointerDown(handle, { button: 0, clientY: 0, pointerId: 13 })
+    fireEvent.pointerMove(handle, { clientY: 360, pointerId: 13 })
+    expect(store.getState().preferences.sidebar.sceneJobSplitPercent).toBe(75)
+    expect(store.getState().preferences.sidebar.widthPx).toBe(300)
+    fireEvent.pointerMove(handle, { clientY: -360, pointerId: 13 })
+    expect(store.getState().preferences.sidebar.sceneJobSplitPercent).toBe(35)
+    fireEvent.doubleClick(handle)
+    expect(store.getState().preferences.sidebar.sceneJobSplitPercent).toBe(60)
+    expect(store.getState().preferences.sidebar.widthPx).toBe(300)
+
+    const writesBeforeHidden = storage.writes
+    view.rerender(<SceneJobResizeHarness contentHeightPx={359} controller={controller} />)
+    expect(screen.getByTestId('scene-job-handle-hidden')).toBeInTheDocument()
+    expect(screen.queryByRole('separator', { name: 'Resize scene and jobs' })).toBeNull()
+    expect(storage.writes).toBe(writesBeforeHidden)
   })
 })

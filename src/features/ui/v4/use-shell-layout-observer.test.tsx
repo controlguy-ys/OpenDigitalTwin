@@ -25,6 +25,19 @@ function Harness({ controller }: { controller: ReturnType<typeof createShellLayo
   return <div data-layout-mode={snapshot.mode} data-testid="shell-root"><section className="studio-workspace" ref={workspaceRef} /></div>
 }
 
+function ReplacementHarness({
+  controller,
+  replacement,
+}: {
+  controller: ReturnType<typeof createShellLayoutControllerV4>
+  replacement: boolean
+}) {
+  const { workspaceRef } = useShellLayoutObserverV4(controller)
+  return replacement
+    ? <aside className="studio-workspace" data-testid="replacement-workspace" key="replacement" ref={workspaceRef} />
+    : <section className="studio-workspace" data-testid="initial-workspace" key="initial" ref={workspaceRef} />
+}
+
 function controller() {
   return createShellLayoutControllerV4({
     preferencesStore: createShellLayoutStoreV4({ storage: null }),
@@ -54,5 +67,22 @@ describe('useShellLayoutObserverV4', () => {
 
     vi.stubGlobal('ResizeObserver', undefined)
     expect(() => render(<Harness controller={controller()} />)).not.toThrow()
+  })
+
+  it('disconnects the old observer and observes a replacement workspace target before unmount cleanup', () => {
+    TestResizeObserver.instances = []
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+    const layout = controller()
+    const view = render(<ReplacementHarness controller={layout} replacement={false} />)
+    const initial = TestResizeObserver.instances[0]!
+    expect(initial.observe).toHaveBeenCalledWith(screen.getByTestId('initial-workspace'))
+
+    view.rerender(<ReplacementHarness controller={layout} replacement />)
+    const replacement = TestResizeObserver.instances[1]!
+    expect(initial.disconnect).toHaveBeenCalledOnce()
+    expect(replacement.observe).toHaveBeenCalledWith(screen.getByTestId('replacement-workspace'))
+
+    view.unmount()
+    expect(replacement.disconnect).toHaveBeenCalledOnce()
   })
 })

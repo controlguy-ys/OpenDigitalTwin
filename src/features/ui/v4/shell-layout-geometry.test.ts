@@ -71,15 +71,27 @@ describe('shell layout geometry', () => {
   })
 
   it('clamps only the active dock, ignores unsupported side resizing, and bounds Bottom independently', () => {
-    const source = preferences()
+    const source = {
+      ...preferences(),
+      sidebar: { widthPx: 300, sceneJobSplitPercent: 60 },
+      inspector: { widthPx: 400 },
+    }
+    const bytesBefore = JSON.stringify(source)
     const wide = initialShellLayoutBoundsV4(1200, 900)
-    expect(resolveActiveDockResizeV4('sidebar', 999, wide, source)).toBe(388)
-    expect(resolveActiveDockResizeV4('inspector', 999, wide, source)).toBe(460)
-    expect(resolveActiveDockResizeV4('inspector', 400, initialShellLayoutBoundsV4(960, 900), source)).toBe(320)
-    expect(resolveActiveDockResizeV4('sidebar', 400, initialShellLayoutBoundsV4(959, 900), source)).toBe(248)
+    expect(resolveActiveDockResizeV4('sidebar', 999, wide, source)).toBe(308)
+    expect(source.inspector.widthPx).toBe(400)
+    expect(resolveActiveDockResizeV4('inspector', 999, wide, source)).toBe(408)
+    expect(source.sidebar.widthPx).toBe(300)
+    expect(resolveActiveDockResizeV4('inspector', 400, initialShellLayoutBoundsV4(960, 900), source)).toBe(400)
+    expect(resolveActiveDockResizeV4('sidebar', 400, initialShellLayoutBoundsV4(959, 900), source)).toBe(300)
     expect(resolveActiveDockResizeV4('bottom', 999, initialShellLayoutBoundsV4(1440, 200), source)).toBe(120)
     expect(resolveActiveDockResizeV4('bottom', Number.NaN, initialShellLayoutBoundsV4(1440, 900), source)).toBe(160)
-    expect(source.inspector.widthPx).toBe(320)
+    expect(JSON.stringify(source)).toBe(bytesBefore)
+  })
+
+  it('caps a normal Bottom rail at 45 percent of workspace height', () => {
+    const source = { ...preferences(), bottom: { heightPx: 999, activeTab: 'timeline' as const } }
+    expect(resolveShellLayoutV4(initialShellLayoutBoundsV4(1440, 1000), source).bottomHeightPx).toBe(450)
   })
 
   it('applies the approved Scene-to-Job availability threshold', () => {
