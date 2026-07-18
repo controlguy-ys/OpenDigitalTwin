@@ -10,6 +10,53 @@ describe('deployment contract', () => {
     await expect(validateDeploymentFiles(resolve('.'))).resolves.toEqual([])
   })
 
+  it('requires the production proxy to preserve the Runtime Gateway WebSocket upgrade', () => {
+    const deployment = {
+      dockerfile: [
+        'FROM node:22-alpine AS build',
+        'RUN npm ci',
+        'FROM nginxinc/nginx-unprivileged:1.27-alpine',
+        'USER 101',
+      ].join('\n'),
+      gatewayDockerfile: 'FROM node:22-alpine\nUSER node',
+      nginx: [
+        'resolver 127.0.0.11;',
+        'location = /healthz {}',
+        'location /runtime/ { proxy_pass http://runtime-gateway:8081; }',
+        'location /assets/ { add_header Cache-Control immutable; }',
+        'location / { try_files $uri $uri/ /index.html; }',
+      ].join('\n'),
+      compose: [
+        'services:',
+        '  runtime-gateway:',
+        '    read_only: true',
+        '    cap_drop: [- ALL]',
+        '    security_opt: [- no-new-privileges:true]',
+        '    healthcheck: {}',
+        '    pids_limit: 128',
+        '    mem_limit: 512m',
+        '    cpus: 1.0',
+        '    environment:',
+        '      ROBOTSIM_OPCUA_PORT: "${ROBOTSIM_OPCUA_PORT:-4840}"',
+        '      ROBOTSIM_OPCUA_ADVERTISE_HOST: localhost',
+        '      ROBOTSIM_OPCUA_ADVERTISE_PORT: "${ROBOTSIM_OPCUA_PORT:-4840}"',
+        '    ports: ["${ROBOTSIM_OPCUA_PORT:-4840}:${ROBOTSIM_OPCUA_PORT:-4840}"]',
+        '    tmpfs: [- /tmp:size=16m,mode=1777]',
+        '  web:',
+        '    read_only: true',
+        '    cap_drop: [- ALL]',
+        '    security_opt: [- no-new-privileges:true]',
+        '    healthcheck: {}',
+      ].join('\n'),
+      dockerignore: 'node_modules',
+    }
+
+    expect(validateDeploymentContract(deployment)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/WebSocket.*Upgrade/i),
+      expect.stringMatching(/WebSocket.*Connection/i),
+    ]))
+  })
+
   it('reports missing Runtime Gateway proxy, service, OPC UA port, and hardening contracts', () => {
     const errors = validateDeploymentContract({
       dockerfile: 'FROM node:22-alpine',
