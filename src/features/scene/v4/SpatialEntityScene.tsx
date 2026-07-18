@@ -119,6 +119,8 @@ const NO_ATTEMPT_FAILURE_V4: AttemptFailureV4 = Object.freeze({
   value: undefined,
 })
 
+const LIVE_RUNTIME_PUBLICATION_INTERVAL_MS_V4 = 100
+
 function attemptV4(
   failure: AttemptFailureV4,
   action: () => void,
@@ -518,29 +520,35 @@ export function SpatialEntitySceneV4({
     const nowMs = Date.now()
     const signature: string[] = []
     for (const entity of project.spatialEntities) {
-      if (!entity.transformOwner.startsWith('opcua:')) continue
       const record = renderState.resources.records.get(entity.id)
       if (record === undefined) continue
-      applyPoseV4(record.root, resolveSpatialEntityWorldPoseV4(
-        project,
-        sceneRuntime,
-        entity,
-        objectRuntime,
-        nowMs,
-      ))
-      const pose = objectRuntime.sampleEntityFrame(entity.id, entity.parentFrameId, nowMs)
       const status = objectRuntime.readEntityStatus(entity.id, nowMs)
-      signature.push(
-        entity.id,
-        String(pose?.sourceTimestampMs ?? -1),
-        pose?.quality ?? 'NONE',
-        pose?.statusCode ?? 'NONE',
-        String(status?.sourceTimestampMs ?? -1),
-        status?.quality ?? 'NONE',
-        String(status?.value ?? ''),
-      )
+      if (entity.transformOwner.startsWith('opcua:')) {
+        applyPoseV4(record.root, resolveSpatialEntityWorldPoseV4(
+          project,
+          sceneRuntime,
+          entity,
+          objectRuntime,
+          nowMs,
+        ))
+        const pose = objectRuntime.sampleEntityFrame(entity.id, entity.parentFrameId, nowMs)
+        signature.push(
+          entity.id,
+          String(pose?.sourceTimestampMs ?? -1),
+          pose?.quality ?? 'NONE',
+          pose?.statusCode ?? 'NONE',
+        )
+      }
+      if (status !== null) {
+        signature.push(
+          entity.id,
+          String(status.sourceTimestampMs),
+          status.quality,
+          String(status.value),
+        )
+      }
     }
-    if (nowMs - lastRuntimeProjection.current.atMs < 250) return
+    if (nowMs - lastRuntimeProjection.current.atMs < LIVE_RUNTIME_PUBLICATION_INTERVAL_MS_V4) return
     const nextSignature = signature.join('|')
     lastRuntimeProjection.current.atMs = nowMs
     if (nextSignature === lastRuntimeProjection.current.signature) return

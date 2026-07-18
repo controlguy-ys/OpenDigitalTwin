@@ -198,6 +198,25 @@ describe('ObjectRuntimeStateV4', () => {
     expect(result?.statusCode).toBe('BadNoCommunication')
   })
 
+  it('keeps BAD ahead of STALE while recent invalid receipts prove the connection is alive', () => {
+    const runtime = createObjectRuntimeStateV4(mappedProject())
+    expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)]), 5_100)).toBe(true)
+    expect(runtime.ingest(batch(2, [{
+      ...poseValue('mapping-box-live', 2),
+      value: { positionM: [2, 0, 'invalid'], quaternion: [0, 0, 0, 1] },
+    }]), 5_900)).toBe(true)
+
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 6_500)).toEqual(expect.objectContaining({
+      pose: expect.objectContaining({ positionM: [1, 0, 0] }),
+      quality: 'BAD',
+      statusCode: 'BadTypeMismatch',
+    }))
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 6_901)).toEqual(expect.objectContaining({
+      quality: 'STALE',
+      statusCode: 'BadNoCommunication',
+    }))
+  })
+
   it('accepts UNCERTAIN poses, rejects delayed endpoint sequence, and never rewinds', () => {
     const runtime = createObjectRuntimeStateV4(mappedProject())
     expect(runtime.ingest(batch(2, [poseValue('mapping-box-live', 2, 'UNCERTAIN')]), 5_200)).toBe(true)
@@ -226,11 +245,60 @@ describe('ObjectRuntimeStateV4', () => {
     expect(runtime.ingest(batch(3, [{ ...goodStatus, mappingId: 'mapping-unknown' }]), 5_300)).toBe(false)
   })
 
+  it('uses the endpoint interval for omitted mappings and keeps BAD status fresh for at least one second', () => {
+    const source = mappedProject()
+    const project = validateWorkcellProjectV4({
+      ...source,
+      opcUa: {
+        ...source.opcUa,
+        mappings: source.opcUa.mappings.map((mapping) => (
+          mapping.id === 'mapping-box-status'
+            ? (() => {
+                const { publishingIntervalMs: _publishingIntervalMs, ...withoutInterval } = mapping
+                return withoutInterval
+              })()
+            : mapping
+        )),
+      },
+    })
+    const runtime = createObjectRuntimeStateV4(project)
+    const status = {
+      mappingId: 'mapping-box-status', coherenceGroupId: null, value: 42,
+      unit: 'number', quality: 'GOOD' as const, statusCode: 'Good',
+    }
+    expect(runtime.ingest(batch(1, [status]), 5_100)).toBe(true)
+    expect(runtime.ingest(batch(2, [{
+      ...status,
+      value: 'not-a-number',
+      statusCode: 'BadTypeMismatch',
+    }]), 5_900)).toBe(true)
+
+    expect(runtime.readEntityStatus('box-live', 6_500)).toEqual(expect.objectContaining({
+      value: 42,
+      quality: 'BAD',
+      statusCode: 'BadTypeMismatch',
+    }))
+    expect(runtime.readEntityStatus('box-live', 6_901)).toEqual(expect.objectContaining({
+      quality: 'STALE',
+      statusCode: 'BadNoCommunication',
+    }))
+  })
+
+  it('clears endpoint sequence and interpolation state when the gateway opens a new session', () => {
+    const runtime = createObjectRuntimeStateV4(mappedProject())
+    expect(runtime.ingest(batch(10, [poseValue('mapping-box-live', 10)]), 5_100)).toBe(true)
+    runtime.resetGatewaySession()
+
+    expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)]), 5_200)).toBe(true)
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 5_200)?.pose.positionM)
+      .toEqual([1, 0, 0])
+  })
+
   it('marks a retained pose STALE after the interpolation freshness window', () => {
     const runtime = createObjectRuntimeStateV4(mappedProject())
     runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)]), 5_100)
 
-    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 5_601)?.quality).toBe('STALE')
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 6_101)?.quality).toBe('STALE')
   })
 
   it('drops batches for another Project, Revision, or Endpoint', () => {

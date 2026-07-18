@@ -35,6 +35,7 @@ export interface ObjectRuntimeNumericStatusV4 {
 
 export interface ObjectRuntimeStateV4 {
   ingest(value: unknown, receivedTimestampMs?: number): boolean
+  resetGatewaySession(): void
   sampleEntityFrame(
     entityId: SpatialEntityIdV4,
     frameId: FrameIdV4,
@@ -53,8 +54,10 @@ interface PoseChannelV4 {
   readonly endpointId: string
   readonly entityId: SpatialEntityIdV4
   readonly frameId: FrameIdV4
-  readonly buffer: RuntimePoseBufferV1
+  readonly publishingIntervalMs: number
+  buffer: RuntimePoseBufferV1
   latestSignalTimestampMs: number
+  latestReceiptTimestampMs: number
   quality: Exclude<ObjectRuntimeQualityV4, 'STALE'>
   statusCode: string
 }
@@ -69,6 +72,7 @@ interface StatusChannelV4 {
   sourceTimestampMs: number
   receivedTimestampMs: number
   latestSignalTimestampMs: number
+  latestReceiptTimestampMs: number
   quality: Exclude<ObjectRuntimeQualityV4, 'STALE'>
   statusCode: string
 }
@@ -196,6 +200,8 @@ function compileChannelsV4(project: WorkcellProjectV4): readonly RuntimeChannelV
   for (const candidates of poseCandidates.values()) {
     if (candidates.length !== 1) continue
     const { mapping, entityId, frameId } = candidates[0]!
+    const endpoint = endpoints.get(mapping.endpointId)!
+    const publishingIntervalMs = mapping.publishingIntervalMs ?? endpoint.publishingIntervalMs
     channels.push({
       kind: 'pose',
       mappingId: mapping.id,
@@ -204,9 +210,11 @@ function compileChannelsV4(project: WorkcellProjectV4): readonly RuntimeChannelV
       frameId,
       buffer: createRuntimePoseBufferV1(
         `${entityId}:${frameId}`,
-        mapping.publishingIntervalMs,
+        publishingIntervalMs,
       ),
+      publishingIntervalMs,
       latestSignalTimestampMs: -1,
+      latestReceiptTimestampMs: -1,
       quality: 'BAD',
       statusCode: 'BadWaitingForInitialData',
     })
@@ -214,16 +222,18 @@ function compileChannelsV4(project: WorkcellProjectV4): readonly RuntimeChannelV
   for (const [entityId, candidates] of statusCandidates) {
     if (candidates.length !== 1) continue
     const mapping = candidates[0]!
+    const endpoint = endpoints.get(mapping.endpointId)!
     channels.push({
         kind: 'status',
         mappingId: mapping.id,
         endpointId: mapping.endpointId,
         entityId,
-        publishingIntervalMs: mapping.publishingIntervalMs,
+        publishingIntervalMs: mapping.publishingIntervalMs ?? endpoint.publishingIntervalMs,
         value: null,
         sourceTimestampMs: 0,
         receivedTimestampMs: 0,
         latestSignalTimestampMs: -1,
+        latestReceiptTimestampMs: -1,
         quality: 'BAD',
         statusCode: 'BadWaitingForInitialData',
       })
@@ -244,8 +254,9 @@ function poseFromMappedValueV4(
   if (mapped.value === null || typeof mapped.value !== 'object' || Array.isArray(mapped.value)) {
     return null
   }
-  const positionM = finiteTupleV4(mapped.value.positionM, 3)
-  const quaternion = finiteTupleV4(mapped.value.quaternion, 4)
+  const record = mapped.value as Readonly<Record<string, unknown>>
+  const positionM = finiteTupleV4(record.positionM, 3)
+  const quaternion = finiteTupleV4(record.quaternion, 4)
   if (positionM === null || quaternion === null) return null
   return {
     positionM: positionM as [number, number, number],
@@ -271,6 +282,27 @@ export function createObjectRuntimeStateV4(
   )
   const latestSequenceByEndpoint = new Map<string, number>()
 
+  const resetGatewaySession = (): void => {
+    latestSequenceByEndpoint.clear()
+    for (const channel of channels) {
+      channel.latestSignalTimestampMs = -1
+      if (channel.kind === 'pose') {
+        channel.buffer = createRuntimePoseBufferV1(
+          `${channel.entityId}:${channel.frameId}`,
+          channel.publishingIntervalMs,
+        )
+        channel.latestReceiptTimestampMs = -1
+      } else {
+        channel.value = null
+        channel.sourceTimestampMs = 0
+        channel.receivedTimestampMs = 0
+        channel.latestReceiptTimestampMs = -1
+      }
+      channel.quality = 'BAD'
+      channel.statusCode = 'BadWaitingForInitialData'
+    }
+  }
+
   const ingest = (value: unknown, receivedTimestampCandidate = Date.now()): boolean => {
     const receivedTimestampMs = positiveSafeTimestampV4(
       receivedTimestampCandidate,
@@ -295,6 +327,7 @@ export function createObjectRuntimeStateV4(
     for (const mapped of batch.values) {
       const channel = channelsByMappingId.get(mapped.mappingId)
       if (channel === undefined || channel.endpointId !== batch.endpointId) continue
+      channel.latestReceiptTimestampMs = receivedTimestampMs
       if (batch.sourceTimestampMs < channel.latestSignalTimestampMs) continue
       if (mapped.quality === 'BAD') {
         channel.latestSignalTimestampMs = batch.sourceTimestampMs
@@ -352,13 +385,15 @@ export function createObjectRuntimeStateV4(
     if (channel === undefined) return null
     const result = channel.buffer.sample(nowMs)
     if (result === null) return null
+    const staleAfterMs = Math.max(1_000, 3 * channel.publishingIntervalMs)
+    const stale = nowMs - channel.latestReceiptTimestampMs > staleAfterMs
     return Object.freeze({
       entityId,
       frameId,
       sourceTimestampMs: result.sourceTimestampMs,
       pose: result.pose,
-      quality: result.quality === 'STALE' ? 'STALE' : channel.quality,
-      statusCode: result.quality === 'STALE' ? 'BadNoCommunication' : channel.statusCode,
+      quality: stale ? 'STALE' : channel.quality,
+      statusCode: stale ? 'BadNoCommunication' : channel.statusCode,
     })
   }
 
@@ -369,8 +404,8 @@ export function createObjectRuntimeStateV4(
     const nowMs = positiveSafeTimestampV4(nowCandidate, 'Current time')
     const channel = statusChannelsByEntityId.get(entityId)
     if (channel === undefined || channel.value === null) return null
-    const staleAfterMs = Math.max(500, 5 * channel.publishingIntervalMs)
-    const stale = nowMs - channel.receivedTimestampMs > staleAfterMs
+    const staleAfterMs = Math.max(1_000, 3 * channel.publishingIntervalMs)
+    const stale = nowMs - channel.latestReceiptTimestampMs > staleAfterMs
     return Object.freeze({
       entityId,
       sourceTimestampMs: channel.sourceTimestampMs,
@@ -382,6 +417,7 @@ export function createObjectRuntimeStateV4(
 
   return Object.freeze({
     ingest,
+    resetGatewaySession,
     sampleEntityFrame,
     readEntityStatus,
     bindingKeys: () => Object.freeze([...poseChannelsByKey.keys()]),

@@ -258,6 +258,25 @@ function liveBatch(sequence: number, x: number, status = 42) {
   }
 }
 
+function statusOnlyLiveSpatialProject(): WorkcellProjectV4 {
+  const source = liveSpatialProject()
+  const box = source.spatialEntities[0]!
+  return validateWorkcellProjectV4({
+    ...source,
+    spatialEntities: [{
+      ...box,
+      parentFrameId: 'world',
+      localPose: { positionM: [7, 0, 0], quaternion: [0, 0, 0, 1] },
+      transformOwner: 'manual',
+      movingFrames: [],
+    }],
+    opcUa: {
+      ...source.opcUa,
+      mappings: source.opcUa.mappings.filter(({ id }) => id === 'mapping-live-status'),
+    },
+  })
+}
+
 function runtimeFor(project: WorkcellProjectV4): SceneRuntimeProjectionV4 {
   return selectSceneRuntimeV4(project, {
     projectRevisionId: project.revisionId,
@@ -1138,6 +1157,49 @@ describe('SpatialEntitySceneV4', () => {
           .toEqual([3.25, 0, 0])
         expect(screen.getByRole('status', { name: 'box-entity numeric status' }))
           .toHaveTextContent('44')
+      })
+      expect(firstMesh(root).geometry).toBe(geometry)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('republishes a status-only OPC UA Object within 100 ms without moving its manual transform', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(5_000)
+    fiberCapture.frame = null
+    try {
+      const project = statusOnlyLiveSpatialProject()
+      const sceneRuntime = runtimeFor(project)
+      const objectRuntime = createObjectRuntimeStateV4(project)
+      expect(objectRuntime.ingest(liveBatch(1, 1, 42), 5_000)).toBe(true)
+
+      let registration: SpatialEntitySceneRegistrationV4 | null = null
+      render(
+        <SpatialEntitySceneV4
+          objectRuntime={objectRuntime}
+          onRegister={(value) => { if (value !== null) registration = value }}
+          project={project}
+          sceneRuntime={sceneRuntime}
+        />,
+      )
+      await waitFor(() => expect(registration?.roots.size).toBe(1))
+      const root = registration!.roots.get('box-entity')!
+      const geometry = firstMesh(root).geometry
+      expect(root.position.x).toBeCloseTo(7)
+      expect(screen.getByRole('status', { name: 'box-entity numeric status' }))
+        .toHaveTextContent('42')
+
+      vi.setSystemTime(5_100)
+      expect(objectRuntime.ingest(liveBatch(2, 99, 43), 5_100)).toBe(true)
+      act(() => { fiberCapture.frame?.() })
+
+      await waitFor(() => {
+        expect(root.position.x).toBeCloseTo(7)
+        expect(registration!.collisionProxies[0]!.entity.worldMatrix.slice(12, 15))
+          .toEqual([7, 0, 0])
+        expect(screen.getByRole('status', { name: 'box-entity numeric status' }))
+          .toHaveTextContent('43')
       })
       expect(firstMesh(root).geometry).toBe(geometry)
     } finally {

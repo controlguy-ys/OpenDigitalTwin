@@ -92,6 +92,37 @@ describe('Runtime Gateway browser stream V4', () => {
     }
   })
 
+  it('notifies the state controller once for each newly opened gateway session', () => {
+    vi.useFakeTimers()
+    try {
+      const sockets: FakeSocketV4[] = []
+      const onSessionStart = vi.fn()
+      const stream = createRuntimeGatewayStreamV4({
+        createWebSocket: () => {
+          const socket = new FakeSocketV4()
+          sockets.push(socket)
+          return socket
+        },
+        ingest: vi.fn(() => true),
+        onSessionStart,
+        reconnectDelayMs: 250,
+        url: 'ws://test/runtime/ws',
+      })
+      stream.start()
+      sockets[0]!.emit('open')
+      sockets[0]!.emit('open')
+      sockets[0]!.emit('close')
+      vi.advanceTimersByTime(250)
+      sockets[1]!.emit('open')
+
+      // The callback must run only once per actual socket session, not once
+      // per duplicate browser open event.
+      expect(onSessionStart).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('is idempotent across repeated start and stop calls', () => {
     const socket = new FakeSocketV4()
     const createWebSocket = vi.fn(() => socket)

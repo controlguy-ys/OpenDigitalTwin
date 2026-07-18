@@ -32,6 +32,7 @@ export interface RuntimeGatewayStreamOptionsV4 {
   readonly location?: BrowserLocationV4
   readonly createWebSocket?: (url: string) => BrowserWebSocketV4
   readonly ingest: (value: unknown, receivedTimestampMs: number) => boolean
+  readonly onSessionStart?: () => void
   readonly nowMs?: () => number
   readonly reconnectDelayMs?: number
 }
@@ -132,7 +133,10 @@ export function createRuntimeGatewayStreamV4(
     }
     const candidateListeners: SocketListenersV4 = {
       open: () => {
-        if (socket === candidate && started) phase = 'open'
+        if (socket !== candidate || !started || candidate.readyState !== 1) return
+        if (phase === 'open') return
+        phase = 'open'
+        options.onSessionStart?.()
       },
       message: (event) => {
         if (socket !== candidate || !started) return

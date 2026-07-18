@@ -111,7 +111,10 @@ export type RuntimeGatewayStreamFactoryV4 = (
 
 const browserRuntimeGatewayPublisherV4 = createRuntimeGatewayPublisherV4()
 const browserRuntimeGatewayStreamFactoryV4: RuntimeGatewayStreamFactoryV4 = (runtime) => (
-  createRuntimeGatewayStreamV4({ ingest: runtime.ingest })
+  createRuntimeGatewayStreamV4({
+    ingest: runtime.ingest,
+    onSessionStart: runtime.resetGatewaySession,
+  })
 )
 
 const IDLE_GATEWAY_PRESENTATION_V4: RuntimeGatewayPresentationV4 = Object.freeze({
