@@ -69,6 +69,22 @@ function useCommandRuntimeSyncV4(bindings: AppCommandBindingsV4): void {
   )
 }
 
+function logicalMenuItemsV4(menu: HTMLElement): HTMLButtonElement[] {
+  return Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).filter((item) => (
+    item.disabled !== true && item.getAttribute('aria-disabled') !== 'true'
+  ))
+}
+
+function focusMenuItemV4(menu: HTMLElement | null, intent: 'first' | 'last' | 1 | -1): void {
+  if (menu === null) return
+  const items = logicalMenuItemsV4(menu)
+  if (items.length === 0) return
+  if (intent === 'first') return void items[0]?.focus()
+  if (intent === 'last') return void items.at(-1)?.focus()
+  const current = items.indexOf(document.activeElement as HTMLButtonElement)
+  items[(current + intent + items.length) % items.length]?.focus()
+}
+
 function RibbonCommandButtonV4({
   bindings,
   item,
@@ -125,24 +141,32 @@ export function RibbonLiteV4({
   })
   const [moreOpen, setMoreOpen] = useState(false)
   const moreRef = useRef<HTMLDivElement>(null)
+  const moreMenuRef = useRef<HTMLDivElement>(null)
+  const moreTriggerRef = useRef<HTMLButtonElement>(null)
   const ribbonExpanded = snapshot.isRibbonExpanded()
   const selectionKey = context.selection === null ? 'none' : sceneSelectionKeyV4(context.selection)
   const itemsKey = resolved.items.map((item) => item.commandId).join('|')
   const contextKey = `${selectionKey}:${context.activeRobotId ?? ''}:${context.activeJobId ?? ''}:${context.previewSection ?? ''}`
+  const closeMore = useCallback(() => {
+    const focusWasInsideMenu = moreMenuRef.current?.contains(document.activeElement) === true
+    setMoreOpen(false)
+    if (focusWasInsideMenu) moreTriggerRef.current?.focus()
+  }, [])
 
   useEffect(() => {
-    setMoreOpen(false)
-  }, [contextKey, itemsKey, ribbonExpanded])
+    closeMore()
+  }, [closeMore, contextKey, itemsKey, ribbonExpanded])
 
   useEffect(() => {
     if (!moreOpen) return
+    focusMenuItemV4(moreMenuRef.current, 'first')
     const dismiss = (event: PointerEvent): void => {
-      if (moreRef.current?.contains(event.target as Node) !== true) setMoreOpen(false)
+      if (moreRef.current?.contains(event.target as Node) !== true) closeMore()
     }
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing) return
       event.preventDefault()
-      setMoreOpen(false)
+      closeMore()
     }
     document.addEventListener('pointerdown', dismiss, true)
     document.addEventListener('keydown', closeOnEscape)
@@ -150,13 +174,12 @@ export function RibbonLiteV4({
       document.removeEventListener('pointerdown', dismiss, true)
       document.removeEventListener('keydown', closeOnEscape)
     }
-  }, [moreOpen])
+  }, [closeMore, moreOpen])
 
   return <section
     aria-label="Context commands"
     className="ribbon-lite-v4"
     data-context-kind={resolved.kind}
-    data-more-open={moreOpen}
     data-section={resolved.section ?? undefined}
     hidden={!ribbonExpanded}
     id="ribbon-lite-v4"
@@ -171,12 +194,37 @@ export function RibbonLiteV4({
         aria-expanded={moreOpen}
         aria-haspopup="menu"
         aria-label="More commands"
-        onClick={() => setMoreOpen((open) => !open)}
+        onClick={() => { if (moreOpen) closeMore(); else setMoreOpen(true) }}
+        ref={moreTriggerRef}
         title="More commands"
         type="button"
       >More</button>
-      {moreOpen ? <div aria-label="More commands" className="ribbon-more-menu-v4" id="ribbon-more-menu-v4" role="menu">
-        {layout.overflowItems.map((item) => <RibbonCommandButtonV4 bindings={commandBindings} item={item} key={item.commandId} role="menuitem" onOutcome={(outcome) => { if (outcome === 'completed') setMoreOpen(false) }} />)}
+      {moreOpen ? <div
+        aria-label="More commands"
+        className="ribbon-more-menu-v4"
+        id="ribbon-more-menu-v4"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            closeMore()
+          } else if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            focusMenuItemV4(event.currentTarget, 1)
+          } else if (event.key === 'ArrowUp') {
+            event.preventDefault()
+            focusMenuItemV4(event.currentTarget, -1)
+          } else if (event.key === 'Home') {
+            event.preventDefault()
+            focusMenuItemV4(event.currentTarget, 'first')
+          } else if (event.key === 'End') {
+            event.preventDefault()
+            focusMenuItemV4(event.currentTarget, 'last')
+          }
+        }}
+        ref={moreMenuRef}
+        role="menu"
+      >
+        {layout.overflowItems.map((item) => <RibbonCommandButtonV4 bindings={commandBindings} item={item} key={item.commandId} role="menuitem" onOutcome={(outcome) => { if (outcome === 'completed') closeMore() }} />)}
       </div> : null}
     </div> : null}
   </section>

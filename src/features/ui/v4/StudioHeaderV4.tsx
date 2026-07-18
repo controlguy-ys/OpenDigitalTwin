@@ -1,5 +1,5 @@
 import { Play, Save, Square, type LucideIcon } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
 import type { AppCommandSectionV4 } from '../../commands/v4/app-command.js'
@@ -120,11 +120,21 @@ export function StudioHeaderV4({
   const [previewSection, setPreviewSection] = useState<AppCommandSectionV4 | null>(null)
   const gatewayTriggerRef = useRef<HTMLButtonElement>(null)
   const gatewayDetailsRef = useRef<HTMLDivElement>(null)
+  const gatewayWasOpenRef = useRef(false)
   const compact = snapshot.mode !== 'wide'
   const labels = statusLabelsV4(status, compact)
   const Menu = compact ? CompactAppMenuV4 : AppMenuBarV4
   const context: RibbonContextV4 = { ...ribbonContext, previewSection }
   const gatewayEndpoint = status.gateway.endpoint ?? 'Not configured'
+
+  useLayoutEffect(() => {
+    if (gatewayDetailsOpen && !gatewayWasOpenRef.current) {
+      gatewayDetailsRef.current?.focus()
+    } else if (!gatewayDetailsOpen && gatewayWasOpenRef.current) {
+      gatewayTriggerRef.current?.focus()
+    }
+    gatewayWasOpenRef.current = gatewayDetailsOpen
+  }, [gatewayDetailsOpen])
 
   useEffect(() => {
     if (!gatewayDetailsOpen) return
@@ -183,6 +193,7 @@ export function StudioHeaderV4({
       id="gateway-details-v4"
       ref={gatewayDetailsRef}
       role="dialog"
+      tabIndex={-1}
     >
       <header>
         <strong>Gateway details</strong>

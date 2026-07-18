@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from '../../commands/v4/app-command-runtime.js'
@@ -39,6 +40,23 @@ function bindings() {
 
 function controller(width = 1440) {
   return createShellLayoutControllerV4({ preferencesStore: createShellLayoutStoreV4({ storage: null }), initialBounds: initialShellLayoutBoundsV4(width, 900) })
+}
+
+function GatewayHeaderHarnessV4({ commandStyleOpen = false }: { readonly commandStyleOpen?: boolean }) {
+  const [gatewayDetailsOpen, setGatewayDetailsOpen] = useState(false)
+  return <>
+    {commandStyleOpen ? <button onClick={() => setGatewayDetailsOpen(true)} type="button">Open Gateway command</button> : null}
+    <StudioHeaderV4
+      status={status}
+      menuModel={model}
+      commandBindings={bindings()}
+      quickActionIds={['project.save', 'job.start', 'job.cancel']}
+      ribbonContext={{ selection: null, activeRobotId: null, activeJobId: null }}
+      shellLayoutController={controller()}
+      gatewayDetailsOpen={gatewayDetailsOpen}
+      onGatewayDetailsOpenChange={setGatewayDetailsOpen}
+    />
+  </>
 }
 
 describe('StudioHeaderV4', () => {
@@ -173,5 +191,44 @@ describe('StudioHeaderV4', () => {
     expect(onGatewayDetailsOpenChange).toHaveBeenLastCalledWith(false)
     view.rerender(<StudioHeaderV4 {...props} gatewayDetailsOpen={false} />)
     expect(screen.queryByRole('dialog', { name: 'Gateway details' })).toBeNull()
+  })
+
+  it('moves focus into the Gateway dialog and restores its status trigger after every disclosure close route', async () => {
+    render(<GatewayHeaderHarnessV4 />)
+    const trigger = screen.getByRole('button', { name: 'Gateway details: OPC UA Server · Ready' })
+
+    fireEvent.click(trigger)
+    expect(await screen.findByRole('dialog', { name: 'Gateway details' })).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Close Gateway details' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Gateway details' })).toBeNull())
+    expect(trigger).toHaveFocus()
+
+    fireEvent.click(trigger)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Gateway details' })).toBeNull())
+    expect(trigger).toHaveFocus()
+
+    fireEvent.click(trigger)
+    fireEvent.pointerDown(document.body)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Gateway details' })).toBeNull())
+    expect(trigger).toHaveFocus()
+  })
+
+  it('uses the persistent Gateway status trigger as the controlled command-style open fallback and cleans listeners on unmount', async () => {
+    const view = render(<GatewayHeaderHarnessV4 commandStyleOpen />)
+    const trigger = screen.getByRole('button', { name: 'Gateway details: OPC UA Server · Ready' })
+    fireEvent.click(screen.getByRole('button', { name: 'Open Gateway command' }))
+    expect(await screen.findByRole('dialog', { name: 'Gateway details' })).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Close Gateway details' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Gateway details' })).toBeNull())
+    expect(trigger).toHaveFocus()
+
+    const onGatewayDetailsOpenChange = vi.fn()
+    view.rerender(<StudioHeaderV4 status={status} menuModel={model} commandBindings={bindings()} quickActionIds={['project.save', 'job.start', 'job.cancel']} ribbonContext={{ selection: null, activeRobotId: null, activeJobId: null }} shellLayoutController={controller()} gatewayDetailsOpen onGatewayDetailsOpenChange={onGatewayDetailsOpenChange} />)
+    expect(screen.getByRole('dialog', { name: 'Gateway details' })).toHaveFocus()
+    view.unmount()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.pointerDown(document.body)
+    expect(onGatewayDetailsOpenChange).not.toHaveBeenCalled()
   })
 })
