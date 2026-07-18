@@ -9,6 +9,33 @@ import type { AppMenuSectionModelV4 } from './app-menu-model.js'
 const model: readonly AppMenuSectionModelV4[] = Object.freeze([{ id: 'view', label: 'View', children: Object.freeze([{ kind: 'command' as const, commandId: 'view.home' }, { kind: 'submenu' as const, id: 'view.camera', label: 'Camera', children: Object.freeze([{ kind: 'command' as const, commandId: 'view.fit' }]) }]) }])
 const bindings = createAppCommandBindingsV4(createAppCommandRuntimeV4(createAppCommandRegistryV4([{ id: 'view.home', label: 'Home View', section: 'view', kind: 'action', visible: true, enabled: true, execute() {} }, { id: 'view.fit', label: 'Fit All', section: 'view', kind: 'action', visible: true, enabled: true, execute() {} }])))
 function Harness() { const [open, setOpen] = useState<AppCommandSectionV4 | null>(null); return <><button>Outside</button><CompactAppMenuV4 commandBindings={bindings} model={model} openSection={open} onOpenSectionChange={setOpen} onPreviewSection={() => undefined} /></> }
+
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+  return { x: left, y: top, left, top, width, height, right: left + width, bottom: top + height, toJSON: () => ({}) } as DOMRect
+}
+
+function installCompactFlyoutRects(options: {
+  readonly viewport: readonly [number, number]
+  readonly owner: DOMRect
+  readonly trigger: DOMRect
+  readonly flyout: DOMRect
+}): () => void {
+  const width = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+  const height = Object.getOwnPropertyDescriptor(window, 'innerHeight')
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: options.viewport[0] })
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: options.viewport[1] })
+  const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this.classList.contains('app-menu-submenu-popup-v4')) return options.flyout
+    if (this.id.endsWith('-view-section')) return options.owner
+    if (this.id.endsWith('-view.camera-trigger')) return options.trigger
+    return rect(0, 0, 0, 0)
+  })
+  return () => {
+    spy.mockRestore()
+    if (width !== undefined) Object.defineProperty(window, 'innerWidth', width)
+    if (height !== undefined) Object.defineProperty(window, 'innerHeight', height)
+  }
+}
 describe('CompactAppMenuV4', () => {
   it('opens categories without a menubar', () => { render(<Harness />); fireEvent.click(screen.getByRole('button', { name: 'Menu' })); expect(screen.queryByRole('menubar')).toBeNull(); fireEvent.keyDown(screen.getByRole('menuitem', { name: 'View' }), { key: 'Enter' }); expect(screen.getByRole('menuitem', { name: 'Home View' })).toBeInTheDocument() })
   it('returns from category/submenu and closes on escape or outside pointerdown', async () => { render(<Harness />); const menu = screen.getByRole('button', { name: 'Menu' }); fireEvent.click(menu); fireEvent.click(screen.getByRole('menuitem', { name: 'View' })); fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Camera' }), { key: 'ArrowRight' }); await Promise.resolve(); fireEvent.keyDown(screen.getByRole('menu', { name: 'Camera' }), { key: 'ArrowLeft' }); expect(screen.getByRole('menuitem', { name: 'Camera' })).toHaveFocus(); fireEvent.keyDown(screen.getByRole('menu', { name: 'View' }), { key: 'ArrowLeft' }); expect(screen.getByRole('menuitem', { name: 'View' })).toBeInTheDocument(); fireEvent.keyDown(screen.getByRole('menu', { name: 'Application menu' }), { key: 'Escape' }); expect(menu).toHaveFocus(); fireEvent.click(menu); fireEvent.pointerDown(screen.getByRole('button', { name: 'Outside' })); expect(screen.queryByRole('menu', { name: 'Application menu' })).toBeNull() })
@@ -198,5 +225,17 @@ describe('CompactAppMenuV4', () => {
     await waitFor(() => expect(ignored).toHaveBeenCalledWith('view.ignored'))
     expect(screen.getByRole('menu', { name: 'View' })).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('includes the active category row and scrolled section offset in compact flyout geometry', async () => {
+    const restore = installCompactFlyoutRects({ viewport: [800, 500], owner: rect(40, 72, 210, 400), trigger: rect(100, 300, 100, 32), flyout: rect(0, 0, 210, 96) })
+    try {
+      render(<Harness />)
+      fireEvent.click(screen.getByRole('button', { name: 'Menu' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'View' }))
+      fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Camera' }), { key: 'ArrowRight' })
+      const nested = await screen.findByRole('menu', { name: 'Camera' })
+      await waitFor(() => expect(nested).toHaveStyle({ left: '163px', top: '224px', width: '210px', maxHeight: '196px' }))
+    } finally { restore() }
   })
 })

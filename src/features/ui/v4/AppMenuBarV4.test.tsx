@@ -15,6 +15,39 @@ const bindings = createAppCommandBindingsV4(createAppCommandRuntimeV4(createAppC
   { id: 'project.save', label: 'Save Project', section: 'project', kind: 'action', visible: true, enabled: true, execute() {} }, { id: 'project.sample', label: 'Sample', section: 'project', kind: 'action', visible: true, enabled: true, execute() {} }, { id: 'view.home', label: 'Home View', section: 'view', kind: 'action', visible: true, enabled: true, execute() {} },
 ])))
 function Harness({ preview = () => undefined }: { preview?: (section: AppCommandSectionV4 | null) => void }) { const [open, setOpen] = useState<AppCommandSectionV4 | null>(null); return <><button>Outside</button><AppMenuBarV4 commandBindings={bindings} model={model} openSection={open} onOpenSectionChange={setOpen} onPreviewSection={preview} /></> }
+
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+  return { x: left, y: top, left, top, width, height, right: left + width, bottom: top + height, toJSON: () => ({}) } as DOMRect
+}
+
+function installDesktopFlyoutRects(options: {
+  readonly viewport: readonly [number, number]
+  readonly owner: DOMRect
+  readonly trigger: DOMRect
+  readonly flyout: DOMRect
+}): () => void {
+  const width = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+  const height = Object.getOwnPropertyDescriptor(window, 'innerHeight')
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: options.viewport[0] })
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: options.viewport[1] })
+  const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this.classList.contains('app-menu-submenu-popup-v4')) return options.flyout
+    if (this.id.endsWith('-project-menu')) return options.owner
+    if (this.id.endsWith('-project.samples-trigger')) return options.trigger
+    return rect(0, 0, 0, 0)
+  })
+  return () => {
+    spy.mockRestore()
+    if (width !== undefined) Object.defineProperty(window, 'innerWidth', width)
+    if (height !== undefined) Object.defineProperty(window, 'innerHeight', height)
+  }
+}
+
+async function openDesktopSamples(): Promise<HTMLElement> {
+  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Project' }), { key: 'ArrowDown' })
+  fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Samples' }), { key: 'ArrowRight' })
+  return screen.findByRole('menu', { name: 'Samples' })
+}
 describe('AppMenuBarV4', () => {
   it('opens a single accessible popup and restores trigger focus on escape', () => { render(<Harness />); const trigger = screen.getByRole('menuitem', { name: 'Project' }); fireEvent.keyDown(trigger, { key: 'ArrowDown' }); expect(screen.getByRole('menu', { name: 'Project' })).toBeInTheDocument(); fireEvent.keyDown(screen.getByRole('menu', { name: 'Project' }), { key: 'Escape' }); expect(trigger).toHaveFocus() })
   it('uses roving top-level keyboard navigation while a section is open', async () => { render(<Harness />); const project = screen.getByRole('menuitem', { name: 'Project' }); fireEvent.keyDown(project, { key: 'ArrowRight' }); expect(screen.getByRole('menuitem', { name: 'View' })).toHaveFocus(); fireEvent.keyDown(screen.getByRole('menuitem', { name: 'View' }), { key: 'ArrowDown' }); fireEvent.keyDown(screen.getByRole('menuitem', { name: 'View' }), { key: 'ArrowLeft' }); expect(await screen.findByRole('menu', { name: 'Project' })).toBeInTheDocument() })
@@ -177,5 +210,41 @@ describe('AppMenuBarV4', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Ignored' }))
     await waitFor(() => expect(ignored).toHaveBeenCalledWith('project.ignored'))
     expect(screen.getByRole('menu', { name: 'Project' })).toBeInTheDocument()
+  })
+
+  it('places a desktop flyout to the right with a viewport-relative remaining height', async () => {
+    const restore = installDesktopFlyoutRects({ viewport: [1000, 700], owner: rect(100, 100, 250, 300), trigger: rect(200, 180, 120, 32), flyout: rect(0, 0, 210, 96) })
+    try {
+      render(<Harness />)
+      const nested = await openDesktopSamples()
+      await waitFor(() => expect(nested).toHaveStyle({ left: '223px', top: '76px', width: '210px', maxHeight: '516px' }))
+    } finally { restore() }
+  })
+
+  it('flips a desktop flyout left when its right edge lacks viewport space', async () => {
+    const restore = installDesktopFlyoutRects({ viewport: [500, 700], owner: rect(100, 100, 300, 300), trigger: rect(300, 180, 100, 32), flyout: rect(0, 0, 210, 96) })
+    try {
+      render(<Harness />)
+      const nested = await openDesktopSamples()
+      await waitFor(() => expect(nested).toHaveStyle({ left: '-13px', top: '76px', width: '210px', maxHeight: '516px' }))
+    } finally { restore() }
+  })
+
+  it('clamps a desktop flyout width and x-position in a narrow viewport', async () => {
+    const restore = installDesktopFlyoutRects({ viewport: [176, 500], owner: rect(100, 50, 76, 300), trigger: rect(150, 100, 20, 32), flyout: rect(0, 0, 210, 96) })
+    try {
+      render(<Harness />)
+      const nested = await openDesktopSamples()
+      await waitFor(() => expect(nested).toHaveStyle({ left: '-92px', top: '46px', width: '160px', maxWidth: '160px', maxHeight: '396px' }))
+    } finally { restore() }
+  })
+
+  it('clamps a low desktop flyout to the remaining viewport height from its positive trigger offset', async () => {
+    const restore = installDesktopFlyoutRects({ viewport: [1000, 320], owner: rect(100, 60, 250, 250), trigger: rect(200, 285, 100, 32), flyout: rect(0, 0, 210, 96) })
+    try {
+      render(<Harness />)
+      const nested = await openDesktopSamples()
+      await waitFor(() => expect(nested).toHaveStyle({ left: '203px', top: '221px', maxHeight: '31px' }))
+    } finally { restore() }
   })
 })

@@ -2619,7 +2619,9 @@ button {
   position: absolute;
   z-index: 30;
   display: grid;
-  min-width: 210px;
+  min-width: min(210px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
   padding: 4px;
   overflow: visible;
   background: var(--color-panel);
@@ -2632,15 +2634,22 @@ button {
 .compact-app-menu-v4 > .app-menu-popup-v4 { top: calc(100% + 3px); left: 0; }
 .compact-app-menu-v4 .app-menu-section-root-v4 { position: relative; z-index: auto; min-width: 0; padding: 0; border: 0; box-shadow: none; }
 .app-menu-flyout-layer-v4 { position: absolute; z-index: 1; inset: 0; pointer-events: none; }
-.app-menu-submenu-popup-v4 { position: absolute; left: calc(100% + 3px); pointer-events: auto; }
-
-.app-menu-list-v4,
 .app-menu-submenu-popup-v4 {
+  position: absolute;
+  left: calc(100% + 3px);
+  max-height: min(420px, calc(100dvh - 16px));
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.app-menu-list-v4 {
   display: grid;
   max-height: min(420px, calc(100dvh - 72px));
   overflow-x: hidden;
   overflow-y: auto;
 }
+
+.app-menu-submenu-popup-v4 > .app-menu-list-v4 { max-height: inherit; }
 
 .app-menu-list-v4 > .app-command-menu-item-v4,
 .app-menu-list-v4 > .app-menu-submenu-v4 > button,

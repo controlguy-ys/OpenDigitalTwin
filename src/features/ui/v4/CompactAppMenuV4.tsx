@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
 import { AppCommandMenuItemV4 } from './AppCommandMenuItemV4.js'
@@ -23,6 +23,51 @@ function focus(menu: HTMLElement, direction: 'first' | 'last' | 1 | -1): void {
   items[(index + direction + items.length) % items.length]?.focus()
 }
 
+interface FlyoutGeometryV4 {
+  readonly left: number
+  readonly top: number
+  readonly width: number
+  readonly maxWidth: number
+  readonly maxHeight: number
+}
+
+const flyoutViewportPaddingV4 = 8
+const flyoutGapV4 = 3
+const flyoutMinimumWidthV4 = 210
+
+function clampFlyoutCoordinateV4(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum)
+}
+
+function getFlyoutGeometryV4(trigger: DOMRect, owner: DOMRect, flyout: DOMRect): FlyoutGeometryV4 {
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const availableWidth = Math.max(0, viewportWidth - flyoutViewportPaddingV4 * 2)
+  const width = Math.min(Math.max(flyoutMinimumWidthV4, trigger.width, flyout.width), availableWidth)
+  const right = trigger.right + flyoutGapV4
+  const preferredLeft = right + width <= viewportWidth - flyoutViewportPaddingV4
+    ? right
+    : trigger.left - flyoutGapV4 - width
+  const left = clampFlyoutCoordinateV4(
+    preferredLeft,
+    flyoutViewportPaddingV4,
+    Math.max(flyoutViewportPaddingV4, viewportWidth - flyoutViewportPaddingV4 - width),
+  )
+  const top = clampFlyoutCoordinateV4(
+    trigger.top - 4,
+    flyoutViewportPaddingV4,
+    Math.max(flyoutViewportPaddingV4, viewportHeight - flyoutViewportPaddingV4),
+  )
+
+  return {
+    left: left - owner.left,
+    top: top - owner.top,
+    width,
+    maxWidth: width,
+    maxHeight: Math.max(0, viewportHeight - flyoutViewportPaddingV4 - top),
+  }
+}
+
 export function CompactAppMenuV4({
   commandBindings,
   model,
@@ -39,7 +84,7 @@ export function CompactAppMenuV4({
   const returnCategoryId = useRef<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [submenu, setSubmenu] = useState<string | null>(null)
-  const [submenuOffset, setSubmenuOffset] = useState(0)
+  const [flyoutGeometry, setFlyoutGeometry] = useState<FlyoutGeometryV4 | null>(null)
   const id = useId().replace(/:/g, '')
   const section = openSection === null ? null : model.find((candidate) => candidate.id === openSection) ?? null
   const sectionId = section?.id ?? null
@@ -61,11 +106,13 @@ export function CompactAppMenuV4({
     if (openSection === null) return
     setExpanded(true)
     setSubmenu(null)
+    setFlyoutGeometry(null)
   }, [openSection])
   useEffect(() => {
     if (openSection === null || sectionId !== null) return
     setExpanded(true)
     setSubmenu(null)
+    setFlyoutGeometry(null)
     onOpenSectionChange(null)
   }, [onOpenSectionChange, openSection, sectionId])
   useEffect(() => {
@@ -74,11 +121,26 @@ export function CompactAppMenuV4({
       if (root.current?.contains(event.target as Node) === true) return
       setExpanded(false)
       setSubmenu(null)
+      setFlyoutGeometry(null)
       onOpenSectionChange(null)
     }
     document.addEventListener('pointerdown', dismiss, true)
     return () => document.removeEventListener('pointerdown', dismiss, true)
   }, [onOpenSectionChange, surfaceOpen])
+  useLayoutEffect(() => {
+    if (section === null || submenu === null) return
+    const update = (): void => {
+      const owner = document.getElementById(`${id}-${section.id}-section`)
+      const trigger = submenuTriggerRefs.current.get(submenu)
+      const flyout = document.getElementById(`${id}-${submenu}`)
+      if (owner !== null && trigger !== undefined && flyout !== null) {
+        setFlyoutGeometry(getFlyoutGeometryV4(trigger.getBoundingClientRect(), owner.getBoundingClientRect(), flyout.getBoundingClientRect()))
+      }
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [id, section, submenu])
   useEffect(() => {
     if (sectionId !== null || returnCategoryId.current === null) return
     const categoryId = returnCategoryId.current
@@ -90,11 +152,13 @@ export function CompactAppMenuV4({
     if (restore) disclosure.current?.focus()
     setExpanded(false)
     setSubmenu(null)
+    setFlyoutGeometry(null)
     onOpenSectionChange(null)
   }
 
   const backToCategories = (restore = true): void => {
     setSubmenu(null)
+    setFlyoutGeometry(null)
     if (restore && openSection !== null) returnCategoryId.current = openSection
     onOpenSectionChange(null)
   }
@@ -138,14 +202,10 @@ export function CompactAppMenuV4({
     })
   }
 
-  const openNested = (submenuId: string, menuId: string, ownerId: string): void => {
+  const openNested = (submenuId: string, menuId: string): void => {
+    setFlyoutGeometry(null)
     setSubmenu(submenuId)
     queueMicrotask(() => {
-      const owner = document.getElementById(ownerId)
-      const trigger = submenuTriggerRefs.current.get(submenuId)
-      if (owner !== null && trigger !== undefined) {
-        setSubmenuOffset(Math.max(0, trigger.getBoundingClientRect().top - owner.getBoundingClientRect().top - 4))
-      }
       const popup = document.getElementById(menuId)
       if (popup !== null) focus(popup, 'first')
     })
@@ -153,6 +213,7 @@ export function CompactAppMenuV4({
 
   const closeNested = (submenuId: string): void => {
     setSubmenu(null)
+    setFlyoutGeometry(null)
     submenuTriggerRefs.current.get(submenuId)?.focus()
   }
 
@@ -164,7 +225,7 @@ export function CompactAppMenuV4({
     return null
   })
 
-  const renderRootNodes = (items: readonly AppMenuNodeV4[], ownerId: string): ReactNode => items.map((node) => {
+  const renderRootNodes = (items: readonly AppMenuNodeV4[]): ReactNode => items.map((node) => {
     if (node.kind !== 'submenu') {
       if (node.kind === 'separator') return <div key={node.id} role="separator" className="app-menu-separator-v4" />
       return <AppCommandMenuItemV4 key={node.commandId} commandBindings={commandBindings} commandId={node.commandId} onOutcome={outcome} />
@@ -186,14 +247,16 @@ export function CompactAppMenuV4({
         aria-expanded={open}
         aria-controls={submenuId}
         onClick={() => {
-          if (open) setSubmenu(null)
-          else openNested(node.id, submenuId, ownerId)
+          if (open) {
+            setSubmenu(null)
+            setFlyoutGeometry(null)
+          } else openNested(node.id, submenuId)
         }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowRight') {
             event.preventDefault()
             event.stopPropagation()
-            openNested(node.id, submenuId, ownerId)
+            openNested(node.id, submenuId)
           }
         }}
       >
@@ -278,14 +341,14 @@ export function CompactAppMenuV4({
           className="app-menu-section-root-v4"
           onKeyDown={(event) => navigate(event, () => backToCategories(true))}
         >
-          <div className="app-menu-list-v4">{renderRootNodes(section.children, sectionMenuId)}</div>
+          <div className="app-menu-list-v4">{renderRootNodes(section.children)}</div>
           {activeSubmenu?.kind === 'submenu' ? <div className="app-menu-flyout-layer-v4">
             <div
               id={`${id}-${activeSubmenu.id}`}
               role="menu"
               aria-labelledby={`${id}-${activeSubmenu.id}-trigger`}
               className="app-menu-submenu-popup-v4"
-              style={{ top: submenuOffset }}
+              style={flyoutGeometry ?? undefined}
               onKeyDown={(event) => {
                 if (event.key === 'ArrowLeft') {
                   event.preventDefault()
