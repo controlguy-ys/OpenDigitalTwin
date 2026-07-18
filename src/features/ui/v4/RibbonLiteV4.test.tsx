@@ -59,6 +59,74 @@ describe('RibbonLiteV4', () => {
     expect(screen.getByRole('menuitem', { name: 'Fit All' })).toBeInTheDocument()
   })
 
+  it('measures the live ribbon once per ResizeObserver pass while explicit width props remain optional', async () => {
+    const disconnect = vi.fn()
+    class TestResizeObserver {
+      readonly callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) { this.callback = callback }
+      observe(): void { this.callback([], this as unknown as ResizeObserver) }
+      disconnect = disconnect
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+    const nativeRect = HTMLElement.prototype.getBoundingClientRect
+    const rectangle = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement): DOMRect {
+      if (this.id === 'ribbon-lite-v4') return { width: 154 } as DOMRect
+      if (this.dataset.ribbonMeasureCommand !== undefined) return { width: 40 } as DOMRect
+      if (this.textContent === 'More') return { width: 36 } as DOMRect
+      return nativeRect.call(this)
+    })
+    try {
+      const view = render(<RibbonLiteV4 commandBindings={bindings()} context={emptyContext} shellLayoutController={controller()} />)
+      const more = await screen.findByRole('button', { name: 'More commands' })
+      expect(screen.getAllByRole('button', { name: /Add Box|Add Cylinder|Add Group|Fit All/ }).map((button) => button.getAttribute('aria-label')))
+        .toEqual(['Add Box', 'Add Cylinder'])
+      fireEvent.click(more)
+      await screen.findByRole('menu', { name: 'More commands' })
+      expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Fit All', 'Add Group'])
+      view.unmount()
+      expect(disconnect).toHaveBeenCalled()
+    } finally {
+      rectangle.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('uses the ribbon content box and outer More gap at an overflow threshold', async () => {
+    const callbacks: ResizeObserverCallback[] = []
+    class TestResizeObserver {
+      readonly callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) { this.callback = callback; callbacks.push(callback) }
+      observe(): void { this.callback([], this as unknown as ResizeObserver) }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+    const nativeRect = HTMLElement.prototype.getBoundingClientRect
+    const rectangle = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement): DOMRect {
+      if (this.id === 'ribbon-lite-v4') return { width: 204 } as DOMRect
+      if (this.dataset.ribbonMeasureCommand !== undefined) return { width: 46 } as DOMRect
+      if (this.textContent === 'More') return { width: 36 } as DOMRect
+      return nativeRect.call(this)
+    })
+    try {
+      render(<RibbonLiteV4 commandBindings={bindings()} context={emptyContext} shellLayoutController={controller()} />)
+      const ribbon = screen.getByRole('toolbar', { name: 'Context commands' })
+      expect(screen.queryByRole('button', { name: 'More commands' })).toBeNull()
+      ribbon.setAttribute('style', 'padding: 0px 12px; column-gap: 6px;')
+      callbacks.forEach((callback) => callback([], {} as ResizeObserver))
+      const more = await screen.findByRole('button', { name: 'More commands' })
+      expect(screen.getAllByRole('button', { name: /Add Box|Add Cylinder|Add Group|Fit All/ }).map((button) => button.getAttribute('aria-label')))
+        .toEqual(['Add Box', 'Add Cylinder'])
+      fireEvent.click(more)
+      await screen.findByRole('menu', { name: 'More commands' })
+      expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Fit All', 'Add Group'])
+    } finally {
+      rectangle.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('focuses the first enabled More command and supports logical keyboard navigation that skips disabled menuitems', async () => {
     const { bindings: commandBindings, runtime } = runtimeBindings([
       { id: 'model.add.box', label: 'Add Box', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },

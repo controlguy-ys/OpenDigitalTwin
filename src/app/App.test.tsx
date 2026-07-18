@@ -128,7 +128,24 @@ vi.mock('../features/scene/v4/SceneEntityInspector.js', () => ({
 vi.mock('../features/jobs/v4/RobotJobList.js', () => ({
   RobotJobListV4: (props: Record<string, unknown>) => {
     observed.jobList = props
-    return <section data-testid="robot-jobs-v4">Robot Jobs V4</section>
+    return <section data-testid="robot-jobs-v4">
+      Robot Jobs V4
+      <button
+        onClick={() => {
+          const interaction = props.interaction as {
+            readonly getState: () => { readonly selectJob: (robotId: string, jobId: string) => void }
+          }
+          interaction.getState().selectJob('robot-default', 'job-default')
+          const onExplicitJobSelection = props.onExplicitJobSelection as (
+            (robotId: string, jobId: string) => void
+          ) | undefined
+          onExplicitJobSelection?.('robot-default', 'job-default')
+        }}
+        type="button"
+      >
+        Select Default Job
+      </button>
+    </section>
   },
 }))
 
@@ -577,6 +594,51 @@ describe('App Project V4 production composition', () => {
     expect(resources.projectFiles.pickProject).toHaveBeenCalledOnce()
     expect(resources.projectFiles.downloadProject).toHaveBeenCalledWith(expect.any(Blob), 'Untitled Workcell.json')
     expect(vi.mocked(resources.mutations.replaceFromActive)).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the Job ribbon active across a revision committed by Save Current Pose', async () => {
+    const resources = resourcesForTest()
+    const user = userEvent.setup()
+    const saveJointPose = vi.fn(async () => undefined)
+    Object.assign(resources.jobCommands, { saveJointPose })
+    render(<App gatewayPublisher={null} resources={resources} />)
+
+    await user.click(screen.getByRole('button', { name: 'Select Default Job' }))
+    const savePose = screen.getByRole('button', { name: 'Save Current Pose' })
+    await user.click(savePose)
+    await waitFor(() => expect(saveJointPose).toHaveBeenCalledOnce())
+
+    const nextProject = createDefaultProjectV4({
+      projectId: 'project-app-v4',
+      revisionId: 'revision-app-v4-after-first-pose',
+      nowIso: '2026-07-17T00:05:00.000Z',
+    })
+    act(() => {
+      resources.robots.getState().replaceProject(nextProject)
+      resources.jobs.getState().replaceProject(nextProject)
+      const projection = selectSceneRuntimeV4(nextProject, resources.robots.getState())
+      resources.scene.getState().replaceProjection(projection)
+      resources.interaction.getState().replaceProject(nextProject)
+      resources.coordinateDisplay.getState().replaceProject(nextProject)
+      const priorJobs = resources.runtimeBundle.getState().active!.jobs
+      resources.runtimeBundle.getState().replaceActive({
+        project: nextProject,
+        sceneRuntime: projection,
+        collisionPolicy: deriveCollisionPolicyV4(
+          nextProject.robots,
+          nextProject.robotDefinitions,
+          { enabled: true, nearMissMarginM: 0.05 },
+        ),
+        jobs: priorJobs,
+      })
+      resources.projectStore.setState((state) => ({
+        ...state,
+        activeProject: nextProject,
+      }), true)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Save Current Pose' }))
+    await waitFor(() => expect(saveJointPose).toHaveBeenCalledTimes(2))
   })
 
   it('retains the App binding across a registry replacement while an accepted command settles with its own error', async () => {

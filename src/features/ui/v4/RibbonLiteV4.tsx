@@ -36,6 +36,12 @@ export interface RibbonLitePropsV4 {
   readonly moreWidthPx?: number
 }
 
+interface IntrinsicRibbonMeasurementV4 {
+  readonly availableWidthPx: number
+  readonly measuredWidthPxByCommandId: Readonly<Record<string, number>>
+  readonly moreWidthPx: number
+}
+
 const ICONS_V4: Readonly<Record<AppIconKeyV4, LucideIcon>> = Object.freeze({
   save: Save,
   play: Play,
@@ -51,6 +57,25 @@ const ICONS_V4: Readonly<Record<AppIconKeyV4, LucideIcon>> = Object.freeze({
 })
 
 function idPartV4(id: string): string { return id.replace(/[^a-zA-Z0-9_-]/g, '-') }
+
+function sameMeasurementV4(
+  current: IntrinsicRibbonMeasurementV4 | null,
+  next: IntrinsicRibbonMeasurementV4,
+): boolean {
+  if (current === null
+    || current.availableWidthPx !== next.availableWidthPx
+    || current.moreWidthPx !== next.moreWidthPx) return false
+  const currentIds = Object.keys(current.measuredWidthPxByCommandId)
+  const nextIds = Object.keys(next.measuredWidthPxByCommandId)
+  return currentIds.length === nextIds.length && currentIds.every((id) => (
+    current.measuredWidthPxByCommandId[id] === next.measuredWidthPxByCommandId[id]
+  ))
+}
+
+function cssPixelsV4(value: string): number {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+}
 
 function useShellSnapshotV4(controller: ShellLayoutControllerV4) {
   return useSyncExternalStore(
@@ -123,25 +148,53 @@ function RibbonCommandButtonV4({
   </>
 }
 
+function IntrinsicRibbonMeasurementsV4({
+  commandBindings,
+  items,
+  measurementRef,
+  moreRef,
+}: {
+  readonly commandBindings: AppCommandBindingsV4
+  readonly items: readonly RibbonItemSpecV4[]
+  readonly measurementRef: (node: HTMLDivElement | null) => void
+  readonly moreRef: (node: HTMLButtonElement | null) => void
+}): ReactNode {
+  return <div aria-hidden="true" className="ribbon-intrinsic-measurements-v4" ref={measurementRef}>
+    {items.map((item) => {
+      const command = commandBindings.getRegistry().get(item.commandId)
+      if (command?.visible !== true) return null
+      const Icon = ICONS_V4[item.iconKey]
+      return <button
+        className="ribbon-command-v4"
+        data-ribbon-measure-command={item.commandId}
+        key={item.commandId}
+        tabIndex={-1}
+        type="button"
+      >
+        <Icon aria-hidden="true" size={16} strokeWidth={1.75} />
+        <span>{command.label}</span>
+      </button>
+    })}
+    <div className="ribbon-more-v4"><button ref={moreRef} tabIndex={-1} type="button">More</button></div>
+  </div>
+}
+
 export function RibbonLiteV4({
   commandBindings,
   context,
   shellLayoutController,
-  availableWidthPx = Number.POSITIVE_INFINITY,
+  availableWidthPx,
   measuredWidthPxByCommandId = {},
   moreWidthPx,
 }: RibbonLitePropsV4): ReactNode {
   const snapshot = useShellSnapshotV4(shellLayoutController)
   useCommandRuntimeSyncV4(commandBindings)
   const resolved = resolveRibbonContextV4({ context, registry: commandBindings.getRegistry() })
-  const layout = resolveRibbonOverflowV4({
-    items: resolved.items,
-    availableWidthPx,
-    measuredWidthPxByCommandId,
-    ...(moreWidthPx === undefined ? {} : { moreWidthPx }),
-  })
   const [moreOpen, setMoreOpen] = useState(false)
+  const [intrinsicMeasurement, setIntrinsicMeasurement] = useState<IntrinsicRibbonMeasurementV4 | null>(null)
   const ribbonRef = useRef<HTMLElement>(null)
+  const measurementRef = useRef<HTMLDivElement>(null)
+  const measurementMoreRef = useRef<HTMLButtonElement>(null)
   const moreRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
   const moreTriggerRef = useRef<HTMLButtonElement>(null)
@@ -149,8 +202,63 @@ export function RibbonLiteV4({
   const ribbonExpanded = snapshot.isRibbonExpanded()
   const selectionKey = context.selection === null ? 'none' : sceneSelectionKeyV4(context.selection)
   const itemsKey = resolved.items.map((item) => item.commandId).join('|')
-  const overflowKey = layout.overflowItems.map((item) => item.commandId).join('|')
   const contextKey = `${selectionKey}:${context.activeRobotId ?? ''}:${context.activeJobId ?? ''}:${context.previewSection ?? ''}`
+  const hasExplicitCommandWidths = Object.keys(measuredWidthPxByCommandId).length > 0
+  const measureIntrinsicWidths = useCallback(() => {
+    const ribbon = ribbonRef.current
+    const measurementRoot = measurementRef.current
+    const more = measurementMoreRef.current
+    if (ribbon === null || measurementRoot === null || more === null) return
+    const ribbonStyle = window.getComputedStyle(ribbon)
+    const horizontalInsets = cssPixelsV4(ribbonStyle.paddingLeft)
+      + cssPixelsV4(ribbonStyle.paddingRight)
+      + cssPixelsV4(ribbonStyle.borderLeftWidth)
+      + cssPixelsV4(ribbonStyle.borderRightWidth)
+    const availableWidthPx = Math.max(0, Math.floor(ribbon.getBoundingClientRect().width - horizontalInsets))
+    const measuredWidthPxByCommandId = Object.fromEntries(
+      Array.from(measurementRoot.querySelectorAll<HTMLButtonElement>('[data-ribbon-measure-command]'))
+        .map((button) => [
+          button.dataset.ribbonMeasureCommand ?? '',
+          Math.max(0, Math.ceil(button.getBoundingClientRect().width) + 4),
+        ]),
+    )
+    const moreWidthPx = Math.max(
+      0,
+      Math.ceil(more.getBoundingClientRect().width)
+        + cssPixelsV4(ribbonStyle.columnGap || ribbonStyle.gap),
+    )
+    if (
+      availableWidthPx === 0
+      || moreWidthPx === 0
+      || Object.values(measuredWidthPxByCommandId).some((width) => width === 0)
+    ) return
+    const next: IntrinsicRibbonMeasurementV4 = Object.freeze({
+      availableWidthPx,
+      measuredWidthPxByCommandId: Object.freeze(measuredWidthPxByCommandId),
+      moreWidthPx,
+    })
+    setIntrinsicMeasurement((current) => sameMeasurementV4(current, next) ? current : next)
+  }, [])
+  useLayoutEffect(() => {
+    if (availableWidthPx !== undefined && hasExplicitCommandWidths) return
+    measureIntrinsicWidths()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => measureIntrinsicWidths())
+    if (ribbonRef.current !== null) observer.observe(ribbonRef.current)
+    if (measurementRef.current !== null) observer.observe(measurementRef.current)
+    return () => observer.disconnect()
+  }, [availableWidthPx, hasExplicitCommandWidths, itemsKey, measureIntrinsicWidths, ribbonExpanded])
+  const layout = resolveRibbonOverflowV4({
+    items: resolved.items,
+    availableWidthPx: availableWidthPx ?? intrinsicMeasurement?.availableWidthPx ?? Number.POSITIVE_INFINITY,
+    measuredWidthPxByCommandId: hasExplicitCommandWidths
+      ? measuredWidthPxByCommandId
+      : intrinsicMeasurement?.measuredWidthPxByCommandId ?? {},
+    ...(moreWidthPx === undefined
+      ? intrinsicMeasurement === null ? {} : { moreWidthPx: intrinsicMeasurement.moreWidthPx }
+      : { moreWidthPx }),
+  })
+  const overflowKey = layout.overflowItems.map((item) => item.commandId).join('|')
   const closeMore = useCallback(() => {
     const focusWasInsideMenu = moreFocusOwnedRef.current || moreMenuRef.current?.contains(document.activeElement) === true
     moreFocusOwnedRef.current = false
@@ -204,6 +312,12 @@ export function RibbonLiteV4({
     role="toolbar"
     tabIndex={-1}
   >
+    <IntrinsicRibbonMeasurementsV4
+      commandBindings={commandBindings}
+      items={resolved.items}
+      measurementRef={(node) => { measurementRef.current = node }}
+      moreRef={(node) => { measurementMoreRef.current = node }}
+    />
     <div className="ribbon-command-list-v4">
       {layout.visibleItems.map((item) => <RibbonCommandButtonV4 bindings={commandBindings} item={item} key={item.commandId} />)}
     </div>

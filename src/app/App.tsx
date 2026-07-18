@@ -279,6 +279,8 @@ export function App({
   const [gatewayDetailsOpen, setGatewayDetailsOpen] = useState(false)
   const [contextTargetSource, setContextTargetSource] =
     useState<AppContextTargetSourceV4>('empty')
+  const contextTargetSourceRef = useRef<AppContextTargetSourceV4>('empty')
+  contextTargetSourceRef.current = contextTargetSource
   const shellLayoutSnapshot = useSyncExternalStore(
     shellLayoutController?.subscribe ?? subscribeInactiveShellLayoutV4,
     shellLayoutController?.getState ?? getInactiveShellLayoutSnapshotV4,
@@ -464,11 +466,13 @@ export function App({
   const activeJobId = activeJobIdV4(interaction)
 
   useEffect(() => {
+    const retainJobContext = contextTargetSourceRef.current === 'job'
+      && activeJobIdV4(resources.interaction.getState()) !== null
     setContextRequestState(null)
     setRegistration(null)
     setInspectorFocusRequest(null)
     setGatewayDetailsOpen(false)
-    setContextTargetSource('empty')
+    setContextTargetSource(retainJobContext ? 'job' : 'empty')
     setSceneStatusState({
       projectRevisionId: revisionId,
       status: 'loading',
