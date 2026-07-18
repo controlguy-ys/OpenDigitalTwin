@@ -46,6 +46,7 @@
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "three": "0.185.1",
+    "ws": "8.21.0",
     "zustand": "5.0.14"
   },
   "devDependencies": {
@@ -59,6 +60,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@types/three": "0.185.1",
+    "@types/ws": "8.5.14",
     "@vitejs/plugin-react": "6.0.3",
     "@vitest/coverage-v8": "4.1.10",
     "fake-indexeddb": "6.2.5",

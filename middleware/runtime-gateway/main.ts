@@ -8,6 +8,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { WebSocketServer } from 'ws'
 
 import {
   MAX_OPCUA_VALUES_PER_CALL_V4,
@@ -25,6 +26,15 @@ import {
   type OpcUaServerAdapterOptionsV1,
   type OpcUaServerAdapterV1,
 } from './opcua-server-adapter.js'
+import {
+  createOpcUaClientAdapterV1,
+  type OpcUaClientAdapterV1,
+  type OpcUaClientAdapterOptionsV1,
+} from './opcua-client-adapter.js'
+import {
+  createStateBatchHubV1,
+  type StateBatchHubV1,
+} from './state-batch-hub.js'
 
 export const MAX_RUNTIME_PROJECT_BODY_BYTES_V1 = 1024 * 1024
 
@@ -47,9 +57,21 @@ export interface RuntimeGatewayActiveStatusV1 {
   readonly endpointUrl: string | null
 }
 
+export interface RuntimeGatewayActiveClientStatusV1 {
+  readonly mode: 'client' | 'bridge'
+  readonly activeProjectId: string
+  readonly activeConfigRevision: string
+  readonly ready: true
+  readonly readinessCode: 'READY'
+  readonly opcUaStarted: boolean
+  readonly endpointUrl: string | null
+  readonly opcUaClientEndpoints: ReturnType<OpcUaClientAdapterV1['status']>
+}
+
 export type RuntimeGatewayStatusV1 =
   | RuntimeGatewayPreApplyStatusV1
   | RuntimeGatewayActiveStatusV1
+  | RuntimeGatewayActiveClientStatusV1
 
 export interface RuntimeGatewayEntrypointServiceV1 {
   start(): Promise<void>
@@ -63,6 +85,11 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
     project: WorkcellProjectV4,
     options: OpcUaServerAdapterOptionsV1,
   ) => OpcUaServerAdapterV1
+  readonly createOpcUaClientAdapter?: (
+    project: WorkcellProjectV4,
+    options: OpcUaClientAdapterOptionsV1,
+  ) => OpcUaClientAdapterV1
+  readonly createStateBatchHub?: () => StateBatchHubV1
   readonly pkiRootDir?: string
 }
 
@@ -77,7 +104,8 @@ const PRE_APPLY_STATUS: RuntimeGatewayPreApplyStatusV1 = Object.freeze({
 
 interface ActiveProjectRuntimeV1 {
   readonly project: WorkcellProjectV4
-  readonly adapter: OpcUaServerAdapterV1 | null
+  readonly serverAdapter: OpcUaServerAdapterV1 | null
+  readonly clientAdapter: OpcUaClientAdapterV1 | null
 }
 
 interface StagedRobotJointStateV1 {
@@ -225,14 +253,19 @@ function browserStatus(status: RuntimeGatewayStatusV1): Readonly<Record<string, 
       errorCode: status.readinessCode,
     })
   }
-  return Object.freeze({
+  const base = {
     projectId: status.activeProjectId,
     revisionId: status.activeConfigRevision,
     mode: status.mode,
     ready: true,
     opcUaStarted: status.opcUaStarted,
     endpointUrl: status.endpointUrl,
-  })
+  }
+  return Object.freeze(
+    'opcUaClientEndpoints' in status
+      ? { ...base, opcUaClientEndpoints: status.opcUaClientEndpoints }
+      : base,
+  )
 }
 
 export function createRuntimeGatewayEntrypointService(
@@ -242,9 +275,15 @@ export function createRuntimeGatewayEntrypointService(
   const createHttpServer = dependencies.createHttpServer ?? createServer
   const createOpcUaServerAdapter = dependencies.createOpcUaServerAdapter
     ?? createOpcUaServerAdapterV1
+  const createOpcUaClientAdapter = dependencies.createOpcUaClientAdapter
+    ?? createOpcUaClientAdapterV1
+  const createStateBatchHub = dependencies.createStateBatchHub
+    ?? createStateBatchHubV1
   const pkiRootDir = dependencies.pkiRootDir
     ?? join(tmpdir(), 'web-digital-twin-runtime-gateway', config.gatewayId)
   let server: Server | null = null
+  let webSocketServer: WebSocketServer | null = null
+  let stateBatchHub = createStateBatchHub()
   let activeRuntime: ActiveProjectRuntimeV1 | null = null
   let lifecycleTail: Promise<void> = Promise.resolve()
   let runtimeTail: Promise<void> = Promise.resolve()
@@ -265,7 +304,22 @@ export function createRuntimeGatewayEntrypointService(
       })
     }
 
-    const adapterStatus = active.adapter?.status()
+    const adapterStatus = active.serverAdapter?.status()
+    if (
+      active.project.opcUa.mode === 'client'
+      || active.project.opcUa.mode === 'bridge'
+    ) {
+      return Object.freeze({
+        mode: active.project.opcUa.mode,
+        activeProjectId: active.project.projectId,
+        activeConfigRevision: active.project.revisionId,
+        ready: true,
+        readinessCode: 'READY',
+        opcUaStarted: adapterStatus?.started === true,
+        endpointUrl: adapterStatus?.endpointUrl ?? null,
+        opcUaClientEndpoints: active.clientAdapter?.status() ?? [],
+      })
+    }
     return Object.freeze({
       mode: 'server',
       activeProjectId: active.project.projectId,
@@ -286,24 +340,21 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   function validateProjectMode(project: WorkcellProjectV4): void {
-    if (project.opcUa.mode !== 'off' && project.opcUa.mode !== 'server') {
-      throw new RuntimeGatewayHttpError(
-        400,
-        'OPC_UA_MODE_UNSUPPORTED',
-        `Runtime Gateway currently supports only off or server mode, not ${project.opcUa.mode}.`,
-      )
-    }
+    void project
   }
 
   async function recoverPreviousRuntime(
     previous: ActiveProjectRuntimeV1 | null,
-    restartAdapter: boolean,
+    restartAdapters: boolean,
   ): Promise<boolean> {
     if (previous === null) {
       activeRuntime = null
       return false
     }
-    if (restartAdapter && previous.adapter !== null) await previous.adapter.start()
+    if (restartAdapters) {
+      await previous.serverAdapter?.start()
+      await previous.clientAdapter?.start()
+    }
     activeRuntime = previous
     return true
   }
@@ -311,12 +362,13 @@ export function createRuntimeGatewayEntrypointService(
   async function replaceActiveProject(project: WorkcellProjectV4): Promise<void> {
     validateProjectMode(project)
     const previous = activeRuntime
-    let candidateAdapter: OpcUaServerAdapterV1 | null = null
-    let previousAdapterStopped = false
+    let candidateServerAdapter: OpcUaServerAdapterV1 | null = null
+    let candidateClientAdapter: OpcUaClientAdapterV1 | null = null
+    let previousAdaptersStopped = false
 
     try {
-      if (project.opcUa.mode === 'server') {
-        candidateAdapter = createOpcUaServerAdapter(project, {
+      if (project.opcUa.mode === 'server' || project.opcUa.mode === 'bridge') {
+        candidateServerAdapter = createOpcUaServerAdapter(project, {
           host: config.host,
           advertisedHost: config.opcUaAdvertisedHost,
           advertisedPort: config.opcUaAdvertisedPort,
@@ -324,24 +376,40 @@ export function createRuntimeGatewayEntrypointService(
           pkiRootDir,
         })
       }
-      previousAdapterStopped = previous?.adapter !== null && previous?.adapter !== undefined
-      await previous?.adapter?.stop()
+      if (project.opcUa.mode === 'client' || project.opcUa.mode === 'bridge') {
+        candidateClientAdapter = createOpcUaClientAdapter(project, {
+          gatewayId: config.gatewayId,
+          originId: `${config.gatewayId}:opcua-client`,
+          publish: (batch) => stateBatchHub.publish(batch),
+        })
+      }
+      previousAdaptersStopped = previous !== null
+        && (previous.serverAdapter !== null || previous.clientAdapter !== null)
+      await previous?.serverAdapter?.stop()
+      await previous?.clientAdapter?.stop()
       activeRuntime = null
 
-      if (candidateAdapter !== null) {
-        await candidateAdapter.start()
-        const adapterStatus = candidateAdapter.status()
+      if (candidateServerAdapter !== null) {
+        await candidateServerAdapter.start()
+        const adapterStatus = candidateServerAdapter.status()
         if (!adapterStatus.started || adapterStatus.endpointUrl === null) {
           throw new Error('OPC_UA_SERVER_START_INCOMPLETE')
         }
       }
-      activeRuntime = Object.freeze({ project, adapter: candidateAdapter })
+      await candidateClientAdapter?.start()
+      activeRuntime = Object.freeze({
+        project,
+        serverAdapter: candidateServerAdapter,
+        clientAdapter: candidateClientAdapter,
+      })
+      stateBatchHub.activateRevision(project.projectId, project.revisionId)
     } catch (error) {
-      await candidateAdapter?.stop().catch(() => undefined)
+      await candidateClientAdapter?.stop().catch(() => undefined)
+      await candidateServerAdapter?.stop().catch(() => undefined)
       let recovered = false
       let recoveryError: unknown = null
       try {
-        recovered = await recoverPreviousRuntime(previous, previousAdapterStopped)
+        recovered = await recoverPreviousRuntime(previous, previousAdaptersStopped)
       } catch (caughtRecoveryError) {
         recoveryError = caughtRecoveryError
         activeRuntime = null
@@ -510,7 +578,10 @@ export function createRuntimeGatewayEntrypointService(
           'No active Project Revision exists.',
         )
       }
-      if (active.project.opcUa.mode !== 'server' || active.adapter === null) {
+      if (
+        (active.project.opcUa.mode !== 'server' && active.project.opcUa.mode !== 'bridge')
+        || active.serverAdapter === null
+      ) {
         throw new RuntimeGatewayHttpError(
           409,
           'OPC_UA_SERVER_NOT_ACTIVE',
@@ -519,7 +590,7 @@ export function createRuntimeGatewayEntrypointService(
       }
       const staged = validateStateBatch(body, active)
       for (const robotState of staged) {
-        await active.adapter.publishRobotJointState(
+        await active.serverAdapter.publishRobotJointState(
           robotState.robotId,
           robotState.jointValues,
         )
@@ -597,7 +668,14 @@ export function createRuntimeGatewayEntrypointService(
 
   async function startListening(): Promise<void> {
     const candidate = createHttpServer(requestListener)
-    candidate.on('upgrade', (_request, socket) => {
+    const candidateWebSocketServer = new WebSocketServer({ noServer: true, clientTracking: false })
+    candidate.on('upgrade', (request, socket, head) => {
+      if (request.url === '/runtime/ws') {
+        candidateWebSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
+          stateBatchHub.attach(webSocket)
+        })
+        return
+      }
       socket.end([
         'HTTP/1.1 426 Upgrade Required',
         'Connection: close',
@@ -610,6 +688,7 @@ export function createRuntimeGatewayEntrypointService(
     await new Promise<void>((resolveStart, rejectStart) => {
       const onError = (error: Error) => {
         candidate.removeListener('listening', onListening)
+        void candidateWebSocketServer.close()
         rejectStart(error)
       }
       const onListening = () => {
@@ -623,6 +702,7 @@ export function createRuntimeGatewayEntrypointService(
     })
 
     server = candidate
+    webSocketServer = candidateWebSocketServer
   }
 
   async function startTransition(): Promise<void> {
@@ -644,13 +724,29 @@ export function createRuntimeGatewayEntrypointService(
     server = null
   }
 
+  async function closeWebSocketServer(): Promise<void> {
+    const activeWebSocketServer = webSocketServer
+    webSocketServer = null
+    if (activeWebSocketServer === null) return
+    await new Promise<void>((resolveStop, rejectStop) => {
+      activeWebSocketServer.close((error) => {
+        if (error === undefined) resolveStop()
+        else rejectStop(error)
+      })
+    })
+  }
+
   async function closeService(): Promise<void> {
+    await stateBatchHub.close()
+    await closeWebSocketServer()
     await closeHttpServer()
     await enqueueRuntimeTransition(async () => {
       const active = activeRuntime
       activeRuntime = null
-      await active?.adapter?.stop()
+      await active?.clientAdapter?.stop()
+      await active?.serverAdapter?.stop()
     })
+    stateBatchHub = createStateBatchHub()
   }
 
   function enqueueLifecycleTransition(

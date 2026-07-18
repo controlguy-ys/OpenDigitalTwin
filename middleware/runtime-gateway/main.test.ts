@@ -5,6 +5,7 @@ import {
   connect,
   type Server as NetServer,
 } from 'node:net'
+import WebSocket from 'ws'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,6 +19,8 @@ import {
   ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
   type OpcUaServerAdapterV1,
 } from './opcua-server-adapter.js'
+import type { OpcUaClientAdapterV1 } from './opcua-client-adapter.js'
+import type { StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
 
 async function importMain() {
   return import('./main.js')
@@ -81,15 +84,18 @@ function createTestConfig(httpPort: number): RuntimeGatewayDeploymentConfigV1 {
 }
 
 function sampleProject(
-  mode: 'off' | 'server',
+  mode: 'off' | 'server' | 'client' | 'bridge',
   revisionId = `revision-main-${mode}`,
 ): WorkcellProjectV4 {
-  return createDualRobotSampleV4({
+  const project = createDualRobotSampleV4({
     projectId: 'project-main-http',
     revisionId,
     nowIso: '2026-07-17T00:00:00.000Z',
-    opcUaMode: mode,
+    opcUaMode: mode === 'off' ? 'off' : 'server',
   })
+  return mode === 'off' || mode === 'server'
+    ? project
+    : validateWorkcellProjectV4({ ...project, opcUa: { ...project.opcUa, mode } })
 }
 
 function projectWithReservedJointId(): WorkcellProjectV4 {
@@ -161,6 +167,29 @@ function fakeServerAdapter(
   return { adapter, start, stop, publishRobotJointState }
 }
 
+function fakeClientAdapter(): {
+  readonly adapter: OpcUaClientAdapterV1
+  readonly start: ReturnType<typeof vi.fn>
+  readonly stop: ReturnType<typeof vi.fn>
+} {
+  let started = false
+  const start = vi.fn(async () => { started = true })
+  const stop = vi.fn(async () => { started = false })
+  return {
+    adapter: {
+      start,
+      stop,
+      status: () => [{
+        endpointId: 'endpoint-sample-server',
+        connected: false,
+        lastError: started ? 'OPC_UA_CLIENT_CONNECT_TIMEOUT' : null,
+      }],
+    },
+    start,
+    stop,
+  }
+}
+
 async function requestJson(
   port: number,
   method: 'PUT' | 'POST',
@@ -205,6 +234,22 @@ async function requestUpgrade(port: number, path: string): Promise<string> {
         '',
       ].join('\r\n'))
     })
+  })
+}
+
+async function openWebSocket(port: number): Promise<WebSocket> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
+  await new Promise<void>((resolve, reject) => {
+    socket.once('open', resolve)
+    socket.once('error', reject)
+  })
+  return socket
+}
+
+async function nextWebSocketMessage(socket: WebSocket): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    socket.once('message', (data) => resolve(data.toString()))
+    socket.once('error', reject)
   })
 }
 
@@ -283,7 +328,7 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
-  it('rejects WebSocket Upgrade without constructing an OPC UA object', async () => {
+  it('rejects WebSocket Upgrade outside the exact runtime stream route', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     const createOpcUaServerAdapter = vi.fn(() => fakeServerAdapter().adapter)
@@ -294,10 +339,189 @@ describe('runtime Gateway entrypoint', () => {
 
     await service.start()
     try {
-      const response = await requestUpgrade(port, '/runtime/ws')
+      const response = await requestUpgrade(port, '/runtime/ws/not-exact')
       expect(response).not.toContain('101 Switching Protocols')
       expect(response).toMatch(/^HTTP\/1\.1 426 Upgrade Required\r\n/)
       expect(createOpcUaServerAdapter).not.toHaveBeenCalled()
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('activates an offline Client Project promptly and exposes its connection state', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const fake = fakeClientAdapter()
+    const createOpcUaClientAdapter = vi.fn(() => fake.adapter)
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      { createOpcUaClientAdapter },
+    )
+    const project = sampleProject('client')
+
+    await service.start()
+    try {
+      const apply = await requestJson(port, 'PUT', '/runtime/project', project)
+      expect(apply.status).toBe(200)
+      expect(await apply.json()).toMatchObject({
+        projectId: project.projectId,
+        revisionId: project.revisionId,
+        mode: 'client',
+        ready: true,
+        opcUaStarted: false,
+        endpointUrl: null,
+        opcUaClientEndpoints: [{
+          endpointId: 'endpoint-sample-server',
+          connected: false,
+          lastError: 'OPC_UA_CLIENT_CONNECT_TIMEOUT',
+        }],
+      })
+      expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(1)
+      expect(fake.start).toHaveBeenCalledTimes(1)
+    } finally {
+      await service.stop()
+    }
+    expect(fake.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('activates both adapters for a Bridge Project', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const server = fakeServerAdapter()
+    const client = fakeClientAdapter()
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      {
+        createOpcUaServerAdapter: () => server.adapter,
+        createOpcUaClientAdapter: () => client.adapter,
+      },
+    )
+
+    await service.start()
+    try {
+      const response = await requestJson(port, 'PUT', '/runtime/project', sampleProject('bridge'))
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({
+        mode: 'bridge',
+        opcUaStarted: true,
+        endpointUrl: 'opc.tcp://127.0.0.1:14840',
+        opcUaClientEndpoints: [{ endpointId: 'endpoint-sample-server' }],
+      })
+      expect(server.start).toHaveBeenCalledTimes(1)
+      expect(client.start).toHaveBeenCalledTimes(1)
+    } finally {
+      await service.stop()
+    }
+    expect(server.stop).toHaveBeenCalledTimes(1)
+    expect(client.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('streams a Client state batch through the exact WebSocket route', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = fakeClientAdapter()
+    let publish: ((batch: StateBatchV1) => void) | null = null
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      {
+        createOpcUaClientAdapter: (_project, options) => {
+          publish = options.publish
+          return client.adapter
+        },
+      },
+    )
+    const project = sampleProject('client', 'a'.repeat(64))
+
+    await service.start()
+    let socket: WebSocket | null = null
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      socket = await openWebSocket(port)
+      const message = nextWebSocketMessage(socket)
+      publish!({
+        type: 'state-batch-v1',
+        protocolVersion: 1,
+        gatewayId: 'test-gateway',
+        projectId: project.projectId,
+        configRevision: project.revisionId,
+        endpointId: 'endpoint-sample-server',
+        sequence: 1,
+        sourceTimestampMs: 1,
+        publishedTimestampMs: 1,
+        originId: 'test-gateway:opcua-client',
+        values: [{
+          mappingId: 'mapping-sample-crb-j1',
+          coherenceGroupId: null,
+          value: 10,
+          unit: 'degree',
+          quality: 'GOOD',
+          statusCode: 'Good',
+        }],
+      })
+      expect(JSON.parse(await message)).toMatchObject({
+        type: 'state-batch-v1',
+        projectId: project.projectId,
+        configRevision: project.revisionId,
+        values: [{ mappingId: 'mapping-sample-crb-j1', value: 10 }],
+      })
+    } finally {
+      socket?.close()
+      await service.stop()
+    }
+  })
+
+  it('closes runtime sockets on stop and accepts a fresh stream after restart', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port))
+    await service.start()
+    const first = await openWebSocket(port)
+    const closed = new Promise<void>((resolve) => first.once('close', resolve))
+    await service.stop()
+    await closed
+    await service.start()
+    const second = await openWebSocket(port)
+    try {
+      expect(second.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      second.close()
+      await service.stop()
+    }
+  })
+
+  it('recovers a prior Client when a replacement Client fails to start', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const prior = fakeClientAdapter()
+    const candidate = fakeClientAdapter()
+    candidate.start.mockRejectedValueOnce(new Error('candidate-client-failure'))
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      {
+        createOpcUaClientAdapter: (project) => (
+          project.revisionId === 'revision-client-fails' ? candidate.adapter : prior.adapter
+        ),
+      },
+    )
+    const firstProject = sampleProject('client', 'revision-client-prior')
+    const replacement = sampleProject('client', 'revision-client-fails')
+
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', firstProject)).status).toBe(200)
+      const failed = await requestJson(port, 'PUT', '/runtime/project', replacement)
+      expect(failed.status).toBe(503)
+      expect(await failed.json()).toMatchObject({
+        code: 'PROJECT_ACTIVATION_FAILED',
+        recoveredRevisionId: firstProject.revisionId,
+      })
+      expect(prior.stop).toHaveBeenCalledTimes(1)
+      expect(prior.start).toHaveBeenCalledTimes(2)
+      expect(candidate.stop).toHaveBeenCalledTimes(1)
+      expect(service.status()).toMatchObject({
+        mode: 'client',
+        activeConfigRevision: firstProject.revisionId,
+      })
     } finally {
       await service.stop()
     }
