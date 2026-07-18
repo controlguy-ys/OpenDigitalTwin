@@ -383,19 +383,13 @@ export function createInteractionStoreV4(): StoreApi<InteractionStoreStateV4> {
       const jobSelections: Array<readonly [RobotIdV4, RobotJobIdV4 | null]> = []
       for (const robot of validated.robots) {
         const jobs = candidateContext.jobIdsByRobotId.get(robot.id) ?? []
-        const hasPreviousChoice = !firstPublication
-          && current.selectedJobIdsByRobotId.has(robot.id)
         const previousChoice = current.selectedJobIdsByRobotId.get(robot.id) ?? null
-        let selectedJobId: RobotJobIdV4 | null
-        if (!hasPreviousChoice) {
-          selectedJobId = jobs[0] ?? null
-        } else if (previousChoice === null) {
-          selectedJobId = null
-        } else {
-          selectedJobId = candidateContext.jobOwnerById.get(previousChoice) === robot.id
+        const selectedJobId = firstPublication
+          ? jobs[0] ?? null
+          : previousChoice !== null
+            && candidateContext.jobOwnerById.get(previousChoice) === robot.id
             ? previousChoice
-            : jobs[0] ?? null
-        }
+            : null
         jobSelections.push([robot.id, selectedJobId])
       }
 

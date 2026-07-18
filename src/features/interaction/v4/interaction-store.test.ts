@@ -231,7 +231,7 @@ describe('interaction store V4 publication', () => {
     const first = projectWithRobots({
       revisionId: 'active-reconcile-a',
       robotIds: ['robot-a', 'robot-b', 'robot-c'],
-      jobs: [job('job-b', 'robot-b'), job('job-c', 'robot-c')],
+      jobs: [job('job-b', 'robot-b')],
     })
     const store = createInteractionStoreV4()
     store.getState().replaceProject(first)
@@ -243,7 +243,7 @@ describe('interaction store V4 publication', () => {
       jobs: [job('job-c', 'robot-c')],
     }))
     expect(store.getState().activeRobotId).toBe('robot-c')
-    expect(activeJobIdV4(store.getState())).toBe('job-c')
+    expect(activeJobIdV4(store.getState())).toBeNull()
 
     store.getState().replaceProject(projectWithRobots({
       revisionId: 'active-reconcile-c',
@@ -258,6 +258,61 @@ describe('interaction store V4 publication', () => {
       robotIds: [],
     }))
     expect(store.getState().activeRobotId).toBeNull()
+    expect(activeJobIdV4(store.getState())).toBeNull()
+  })
+
+  it('clears an Active Job removed while another Job remains for its Robot', () => {
+    const store = createInteractionStoreV4()
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-job-removed-a',
+      jobs: [job('job-selected', 'robot-a'), job('job-other', 'robot-a')],
+    }))
+    store.getState().selectJob('robot-a', 'job-selected')
+
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-job-removed-b',
+      jobs: [job('job-other', 'robot-a')],
+    }))
+
+    expect(store.getState().activeRobotId).toBe('robot-a')
+    expect(activeJobIdV4(store.getState())).toBeNull()
+  })
+
+  it('clears an Active Job when the same Job identity is rebound to another Robot', () => {
+    const store = createInteractionStoreV4()
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-job-rebound-a',
+      robotIds: ['robot-a'],
+      jobs: [job('job-shared', 'robot-a')],
+    }))
+    store.getState().selectJob('robot-a', 'job-shared')
+
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-job-rebound-b',
+      robotIds: ['robot-b'],
+      jobs: [job('job-shared', 'robot-b')],
+    }))
+
+    expect(store.getState().activeRobotId).toBe('robot-b')
+    expect(activeJobIdV4(store.getState())).toBeNull()
+  })
+
+  it('does not select the first Job for a reconciled Active Robot without a prior choice', () => {
+    const store = createInteractionStoreV4()
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-job-reconcile-a',
+      robotIds: ['robot-a', 'robot-b'],
+      jobs: [job('job-b', 'robot-b')],
+    }))
+    store.getState().selectJob('robot-b', 'job-b')
+
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-job-reconcile-b',
+      robotIds: ['robot-c', 'robot-a'],
+      jobs: [job('job-c', 'robot-c')],
+    }))
+
+    expect(store.getState().activeRobotId).toBe('robot-c')
     expect(activeJobIdV4(store.getState())).toBeNull()
   })
 
@@ -308,7 +363,7 @@ describe('interaction store V4 publication', () => {
     expect(store.getState().transformClipboard).toBeNull()
   })
 
-  it('falls back only stale identities and initializes only newly introduced Robots', () => {
+  it('falls back only stale identities and clears Jobs for newly introduced Robots', () => {
     const first = projectWithRobots({
       revisionId: 'fallback-a',
       robotIds: ['robot-old', 'robot-stay'],
@@ -332,8 +387,8 @@ describe('interaction store V4 publication', () => {
 
     expect(store.getState().selection).toEqual({ kind: 'robot', robotId: 'robot-stay' })
     expect([...store.getState().selectedJobIdsByRobotId]).toEqual([
-      ['robot-stay', 'stay-first'],
-      ['robot-new', 'new-first'],
+      ['robot-stay', null],
+      ['robot-new', null],
     ])
   })
 
