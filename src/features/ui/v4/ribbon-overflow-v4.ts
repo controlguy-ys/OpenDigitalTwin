@@ -34,14 +34,16 @@ export function resolveRibbonOverflowV4(input: {
     : 64
   const budget = Math.max(0, input.availableWidthPx - moreWidth)
   let used = 0
+  let hasOverflowed = false
   const visible: RibbonItemSpecV4[] = []
   const overflow: RibbonItemSpecV4[] = []
   for (const entry of ordered) {
     const width = widthOf(entry.item)
-    if (used + width <= budget) {
+    if (!hasOverflowed && used + width <= budget) {
       visible.push(entry.item)
       used += width
     } else {
+      hasOverflowed = true
       overflow.push(entry.item)
     }
   }

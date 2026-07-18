@@ -44,4 +44,20 @@ describe('ribbon-overflow-v4', () => {
     expect(layout.overflowItems).toEqual([])
     expect(layout.hasOverflow).toBe(false)
   })
+
+  it('keeps a priority-prefix in the command strip after the first unequal-width item does not fit', () => {
+    const layout = resolveRibbonOverflowV4({
+      items: [
+        { commandId: 'first', priority: 10, iconKey: 'save' },
+        { commandId: 'too-wide', priority: 20, iconKey: 'play' },
+        { commandId: 'later-but-small', priority: 30, iconKey: 'view' },
+      ],
+      availableWidthPx: 100,
+      measuredWidthPxByCommandId: { first: 20, 'too-wide': 90, 'later-but-small': 10 },
+      moreWidthPx: 20,
+    })
+
+    expect(layout.visibleItems.map((item) => item.commandId)).toEqual(['first'])
+    expect(layout.overflowItems.map((item) => item.commandId)).toEqual(['too-wide', 'later-but-small'])
+  })
 })
