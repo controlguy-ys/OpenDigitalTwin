@@ -180,6 +180,12 @@ describe('browser Project V4 resource root', () => {
   it('exports only gated V4 resources and command boundaries', () => {
     const resources = createResources()
 
+    expect(resources.shellLayoutStore.getState().preferences).toMatchObject({
+      version: 1,
+      bottom: { activeTab: 'timeline' },
+      theme: 'system',
+    })
+
     expect(Object.keys(resources).sort()).toEqual([
       'coordinateDisplay',
       'geometry',
@@ -192,6 +198,7 @@ describe('browser Project V4 resource root', () => {
       'runtimeBundle',
       'scene',
       'sceneCommands',
+      'shellLayoutStore',
       'viewportPreferences',
     ])
     expect(resources).not.toHaveProperty('rawRobots')

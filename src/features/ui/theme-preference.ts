@@ -4,10 +4,14 @@ export type ResolvedTheme = Exclude<ThemePreference, 'system'>
 export const THEME_PREFERENCE_KEY = 'robotsim.theme'
 export const DARK_THEME_QUERY = '(prefers-color-scheme: dark)'
 
+export function isThemePreference(value: unknown): value is ThemePreference {
+  return value === 'light' || value === 'dark' || value === 'system'
+}
+
 export function readThemePreference(storage: Pick<Storage, 'getItem'> = localStorage): ThemePreference {
   try {
     const value = storage.getItem(THEME_PREFERENCE_KEY)
-    return value === 'light' || value === 'dark' || value === 'system' ? value : 'system'
+    return isThemePreference(value) ? value : 'system'
   } catch {
     return 'system'
   }

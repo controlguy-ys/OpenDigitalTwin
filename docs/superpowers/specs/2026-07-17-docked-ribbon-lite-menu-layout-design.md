@@ -169,6 +169,13 @@ Reset Layout restores the defaults for all three responsive modes, the approved
 shared sizes, and the Scene-to-Job split, then closes every transient overlay.
 It preserves Theme and the selected Timeline or Collision tab.
 
+Shell mode and available workspace height come from a `ResizeObserver` on
+`studio-workspace`. The Shell publishes that one mode through
+`data-layout-mode`, and Shell CSS uses the same attribute rather than an
+independent layout breakpoint. Ribbon expansion and docked-region visibility
+remain persisted per mode; compact Inspector and every narrow drawer or sheet
+remain transient Shell-owned overlays.
+
 On a 1200-CSS-pixel-or-wider desktop, the central Viewport has a 480-CSS-pixel
 minimum width after separators. Dragging a divider clamps only the active dock
 against the other dock and that minimum; it never proportionally changes or
@@ -401,6 +408,8 @@ current target Context Bar.
 Every listed Context Bar command still passes through the command's `visible`
 gate. Geometry, Kinematics, OPC Mapping, or other future commands are absent
 until their corresponding V4 workflow is operational.
+
+Context Bar copy comes only from labels of visible `AppCommandV4` commands.
 
 The row uses icon and short-label commands. Icon-only Quick Access buttons have
 tooltips and accessible labels. The row does not horizontally scroll; lower

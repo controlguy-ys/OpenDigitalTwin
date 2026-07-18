@@ -5,14 +5,14 @@
 - Desktop: `docs/design/robot-sim-desktop-concept.png` at 1440 x 900
 - Narrow: `docs/design/robot-sim-narrow-concept.png` at 768 x 1024
 
-## Visible Copy Allow-List
+## Visible Copy Surface Rules
 
-RobotSim; SIMULATION; GOOD; Import STEP; Scene Assets; Robot; Equipment;
-LINK00; LINK01; LINK02; LINK03; LINK04; LINK05; LINK06; Cup 01; Cup 02;
-Machine 01; Inspector; J1; J2; J3; J4; J5; J6; Home; Reset; Save Pose;
-Open Gripper; Close Gripper; Timeline; Events.
-
-No additional above-the-fold copy is permitted.
+- Header copy permits the approved Menu Bar labels: Project, Home, Model, Job,
+  Simulation, Connectivity, View, and Help; the Project name and save state;
+  Simulation state; Joint source; Gateway state; and approved Quick Actions.
+- Context Bar copy comes only from labels of visible `AppCommandV4` commands.
+- Other visible copy remains local to its approved surface and capability. Do
+  not introduce unapproved menu copy or imply capabilities that are not wired.
 
 ## Tokens
 
@@ -34,22 +34,42 @@ Upload, ChevronDown, Eye, EyeOff, Home, RotateCcw, Save, Play, Pause,
 Square, Grip, PanelLeft, PanelRight, TriangleAlert.
 All icons use the same 1.75px outline weight and 16px optical size.
 
-## Desktop Layout
+## Workspace Layout
 
 - Canvas: 1440 x 900.
 - Top bar: 48px high.
-- Scene Assets rail: 248px wide on the left.
-- Inspector: 320px wide on the right.
-- Timeline / Events rail: 128px high at the bottom.
-- The central 3D viewport fills the remaining application area and remains the visual focus.
+- Wide defaults: the 248px Scene and Job Sidebar and 320px Inspector are open,
+  the 160px Bottom Workspace is closed, and Ribbon Lite is expanded.
+- Compact defaults: the Sidebar is open, the Inspector overlay and Bottom
+  Workspace are closed, and Ribbon Lite is collapsed.
+- Narrow defaults: both side drawers and the Bottom Sheet are closed, and
+  Ribbon Lite is collapsed.
+- The Bottom Workspace has a 160px default and spans the central Viewport
+  column only; it never runs beneath either side dock.
+- The central 3D Viewport fills the remaining application area and remains the
+  visual focus.
 
 ## Narrow Layout
 
 - Canvas: 768 x 1024.
 - Keep the 48px top bar and the central 3D viewport visible.
-- Convert the Scene Assets tree and Inspector into closed left and right edge drawers.
-- Collapse the Timeline / Events rail into a bottom sheet.
-- Reuse the desktop colors, typography, objects, copy, and component families.
+- Use the narrow defaults from Workspace Layout: closed left and right drawers,
+  a closed Bottom Sheet, and a collapsed Ribbon Lite.
+- Reuse the desktop colors, typography, objects, copy surface rules, and
+  component families.
+
+## Workspace Preference and Responsive Rules
+
+- Ribbon Lite expansion and docked-region visibility persist per wide, compact,
+  and narrow mode. The compact Inspector and every narrow drawer or sheet are
+  transient Shell-owned overlays and start closed on reload or mode change.
+- Shell mode and available height come from a `ResizeObserver` on
+  `studio-workspace`. The Shell writes that one result to `data-layout-mode`,
+  which drives the Shell CSS.
+- The approved viewport-context and real 3D View Cube plan is a prerequisite
+  for this workspace behavior.
+- Reset Layout restores layout defaults but preserves the Theme and selected
+  Bottom Workspace tab.
 
 ## Immutable Visual Rules
 

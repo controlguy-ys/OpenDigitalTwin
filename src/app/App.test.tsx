@@ -22,6 +22,7 @@ import type { SceneCommandServiceV4 } from '../features/scene/v4/scene-command-s
 import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selector.js'
 import { createSceneRuntimeStoreV4 } from '../features/scene/v4/scene-runtime-store.js'
 import { createViewportPreferenceStoreV4 } from '../features/viewport/v4/viewport-preference-store.js'
+import { createShellLayoutStoreV4 } from '../features/ui/v4/shell-layout-store.js'
 import { App } from './App.js'
 
 const observed = vi.hoisted(() => ({
@@ -244,6 +245,7 @@ function resourcesForTest(): BrowserProjectResourcesV4 & {
     interaction,
     coordinateDisplay,
     viewportPreferences: createViewportPreferenceStoreV4(null),
+    shellLayoutStore: createShellLayoutStoreV4({ storage: null }),
     geometry: createRobotDefinitionGeometryRepositoryV4(),
     runtimeBundle,
     sceneCommands,

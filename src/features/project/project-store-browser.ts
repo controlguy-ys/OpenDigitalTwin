@@ -43,6 +43,10 @@ import {
   createViewportPreferenceStoreV4,
   type ViewportPreferenceStoreV4,
 } from '../viewport/v4/viewport-preference-store.js'
+import {
+  createShellLayoutStoreV4,
+  type ShellLayoutStoreV4,
+} from '../ui/v4/shell-layout-store.js'
 import { createBrowserProjectRuntimeV4 } from './v4/browser-project-runtime-v4.js'
 import {
   createBrowserRuntimeBundleStoreV4,
@@ -77,6 +81,7 @@ export interface BrowserProjectResourcesV4 {
   readonly interaction: StoreApi<InteractionStoreStateV4>
   readonly coordinateDisplay: StoreApi<CoordinateDisplayStoreStateV4>
   readonly viewportPreferences: ViewportPreferenceStoreV4
+  readonly shellLayoutStore: ShellLayoutStoreV4
   readonly geometry: RobotDefinitionGeometryRepositoryV4
   readonly runtimeBundle: StoreApi<BrowserRuntimeBundleStoreStateV4>
   readonly sceneCommands: SceneCommandServiceV4
@@ -142,6 +147,9 @@ export function createBrowserProjectResourcesV4(
   const viewportPreferences = createViewportPreferenceStoreV4(
     typeof localStorage === 'undefined' ? null : localStorage,
   )
+  const shellLayoutStore = createShellLayoutStoreV4({
+    storage: typeof localStorage === 'undefined' ? null : localStorage,
+  })
 
   const resolveDefinitionGeometry = options.resolveDefinitionGeometry
     ?? (async (
@@ -241,6 +249,7 @@ export function createBrowserProjectResourcesV4(
     interaction,
     coordinateDisplay,
     viewportPreferences,
+    shellLayoutStore,
     geometry,
     runtimeBundle,
     sceneCommands,

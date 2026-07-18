@@ -28,6 +28,7 @@ import { RuntimeGatewayPublisherV4Error } from '../features/runtime-gateway/v4/r
 import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selector.js'
 import { createSceneRuntimeStoreV4 } from '../features/scene/v4/scene-runtime-store.js'
 import { createViewportPreferenceStoreV4 } from '../features/viewport/v4/viewport-preference-store.js'
+import { createShellLayoutStoreV4 } from '../features/ui/v4/shell-layout-store.js'
 import { App } from './App.js'
 
 vi.mock('./AppShell.js', () => ({
@@ -163,6 +164,7 @@ function resourcesForProject(projectV4: WorkcellProjectV4): BrowserProjectResour
     interaction,
     coordinateDisplay,
     viewportPreferences: createViewportPreferenceStoreV4(null),
+    shellLayoutStore: createShellLayoutStoreV4({ storage: null }),
     geometry: createRobotDefinitionGeometryRepositoryV4(),
     runtimeBundle,
     sceneCommands: {} as BrowserProjectResourcesV4['sceneCommands'],
