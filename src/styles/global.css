@@ -2570,3 +2570,80 @@ button {
 .drawer-control-left { top: calc(var(--top-bar-height) + 8px); left: 8px; }
 .drawer-control-right { top: calc(var(--top-bar-height) + 8px); right: 8px; }
 .sheet-control { right: 8px; bottom: 8px; }
+
+/* Task 8: reusable application-menu presentation.  Shell placement remains Task 10 owned. */
+.app-menu-bar-v4,
+.compact-app-menu-v4 {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.app-menu-section-v4,
+.app-menu-submenu-v4 { position: relative; }
+
+.app-menu-trigger-v4,
+.app-menu-bar-v4 > .app-menu-section-v4 > button,
+.compact-app-menu-v4 > button,
+.app-menu-submenu-v4 > button,
+.app-command-menu-item-v4 {
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: var(--color-panel);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+}
+
+.app-menu-bar-v4 > .app-menu-section-v4 > button[aria-expanded='true'],
+.compact-app-menu-v4 > button[aria-expanded='true'],
+.app-menu-bar-v4 > .app-menu-section-v4 > button:hover,
+.compact-app-menu-v4 > button:hover,
+.app-menu-submenu-v4 > button:hover,
+.app-command-menu-item-v4:hover:not([aria-disabled='true']) {
+  color: var(--color-accent);
+  border-color: var(--color-border);
+}
+
+.app-menu-popup-v4,
+.app-menu-submenu-v4 > [role='menu'] {
+  position: absolute;
+  z-index: 30;
+  display: grid;
+  min-width: 210px;
+  padding: 4px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 18%);
+}
+
+.app-menu-section-v4 > .app-menu-popup-v4,
+.compact-app-menu-v4 > .app-menu-popup-v4 { top: calc(100% + 3px); left: 0; }
+.app-menu-submenu-v4 > [role='menu'] { top: -4px; left: calc(100% + 3px); }
+
+.app-menu-popup-v4 > .app-command-menu-item-v4,
+.app-menu-popup-v4 > .app-menu-submenu-v4 > button,
+.app-menu-submenu-v4 > [role='menu'] > .app-command-menu-item-v4 {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.app-command-menu-item-v4[aria-disabled='true'] { cursor: default; opacity: 0.5; }
+.app-command-menu-item-v4[data-destructive='true'] { color: var(--color-fault); }
+.app-command-menu-item-v4[data-pending='true'] { color: var(--color-muted); }
+.app-command-menu-item-v4 kbd { color: var(--color-muted); font: 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.app-command-menu-item-v4[role='menuitemcheckbox'][aria-checked='true']::before,
+.app-command-menu-item-v4[role='menuitemradio'][aria-checked='true']::before { width: 10px; color: var(--color-accent); content: '✓'; }
+.app-menu-separator-v4 { height: 1px; margin: 4px 2px; background: var(--color-border); }
+.app-command-menu-error-v4 { padding: 3px 8px; color: var(--color-fault); font-size: 10px; }
+.app-menu-bar-v4 button:focus-visible,
+.compact-app-menu-v4 button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
