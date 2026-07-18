@@ -17,6 +17,7 @@ import {
 } from '../../interaction/v4/scene-selection.js'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
 import type { RobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
+import type { ObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4.js'
 import type { SceneCommandServiceV4 } from './scene-command-service.js'
 import type {
   SceneRuntimeProjectionV4,
@@ -45,6 +46,7 @@ export interface SceneEntityInspectorPropsV4 {
   readonly interaction: StoreApi<InteractionStoreStateV4>
   readonly sceneCommands: SceneCommandServiceV4
   readonly commandBindings: AppCommandBindingsV4
+  readonly objectRuntime?: ObjectRuntimeStateV4 | null
   readonly focusRequest?: SceneEntityInspectorFocusRequestV4 | null
 }
 
@@ -274,6 +276,7 @@ interface SpatialInspectorPropsV4 {
   readonly runtime: SceneRuntimeProjectionV4
   readonly entityId: SpatialEntityIdV4
   readonly commands: SceneCommandServiceV4
+  readonly objectRuntime?: ObjectRuntimeStateV4 | null
 }
 
 function SpatialEntityInspectorV4({
@@ -281,24 +284,43 @@ function SpatialEntityInspectorV4({
   runtime,
   entityId,
   commands,
+  objectRuntime = null,
 }: SpatialInspectorPropsV4): ReactNode {
   const entity = project.spatialEntities.find(({ id }) => id === entityId)
   const projected = runtime.entities.get(entityId)
   const runtimeEntity: SceneRuntimeSpatialEntityV4 | null = projected?.kind === 'spatial-entity'
     ? projected
     : null
+  const hasOpcUaTransformOwner = entity?.transformOwner.startsWith('opcua:') ?? false
+  const hasOpcUaStatusOwner = entity?.numericStatus.sourceOwnership.startsWith('opcua:') ?? false
+  const [liveHudRevision, setLiveHudRevision] = useState(0)
+  useEffect(() => {
+    if (objectRuntime === null || (!hasOpcUaTransformOwner && !hasOpcUaStatusOwner)) return
+    const interval = window.setInterval(() => {
+      setLiveHudRevision((revision) => revision + 1)
+    }, 100)
+    return () => window.clearInterval(interval)
+  }, [entityId, hasOpcUaStatusOwner, hasOpcUaTransformOwner, objectRuntime])
+  void liveHudRevision
   const command = useInspectorCommandV4(`spatial-entity:${entityId}`)
+  const liveNowMs = Date.now()
+  const livePose = !hasOpcUaTransformOwner || objectRuntime === null
+    ? null
+    : objectRuntime.sampleEntityFrame(entityId, entity?.parentFrameId ?? project.scene.frames[0]!.id, liveNowMs)
   const localPoseSource = entity?.transformOwner === 'manual'
     ? entity.localPose
-    : runtimeEntity?.localPose ?? entity?.localPose ?? project.scene.frames[0]!.localPose
+    : livePose?.pose ?? runtimeEntity?.localPose ?? entity?.localPose ?? project.scene.frames[0]!.localPose
   const localPoseSourceKey = JSON.stringify([
     ...localPoseSource.positionM,
     ...localPoseSource.quaternion,
   ])
   const groupIdSource = entity?.groupId ?? null
+  const liveStatus = !hasOpcUaStatusOwner || objectRuntime === null
+    ? null
+    : objectRuntime.readEntityStatus(entityId, liveNowMs)
   const statusSource = entity?.numericStatus.sourceOwnership === 'manual'
     ? entity.numericStatus.value
-    : runtimeEntity?.numericStatus ?? entity?.numericStatus.value ?? 0
+    : liveStatus?.value ?? runtimeEntity?.numericStatus ?? entity?.numericStatus.value ?? 0
   const overlayVisibleSource = entity?.numericStatus.overlay.visible ?? false
   const opcUaBinding = selectSpatialEntityOpcUaBindingV4(project, entityId)
   const boundEndpoint = opcUaBinding === null
@@ -373,7 +395,6 @@ function SpatialEntityInspectorV4({
 
   const poseEditable = entity.transformOwner === 'manual'
   const statusEditable = entity.numericStatus.sourceOwnership === 'manual'
-  const hasOpcUaTransformOwner = entity.transformOwner.startsWith('opcua:')
   const setOpcUaNode = (key: keyof typeof opcUaNodes, value: string): void => {
     setOpcUaNodes((current) => ({ ...current, [key]: value }))
   }
@@ -823,6 +844,7 @@ export function SceneEntityInspectorV4({
   interaction,
   sceneCommands,
   commandBindings,
+  objectRuntime = null,
   focusRequest = null,
 }: SceneEntityInspectorPropsV4): ReactNode {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -874,6 +896,7 @@ export function SceneEntityInspectorV4({
           key={selection.entityId}
           project={project}
           runtime={runtime}
+          objectRuntime={objectRuntime}
         />
       )
       break

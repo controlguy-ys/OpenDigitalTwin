@@ -1018,6 +1018,7 @@ export function App({
             runtime={sceneRuntime}
             sceneCommands={resources.sceneCommands}
             selection={interaction.selection}
+            objectRuntime={objectRuntime}
           />
         )}
         jobTree={(

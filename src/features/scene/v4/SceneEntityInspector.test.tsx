@@ -13,6 +13,7 @@ import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-regist
 import { createJobRuntimeStoreV4 } from '../../jobs/v4/job-runtime-store.js'
 import { createRobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
 import { createInteractionStoreV4 } from '../../interaction/v4/interaction-store.js'
+import type { ObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4.js'
 import type { SceneSelectionV4 } from '../../interaction/v4/scene-selection.js'
 import type { SceneCommandServiceV4 } from './scene-command-service.js'
 import { selectSceneRuntimeV4 } from './scene-runtime-selector.js'
@@ -237,6 +238,7 @@ function renderInspector(
   selection: SceneSelectionV4,
   commands = sceneCommands(),
   project = inspectorProject(),
+  objectRuntime: ObjectRuntimeStateV4 | null = null,
 ) {
   const robots = createRobotRuntimeRegistryV4()
   const jobs = createJobRuntimeStoreV4()
@@ -258,6 +260,7 @@ function renderInspector(
     jobs,
     sceneCommands: commands,
     commandBindings,
+    objectRuntime,
   }
   const view = render(<SceneEntityInspectorV4 {...props} />)
   return { ...view, commands, props, project, robots, jobs, interaction }
@@ -582,6 +585,88 @@ describe('SceneEntityInspectorV4', () => {
     await user.click(screen.getByRole('button', { name: 'Take Manual Control' }))
     await waitFor(() => expect(harness.commands.takeSpatialEntityManualControl)
       .toHaveBeenCalledWith('platform'))
+  })
+
+  it('shows live OPC UA Entity pose and status at the bounded operator HUD cadence', () => {
+    vi.useFakeTimers()
+    try {
+      const live = {
+        pose: pose(0.456, 0.2, 0.3, [10, 20, 30]),
+        status: 42,
+      }
+      const objectRuntime: ObjectRuntimeStateV4 = {
+        ingest: vi.fn(() => false),
+        resetGatewaySession: vi.fn(),
+        sampleEntityFrame: vi.fn(() => ({
+          entityId: 'platform',
+          frameId: 'platform-opcua-frame',
+          sourceTimestampMs: 5_000,
+          pose: live.pose,
+          quality: 'BAD' as const,
+          statusCode: 'BadNoCommunication',
+        })),
+        readEntityStatus: vi.fn(() => ({
+          entityId: 'platform',
+          sourceTimestampMs: 5_000,
+          value: live.status,
+          quality: 'STALE' as const,
+          statusCode: 'BadNoCommunication',
+        })),
+        bindingKeys: () => [],
+      }
+      const harness = renderInspector(
+        { kind: 'spatial-entity', entityId: 'platform' },
+        sceneCommands(),
+        boundInspectorProject(),
+        objectRuntime,
+      )
+
+      expect(screen.getByLabelText('Entity Local Position X (mm)')).toHaveValue(456)
+      expect(screen.getByLabelText('Numeric Status')).toHaveValue(42)
+
+      live.pose = pose(0.789, 0.2, 0.3, [10, 20, 30])
+      live.status = 43
+      act(() => { vi.advanceTimersByTime(100) })
+
+      expect(screen.getByLabelText('Entity Local Position X (mm)')).toHaveValue(789)
+      expect(screen.getByLabelText('Numeric Status')).toHaveValue(43)
+      harness.unmount()
+
+      const poseReadsAtUnmount = vi.mocked(objectRuntime.sampleEntityFrame).mock.calls.length
+      act(() => { vi.advanceTimersByTime(500) })
+      expect(objectRuntime.sampleEntityFrame).toHaveBeenCalledTimes(poseReadsAtUnmount)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not replace a dirty manual Entity draft when an Object runtime is available', () => {
+    vi.useFakeTimers()
+    try {
+      const objectRuntime: ObjectRuntimeStateV4 = {
+        ingest: vi.fn(() => false),
+        resetGatewaySession: vi.fn(),
+        sampleEntityFrame: vi.fn(() => null),
+        readEntityStatus: vi.fn(() => null),
+        bindingKeys: () => [],
+      }
+      renderInspector(
+        { kind: 'spatial-entity', entityId: 'platform' },
+        sceneCommands(),
+        inspectorProject(),
+        objectRuntime,
+      )
+      fireEvent.change(screen.getByLabelText('Entity Local Position X (mm)'), {
+        target: { value: '777' },
+      })
+      act(() => { vi.advanceTimersByTime(500) })
+
+      expect(screen.getByLabelText('Entity Local Position X (mm)')).toHaveValue(777)
+      expect(objectRuntime.sampleEntityFrame).not.toHaveBeenCalled()
+      expect(objectRuntime.readEntityStatus).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('exposes manual takeover for a partially authored OPC UA transform binding', async () => {
