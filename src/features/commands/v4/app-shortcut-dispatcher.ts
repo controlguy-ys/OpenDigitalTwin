@@ -17,7 +17,7 @@ function parseShortcut(value: string | undefined): ParsedShortcut | null {
     if (token === 'ctrl' || token === 'control') { if (ctrl) return null; ctrl = true }
     else if (token === 'alt' || token === 'option') { if (alt) return null; alt = true }
     else if (token === 'shift') { if (shift) return null; shift = true }
-    else if (token === 'meta' || token === 'cmd') { if (meta || key !== null) return null; meta = true }
+    else if (token === 'meta' || token === 'cmd') { if (meta) return null; meta = true }
     else if (key === null) key = token
     else return null
   }
@@ -30,7 +30,11 @@ function isEditable(target: EventTarget | null): boolean {
   let current: Element | null = target
   while (current !== null) {
     const value = current.getAttribute('contenteditable')
-    if (value !== null) return value !== 'false'
+    if (value !== null) {
+      const normalized = value.trim().toLowerCase()
+      if (normalized === '' || normalized === 'true') return true
+      if (normalized === 'false') return false
+    }
     current = current.parentElement
   }
   return false

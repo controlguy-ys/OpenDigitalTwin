@@ -2648,9 +2648,11 @@ button {
 }
 
 .app-command-menu-item-v4 {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
 }
+.app-command-menu-item-v4 kbd { flex: none; }
 
 .app-command-menu-item-v4[aria-disabled='true'] { cursor: default; opacity: 0.5; }
 .app-command-menu-item-v4[data-destructive='true'] { color: var(--color-fault); }

@@ -25,20 +25,21 @@ function focusLogical(menu: HTMLElement, intent: 'first' | 'last' | 1 | -1): voi
 export function AppMenuBarV4({ commandBindings, model, openSection, onOpenSectionChange, onPreviewSection }: AppMenuBarPropsV4): ReactNode {
   const rootRef = useRef<HTMLDivElement>(null)
   const callbackRef = useRef(onPreviewSection)
+  const lastPreviewRef = useRef<undefined | AppMenuNavigationPropsV4['openSection']>(undefined)
   const triggerRefs = useRef(new Map<string, HTMLButtonElement>())
   const focusIntent = useRef<'first' | 'last' | null>(null)
-  const [focusIndex, setFocusIndex] = useState(0)
+  const [focusSectionId, setFocusSectionId] = useState<string | null>(model[0]?.id ?? null)
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null)
   const ids = useId().replace(/:/g, '')
   const active = openSection === null ? null : model.find((section) => section.id === openSection) ?? null
 
   useEffect(() => { callbackRef.current = onPreviewSection }, [onPreviewSection])
-  useEffect(() => { callbackRef.current(openSection) }, [openSection])
-  useEffect(() => { if (focusIndex >= model.length) setFocusIndex(Math.max(0, model.length - 1)) }, [focusIndex, model.length])
+  useEffect(() => { if (lastPreviewRef.current !== openSection) { lastPreviewRef.current = openSection; callbackRef.current(openSection) } }, [openSection])
+  useEffect(() => { if (!model.some((section) => section.id === focusSectionId)) setFocusSectionId(model[0]?.id ?? null) }, [focusSectionId, model])
   useEffect(() => {
     if (openSection !== null && active === null) onOpenSectionChange(null)
-    setOpenSubmenu(null)
   }, [active, onOpenSectionChange, openSection])
+  useEffect(() => { setOpenSubmenu(null) }, [openSection])
   useEffect(() => {
     if (active === null || focusIntent.current === null) return
     const popup = document.getElementById(`${ids}-${active.id}-menu`)
@@ -61,11 +62,11 @@ export function AppMenuBarV4({ commandBindings, model, openSection, onOpenSectio
     if (restore && section !== null) triggerRefs.current.get(section)?.focus()
     setOpenSubmenu(null); onOpenSectionChange(null)
   }
-  const switchSection = (delta: number, keepOpen: boolean): void => {
+  const switchSection = (delta: number, keepOpen: boolean, fromSectionId: string | null = active?.id ?? null): void => {
     if (model.length === 0) return
-    const current = active === null ? focusIndex : model.indexOf(active)
+    const current = Math.max(0, model.findIndex((section) => section.id === (fromSectionId ?? focusSectionId)))
     const next = model[(current + delta + model.length) % model.length]!
-    setFocusIndex(model.indexOf(next))
+    setFocusSectionId(next.id)
     triggerRefs.current.get(next.id)?.focus()
     if (keepOpen) { focusIntent.current = 'first'; onOpenSectionChange(next.id) }
   }
@@ -77,24 +78,25 @@ export function AppMenuBarV4({ commandBindings, model, openSection, onOpenSectio
     return <div key={node.id} className="app-menu-submenu-v4">
       <button id={triggerId} type="button" role="menuitem" data-menu-direct="true" aria-haspopup="menu" aria-expanded={expanded} aria-controls={submenuId} onClick={() => { setOpenSubmenu(expanded ? null : node.id) }} onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowRight') { event.preventDefault(); event.stopPropagation(); setOpenSubmenu(node.id); queueMicrotask(() => { const popup = document.getElementById(submenuId); if (popup) focusLogical(popup, 'first') }) }
-      }}>{node.label}<span className="app-menu-submenu-indicator-v4" aria-hidden="true" /></button>
+      }}><span>{node.label}</span><span className="app-menu-submenu-indicator-v4" aria-hidden="true" /></button>
       {expanded ? <div id={submenuId} role="menu" aria-labelledby={triggerId} onKeyDown={(event) => {
-        if (event.key === 'ArrowLeft') { event.preventDefault(); event.stopPropagation(); setOpenSubmenu(null); document.getElementById(triggerId)?.focus() }
+        if (event.key === 'ArrowLeft') { event.preventDefault(); event.stopPropagation(); switchSection(-1, true) }
         else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true) }
         else if (event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); focusLogical(event.currentTarget, 1) }
         else if (event.key === 'ArrowUp') { event.preventDefault(); event.stopPropagation(); focusLogical(event.currentTarget, -1) }
         else if (event.key === 'Home') { event.preventDefault(); event.stopPropagation(); focusLogical(event.currentTarget, 'first') }
         else if (event.key === 'End') { event.preventDefault(); event.stopPropagation(); focusLogical(event.currentTarget, 'last') }
+        else if (event.key === 'Tab') { event.stopPropagation(); close(false) }
       }}>{nodes(node.children)}</div> : null}
     </div>
   })
 
   return <div ref={rootRef} className="app-menu-bar-v4" role="menubar" aria-label="Application menu">
-    {model.map((section, index) => {
+    {model.map((section) => {
       const open = section.id === openSection; const triggerId = `${ids}-${section.id}-trigger`; const popupId = `${ids}-${section.id}-menu`
-      return <div key={section.id} className="app-menu-section-v4"><button ref={(node) => { if (node) triggerRefs.current.set(section.id, node); else triggerRefs.current.delete(section.id) }} id={triggerId} type="button" role="menuitem" tabIndex={focusIndex === index ? 0 : -1} aria-haspopup="menu" aria-expanded={open} aria-controls={popupId} onFocus={() => setFocusIndex(index)} onClick={() => { if (open) close(false); else { focusIntent.current = 'first'; onOpenSectionChange(section.id) } }} onKeyDown={(event) => {
-        if (event.key === 'ArrowLeft') { event.preventDefault(); switchSection(-1, open) }
-        else if (event.key === 'ArrowRight') { event.preventDefault(); switchSection(1, open) }
+      return <div key={section.id} className="app-menu-section-v4"><button ref={(node) => { if (node) triggerRefs.current.set(section.id, node); else triggerRefs.current.delete(section.id) }} id={triggerId} type="button" role="menuitem" tabIndex={focusSectionId === section.id ? 0 : -1} aria-haspopup="menu" aria-expanded={open} aria-controls={popupId} onFocus={() => setFocusSectionId(section.id)} onClick={() => { if (open) close(false); else { focusIntent.current = 'first'; onOpenSectionChange(section.id) } }} onKeyDown={(event) => {
+        if (event.key === 'ArrowLeft') { event.preventDefault(); switchSection(-1, open, section.id) }
+        else if (event.key === 'ArrowRight') { event.preventDefault(); switchSection(1, open, section.id) }
         else if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') { event.preventDefault(); focusIntent.current = 'first'; onOpenSectionChange(section.id) }
         else if (event.key === 'ArrowUp') { event.preventDefault(); focusIntent.current = 'last'; onOpenSectionChange(section.id) }
       }}>{section.label}</button>{open ? <div id={popupId} role="menu" aria-labelledby={triggerId} className="app-menu-popup-v4" onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
