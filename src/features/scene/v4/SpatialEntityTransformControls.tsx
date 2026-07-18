@@ -98,6 +98,7 @@ export function SpatialEntityTransformControlsV4({
       mode="translate"
       object={controlObject}
       onMouseDown={() => {
+        if (committingRef.current) return
         if (gizmoFrame === 'parent') {
           synchronizeParentProxyV4(
             parentProxyRef.current,

@@ -144,4 +144,34 @@ describe('SpatialEntityTransformControlsV4', () => {
     view.unmount()
     expect(onDraggingChange.mock.calls).toEqual([[true], [false]])
   })
+
+  it('does not begin a second drag while its prior pose commit is pending', async () => {
+    const object = new Group()
+    const onDraggingChange = vi.fn()
+    let resolveCommit: () => void = () => undefined
+    const onCommitLocalPose = vi.fn(() => new Promise<void>((resolve) => {
+      resolveCommit = resolve
+    }))
+    render(
+      <SpatialEntityTransformControlsV4
+        entityId="entity-a"
+        gizmoFrame="world"
+        object={object}
+        onCommitLocalPose={onCommitLocalPose}
+        onDraggingChange={onDraggingChange}
+        parentWorldPose={{ positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }}
+        persistedWorldPose={{ positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }}
+      />,
+    )
+
+    act(() => {
+      callControl('onMouseDown')
+      callControl('onMouseUp')
+    })
+    await waitFor(() => expect(onCommitLocalPose).toHaveBeenCalledOnce())
+    act(() => callControl('onMouseDown'))
+
+    expect(onDraggingChange.mock.calls).toEqual([[true], [false]])
+    act(() => resolveCommit())
+  })
 })
