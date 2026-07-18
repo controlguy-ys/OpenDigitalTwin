@@ -136,7 +136,7 @@ class BoundedRuntimePoseBufferV1 implements RuntimePoseBufferV1 {
     const latest = this.#samples.at(-1)
     if (
       latest !== undefined
-      && (sample.sequence <= latest.sequence || sample.sourceTimestampMs <= latest.sourceTimestampMs)
+      && (sample.sequence <= latest.sequence || sample.sourceTimestampMs < latest.sourceTimestampMs)
     ) {
       return false
     }

@@ -52,6 +52,16 @@ describe('runtime interpolation v1', () => {
     expectNumbersClose(result.quaternion, [0, 0, 0, 1])
   })
 
+  it('uses the shorter arc when the endpoint quaternion has a negative dot product', () => {
+    const result = interpolateRigidTransformV4(
+      poseAt(0, [0, 0, 0, 1]),
+      poseAt(10, [0, 0, Math.sin(100 * Math.PI / 180), Math.cos(100 * Math.PI / 180)]),
+      0.5,
+    )
+
+    expectNumbersClose(result.quaternion, [0, 0, -Math.sin(40 * Math.PI / 180), Math.cos(40 * Math.PI / 180)])
+  })
+
   it('renders two publishing cycles behind the latest accepted source timestamp', () => {
     const buffer = createRuntimePoseBufferV1('box-1', 100)
     expect(buffer.push({ sequence: 1, sourceTimestampMs: 1_000, pose: poseAt(0) })).toBe(true)
@@ -64,12 +74,12 @@ describe('runtime interpolation v1', () => {
     expectNumbersClose(result!.pose.positionM, [0, 1, 2])
   })
 
-  it('rejects non-increasing sequences and out-of-order source timestamps', () => {
+  it('accepts increasing sequences at an equal source timestamp and rejects older timestamps', () => {
     const buffer = createRuntimePoseBufferV1('box-1', 100)
     expect(buffer.push({ sequence: 2, sourceTimestampMs: 1_000, pose: poseAt(0) })).toBe(true)
-    expect(buffer.push({ sequence: 2, sourceTimestampMs: 1_100, pose: poseAt(10) })).toBe(false)
-    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_000, pose: poseAt(20) })).toBe(false)
-    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_100, pose: poseAt(30) })).toBe(true)
+    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_000, pose: poseAt(10) })).toBe(true)
+    expect(buffer.push({ sequence: 4, sourceTimestampMs: 999, pose: poseAt(20) })).toBe(false)
+    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_100, pose: poseAt(30) })).toBe(false)
 
     expect(buffer.size).toBe(2)
   })
@@ -99,5 +109,15 @@ describe('runtime interpolation v1', () => {
 
     expect(result).toMatchObject({ quality: 'STALE', sourceTimestampMs: 1_000 })
     expectNumbersClose(result!.pose.positionM, [0, 1, 2])
+  })
+
+  it('uses five publishing cycles when that exceeds the 500ms freshness minimum', () => {
+    const buffer = createRuntimePoseBufferV1('box-1', 200)
+    expect(buffer.push({ sequence: 1, sourceTimestampMs: 1_000, pose: poseAt(0) })).toBe(true)
+    expect(buffer.push({ sequence: 2, sourceTimestampMs: 1_200, pose: poseAt(10) })).toBe(true)
+    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_400, pose: poseAt(20) })).toBe(true)
+
+    expect(buffer.sample(2_400)).toMatchObject({ quality: 'GOOD' })
+    expect(buffer.sample(2_401)).toMatchObject({ quality: 'STALE', sourceTimestampMs: 1_000 })
   })
 })
