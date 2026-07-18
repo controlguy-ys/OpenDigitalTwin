@@ -239,4 +239,50 @@ describe('ObjectRuntimeStateV4', () => {
     expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)], { configRevision: 'd'.repeat(64) }), 5_100)).toBe(false)
     expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)], { endpointId: 'endpoint-other' }), 5_100)).toBe(false)
   })
+
+  it('does not compile retained client mappings while the Project mode is off or server', () => {
+    const project = mappedProject()
+    for (const mode of ['off', 'server'] as const) {
+      const runtime = createObjectRuntimeStateV4(validateWorkcellProjectV4({
+        ...project,
+        opcUa: { ...project.opcUa, mode },
+      }))
+      expect(runtime.bindingKeys()).toEqual([])
+      expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)]), 5_100)).toBe(false)
+    }
+  })
+
+  it('requires exactly one canonical owned pose mapping for an Entity Frame', () => {
+    const project = mappedProject()
+    const source = project.opcUa.mappings.find(({ id }) => id === 'mapping-box-live')!
+    const duplicate = {
+      ...source,
+      id: 'mapping-box-live-duplicate',
+      leaves: source.leaves.map((leaf, index) => ({
+        ...leaf,
+        nodeId: `ns=2;s=duplicate/${index}`,
+      })),
+    }
+    const runtime = createObjectRuntimeStateV4(validateWorkcellProjectV4({
+      ...project,
+      opcUa: { ...project.opcUa, mappings: [...project.opcUa.mappings, duplicate] },
+    }))
+
+    expect(runtime.bindingKeys()).not.toContain('box-live:box-live-motion')
+    expect(runtime.bindingKeys()).toContain('cylinder-live:cylinder-live-motion')
+  })
+
+  it('does not replace retained pose quality with a newer wire sequence carrying an older source timestamp', () => {
+    const runtime = createObjectRuntimeStateV4(mappedProject())
+    expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)]), 5_100)).toBe(true)
+    expect(runtime.ingest(batch(2, [poseValue('mapping-box-live', 2, 'UNCERTAIN')], {
+      sourceTimestampMs: 999,
+    }), 5_200)).toBe(false)
+
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 5_200)).toEqual(expect.objectContaining({
+      quality: 'GOOD',
+      statusCode: 'Good',
+      pose: expect.objectContaining({ positionM: [1, 0, 0] }),
+    }))
+  })
 })

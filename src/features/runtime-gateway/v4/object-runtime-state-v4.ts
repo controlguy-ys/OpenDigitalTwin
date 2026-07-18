@@ -54,6 +54,7 @@ interface PoseChannelV4 {
   readonly entityId: SpatialEntityIdV4
   readonly frameId: FrameIdV4
   readonly buffer: RuntimePoseBufferV1
+  latestSignalTimestampMs: number
   quality: Exclude<ObjectRuntimeQualityV4, 'STALE'>
   statusCode: string
 }
@@ -67,6 +68,7 @@ interface StatusChannelV4 {
   value: number | null
   sourceTimestampMs: number
   receivedTimestampMs: number
+  latestSignalTimestampMs: number
   quality: Exclude<ObjectRuntimeQualityV4, 'STALE'>
   statusCode: string
 }
@@ -112,12 +114,26 @@ function poseTargetV4(mapping: OpcUaMappingV4): {
   readonly entityId: SpatialEntityIdV4
   readonly frameId: FrameIdV4
 } | null {
+  const canonicalPaths = [
+    ['positionM', 0], ['positionM', 1], ['positionM', 2],
+    ['rpyDegrees', 0], ['rpyDegrees', 1], ['rpyDegrees', 2],
+  ] as const
   const first = mapping.leaves[0]?.projectTarget
-  if (first?.type !== 'entity-frame') return null
-  if (!mapping.leaves.every((leaf) => (
+  if (
+    first?.type !== 'entity-frame'
+    || mapping.leaves.length !== canonicalPaths.length
+    || mapping.interpolationMode !== 'shortest-quaternion'
+    || mapping.coordinateConvention !== 'project-v4-z-up-metres-quaternion-xyzw'
+    || mapping.sourceOwnership !== `opcua:${mapping.endpointId}`
+  ) return null
+  if (!mapping.leaves.every((leaf, index) => (
     leaf.projectTarget.type === 'entity-frame'
     && leaf.projectTarget.entityId === first.entityId
     && leaf.projectTarget.frameId === first.frameId
+    && leaf.projectDataType === 'number'
+    && leaf.leafPath.length === 2
+    && leaf.leafPath[0] === canonicalPaths[index]![0]
+    && leaf.leafPath[1] === canonicalPaths[index]![1]
   ))) return null
   return { entityId: first.entityId, frameId: first.frameId }
 }
@@ -126,12 +142,23 @@ function statusTargetV4(mapping: OpcUaMappingV4): SpatialEntityIdV4 | null {
   const target = mapping.leaves.length === 1
     ? mapping.leaves[0]?.projectTarget
     : undefined
-  return target?.type === 'entity-status' ? target.entityId : null
+  return target?.type === 'entity-status'
+    && mapping.sourceOwnership === `opcua:${mapping.endpointId}`
+    && mapping.leaves[0]?.leafPath.length === 0
+    && mapping.leaves[0].projectDataType === 'number'
+    ? target.entityId
+    : null
 }
 
 function compileChannelsV4(project: WorkcellProjectV4): readonly RuntimeChannelV4[] {
+  if (project.opcUa.mode !== 'client' && project.opcUa.mode !== 'bridge') return []
   const endpoints = new Map(project.opcUa.endpoints.map((endpoint) => [endpoint.endpointId, endpoint]))
-  const channels: RuntimeChannelV4[] = []
+  const poseCandidates = new Map<string, Array<{
+    readonly mapping: OpcUaMappingV4
+    readonly entityId: SpatialEntityIdV4
+    readonly frameId: FrameIdV4
+  }>>()
+  const statusCandidates = new Map<SpatialEntityIdV4, OpcUaMappingV4[]>()
   for (const mapping of project.opcUa.mappings) {
     if (mapping.direction !== 'read' && mapping.direction !== 'readWrite') continue
     const endpoint = endpoints.get(mapping.endpointId)
@@ -147,19 +174,10 @@ function compileChannelsV4(project: WorkcellProjectV4): readonly RuntimeChannelV
         poseTarget.frameId,
       )
     ) {
-      channels.push({
-        kind: 'pose',
-        mappingId: mapping.id,
-        endpointId: endpoint.endpointId,
-        entityId: poseTarget.entityId,
-        frameId: poseTarget.frameId,
-        buffer: createRuntimePoseBufferV1(
-          `${poseTarget.entityId}:${poseTarget.frameId}`,
-          mapping.publishingIntervalMs,
-        ),
-        quality: 'BAD',
-        statusCode: 'BadWaitingForInitialData',
-      })
+      const key = `${poseTarget.entityId}:${poseTarget.frameId}`
+      const candidates = poseCandidates.get(key) ?? []
+      candidates.push({ mapping, ...poseTarget })
+      poseCandidates.set(key, candidates)
       continue
     }
 
@@ -168,19 +186,47 @@ function compileChannelsV4(project: WorkcellProjectV4): readonly RuntimeChannelV
       statusTarget !== null
       && endpointOwnsEntityStatusV4(project, endpoint.endpointId, statusTarget)
     ) {
-      channels.push({
+      const candidates = statusCandidates.get(statusTarget) ?? []
+      candidates.push(mapping)
+      statusCandidates.set(statusTarget, candidates)
+    }
+  }
+
+  const channels: RuntimeChannelV4[] = []
+  for (const candidates of poseCandidates.values()) {
+    if (candidates.length !== 1) continue
+    const { mapping, entityId, frameId } = candidates[0]!
+    channels.push({
+      kind: 'pose',
+      mappingId: mapping.id,
+      endpointId: mapping.endpointId,
+      entityId,
+      frameId,
+      buffer: createRuntimePoseBufferV1(
+        `${entityId}:${frameId}`,
+        mapping.publishingIntervalMs,
+      ),
+      latestSignalTimestampMs: -1,
+      quality: 'BAD',
+      statusCode: 'BadWaitingForInitialData',
+    })
+  }
+  for (const [entityId, candidates] of statusCandidates) {
+    if (candidates.length !== 1) continue
+    const mapping = candidates[0]!
+    channels.push({
         kind: 'status',
         mappingId: mapping.id,
-        endpointId: endpoint.endpointId,
-        entityId: statusTarget,
+        endpointId: mapping.endpointId,
+        entityId,
         publishingIntervalMs: mapping.publishingIntervalMs,
         value: null,
         sourceTimestampMs: 0,
         receivedTimestampMs: 0,
+        latestSignalTimestampMs: -1,
         quality: 'BAD',
         statusCode: 'BadWaitingForInitialData',
       })
-    }
   }
   return channels
 }
@@ -249,32 +295,45 @@ export function createObjectRuntimeStateV4(
     for (const mapped of batch.values) {
       const channel = channelsByMappingId.get(mapped.mappingId)
       if (channel === undefined || channel.endpointId !== batch.endpointId) continue
-      channel.quality = mapped.quality
-      channel.statusCode = mapped.statusCode
+      if (batch.sourceTimestampMs < channel.latestSignalTimestampMs) continue
       if (mapped.quality === 'BAD') {
+        channel.latestSignalTimestampMs = batch.sourceTimestampMs
+        channel.quality = mapped.quality
+        channel.statusCode = mapped.statusCode
         applied = true
         continue
       }
       if (channel.kind === 'pose') {
         const pose = poseFromMappedValueV4(mapped)
         if (pose === null) {
+          channel.latestSignalTimestampMs = batch.sourceTimestampMs
           channel.quality = 'BAD'
           channel.statusCode = 'BadTypeMismatch'
           applied = true
           continue
         }
-        applied = channel.buffer.push({
+        const accepted = channel.buffer.push({
           sequence: batch.sequence,
           sourceTimestampMs: batch.sourceTimestampMs,
           receivedTimestampMs,
           pose,
-        }) || applied
+        })
+        if (accepted) {
+          channel.latestSignalTimestampMs = batch.sourceTimestampMs
+          channel.quality = mapped.quality
+          channel.statusCode = mapped.statusCode
+          applied = true
+        }
       } else if (typeof mapped.value === 'number' && Number.isFinite(mapped.value)) {
+        channel.latestSignalTimestampMs = batch.sourceTimestampMs
+        channel.quality = mapped.quality
+        channel.statusCode = mapped.statusCode
         channel.value = mapped.value
         channel.sourceTimestampMs = batch.sourceTimestampMs
         channel.receivedTimestampMs = receivedTimestampMs
         applied = true
       } else {
+        channel.latestSignalTimestampMs = batch.sourceTimestampMs
         channel.quality = 'BAD'
         channel.statusCode = 'BadTypeMismatch'
         applied = true
