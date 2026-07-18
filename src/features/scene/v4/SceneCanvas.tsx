@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
 import { useStore } from 'zustand'
@@ -31,6 +32,7 @@ import {
   type WorkcellRegistrationV4,
 } from './Workcell.js'
 import type { SceneContextRequestV4 } from './scene-context-request.js'
+import { createRightButtonGestureControllerV4 } from './right-button-gesture.js'
 import type { SceneRuntimeProjectionV4 } from './scene-runtime-selector.js'
 
 const NOOP_VIEWPORT_ACTIONS_V4: ViewportRuntimeControllerV4['actions'] = {
@@ -84,7 +86,7 @@ export function SceneCanvasV4({
   const viewIsolation = useStore(interaction, (state) => state.isolation)
   const layers = useStore(viewportPreferences, (state) => state.layers)
   const initialCameraState = useRef(viewportPreferences.getState().cameraState)
-  const entityContextHandled = useRef(false)
+  const gestureRef = useRef(createRightButtonGestureControllerV4())
   const currentRevisionId = useRef(project.revisionId)
   currentRevisionId.current = project.revisionId
   const handledCameraRequestKey = useRef<string | null>(null)
@@ -129,17 +131,69 @@ export function SceneCanvasV4({
     interaction.getState().select(nextSelection)
   }, [interaction])
 
-  const handleEntityContext = useCallback((
-    nextSelection: NonNullable<typeof selection>,
-    position: SceneContextRequestV4['position'],
-  ) => {
-    interaction.getState().select(nextSelection)
-    entityContextHandled.current = true
-    onContextRequest({ selection: nextSelection, position })
-    queueMicrotask(() => {
-      entityContextHandled.current = false
+  const onScenePointerDownCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    gestureRef.current.begin({
+      button: event.button,
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      clientX: event.clientX,
+      clientY: event.clientY,
     })
+  }, [])
+
+  const finishGesture = useCallback((event: PointerEvent): void => {
+    const gesture = gestureRef.current
+    const finished = gesture.finish(event)
+    if (finished === null) return
+    if (finished.request !== null) {
+      if (finished.request.selection === null) interaction.getState().clearSelection()
+      else interaction.getState().select(finished.request.selection)
+      onContextRequest(finished.request)
+    }
+    const completionId = finished.completionId
+    requestAnimationFrame(() => gesture.clearCompletion(completionId))
   }, [interaction, onContextRequest])
+
+  useEffect(() => {
+    const gesture = gestureRef.current
+    const onMove = (event: PointerEvent) => gesture.move(event)
+    const onUp = (event: PointerEvent) => finishGesture(event)
+    const onCancel = (event: PointerEvent) => gesture.cancel(event.pointerId)
+    const onNativeMenu = (event: MouseEvent) => {
+      const pointer = event as MouseEvent & Partial<PointerEvent>
+      const matched = gesture.consumeNativeContextMenu({
+        button: event.button,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        ...(typeof pointer.pointerId === 'number'
+          ? { pointerId: pointer.pointerId, pointerType: pointer.pointerType }
+          : {}),
+      })
+      if (matched) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+    }
+    const onBlur = () => gesture.cancel()
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') gesture.cancel()
+    }
+    document.addEventListener('pointermove', onMove, true)
+    document.addEventListener('pointerup', onUp, true)
+    document.addEventListener('pointercancel', onCancel, true)
+    document.addEventListener('contextmenu', onNativeMenu, true)
+    window.addEventListener('blur', onBlur)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      document.removeEventListener('pointermove', onMove, true)
+      document.removeEventListener('pointerup', onUp, true)
+      document.removeEventListener('pointercancel', onCancel, true)
+      document.removeEventListener('contextmenu', onNativeMenu, true)
+      window.removeEventListener('blur', onBlur)
+      document.removeEventListener('visibilitychange', onVisibility)
+      gesture.cancel()
+    }
+  }, [finishGesture])
 
   const overlayActions = useMemo<ViewportRuntimeControllerV4['actions']>(() => {
     if (viewportController === null) return NOOP_VIEWPORT_ACTIONS_V4
@@ -200,18 +254,7 @@ export function SceneCanvasV4({
       <div
         className="scene-canvas-surface-v4"
         data-testid="scene-canvas-surface"
-        onContextMenu={(event) => {
-          event.preventDefault()
-          if (entityContextHandled.current) {
-            entityContextHandled.current = false
-            return
-          }
-          interaction.getState().clearSelection()
-          onContextRequest({
-            selection: null,
-            position: { x: event.clientX, y: event.clientY },
-          })
-        }}
+        onPointerDownCapture={onScenePointerDownCapture}
       >
         <SceneErrorBoundary
           key={sceneAttemptKey}
@@ -232,7 +275,9 @@ export function SceneCanvasV4({
               camera.quaternion.set(...initialCameraState.current.quaternion).normalize()
               camera.updateProjectionMatrix()
             }}
-            onPointerMissed={() => interaction.getState().clearSelection()}
+            onPointerMissed={(event) => {
+              if (event.button === 0) interaction.getState().clearSelection()
+            }}
             shadows="percentage"
           >
             <ambientLight intensity={0.68} />
@@ -248,7 +293,9 @@ export function SceneCanvasV4({
                 geometryRepository={geometryRepository}
                 interaction={{
                   onSelect: handleSelect,
-                  onContextMenu: handleEntityContext,
+                  onContextCandidate: (selection, pointerId) => {
+                    gestureRef.current.setCandidate(pointerId, selection)
+                  },
                 }}
                 onRegister={handleRegistration}
                 project={project}

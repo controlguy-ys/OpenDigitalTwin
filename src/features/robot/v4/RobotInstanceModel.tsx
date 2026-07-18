@@ -367,17 +367,15 @@ export function RobotInstanceModelV4({
     event.nativeEvent as Event & { readonly object?: Object3D }
   ).object
   const interactionProps = interaction === undefined ? {} : {
-    onContextMenu: (event: ThreeEvent<MouseEvent>) => {
-      event.stopPropagation()
-      event.nativeEvent.preventDefault()
-      interaction.onContextMenu(selectionForHit(hitFromEvent(event)), {
-        x: event.nativeEvent.clientX,
-        y: event.nativeEvent.clientY,
-      })
-    },
     onPointerDown: (event: ThreeEvent<PointerEvent>) => {
-      event.stopPropagation()
-      interaction.onSelect(selectionForHit(hitFromEvent(event)))
+      const selection = selectionForHit(hitFromEvent(event))
+      if (event.button === 0) {
+        event.stopPropagation()
+        interaction.onSelect(selection)
+      } else if (event.button === 2) {
+        event.stopPropagation()
+        interaction.onContextCandidate(selection, event.pointerId)
+      }
     },
   }
 

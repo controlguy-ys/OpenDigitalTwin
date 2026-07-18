@@ -12,8 +12,8 @@ export interface SceneContextRequestV4 {
 
 export interface WorkcellInteractionHandlersV4 {
   readonly onSelect: (selection: SceneSelectionTargetV4) => void
-  readonly onContextMenu: (
+  readonly onContextCandidate: (
     selection: SceneSelectionTargetV4,
-    position: SceneContextPositionV4,
+    pointerId: number,
   ) => void
 }

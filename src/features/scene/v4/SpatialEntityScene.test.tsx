@@ -1,6 +1,5 @@
 import { StrictMode } from 'react'
 import {
-  createEvent,
   fireEvent,
   render,
   screen,
@@ -817,10 +816,10 @@ describe('SpatialEntitySceneV4', () => {
       )),
     }
     const onSelect = vi.fn()
-    const onContextMenu = vi.fn()
+    const onContextCandidate = vi.fn()
     let registration: SpatialEntitySceneRegistrationV4 | null = null
     const common = {
-      interaction: { onSelect, onContextMenu },
+      interaction: { onSelect, onContextCandidate },
       onRegister: (value: SpatialEntitySceneRegistrationV4 | null) => {
         if (value !== null) registration = value
       },
@@ -842,16 +841,17 @@ describe('SpatialEntitySceneV4', () => {
       .not.toBeInTheDocument()
 
     const primitive = view.container.querySelectorAll('primitive')[0]!
-    fireEvent(primitive, createEvent.pointerDown(primitive))
+    fireEvent.pointerDown(primitive, { button: 2, pointerId: 21 })
+    expect(onContextCandidate).toHaveBeenCalledWith({
+      kind: 'spatial-entity',
+      entityId: 'box-entity',
+    }, 21)
+    expect(onSelect).not.toHaveBeenCalled()
+    fireEvent.pointerDown(primitive, { button: 0, pointerId: 22 })
     expect(onSelect).toHaveBeenCalledWith({
       kind: 'spatial-entity',
       entityId: 'box-entity',
     })
-    fireEvent.contextMenu(primitive, { clientX: 31, clientY: 47 })
-    expect(onContextMenu).toHaveBeenCalledWith(
-      { kind: 'spatial-entity', entityId: 'box-entity' },
-      { x: 31, y: 47 },
-    )
 
     const proxyIds = registration!.collisionProxies.map(({ entity }) => entity.id)
     view.rerender(

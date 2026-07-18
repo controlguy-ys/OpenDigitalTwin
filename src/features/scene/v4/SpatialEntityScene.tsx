@@ -536,17 +536,14 @@ export function SpatialEntitySceneV4({
       {[...renderState.registration.roots].map(([entityId, root]) => {
         const selection = { kind: 'spatial-entity' as const, entityId }
         const interactionProps = interaction === undefined ? {} : {
-          onContextMenu: (event: ThreeEvent<MouseEvent>) => {
-            event.stopPropagation()
-            event.nativeEvent.preventDefault()
-            interaction.onContextMenu(selection, {
-              x: event.nativeEvent.clientX,
-              y: event.nativeEvent.clientY,
-            })
-          },
           onPointerDown: (event: ThreeEvent<PointerEvent>) => {
-            event.stopPropagation()
-            interaction.onSelect(selection)
+            if (event.button === 0) {
+              event.stopPropagation()
+              interaction.onSelect(selection)
+            } else if (event.button === 2) {
+              event.stopPropagation()
+              interaction.onContextCandidate(selection, event.pointerId)
+            }
           },
         }
         return <primitive key={entityId} object={root} {...interactionProps} />

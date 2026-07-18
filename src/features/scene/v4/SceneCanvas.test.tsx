@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps, ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-support.js'
@@ -23,12 +23,15 @@ const capture = vi.hoisted(() => ({
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children, onPointerMissed, ...props }: {
     readonly children: ReactNode
-    readonly onPointerMissed?: () => void
+    readonly onPointerMissed?: (event: { readonly button: number }) => void
   } & Record<string, unknown>) => {
     capture.canvas = props
     return (
       <div data-testid="r3f-canvas">
-        <button onClick={onPointerMissed} type="button">Pointer miss</button>
+        <button
+          onClick={(event) => onPointerMissed?.({ button: event.button })}
+          type="button"
+        >Pointer miss</button>
         {children}
       </div>
     )
@@ -40,24 +43,20 @@ vi.mock('./Workcell.js', () => ({
     capture.workcell = props
     const interaction = props.interaction as {
       readonly onSelect: (selection: { readonly kind: 'robot'; readonly robotId: string }) => void
-      readonly onContextMenu: (
+      readonly onContextCandidate: (
         selection: { readonly kind: 'robot'; readonly robotId: string },
-        position: { readonly x: number; readonly y: number },
+        pointerId: number,
       ) => void
     }
     return (
       <>
         <button
-          onClick={() => interaction.onSelect({ kind: 'robot', robotId: 'robot-1' })}
-          type="button"
-        >Select rendered Robot</button>
-        <button
-          onContextMenu={() => interaction.onContextMenu(
+          onPointerDown={(event) => interaction.onContextCandidate(
             { kind: 'robot', robotId: 'robot-1' },
-            { x: 31, y: 47 },
+            event.pointerId,
           )}
           type="button"
-        >Open rendered Robot menu</button>
+        >Stationary exact target</button>
       </>
     )
   },
@@ -178,40 +177,191 @@ describe('SceneCanvasV4', () => {
     ])
   })
 
-  it('routes rendered identity once and clears selection for pointer-miss or empty context', () => {
+  it('opens context for a stationary exact target and consumes its native menu', () => {
     const data = renderCanvas()
 
     data.interaction.getState().clearSelection()
-    fireEvent.click(screen.getByRole('button', { name: 'Select rendered Robot' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Stationary exact target' }), {
+      button: 2,
+      clientX: 31,
+      clientY: 47,
+      pointerId: 21,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerUp(document, {
+      button: 2,
+      clientX: 31,
+      clientY: 47,
+      pointerId: 21,
+      pointerType: 'mouse',
+    })
     expect(data.interaction.getState().selection).toEqual({
       kind: 'robot',
       robotId: 'robot-1',
     })
-
-    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open rendered Robot menu' }), {
-      clientX: 31,
-      clientY: 47,
-    })
-    expect(data.onContextRequest).toHaveBeenCalledTimes(1)
     expect(data.onContextRequest).toHaveBeenLastCalledWith({
       selection: { kind: 'robot', robotId: 'robot-1' },
       position: { x: 31, y: 47 },
     })
+    const nativeMenu = createEvent.contextMenu(document, {
+      button: 2,
+      clientX: 31,
+      clientY: 47,
+      pointerId: 21,
+      pointerType: 'mouse',
+    })
+    expect(fireEvent(document, nativeMenu)).toBe(false)
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Pointer miss' }))
-    expect(data.interaction.getState().selection).toBeNull()
+  it('clears selection and requests context for a stationary empty click', () => {
+    const data = renderCanvas()
+    const surface = screen.getByTestId('scene-canvas-surface')
 
-    data.interaction.getState().select({ kind: 'robot', robotId: 'robot-1' })
-    fireEvent.contextMenu(screen.getByTestId('scene-canvas-surface'), {
+    fireEvent.pointerDown(surface, {
+      button: 2,
       clientX: 101,
       clientY: 202,
+      pointerId: 22,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerUp(document, {
+      button: 2,
+      clientX: 101,
+      clientY: 202,
+      pointerId: 22,
+      pointerType: 'mouse',
     })
     expect(data.interaction.getState().selection).toBeNull()
-    expect(data.onContextRequest).toHaveBeenCalledTimes(2)
     expect(data.onContextRequest).toHaveBeenLastCalledWith({
       selection: null,
       position: { x: 101, y: 202 },
     })
+  })
+
+  it('does not select or request context after a 5-pixel right-button Pan', () => {
+    const data = renderCanvas()
+    const target = screen.getByRole('button', { name: 'Stationary exact target' })
+
+    fireEvent.pointerDown(target, {
+      button: 2,
+      clientX: 10,
+      clientY: 20,
+      pointerId: 23,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerMove(document, {
+      clientX: 15,
+      clientY: 20,
+      pointerId: 23,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerUp(document, {
+      button: 2,
+      clientX: 15,
+      clientY: 20,
+      pointerId: 23,
+      pointerType: 'mouse',
+    })
+
+    expect(data.interaction.getState().selection).toEqual({ kind: 'robot', robotId: 'robot-1' })
+    expect(data.onContextRequest).not.toHaveBeenCalled()
+  })
+
+  it('cancels right gestures on pointer cancel, blur, and hidden document', () => {
+    const data = renderCanvas()
+    const surface = screen.getByTestId('scene-canvas-surface')
+    const begin = (pointerId: number) => fireEvent.pointerDown(surface, {
+      button: 2,
+      clientX: pointerId,
+      clientY: pointerId,
+      pointerId,
+      pointerType: 'mouse',
+    })
+    const finish = (pointerId: number) => fireEvent.pointerUp(document, {
+      button: 2,
+      clientX: pointerId,
+      clientY: pointerId,
+      pointerId,
+      pointerType: 'mouse',
+    })
+
+    begin(24)
+    fireEvent.pointerCancel(document, { pointerId: 24 })
+    finish(24)
+    begin(25)
+    fireEvent.blur(window)
+    finish(25)
+    begin(26)
+    const visibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    fireEvent(document, new Event('visibilitychange'))
+    if (visibility === undefined) delete (document as { visibilityState?: string }).visibilityState
+    else Object.defineProperty(document, 'visibilityState', visibility)
+    finish(26)
+
+    expect(data.onContextRequest).not.toHaveBeenCalled()
+  })
+
+  it('handles document completion outside Canvas and leaves primary misses and keyboard menus alone', () => {
+    const data = renderCanvas()
+    const surface = screen.getByTestId('scene-canvas-surface')
+
+    fireEvent.pointerDown(surface, {
+      button: 2,
+      clientX: 40,
+      clientY: 50,
+      pointerId: 27,
+      pointerType: 'mouse',
+    })
+    fireEvent.pointerUp(document.body, {
+      button: 2,
+      clientX: 40,
+      clientY: 50,
+      pointerId: 27,
+      pointerType: 'mouse',
+    })
+    expect(data.onContextRequest).toHaveBeenLastCalledWith({
+      selection: null,
+      position: { x: 40, y: 50 },
+    })
+
+    data.interaction.getState().select({ kind: 'robot', robotId: 'robot-1' })
+    fireEvent.click(screen.getByRole('button', { name: 'Pointer miss' }), { button: 2 })
+    expect(data.interaction.getState().selection).toEqual({ kind: 'robot', robotId: 'robot-1' })
+    fireEvent.click(screen.getByRole('button', { name: 'Pointer miss' }), { button: 0 })
+    expect(data.interaction.getState().selection).toBeNull()
+    const keyboardMenu = createEvent.contextMenu(document, { button: 0, clientX: 0, clientY: 0 })
+    expect(fireEvent(document, keyboardMenu)).toBe(true)
+  })
+
+  it('matches legacy native menus only at final coordinates and preserves the newest completion', () => {
+    const animationFrames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      animationFrames.push(callback)
+      return animationFrames.length
+    })
+    const data = renderCanvas()
+    const surface = screen.getByTestId('scene-canvas-surface')
+    const complete = (pointerId: number, clientX: number, clientY: number) => {
+      fireEvent.pointerDown(surface, { button: 2, clientX, clientY, pointerId, pointerType: 'mouse' })
+      fireEvent.pointerUp(document, { button: 2, clientX, clientY, pointerId, pointerType: 'mouse' })
+    }
+
+    complete(28, 61, 71)
+    expect(fireEvent.contextMenu(document, { button: 2, clientX: 61, clientY: 72 })).toBe(true)
+    expect(fireEvent.contextMenu(document, { button: 2, clientX: 61, clientY: 71 })).toBe(false)
+    complete(29, 81, 91)
+    complete(30, 101, 111)
+    act(() => animationFrames[1]?.(0))
+    expect(fireEvent.contextMenu(document, {
+      button: 2,
+      clientX: 101,
+      clientY: 111,
+      pointerId: 30,
+      pointerType: 'mouse',
+    })).toBe(false)
+    vi.unstubAllGlobals()
+    expect(data.onContextRequest).toHaveBeenCalledTimes(3)
   })
 
   it('does not treat overlay controls as empty Canvas context', () => {

@@ -304,7 +304,7 @@ describe('RobotFleetV4', () => {
         repository.readCurrent(definition.id)!,
       ]]),
       geometryRepository: repository,
-      interaction: { onSelect: vi.fn(), onContextMenu: vi.fn() },
+      interaction: { onSelect: vi.fn(), onContextCandidate: vi.fn() },
       onRegister: (value: RobotFleetRegistrationV4 | null) => {
         if (value !== null) registration = value
       },

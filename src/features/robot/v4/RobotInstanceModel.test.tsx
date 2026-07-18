@@ -365,13 +365,13 @@ describe('RobotInstanceModelV4', () => {
     const handle = repository.stage(definition, source.resource)
     repository.commitBatch([handle])
     const onSelect = vi.fn()
-    const onContextMenu = vi.fn()
+    const onContextCandidate = vi.fn()
     let registration: RobotInstanceRegistrationV4 | null = null
     const common = {
       definition,
       geometryPublication: repository.readCurrent(definition.id)!,
       geometryRepository: repository,
-      interaction: { onSelect, onContextMenu },
+      interaction: { onSelect, onContextCandidate },
       onRegister: (value: RobotInstanceRegistrationV4 | null) => {
         if (value !== null) registration = value
       },
@@ -382,30 +382,25 @@ describe('RobotInstanceModelV4', () => {
     await waitFor(() => expect(registration).not.toBeNull())
     const primitive = view.container.querySelector('primitive')!
 
-    const linkEvent = createEvent.pointerDown(primitive)
+    const linkEvent = createEvent.pointerDown(primitive, { button: 2, pointerId: 21 })
     Object.defineProperty(linkEvent, 'object', {
       value: registration!.linkObjects.get('L1'),
     })
     fireEvent(primitive, linkEvent)
-    expect(onSelect).toHaveBeenCalledWith({
+    expect(onContextCandidate).toHaveBeenCalledWith({
       kind: 'robot-link',
       robotId: robot.id,
       linkId: 'L1',
-    })
+    }, 21)
+    expect(onSelect).not.toHaveBeenCalled()
 
-    const contextEvent = createEvent.contextMenu(primitive, {
-      clientX: 14,
-      clientY: 28,
-    })
-    Object.defineProperty(contextEvent, 'object', {
+    const robotEvent = createEvent.pointerDown(primitive, { button: 0, pointerId: 22 })
+    Object.defineProperty(robotEvent, 'object', {
       value: registration!.root.getObjectByName('robot-geometry-unresolved')
         ?? registration!.root,
     })
-    fireEvent(primitive, contextEvent)
-    expect(onContextMenu).toHaveBeenCalledWith(
-      { kind: 'robot', robotId: robot.id },
-      { x: 14, y: 28 },
-    )
+    fireEvent(primitive, robotEvent)
+    expect(onSelect).toHaveBeenCalledWith({ kind: 'robot', robotId: robot.id })
 
     const proxyIds = registration!.collisionProxies.map(({ entity }) => entity.id)
     view.rerender(<RobotInstanceModelV4 {...common} viewVisible={false} />)
