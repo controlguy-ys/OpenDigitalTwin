@@ -2690,3 +2690,127 @@ button {
 .app-menu-submenu-indicator-v4 { flex: 0 0 auto; width: 7px; height: 7px; border-top: 1px solid currentColor; border-right: 1px solid currentColor; transform: rotate(45deg); }
 .app-menu-bar-v4 button:focus-visible,
 .compact-app-menu-v4 button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* Task 9: the header and local Help surface are composed into AppShell by Task 10. */
+.studio-header-v4 {
+  position: relative;
+  z-index: 24;
+  display: grid;
+  min-width: 0;
+  color: var(--color-text);
+  background: var(--color-canvas);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.studio-header-main-v4 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  min-height: var(--top-bar-height);
+  padding: 0 12px;
+}
+
+.studio-header-product-v4,
+.studio-header-project-name-v4,
+.studio-header-project-phase-v4,
+.studio-header-status-v4 > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-header-product-v4 { flex: 0 0 auto; font-size: 16px; }
+.studio-header-project-name-v4 { flex: 0 1 240px; color: var(--color-accent); font-size: 12px; }
+.studio-header-project-phase-v4 { flex: 0 0 auto; color: var(--color-muted); font-size: 10px; text-transform: uppercase; }
+
+.studio-header-quick-actions-v4,
+.studio-header-status-v4,
+.ribbon-command-list-v4 {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.studio-header-quick-actions-v4 { flex: 0 0 auto; }
+.studio-header-status-v4 { flex: 1 1 auto; justify-content: flex-end; color: var(--color-muted); font-size: 11px; }
+.studio-header-status-v4 > span { max-width: 180px; }
+
+.studio-header-quick-action-v4,
+.studio-header-ribbon-toggle-v4,
+.ribbon-command-v4,
+.ribbon-more-v4 > button,
+.local-help-panel-v4 button {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.studio-header-quick-action-v4 { width: 30px; padding: 0; }
+.studio-header-quick-action-v4:disabled,
+.ribbon-command-v4:disabled { cursor: default; opacity: 0.5; }
+.studio-header-ribbon-toggle-v4 { flex: 0 0 auto; }
+
+.ribbon-lite-v4 {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  min-height: 38px;
+  padding: 4px 12px;
+  overflow: hidden;
+  background: var(--color-panel);
+  border-top: 1px solid var(--color-border);
+}
+
+.ribbon-command-list-v4 { flex: 1 1 auto; overflow: hidden; }
+.ribbon-command-v4 { flex: 0 0 auto; white-space: nowrap; }
+.ribbon-more-v4 { position: relative; flex: 0 0 auto; }
+.ribbon-more-menu-v4 {
+  position: absolute;
+  right: 0;
+  z-index: 31;
+  display: grid;
+  gap: 3px;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 18%);
+}
+.ribbon-more-menu-v4 .ribbon-command-v4 { justify-content: flex-start; width: 100%; }
+
+.local-help-panel-v4 {
+  position: fixed;
+  top: calc(var(--top-bar-height) + 8px);
+  right: 8px;
+  z-index: 40;
+  width: min(360px, calc(100vw - 16px));
+  padding: 12px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
+}
+.local-help-panel-v4 > header { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.local-help-panel-v4 h2 { margin: 0; font-size: 14px; }
+.local-help-panel-v4 p { margin: 10px 0 0; color: var(--color-muted); font-size: 12px; line-height: 1.5; }
+
+.studio-header-v4[data-layout-mode='compact'] .studio-header-project-name-v4,
+.studio-header-v4[data-layout-mode='narrow'] .studio-header-project-name-v4 { flex-basis: 150px; }
+.studio-header-v4[data-layout-mode='compact'] .studio-header-status-v4 > span,
+.studio-header-v4[data-layout-mode='narrow'] .studio-header-status-v4 > span { max-width: 96px; }
+.studio-header-v4[data-layout-mode='narrow'] .studio-header-status-v4 { display: none; }
