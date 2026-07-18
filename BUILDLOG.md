@@ -93,7 +93,7 @@
 
 ## Verification
 
-- Tests and checks: the current serialized `npm run verify` passed `116` Vitest
+- Historical baseline (before Object OPC UA binding documentation): the current serialized `npm run verify` passed `116` Vitest
   files and `1305` tests; CRB CAD validation reported `7 link assets valid; 0
   errors; 0 warnings`; deployment contracts, Runtime Gateway configuration, and
   production builds passed. Chromium acceptance passed the two-Robot V4 flow
@@ -113,11 +113,28 @@
   mechanical confirmation are pending. The 12-Pose demo currently uses Joint
   targets only: named Poses/dwell, Cartesian IK and reachability, collision-based
   stop, execution-trace export, synchronized multi-Robot scheduling, and
-  browser-level cancel/restart acceptance remain checklist items. OPC UA
-  Client/Bridge and command writes, XML/XLSX mapping interchange, explicit
+  browser-level cancel/restart acceptance remain checklist items. OPC UA command
+  writes, XML/XLSX mapping interchange, explicit
   Attach/Detach pick-place, automatic assembly splitting, physics, security
   hardening, Legacy migration, public deployment, and submission media are not
   included in this short-term release.
+
+## Object OPC UA Binding Documentation Update
+
+- Scope: Documented the implemented generic SpatialEntity Object binding path.
+  Manual Box, Cylinder, and imported STEP placement uses XYZ/RPY fields and the
+  move gizmo until an OPC UA transform owns the Object. The Inspector binds six
+  `Double` nodes (`X`, `Y`, `Z`, `Roll`, `Pitch`, `Yaw`), with `m` or `mm`
+  position conversion and optional numeric `Status`.
+- Failure and recovery: Earlier release documentation still described
+  Client/Bridge as unavailable and treated persisted mappings as roadmap-only.
+  Source review confirmed active Client/Bridge adapters, a same-origin
+  `/runtime/ws` stream, deterministic pose interpolation, quality propagation,
+  and retention of the last valid pose/status through bad samples. The docs now
+  describe those contracts and retain the read-only/security/safety exclusions.
+- Focused evidence: documentation link and outdated-claim searches were run for
+  this documentation-only change. No new full-suite count is claimed here; the
+  preceding verification numbers remain historical baseline evidence.
 
 ## Human Decisions
 

@@ -21,15 +21,18 @@ or safety-rated system.
   but this release does not infer Links or Joints from STEP topology.
 - The default Project renders the built-in ABB CRB15000 geometry. The V4 Scene
   also supports primitive Boxes/Cylinders, Groups, visibility, transforms, and
-  geometry-proxy collision inspection.
+  geometry-proxy collision inspection. Boxes, Cylinders, and imported STEP
+  objects have manual XYZ/RPY placement when their transform is manually owned.
 - Simulation Jobs belong to one Robot and contain ordered Joint Poses with a
   speed percentage to the next Pose. Different Robots keep independent state and
   execution sessions.
 - The browser publishes only a fully matched Project revision and matching
   multi-Robot state to the Runtime Gateway. A missing Gateway does not disable
   local Simulation.
-- Runtime Gateway mode is selected per Project: `Off` or `Server`. In Server
-  mode it exposes each Robot Joint as a read-only OPC UA `Double` Actual value.
+- Runtime Gateway mode is selected per Project: `Off`, `Server`, `Client`, or
+  `Bridge`. Client reads configured external OPC UA nodes; Bridge combines that
+  client with the read-only Server namespace. Server remains limited to each
+  Robot Joint's read-only OPC UA `Double` Actual value.
 - The standard Docker topology starts both the Nginx web service and the Runtime
   Gateway. Nginx serves the SPA and proxies same-origin `/runtime/` requests;
   the Gateway owns HTTP activation/state endpoints and optional OPC UA port
@@ -106,10 +109,11 @@ stale revisions are rejected before publication.
 
 The OPC UA namespace URI is `urn:web-digital-twin:robot-sim:v4`. Actual Joint
 variables are read-only; Client writes return `BadNotWritable`.
-The current Server namespace is derived from Robot Definitions. Persisted
-`opcUa.mappings` are retained for the broader Client/Bridge roadmap and the dual
-sample keeps its mapping NodeIds aligned, but arbitrary Server-node authoring
-from those mappings is not implemented in this slice.
+The current Server namespace is derived from Robot Definitions; object bindings
+do not author arbitrary Server nodes. In Client or Bridge mode, an Object
+Inspector can subscribe six external `Double` nodes (`X`, `Y`, `Z`, `Roll`,
+`Pitch`, `Yaw`) and an optional numeric `Status` node. See
+[Object OPC UA live binding](docs/operator/opcua-object-binding.md).
 
 ## Docker deployment
 
@@ -174,10 +178,11 @@ Browser SPA
 Runtime Gateway
   Project activation and validation
   multi-Robot state publication
-  OPC UA Off / Server adapter
+  OPC UA Server adapter (read-only Robot Actual values)
+  OPC UA Client adapter (read-only external Object values)
           |
           v
-External OPC UA Client (read-only Actual Joint values)
+External OPC UA Server / Client connections
 ```
 
 Key code areas:
@@ -190,15 +195,15 @@ src/features/robot/v4           definition-driven Robot rendering
 src/features/jobs/v4            per-Robot Job authoring and execution
 src/features/collision/v4       Robot-qualified geometric collision
 src/features/runtime-gateway/v4 browser HTTP publisher
-middleware/runtime-gateway      HTTP activation and OPC UA Server
+middleware/runtime-gateway      HTTP activation and OPC UA Server/Client adapters
 ```
 
 ## Deliberate limitations
 
 - No authentication, authorization, TLS, OPC UA signing/encryption, certificate
   trust workflow, or public-internet hardening.
-- No OPC UA Client or Bridge mode, controller writes, command nodes, or external
-  motion control in this short-term release.
+- No controller writes, command nodes, external motion control, or arbitrary
+  Server-node authoring. Client/Bridge Object bindings are read-only inputs.
 - No physics response, dynamics, mass/inertia, force/torque, IK, Cartesian path
   planning, reachability solving, or coordinated multi-Robot synchronization.
 - No automatic STEP assembly splitting, Link/Joint inference, mesh
@@ -216,4 +221,5 @@ middleware/runtime-gateway      HTTP activation and OPC UA Server
 - [Project V4 multi-Robot and Runtime Gateway design](docs/superpowers/specs/2026-07-16-project-v4-multi-robot-runtime-gateway-design.md)
 - [Runtime Gateway middleware notes](middleware/README.md)
 - [Docker operator guide](docs/operator/docker-deployment.md)
+- [Object OPC UA live binding](docs/operator/opcua-object-binding.md)
 - [Build Log](BUILDLOG.md)

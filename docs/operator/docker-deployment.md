@@ -19,12 +19,21 @@ Browser -> web:8080 (Nginx SPA)
              +-- /runtime/* -> runtime-gateway:8081
 
 OPC UA Client -> host:4840 -> runtime-gateway:4840 (Server mode only)
+
+runtime-gateway -- outbound OPC UA Client connection --> external OPC UA Server
 ```
 
 The Gateway process is always available, but the applied Project owns the OPC UA
 mode. `Off` keeps browser Simulation and Project activation available without an
-OPC UA listener. `Server` starts the read-only OPC UA namespace for that exact
-Project revision. There is no separate Connector profile or configuration file.
+OPC UA listener or Client connection. `Server` starts the read-only Robot Actual
+namespace for that exact Project revision. `Client` makes outbound connections
+to the configured Project endpoint URLs, and `Bridge` does both. There is no
+separate Connector profile or configuration file.
+
+The Compose network permits the Gateway's outbound Client connections; operators
+must still allow routing and firewall access from the container to each external
+OPC UA Server. Port `4840` is published only for the Gateway Server listener;
+it is not required for Client-only mode.
 
 ## Start
 
@@ -56,12 +65,14 @@ default `localhost` is suitable only for Clients running on the Docker host.
 Compose advertises and listens on the same `ROBOTSIM_OPCUA_PORT`, so strict OPC
 UA endpoint discovery also works when the published port is changed.
 
-## Select OPC UA Server mode
+## Select an OPC UA mode
 
 1. Load the intended Project, or choose **Project → Samples → Dual-Robot Technical Demo**.
-2. Change the Project's **OPC UA** selector from **Off** to **Server**.
-3. Wait for **Gateway ready** and inspect the reported endpoint.
-4. Connect an external OPC UA Client to
+2. Change the Project's **OPC UA** selector from **Off** to **Server** to expose
+   Robot Actual values, **Client** to subscribe to external Object bindings, or
+   **Bridge** to do both.
+3. Wait for **Gateway ready**. For Server/Bridge, inspect the reported endpoint.
+4. In Server/Bridge mode, connect an external OPC UA Client to
    `opc.tcp://<docker-host>:${ROBOTSIM_OPCUA_PORT:-4840}`.
 
 The namespace URI is `urn:web-digital-twin:robot-sim:v4`. Each configured Robot
@@ -77,10 +88,10 @@ is accepted only for the exact active Project and revision. Unknown Robots,
 unknown Joints, duplicate Robots, non-finite values, and oversized batches are
 rejected before publication.
 
-The Server namespace is currently derived from Robot Definitions. Project
-`opcUa.mappings` remain persisted roadmap configuration; the dual sample aligns
-its mapping NodeIds with the derived Actual nodes, but arbitrary Server-node
-authoring from mappings is not part of this release.
+The Server namespace is derived from Robot Definitions. Client/Bridge mappings
+are read-only subscriptions, not Server-node authoring. An Object Inspector can
+configure six external `Double` nodes for `X/Y/Z/Roll/Pitch/Yaw` and an optional
+numeric Status node; see [Object OPC UA live binding](opcua-object-binding.md).
 
 ## Health and diagnostics
 
@@ -97,7 +108,7 @@ docker compose ps
 - `/runtime/healthz` reports Gateway process liveness independently of Project
   activation.
 - `/runtime/readyz` returns `503 NO_ACTIVE_REVISION` until a browser applies a
-  Project, then `200` for either Off or Server mode.
+  Project, then `200` for Off, Server, Client, or Bridge mode.
 - `/runtime/status` reports the active Project ID, revision, mode, readiness,
   OPC UA start state, and endpoint URL.
 - If Server activation fails, the Gateway rejects the candidate and attempts to
@@ -127,7 +138,9 @@ npm run runtime:gateway
 ```
 
 The browser build expects same-origin `/runtime/`; use the Compose/Nginx
-topology for the supported end-to-end browser flow.
+topology for the supported end-to-end browser flow. Nginx proxies both the
+Runtime HTTP routes and the `/runtime/ws` WebSocket upgrade, so Client/Bridge
+state reaches the browser without a cross-origin WebSocket configuration.
 
 ## Validation before deployment
 
@@ -141,9 +154,10 @@ docker compose config --quiet
 npm run deploy:smoke
 ```
 
-The final release gate also uses a real `node-opcua` Client to read both sample
+The Server release gate uses a real `node-opcua` Client to read both sample
 Robots, confirms that Client writes return `BadNotWritable`, and exercises the
-two-Robot Project in the browser.
+two-Robot Project in the browser. Client/Bridge deployment should additionally
+be checked against the intended external OPC UA Server and Object binding.
 
 ## Persistence, update, and rollback
 
@@ -185,7 +199,7 @@ browser storage or retiring the workstation.
 
 ## Safety boundary
 
-The short-term Server publishes read-only simulation Actual Joint values. It
-does not start Robot motion, transfer to a PLC, write controller variables,
-implement a safety function, or make the application suitable for public-
-internet exposure.
+The short-term Server publishes read-only simulation Actual Joint values. The
+Client/Bridge path also only reads external Object values. Neither path starts
+Robot motion, transfers to a PLC, writes controller variables, implements a
+safety function, or makes the application suitable for public-internet exposure.
