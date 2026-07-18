@@ -71,6 +71,24 @@ describe('runtime interpolation v1', () => {
     expectNumbersClose(result.quaternion, [0, 0, -Math.sin(40 * Math.PI / 180), Math.cos(40 * Math.PI / 180)])
   })
 
+  it('rejects non-finite direct interpolation poses and returns a deeply frozen result', () => {
+    expect(() => interpolateRigidTransformV4(
+      { positionM: [Number.NaN, 0, 0], quaternion: [0, 0, 0, 1] },
+      poseAt(1),
+      0.5,
+    )).toThrow(/position/i)
+    expect(() => interpolateRigidTransformV4(
+      poseAt(0),
+      { positionM: [1, 2, 3], quaternion: [0, 0, Number.POSITIVE_INFINITY, 1] },
+      0.5,
+    )).toThrow(/quaternion/i)
+
+    const result = interpolateRigidTransformV4(poseAt(0), poseAt(1), 0.5)
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(Object.isFrozen(result.positionM)).toBe(true)
+    expect(Object.isFrozen(result.quaternion)).toBe(true)
+  })
+
   it('renders two publishing cycles behind the latest accepted source timestamp', () => {
     const buffer = createRuntimePoseBufferV1('box-1', 100)
     expect(buffer.push(runtimeSample(1, 1_000, 0))).toBe(true)
@@ -92,6 +110,38 @@ describe('runtime interpolation v1', () => {
     expectNumbersClose(buffer.sample(5_200)!.pose.positionM, [0, 1, 2])
     expectNumbersClose(buffer.sample(5_250)!.pose.positionM, [5, 6, 7])
     expectNumbersClose(buffer.sample(5_400)!.pose.positionM, [20, 21, 22])
+  })
+
+  it('never rewinds an emitted target when a newer source sample arrives late', () => {
+    const buffer = createRuntimePoseBufferV1('box-1', 100)
+    expect(buffer.push(runtimeSample(1, 1_000, 0, 5_000))).toBe(true)
+    expect(buffer.push(runtimeSample(2, 1_100, 10, 5_100))).toBe(true)
+    expect(buffer.push(runtimeSample(3, 1_200, 20, 5_200))).toBe(true)
+    expect(buffer.sample(5_400)).toMatchObject({ sourceTimestampMs: 1_200 })
+
+    expect(buffer.push(runtimeSample(4, 1_300, 30, 5_600))).toBe(true)
+
+    const delayed = buffer.sample(5_600)!
+    expect(delayed).toMatchObject({ quality: 'GOOD', sourceTimestampMs: 1_200 })
+    expectNumbersClose(delayed.pose.positionM, [20, 21, 22])
+    expect(buffer.sample(5_750)).toMatchObject({ sourceTimestampMs: 1_250 })
+  })
+
+  it('preserves the stale freeze position when fresh data resumes on the same buffer', () => {
+    const buffer = createRuntimePoseBufferV1('box-1', 100)
+    expect(buffer.push(runtimeSample(1, 1_000, 0, 5_000))).toBe(true)
+    expect(buffer.push(runtimeSample(2, 1_100, 10, 5_100))).toBe(true)
+    expect(buffer.push(runtimeSample(3, 1_200, 20, 5_200))).toBe(true)
+    expect(buffer.sample(5_701)).toMatchObject({
+      quality: 'STALE',
+      sourceTimestampMs: 1_200,
+    })
+
+    expect(buffer.push(runtimeSample(4, 1_300, 30, 5_800))).toBe(true)
+
+    const resumed = buffer.sample(5_800)!
+    expect(resumed).toMatchObject({ quality: 'GOOD', sourceTimestampMs: 1_200 })
+    expectNumbersClose(resumed.pose.positionM, [20, 21, 22])
   })
 
   it('accepts increasing sequences at an equal source timestamp and rejects older timestamps', () => {

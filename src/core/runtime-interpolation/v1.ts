@@ -121,22 +121,23 @@ export function interpolateRigidTransformV4(
   fraction: number,
 ): RigidTransformV4 {
   const progress = clampUnitInterval(requireFinite(fraction, 'Interpolation fraction'))
-  const start = normalizeRigidTransformV4(from, '$.from')
-  const end = normalizeRigidTransformV4(to, '$.to')
-  return {
+  const start = frozenPose(from, '$.from')
+  const end = frozenPose(to, '$.to')
+  return frozenPose({
     positionM: [
       start.positionM[0] + (end.positionM[0] - start.positionM[0]) * progress,
       start.positionM[1] + (end.positionM[1] - start.positionM[1]) * progress,
       start.positionM[2] + (end.positionM[2] - start.positionM[2]) * progress,
     ],
     quaternion: slerpQuaternionV4(start.quaternion, end.quaternion, progress),
-  }
+  }, '$.result')
 }
 
 class BoundedRuntimePoseBufferV1 implements RuntimePoseBufferV1 {
   readonly targetId: string
   readonly #publishingIntervalMs: number
   readonly #samples: RuntimePoseSampleV1[] = []
+  #lastEmittedTargetTimestampMs: number | null = null
 
   constructor(targetId: string, publishingIntervalMs: number) {
     if (targetId.trim().length === 0) throw new TypeError('Target ID must not be empty.')
@@ -186,6 +187,7 @@ class BoundedRuntimePoseBufferV1 implements RuntimePoseBufferV1 {
 
     const staleAfterMs = Math.max(500, 5 * this.#publishingIntervalMs)
     if (nowMs - latest.receivedTimestampMs > staleAfterMs) {
+      this.#lastEmittedTargetTimestampMs = latest.sourceTimestampMs
       return Object.freeze({
         targetId: this.targetId,
         sourceTimestampMs: latest.sourceTimestampMs,
@@ -197,6 +199,7 @@ class BoundedRuntimePoseBufferV1 implements RuntimePoseBufferV1 {
     const first = this.#samples[0]!
     const targetTimestampMs = Math.max(
       first.sourceTimestampMs,
+      this.#lastEmittedTargetTimestampMs ?? first.sourceTimestampMs,
       Math.min(
         latest.sourceTimestampMs,
         latest.sourceTimestampMs
@@ -205,6 +208,7 @@ class BoundedRuntimePoseBufferV1 implements RuntimePoseBufferV1 {
       ),
     )
     const pose = this.#poseAt(targetTimestampMs)
+    this.#lastEmittedTargetTimestampMs = targetTimestampMs
     return Object.freeze({
       targetId: this.targetId,
       sourceTimestampMs: targetTimestampMs,
