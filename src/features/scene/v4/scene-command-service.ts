@@ -777,6 +777,7 @@ export function createSceneCommandServiceV4(
           const endpointId = keepCurrentEndpoint
             ? currentEndpoint!.endpointId
             : matchingEndpoint?.endpointId ?? options.createId()
+          const endpointIsShared = endpointIsSharedOutsideEntity(active, endpointId, entity.id)
           const currentFrame = entity.movingFrames.find((frame) => (
             frame.frameId === entity.parentFrameId
             && currentOwnerEndpointId !== null
@@ -887,7 +888,7 @@ export function createSceneCommandServiceV4(
                     if (candidate.endpointId !== endpointId) return candidate
                     // A shared endpoint is shared configuration: a rebinding
                     // may revive it, but must not overwrite its peer settings.
-                    return currentEndpointIsShared ? { ...candidate, enabled: true } : endpoint
+                    return endpointIsShared ? { ...candidate, enabled: true } : endpoint
                   })
                 : [...active.opcUa.endpoints, endpoint],
               mappings: [

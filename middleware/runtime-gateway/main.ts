@@ -13,6 +13,7 @@ import { WebSocketServer } from 'ws'
 import {
   MAX_OPCUA_VALUES_PER_CALL_V4,
   MAX_RUNTIME_BATCH_BYTES_V4,
+  configRevisionForProjectV4,
   validateWorkcellProjectV4,
   type WorkcellProjectV4,
 } from '../../src/core/project-v4/index.js'
@@ -35,6 +36,7 @@ import {
   createStateBatchHubV1,
   type StateBatchHubV1,
 } from './state-batch-hub.js'
+import type { RuntimeMappedValueV1, StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
 
 export const MAX_RUNTIME_PROJECT_BODY_BYTES_V1 = 1024 * 1024
 
@@ -104,6 +106,7 @@ const PRE_APPLY_STATUS: RuntimeGatewayPreApplyStatusV1 = Object.freeze({
 
 interface ActiveProjectRuntimeV1 {
   readonly project: WorkcellProjectV4
+  readonly configRevision: string
   readonly serverAdapter: OpcUaServerAdapterV1 | null
   readonly clientAdapter: OpcUaClientAdapterV1 | null
 }
@@ -111,6 +114,12 @@ interface ActiveProjectRuntimeV1 {
 interface StagedRobotJointStateV1 {
   readonly robotId: string
   readonly jointValues: Readonly<Record<string, number>>
+}
+
+interface StagedClientBatchesV1 {
+  publish(batch: StateBatchV1): void
+  flushTo(hub: StateBatchHubV1): void
+  clear(): void
 }
 
 class RuntimeGatewayHttpError extends Error {
@@ -130,6 +139,82 @@ class RuntimeGatewayHttpError extends Error {
     this.code = code
     this.details = details
   }
+}
+
+const MAX_STAGED_CLIENT_ENDPOINTS_V1 = 8
+const MAX_STAGED_CLIENT_CHANNELS_PER_ENDPOINT_V1 = 128
+
+function stagedChannelGroupsV1(
+  values: readonly RuntimeMappedValueV1[],
+): readonly (readonly RuntimeMappedValueV1[])[] {
+  const coherent = new Map<string, RuntimeMappedValueV1[]>()
+  const groups: RuntimeMappedValueV1[][] = []
+  for (const value of values) {
+    if (value.coherenceGroupId === null) {
+      groups.push([value])
+      continue
+    }
+    const existing = coherent.get(value.coherenceGroupId)
+    if (existing === undefined) {
+      const group = [value]
+      coherent.set(value.coherenceGroupId, group)
+      groups.push(group)
+    } else {
+      existing.push(value)
+    }
+  }
+  return groups
+}
+
+function stagedChannelKeyV1(values: readonly RuntimeMappedValueV1[]): string {
+  const coherenceGroupId = values[0]?.coherenceGroupId
+  return coherenceGroupId === null || coherenceGroupId === undefined
+    ? `mapping:${values[0]!.mappingId}`
+    : `coherence:${coherenceGroupId}`
+}
+
+function createStagedClientBatchesV1(): StagedClientBatchesV1 {
+  const snapshotsByEndpoint = new Map<string, Map<string, StateBatchV1>>()
+
+  const publish = (batch: StateBatchV1): void => {
+    const endpoint = snapshotsByEndpoint.get(batch.endpointId) ?? new Map<string, StateBatchV1>()
+    snapshotsByEndpoint.set(batch.endpointId, endpoint)
+    for (const values of stagedChannelGroupsV1(batch.values)) {
+      const channelKey = stagedChannelKeyV1(values)
+      const existing = endpoint.get(channelKey)
+      if (existing !== undefined && existing.sequence > batch.sequence) continue
+      endpoint.delete(channelKey)
+      endpoint.set(channelKey, { ...batch, values })
+    }
+    while (endpoint.size > MAX_STAGED_CLIENT_CHANNELS_PER_ENDPOINT_V1) {
+      const oldest = endpoint.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      endpoint.delete(oldest)
+    }
+    while (snapshotsByEndpoint.size > MAX_STAGED_CLIENT_ENDPOINTS_V1) {
+      const oldest = snapshotsByEndpoint.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      snapshotsByEndpoint.delete(oldest)
+    }
+  }
+
+  return Object.freeze({
+    publish,
+    flushTo(hub: StateBatchHubV1) {
+      const batches = [...snapshotsByEndpoint.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .flatMap(([, channels]) => [...channels.entries()]
+          .sort(([leftKey, leftBatch], [rightKey, rightBatch]) => (
+            leftBatch.sequence - rightBatch.sequence || leftKey.localeCompare(rightKey)
+          ))
+          .map(([, batch]) => batch))
+      snapshotsByEndpoint.clear()
+      for (const batch of batches) hub.publish(batch)
+    },
+    clear() {
+      snapshotsByEndpoint.clear()
+    },
+  })
 }
 
 function writeJson(
@@ -361,9 +446,12 @@ export function createRuntimeGatewayEntrypointService(
 
   async function replaceActiveProject(project: WorkcellProjectV4): Promise<void> {
     validateProjectMode(project)
+    const configRevision = await configRevisionForProjectV4(project)
     const previous = activeRuntime
     let candidateServerAdapter: OpcUaServerAdapterV1 | null = null
     let candidateClientAdapter: OpcUaClientAdapterV1 | null = null
+    const stagedClientBatches = createStagedClientBatchesV1()
+    let clientBatchPublisherLive = false
     let previousAdaptersStopped = false
 
     try {
@@ -380,7 +468,14 @@ export function createRuntimeGatewayEntrypointService(
         candidateClientAdapter = createOpcUaClientAdapter(project, {
           gatewayId: config.gatewayId,
           originId: `${config.gatewayId}:opcua-client`,
-          publish: (batch) => stateBatchHub.publish(batch),
+          configRevision,
+          publish: (batch) => {
+            if (clientBatchPublisherLive) {
+              stateBatchHub.publish(batch)
+            } else {
+              stagedClientBatches.publish(batch)
+            }
+          },
         })
       }
       previousAdaptersStopped = previous !== null
@@ -397,13 +492,20 @@ export function createRuntimeGatewayEntrypointService(
         }
       }
       await candidateClientAdapter?.start()
+      // Candidate adapters can synchronously emit their first monitored value
+      // from start().  Do not let it race the revision fence or old source
+      // sequence; stage it until the candidate has started successfully.
+      stateBatchHub.activateRevision(project.projectId, configRevision)
+      stagedClientBatches.flushTo(stateBatchHub)
+      clientBatchPublisherLive = true
       activeRuntime = Object.freeze({
         project,
+        configRevision,
         serverAdapter: candidateServerAdapter,
         clientAdapter: candidateClientAdapter,
       })
-      stateBatchHub.activateRevision(project.projectId, project.revisionId)
     } catch (error) {
+      stagedClientBatches.clear()
       await candidateClientAdapter?.stop().catch(() => undefined)
       await candidateServerAdapter?.stop().catch(() => undefined)
       let recovered = false

@@ -100,14 +100,18 @@ describe('StateBatchHubV1', () => {
     hub.activateRevision('project-test', 'a'.repeat(64))
     hub.attach(socket)
 
-    hub.publish(batch(1))
-    hub.publish(batch(2))
-    hub.publish(batch(3))
+    const latest = (sequence: number) => batch(sequence, {
+      values: [{ ...mappedValue(sequence), mappingId: 'mapping-live' }],
+    })
+    hub.publish(latest(1))
+    hub.publish(latest(2))
+    hub.publish(latest(3))
 
     expect(socket.sentSequences()).toEqual([1])
     expect(hub.queueDepth(socket)).toBe(2)
     socket.complete()
-    expect(socket.sentSequences()).toEqual([1, 3])
+    expect(socket.sentSequences()).toEqual([1, 2])
+    expect(socket.sentBatches()[1]?.values[0]?.value).toBe(3)
     expect(hub.queueDepth(socket)).toBe(1)
     socket.complete()
     expect(hub.queueDepth(socket)).toBe(0)
@@ -290,28 +294,31 @@ describe('StateBatchHubV1', () => {
     hub.attach(socket)
 
     for (let sequence = 1; sequence <= 10_000; sequence += 1) {
-      hub.publish(batch(sequence))
+      hub.publish(batch(sequence, {
+        values: [{ ...mappedValue(sequence), mappingId: 'mapping-sustained' }],
+      }))
     }
 
     expect(socket.sentSequences()).toEqual([1])
     expect(hub.queueDepth(socket)).toBe(2)
     socket.complete()
-    expect(socket.sentSequences()).toEqual([1, 10_000])
+    expect(socket.sentSequences()).toEqual([1, 2])
+    expect(socket.sentBatches()[1]?.values[0]?.value).toBe(10_000)
   })
 
   it('replays the newest active-endpoint State snapshot when a browser attaches after subscription publication', () => {
     const hub = createStateBatchHubV1()
     const socket = new ControlledSocket()
     hub.activateRevision('project-test', 'a'.repeat(64))
-    hub.publish(batch(1))
-    hub.publish(batch(2))
+    hub.publish(batch(1, { values: [{ ...mappedValue(1), mappingId: 'mapping-current' }] }))
+    hub.publish(batch(2, { values: [{ ...mappedValue(2), mappingId: 'mapping-current' }] }))
 
     hub.attach(socket)
 
     expect(socket.sentBatches()).toEqual([
       expect.objectContaining({
         endpointId: 'endpoint-test',
-        values: [expect.objectContaining({ mappingId: 'mapping-2' })],
+        values: [expect.objectContaining({ mappingId: 'mapping-current', value: 2 })],
       }),
     ])
     expect(socket.sentSequences()).toEqual([1])
@@ -322,18 +329,66 @@ describe('StateBatchHubV1', () => {
     const first = new ControlledSocket()
     const reconnected = new ControlledSocket()
     hub.activateRevision('project-test', 'a'.repeat(64))
-    hub.publish(batch(1))
+    hub.publish(batch(1, { values: [{ ...mappedValue(1), mappingId: 'mapping-current' }] }))
     hub.attach(first)
     first.complete()
     first.emit('close')
-    hub.publish(batch(2))
+    hub.publish(batch(2, { values: [{ ...mappedValue(2), mappingId: 'mapping-current' }] }))
 
     hub.attach(reconnected)
 
     expect(reconnected.sentBatches()[0]).toMatchObject({
       sequence: 2,
-      values: [expect.objectContaining({ mappingId: 'mapping-2' })],
+      values: [expect.objectContaining({ mappingId: 'mapping-current', value: 2 })],
     })
+  })
+
+  it('replays independent latest Pose and Status channels after status-only traffic', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(1, {
+      values: [{ ...mappedValue(1, 'box-pose'), mappingId: 'box-pose', value: 'pose-1' }],
+    }))
+    hub.publish(batch(2, {
+      values: [{ ...mappedValue(2), mappingId: 'box-status', value: 'status-2' }],
+    }))
+
+    hub.attach(socket)
+    socket.complete()
+
+    expect(socket.sentBatches().flatMap(({ values }) => values.map(({ mappingId, value }) => ({ mappingId, value }))))
+      .toEqual(expect.arrayContaining([
+        { mappingId: 'box-pose', value: 'pose-1' },
+        { mappingId: 'box-status', value: 'status-2' },
+      ]))
+  })
+
+  it('keeps independent latest Pose and Status channels under socket backpressure', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(socket)
+    hub.publish(batch(1, {
+      values: [{ ...mappedValue(1, 'box-pose'), mappingId: 'box-pose', value: 'pose-1' }],
+    }))
+    hub.publish(batch(2, {
+      values: [{ ...mappedValue(2), mappingId: 'box-status', value: 'status-2' }],
+    }))
+    hub.publish(batch(3, {
+      values: [{ ...mappedValue(3, 'box-pose'), mappingId: 'box-pose', value: 'pose-3' }],
+    }))
+
+    socket.complete()
+    socket.complete()
+    socket.complete()
+
+    expect(socket.sentBatches().flatMap(({ values }) => values.map(({ mappingId, value }) => ({ mappingId, value }))))
+      .toEqual(expect.arrayContaining([
+        { mappingId: 'box-pose', value: 'pose-1' },
+        { mappingId: 'box-pose', value: 'pose-3' },
+        { mappingId: 'box-status', value: 'status-2' },
+      ]))
   })
 
   it('fences cached snapshots at revision activation so an attaching browser never receives a stale revision', () => {
@@ -358,7 +413,7 @@ describe('StateBatchHubV1', () => {
     })
   })
 
-  it('keeps source and browser wire sequences monotonic across same-revision recovery for an already-open socket', () => {
+  it('accepts a fresh adapter source sequence while keeping browser wire sequences monotonic across same-revision recovery', () => {
     const hub = createStateBatchHubV1()
     const socket = new ControlledSocket()
     hub.activateRevision('project-test', 'a'.repeat(64))
@@ -367,7 +422,7 @@ describe('StateBatchHubV1', () => {
     socket.complete()
 
     hub.activateRevision('project-test', 'a'.repeat(64))
-    hub.publish(batch(2, { values: [mappedValue(20)] }))
+    hub.publish(batch(1, { values: [mappedValue(20)] }))
 
     expect(socket.sentSequences()).toEqual([1, 2])
     expect(socket.sentBatches()[1]).toMatchObject({

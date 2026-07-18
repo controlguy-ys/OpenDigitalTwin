@@ -10,6 +10,7 @@ import WebSocket from 'ws'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  configRevisionForProjectV4,
   validateWorkcellProjectV4,
   type WorkcellProjectV4,
 } from '../../src/core/project-v4/index.js'
@@ -19,7 +20,10 @@ import {
   ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
   type OpcUaServerAdapterV1,
 } from './opcua-server-adapter.js'
-import type { OpcUaClientAdapterV1 } from './opcua-client-adapter.js'
+import type {
+  OpcUaClientAdapterOptionsV1,
+  OpcUaClientAdapterV1,
+} from './opcua-client-adapter.js'
 import type { StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
 
 async function importMain() {
@@ -352,7 +356,14 @@ describe('runtime Gateway entrypoint', () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     const fake = fakeClientAdapter()
-    const createOpcUaClientAdapter = vi.fn(() => fake.adapter)
+    let suppliedConfigRevision: string | null = null
+    const createOpcUaClientAdapter = vi.fn((
+      _project: WorkcellProjectV4,
+      options: OpcUaClientAdapterOptionsV1,
+    ) => {
+      suppliedConfigRevision = options.configRevision
+      return fake.adapter
+    })
     const service = createRuntimeGatewayEntrypointService(
       createTestConfig(port),
       { createOpcUaClientAdapter },
@@ -377,6 +388,7 @@ describe('runtime Gateway entrypoint', () => {
         }],
       })
       expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(1)
+      expect(suppliedConfigRevision).toBe(await configRevisionForProjectV4(project))
       expect(fake.start).toHaveBeenCalledTimes(1)
     } finally {
       await service.stop()
@@ -431,6 +443,7 @@ describe('runtime Gateway entrypoint', () => {
       },
     )
     const project = sampleProject('client', 'a'.repeat(64))
+    const configRevision = await configRevisionForProjectV4(project)
 
     await service.start()
     let socket: WebSocket | null = null
@@ -443,7 +456,7 @@ describe('runtime Gateway entrypoint', () => {
         protocolVersion: 1,
         gatewayId: 'test-gateway',
         projectId: project.projectId,
-        configRevision: project.revisionId,
+        configRevision,
         endpointId: 'endpoint-sample-server',
         sequence: 1,
         sourceTimestampMs: 1,
@@ -461,10 +474,86 @@ describe('runtime Gateway entrypoint', () => {
       expect(JSON.parse(await message)).toMatchObject({
         type: 'state-batch-v1',
         projectId: project.projectId,
-        configRevision: project.revisionId,
+        configRevision,
         values: [{ mappingId: 'mapping-sample-crb-j1', value: 10 }],
       })
     } finally {
+      socket?.close()
+      await service.stop()
+    }
+  })
+
+  it('stages synchronous Client start samples until activation and accepts sequence one after same-revision replacement', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    let adapterIndex = 0
+    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV4, options) => {
+      const value = ++adapterIndex
+      const adapter: OpcUaClientAdapterV1 = {
+        start: async () => {
+          options.publish({
+            type: 'state-batch-v1',
+            protocolVersion: 1,
+            gatewayId: 'test-gateway',
+            projectId: _project.projectId,
+            configRevision: options.configRevision,
+            endpointId: 'endpoint-sample-server',
+            sequence: 1,
+            sourceTimestampMs: value,
+            publishedTimestampMs: value,
+            originId: 'test-gateway:opcua-client',
+            values: [{
+              mappingId: 'mapping-synchronous-start',
+              coherenceGroupId: null,
+              value,
+              unit: 'degree',
+              quality: 'GOOD',
+              statusCode: 'Good',
+            }],
+          })
+        },
+        stop: async () => undefined,
+        status: () => [],
+      }
+      return adapter
+    })
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      { createOpcUaClientAdapter },
+    )
+    const project = sampleProject('client', 'revision-synchronous-start')
+
+    await service.start()
+    let socket: WebSocket | null = null
+    let replaySocket: WebSocket | null = null
+    try {
+      socket = await openWebSocket(port)
+      const initial = nextWebSocketMessage(socket)
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      expect(JSON.parse(await initial)).toMatchObject({
+        sequence: 1,
+        values: [{ mappingId: 'mapping-synchronous-start', value: 1 }],
+      })
+
+      replaySocket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
+      const replay = nextWebSocketMessage(replaySocket)
+      await new Promise<void>((resolve, reject) => {
+        replaySocket!.once('open', resolve)
+        replaySocket!.once('error', reject)
+      })
+      expect(JSON.parse(await replay)).toMatchObject({
+        values: [{ mappingId: 'mapping-synchronous-start', value: 1 }],
+      })
+
+      const replacement = nextWebSocketMessage(socket)
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      expect(JSON.parse(await replacement)).toMatchObject({
+        sequence: 3,
+        values: [{ mappingId: 'mapping-synchronous-start', value: 2 }],
+      })
+      expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(2)
+    } finally {
+      replaySocket?.close()
       socket?.close()
       await service.stop()
     }

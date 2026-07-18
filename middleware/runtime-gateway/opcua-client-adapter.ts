@@ -47,6 +47,7 @@ export interface CompiledOpcUaClientEndpointV1 {
 export interface OpcUaClientSnapshotAssemblerOptionsV1 {
   readonly project: WorkcellProjectV4
   readonly endpoint: CompiledOpcUaClientEndpointV1
+  readonly configRevision?: string
   readonly gatewayId: string
   readonly originId: string
   readonly nowMs: () => number
@@ -61,6 +62,7 @@ export interface OpcUaClientSnapshotAssemblerV1 {
 export interface OpcUaClientAdapterOptionsV1 {
   readonly gatewayId: string
   readonly originId: string
+  readonly configRevision: string
   readonly publish: (batch: StateBatchV1) => void
   readonly nowMs?: () => number
   readonly createClient?: (endpoint: OpcUaEndpointV4) => OPCUAClient
@@ -343,7 +345,7 @@ export function createOpcUaClientSnapshotAssemblerV1(
         protocolVersion: 1,
         gatewayId: options.gatewayId,
         projectId: options.project.projectId,
-        configRevision: options.project.revisionId,
+        configRevision: options.configRevision ?? options.project.revisionId,
         endpointId: options.endpoint.endpointId,
         sequence,
         sourceTimestampMs: latestSourceTimestampMs,
@@ -422,7 +424,7 @@ export function createOpcUaClientAdapterV1(
   for (const plan of plans) {
     runtimes.set(plan.endpointId, {
       plan,
-      assembler: createOpcUaClientSnapshotAssemblerV1({ project, endpoint: plan, gatewayId: options.gatewayId, originId: options.originId, nowMs, publish: options.publish }),
+      assembler: createOpcUaClientSnapshotAssemblerV1({ project, endpoint: plan, configRevision: options.configRevision, gatewayId: options.gatewayId, originId: options.originId, nowMs, publish: options.publish }),
       client: null,
       session: null,
       subscription: null,
@@ -528,10 +530,14 @@ export function createOpcUaClientAdapterV1(
       group.on('changed', (_item, dataValue, index) => {
         const nodeId = runtime.plan.nodeIds[index]
         if (nodeId === undefined || !active() || runtime.group !== group) return
-        const timestamp = dataValue.sourceTimestamp?.getTime()
-          ?? dataValue.serverTimestamp?.getTime()
-          ?? nowMs()
-        runtime.assembler.accept(nodeId, dataValue.value.value, dataValue.statusCode.toString(), timestamp)
+        try {
+          const timestamp = dataValue.sourceTimestamp?.getTime()
+            ?? dataValue.serverTimestamp?.getTime()
+            ?? nowMs()
+          runtime.assembler.accept(nodeId, dataValue.value.value, dataValue.statusCode.toString(), timestamp)
+        } catch (error) {
+          runtime.lastError = error instanceof Error ? error.message : String(error)
+        }
       })
       group.on('err', (message) => { runtime.lastError = message })
       group.on('terminated', () => {

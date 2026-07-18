@@ -247,6 +247,29 @@ describe('OPC UA client adapter V1', () => {
     expect(second.sequence).toBe(2)
   })
 
+  it('uses the supplied canonical config revision for a UUID Project revision', () => {
+    const configRevision = 'b'.repeat(64)
+    const project = { ...projectWithEntityPoseMapping(), revisionId: '6f0e1d43-1bd3-4c89-a811-3d8681e44773' }
+    const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
+    const batches: unknown[] = []
+    const assembler = createOpcUaClientSnapshotAssemblerV1({
+      project,
+      endpoint,
+      configRevision,
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      nowMs: () => 1_000,
+      publish: (batch) => { batches.push(batch) },
+    })
+
+    endpoint.nodeIds.forEach((nodeId, index) => assembler.accept(nodeId, index === 0 ? 1_000 : 0, 'Good', 900 + index))
+
+    expect(validateStateBatchV1(batches[0])).toMatchObject({
+      configRevision,
+      projectId: project.projectId,
+    })
+  })
+
   it('preserves the latest scalar snapshot while exposing uncertain and bad OPC UA quality', () => {
     const project = projectWithEntityPoseMapping()
     const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
@@ -362,6 +385,7 @@ describe('OPC UA client adapter V1', () => {
     const adapter = createOpcUaClientAdapterV1(project, {
       gatewayId: 'gateway-local',
       originId: 'gateway-local:client',
+      configRevision: REVISION,
       publish: (batch) => { batches.push(batch) },
       createClient: () => connections.shift()!.client as never,
     })
@@ -392,6 +416,27 @@ describe('OPC UA client adapter V1', () => {
     await new Promise<void>((resolve) => { setTimeout(resolve, 20) })
 
     expect(batches).toHaveLength(afterReconnectSnapshot)
+    await adapter.stop()
+  })
+
+  it('contains an invalid snapshot publication error inside the monitored-item callback', async () => {
+    const project = { ...projectWithEntityPoseMapping(), revisionId: '6f0e1d43-1bd3-4c89-a811-3d8681e44773' }
+    const connection = fakeOpcUaClientConnection()
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: 'd'.repeat(64),
+      publish: () => { throw new Error('publisher rejected batch') },
+      createClient: () => connection.client as never,
+    })
+    const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.connected === true)
+
+    expect(() => endpoint.nodeIds.forEach((_, index) => {
+      connection.group.emit('changed', {}, fakeDataValue(index), index)
+    })).not.toThrow()
+    expect(adapter.status()[0]?.lastError).toMatch(/RUNTIME_PROTOCOL_INVALID|publisher rejected batch/)
     await adapter.stop()
   })
 
@@ -496,6 +541,7 @@ describe('OPC UA client adapter V1', () => {
       adapter = createOpcUaClientAdapterV1(liveProject, {
         gatewayId: 'gateway-local',
         originId: 'gateway-local:client',
+        configRevision: REVISION,
         publish: (batch) => { batches.push(batch) },
       })
       await adapter.start()

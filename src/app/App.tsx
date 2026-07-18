@@ -410,9 +410,16 @@ export function App({
 
   const project = projectState.activeProject
   const revisionId = project?.revisionId ?? null
+  const publishedBundle = resources.mutations.readPublished()
+  const objectRuntimeConfigRevision = project !== null
+    && publishedBundle?.revisionId === project.revisionId
+    ? publishedBundle.configRevision
+    : null
   const objectRuntime = useMemo(() => (
-    project === null ? null : createObjectRuntimeStateV4(project)
-  ), [project])
+    project === null || objectRuntimeConfigRevision === null
+      ? null
+      : createObjectRuntimeStateV4(project, objectRuntimeConfigRevision)
+  ), [objectRuntimeConfigRevision, project])
   useEffect(() => {
     if (
       gatewayStreamFactory === null

@@ -94,7 +94,10 @@ function status(
   }
 }
 
-function resourcesForProject(projectV4: WorkcellProjectV4): BrowserProjectResourcesV4 {
+function resourcesForProject(
+  projectV4: WorkcellProjectV4,
+  publishedConfigRevision: string | null = null,
+): BrowserProjectResourcesV4 {
   const robots = createRobotRuntimeRegistryV4()
   robots.getState().replaceProject(projectV4)
   const jobs = createJobRuntimeStoreV4()
@@ -149,7 +152,11 @@ function resourcesForProject(projectV4: WorkcellProjectV4): BrowserProjectResour
   }))
   const mutations = {
     hydrate: vi.fn(async () => undefined),
-    readPublished: vi.fn(() => null),
+    readPublished: vi.fn(() => publishedConfigRevision === null ? null : ({
+      project: projectV4,
+      revisionId: projectV4.revisionId,
+      configRevision: publishedConfigRevision,
+    })),
     subscribe: vi.fn(() => () => undefined),
     replace: vi.fn(),
     replacePrepared: vi.fn(),
@@ -325,7 +332,7 @@ describe('App Runtime Gateway V4 integration', () => {
       ...server,
       opcUa: { ...server.opcUa, mode: 'client' },
     })
-    const resources = resourcesForProject(active)
+    const resources = resourcesForProject(active, 'a'.repeat(64))
     const activateClientProject = vi.fn(async (candidate: WorkcellProjectV4) => ({
       ...status(candidate),
       mode: 'client' as const,

@@ -1102,6 +1102,59 @@ describe('SceneCommandServiceV4', () => {
       .toMatchObject({ transformOwner: 'opcua:endpoint-shared' })
   })
 
+  it('reuses a matching enabled shared endpoint without overwriting its peer settings', async () => {
+    const source = authoredProject()
+    const shared = validateWorkcellProjectV4({
+      ...source,
+      opcUa: {
+        ...source.opcUa,
+        endpoints: [{
+          endpointId: 'endpoint-shared',
+          name: 'Shared peer endpoint',
+          endpointUrl: 'opc.tcp://127.0.0.1:4840',
+          enabled: true,
+          publishingIntervalMs: 100,
+          reconnectDelayMs: 1_000,
+        }],
+        mappings: [{
+          id: 'mapping-platform-peer',
+          endpointId: 'endpoint-shared',
+          direction: 'read',
+          publishingIntervalMs: 100,
+          coherenceGroupId: null,
+          sourceOwnership: 'opcua:endpoint-shared',
+          interpolationMode: 'none',
+          coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw',
+          leaves: [{
+            leafPath: [], nodeId: 'ns=2;s=Peer.Status',
+            projectTarget: { type: 'entity-status', entityId: 'platform' },
+            opcUaDataType: 'Double', projectDataType: 'number',
+            scale: 1, offset: 0, unit: 'number', required: true,
+          }],
+        }],
+      },
+      spatialEntities: source.spatialEntities.map((candidate) => (
+        candidate.id === 'platform'
+          ? { ...candidate, numericStatus: { ...candidate.numericStatus, sourceOwnership: 'opcua:endpoint-shared' as const } }
+          : candidate
+      )),
+    })
+    const harness = commandHarness(shared, ['frame-object', 'mapping-object'])
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object', { publishingIntervalMs: 250 }),
+    ))
+
+    expect(harness.mutations.active.opcUa.endpoints).toEqual([
+      expect.objectContaining({
+        endpointId: 'endpoint-shared', name: 'Shared peer endpoint',
+        enabled: true, publishingIntervalMs: 100,
+      }),
+    ])
+    expect(harness.mutations.active.opcUa.mappings.find(({ id }) => id === 'mapping-platform-peer'))
+      .toMatchObject({ endpointId: 'endpoint-shared', publishingIntervalMs: 100 })
+  })
+
   it('clears Status independently while retaining pose and retains configured Status through manual takeover', async () => {
     const harness = commandHarness(authoredProject(), [
       'endpoint-object', 'frame-object', 'mapping-object', 'mapping-status',

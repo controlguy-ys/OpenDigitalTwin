@@ -29,7 +29,14 @@ interface EncodedLogicalTransmissionV1 {
   readonly projectId: string
   readonly configRevision: string
   readonly endpointId: string
+  readonly channelKey: string
   readonly chunks: readonly EncodedBatchV1[]
+}
+
+interface PendingSnapshotsV1 {
+  readonly projectId: string
+  readonly configRevision: string
+  readonly snapshotsByEndpoint: Map<string, Map<string, StateBatchV1>>
 }
 
 interface SocketStateV1 {
@@ -37,9 +44,10 @@ interface SocketStateV1 {
   readonly onClose: () => void
   readonly onError: () => void
   transmitting: boolean
-  // Depth is logical transmissions: one complete multipart send plus one newest pending update.
-  pending: EncodedLogicalTransmissionV1 | null
-  // A bounded attach-time replay sends one latest snapshot per configured endpoint.
+  // One in-flight transmission plus one composite of the latest independent
+  // channels that arrived while it was blocked.
+  pending: PendingSnapshotsV1 | null
+  // A bounded attach-time replay sends the latest snapshot for every channel.
   replay: EncodedLogicalTransmissionV1[]
   detached: boolean
 }
@@ -51,6 +59,7 @@ interface ActiveRevisionV1 {
 
 const encoder = new TextEncoder()
 const MAX_REPLAY_ENDPOINTS_V1 = 8
+const MAX_CACHED_CHANNELS_PER_ENDPOINT_V1 = MAX_RUNTIME_STATE_VALUES_V1
 
 export class StateBatchHubErrorV1 extends Error {
   readonly code: string
@@ -97,6 +106,41 @@ function groupedValuesV1(
     }
   }
   return groups
+}
+
+function transmissionGroupsV1(
+  values: readonly RuntimeMappedValueV1[],
+): readonly (readonly RuntimeMappedValueV1[])[] {
+  const groups: RuntimeMappedValueV1[][] = []
+  const coherentGroupIndexes = new Map<string, number>()
+  const uncoherent: RuntimeMappedValueV1[] = []
+  for (const value of values) {
+    if (value.coherenceGroupId === null) {
+      uncoherent.push(value)
+      continue
+    }
+    const existingIndex = coherentGroupIndexes.get(value.coherenceGroupId)
+    if (existingIndex === undefined) {
+      coherentGroupIndexes.set(value.coherenceGroupId, groups.length)
+      groups.push([value])
+    } else {
+      groups[existingIndex]!.push(value)
+    }
+  }
+  return Object.freeze([
+    ...(uncoherent.length === 0 ? [] : [Object.freeze(uncoherent)]),
+    ...groups.map((group) => Object.freeze(group)),
+  ])
+}
+
+function channelKeyV1(values: readonly RuntimeMappedValueV1[]): string {
+  const coherenceGroupId = values[0]?.coherenceGroupId
+  if (coherenceGroupId !== null && coherenceGroupId !== undefined) {
+    return `coherence:${coherenceGroupId}`
+  }
+  return values.length === 1
+    ? `mapping:${values[0]!.mappingId}`
+    : `snapshot:${values.map(({ mappingId }) => mappingId).sort().join(',')}`
 }
 
 function assertUniqueSourceMappingIdsV1(
@@ -214,7 +258,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
   const sockets = new Map<GatewayWebSocketV1, SocketStateV1>()
   const lastSourceSequenceByEndpoint = new Map<string, number>()
   const wireSequenceByEndpoint = new Map<string, number>()
-  const latestSnapshotChunksByEndpoint = new Map<string, readonly StateBatchV1[]>()
+  const latestSnapshotsByEndpoint = new Map<string, Map<string, StateBatchV1>>()
   let activeRevision: ActiveRevisionV1 | null = null
   let closed = false
 
@@ -241,15 +285,15 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     try {
       state.socket.send(encoded.payload, (error?: Error) => {
         if (state.detached) return
-        if (error !== undefined) {
+        if (error != null) {
           detachState(state)
           return
         }
         state.transmitting = false
         if (!sameRevisionV1(transmission, activeRevision)) {
-          const pending = state.pending
-          state.pending = null
-          if (pending !== null && sameRevisionV1(pending, activeRevision)) {
+          state.replay = []
+          const pending = nextPending(state)
+          if (pending !== undefined && sameRevisionV1(pending, activeRevision)) {
             sendNext(state, pending)
           }
           return
@@ -265,10 +309,10 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
           sendNext(state, replay)
           return
         }
-        const pending = state.pending
-        state.pending = null
-        if (pending === null || !sameRevisionV1(pending, activeRevision)) return
-        sendNext(state, pending)
+        const pending = nextPending(state)
+        if (pending !== undefined && sameRevisionV1(pending, activeRevision)) {
+          sendNext(state, pending)
+        }
       })
     } catch {
       detachState(state)
@@ -299,26 +343,11 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     socket.on('close', onClose)
     socket.on('error', onError)
     if (activeRevision !== null) {
-      const replay = [...latestSnapshotChunksByEndpoint.entries()]
+      const replay = [...latestSnapshotsByEndpoint.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([endpointId, cachedChunks]) => {
-          let nextWireSequence = (wireSequenceByEndpoint.get(endpointId) ?? 0) + 1
-          const chunks = cachedChunks.flatMap((cachedChunk) => {
-            const replayed = splitStateBatchesV1(
-              { ...cachedChunk, sequence: nextWireSequence },
-              nextWireSequence,
-            )
-            nextWireSequence = replayed.at(-1)!.sequence + 1
-            return replayed
-          })
-          chunks.forEach((chunk) => wireSequenceByEndpoint.set(chunk.endpointId, chunk.sequence))
-          return Object.freeze({
-            projectId: activeRevision!.projectId,
-            configRevision: activeRevision!.configRevision,
-            endpointId,
-            chunks: Object.freeze(chunks.map((chunk) => Object.freeze({ payload: JSON.stringify(chunk) }))),
-          })
-        })
+        .flatMap(([endpointId, snapshots]) => [...snapshots.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([channelKey, snapshot]) => encodeTransmission(endpointId, channelKey, snapshot)))
       const first = replay.shift()
       state.replay = replay
       if (first !== undefined) sendNext(state, first)
@@ -330,45 +359,131 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     if (
       activeRevision?.projectId === projectId
       && activeRevision.configRevision === configRevision
-    ) return
+    ) {
+      // A replacement adapter starts its own source sequence at one, while
+      // existing browser sockets must keep their hub-owned wire sequences.
+      lastSourceSequenceByEndpoint.clear()
+      return
+    }
     activeRevision = Object.freeze({ projectId, configRevision })
     lastSourceSequenceByEndpoint.clear()
     wireSequenceByEndpoint.clear()
-    latestSnapshotChunksByEndpoint.clear()
+    latestSnapshotsByEndpoint.clear()
     for (const state of sockets.values()) {
       state.pending = null
       state.replay = []
     }
   }
 
+  function encodeTransmission(
+    endpointId: string,
+    channelKey: string,
+    source: StateBatchV1,
+  ): EncodedLogicalTransmissionV1 {
+    const firstWireSequence = (wireSequenceByEndpoint.get(endpointId) ?? 0) + 1
+    const chunks = splitStateBatchesV1(source, firstWireSequence)
+    chunks.forEach((chunk) => wireSequenceByEndpoint.set(chunk.endpointId, chunk.sequence))
+    return Object.freeze({
+      projectId: source.projectId,
+      configRevision: source.configRevision,
+      endpointId,
+      channelKey,
+      chunks: Object.freeze(chunks.map((chunk) => Object.freeze({ payload: JSON.stringify(chunk) }))),
+    })
+  }
+
+  function encodePendingSnapshots(pending: PendingSnapshotsV1): EncodedLogicalTransmissionV1 | undefined {
+    const chunks: EncodedBatchV1[] = []
+    for (const [endpointId, snapshots] of [...pending.snapshotsByEndpoint.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))) {
+      for (const [channelKey, snapshot] of [...snapshots.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))) {
+        chunks.push(...encodeTransmission(endpointId, channelKey, snapshot).chunks)
+      }
+    }
+    if (chunks.length === 0) return undefined
+    return Object.freeze({
+      projectId: pending.projectId,
+      configRevision: pending.configRevision,
+      endpointId: 'composite',
+      channelKey: 'composite',
+      chunks: Object.freeze(chunks),
+    })
+  }
+
+  function nextPending(state: SocketStateV1): EncodedLogicalTransmissionV1 | undefined {
+    const pending = state.pending
+    state.pending = null
+    return pending === null ? undefined : encodePendingSnapshots(pending)
+  }
+
+  function enqueue(
+    state: SocketStateV1,
+    transmission: EncodedLogicalTransmissionV1 | null,
+    endpointId: string,
+    channelKey: string,
+    source: StateBatchV1,
+  ): void {
+    if (state.transmitting) {
+      if (
+        state.pending === null
+        || state.pending.projectId !== source.projectId
+        || state.pending.configRevision !== source.configRevision
+      ) {
+        state.pending = {
+          projectId: source.projectId,
+          configRevision: source.configRevision,
+          snapshotsByEndpoint: new Map(),
+        }
+      }
+      const endpointSnapshots = state.pending.snapshotsByEndpoint.get(endpointId) ?? new Map()
+      state.pending.snapshotsByEndpoint.set(endpointId, endpointSnapshots)
+      endpointSnapshots.set(channelKey, source)
+      return
+    }
+    if (transmission !== null) sendNext(state, transmission)
+  }
+
   const publish = (untrustedBatch: StateBatchV1): void => {
     if (closed) return
-    const firstWireSequence = (wireSequenceByEndpoint.get(untrustedBatch.endpointId) ?? 0) + 1
-    const chunks = splitStateBatchesV1(untrustedBatch, firstWireSequence)
-    const batch = chunks[0]!
-    if (!sameRevisionV1(batch, activeRevision)) return
-    const previousSourceSequence = lastSourceSequenceByEndpoint.get(batch.endpointId)
+    if (!sameRevisionV1(untrustedBatch, activeRevision)) return
+    const previousSourceSequence = lastSourceSequenceByEndpoint.get(untrustedBatch.endpointId)
     if (previousSourceSequence !== undefined && untrustedBatch.sequence <= previousSourceSequence) return
-    lastSourceSequenceByEndpoint.set(batch.endpointId, untrustedBatch.sequence)
-    latestSnapshotChunksByEndpoint.delete(batch.endpointId)
-    latestSnapshotChunksByEndpoint.set(batch.endpointId, chunks)
-    if (latestSnapshotChunksByEndpoint.size > MAX_REPLAY_ENDPOINTS_V1) {
-      const oldestEndpointId = latestSnapshotChunksByEndpoint.keys().next().value as string | undefined
-      if (oldestEndpointId !== undefined) latestSnapshotChunksByEndpoint.delete(oldestEndpointId)
+    assertUniqueSourceMappingIdsV1(untrustedBatch.values)
+    const sources = transmissionGroupsV1(untrustedBatch.values).map((values) => Object.freeze({
+      channelKey: channelKeyV1(values),
+      batch: batchWithValuesV1(untrustedBatch, values),
+    }))
+    lastSourceSequenceByEndpoint.set(untrustedBatch.endpointId, untrustedBatch.sequence)
+    const endpointSnapshots = latestSnapshotsByEndpoint.get(untrustedBatch.endpointId) ?? new Map()
+    latestSnapshotsByEndpoint.set(untrustedBatch.endpointId, endpointSnapshots)
+    for (const source of sources) {
+      endpointSnapshots.delete(source.channelKey)
+      endpointSnapshots.set(source.channelKey, source.batch)
+    }
+    while (endpointSnapshots.size > MAX_CACHED_CHANNELS_PER_ENDPOINT_V1) {
+      const oldestChannelKey = endpointSnapshots.keys().next().value as string | undefined
+      if (oldestChannelKey === undefined) break
+      endpointSnapshots.delete(oldestChannelKey)
+    }
+    if (latestSnapshotsByEndpoint.size > MAX_REPLAY_ENDPOINTS_V1) {
+      const oldestEndpointId = latestSnapshotsByEndpoint.keys().next().value as string | undefined
+      if (oldestEndpointId !== undefined) latestSnapshotsByEndpoint.delete(oldestEndpointId)
     }
     if (sockets.size === 0) return
-    const encoded: EncodedLogicalTransmissionV1 = Object.freeze({
-      projectId: batch.projectId,
-      configRevision: batch.configRevision,
-      endpointId: batch.endpointId,
-      chunks: Object.freeze(chunks.map((chunk) => {
-        wireSequenceByEndpoint.set(chunk.endpointId, chunk.sequence)
-        return Object.freeze({ payload: JSON.stringify(chunk) })
-      })),
-    })
-    for (const state of sockets.values()) {
-      if (state.transmitting) state.pending = encoded
-      else sendNext(state, encoded)
+    for (const source of sources) {
+      const transmission = [...sockets.values()].some((state) => !state.transmitting)
+        ? encodeTransmission(untrustedBatch.endpointId, source.channelKey, source.batch)
+        : null
+      for (const state of sockets.values()) {
+        enqueue(
+          state,
+          transmission,
+          untrustedBatch.endpointId,
+          source.channelKey,
+          source.batch,
+        )
+      }
     }
   }
 
@@ -384,7 +499,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     if (closed) return
     closed = true
     activeRevision = null
-    latestSnapshotChunksByEndpoint.clear()
+    latestSnapshotsByEndpoint.clear()
     for (const state of sockets.values()) {
       detachState(state)
       try {

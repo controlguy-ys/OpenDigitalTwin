@@ -325,6 +325,21 @@ describe('ObjectRuntimeStateV4', () => {
     expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)], { endpointId: 'endpoint-other' }), 5_100)).toBe(false)
   })
 
+  it('accepts a canonical config revision for a UUID Project revision and rejects the UUID as a protocol fence', () => {
+    const configRevision = 'c'.repeat(64)
+    const project = validateWorkcellProjectV4({
+      ...mappedProject(),
+      revisionId: '6f0e1d43-1bd3-4c89-a811-3d8681e44773',
+    })
+    const runtime = createObjectRuntimeStateV4(project, configRevision)
+    expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)], {
+      configRevision,
+    }), 5_100)).toBe(true)
+    expect(runtime.ingest(batch(2, [poseValue('mapping-box-live', 2)], {
+      configRevision: project.revisionId,
+    }), 5_200)).toBe(false)
+  })
+
   it('does not compile retained client mappings while the Project mode is off or server', () => {
     const project = mappedProject()
     for (const mode of ['off', 'server'] as const) {

@@ -271,6 +271,7 @@ function poseFromMappedValueV4(
 
 export function createObjectRuntimeStateV4(
   projectInput: WorkcellProjectV4,
+  configRevision = projectInput.revisionId,
 ): ObjectRuntimeStateV4 {
   const project = validateWorkcellProjectV4(projectInput)
   const channels = compileChannelsV4(project)
@@ -326,7 +327,7 @@ export function createObjectRuntimeStateV4(
     }
     if (
       batch.projectId !== project.projectId
-      || batch.configRevision !== project.revisionId
+      || batch.configRevision !== configRevision
       || !project.opcUa.endpoints.some(({ endpointId }) => endpointId === batch.endpointId)
     ) return false
     const previousSequence = latestSequenceByEndpoint.get(batch.endpointId) ?? 0
