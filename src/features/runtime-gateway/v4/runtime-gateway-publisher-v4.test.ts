@@ -17,8 +17,11 @@ function status(
     revisionId,
     mode,
     ready: true,
-    opcUaStarted: mode === 'server',
-    endpointUrl: mode === 'server' ? 'opc.tcp://127.0.0.1:4840' : null,
+    opcUaStarted: mode !== 'off',
+    endpointUrl: mode === 'server' || mode === 'bridge' ? 'opc.tcp://127.0.0.1:4840' : null,
+    ...(mode === 'client' || mode === 'bridge'
+      ? { opcUaClientEndpoints: [{ endpointId: 'endpoint-client', connected: true, lastError: null }] }
+      : {}),
   }
 }
 
@@ -43,6 +46,15 @@ function deferred<T>(): {
 }
 
 describe('RuntimeGatewayPublisherV4', () => {
+  it.each(['client', 'bridge'] as const)('decodes %s mode and typed Client Endpoint status', async (mode) => {
+    const expected = status('revision-client-v4', mode)
+    const publisher = createRuntimeGatewayPublisherV4({
+      fetch: vi.fn(async () => jsonResponse(expected)),
+    })
+
+    await expect(publisher.readStatus()).resolves.toEqual(expected)
+  })
+
   it.each([
     new RuntimeGatewayPublisherV4Error(
       'NO_ACTIVE_REVISION',

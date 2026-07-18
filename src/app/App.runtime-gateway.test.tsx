@@ -29,7 +29,7 @@ import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selecto
 import { createSceneRuntimeStoreV4 } from '../features/scene/v4/scene-runtime-store.js'
 import { createViewportPreferenceStoreV4 } from '../features/viewport/v4/viewport-preference-store.js'
 import { createShellLayoutStoreV4 } from '../features/ui/v4/shell-layout-store.js'
-import { App } from './App.js'
+import { App, type RuntimeGatewayStreamFactoryV4 } from './App.js'
 
 vi.mock('./AppShell.js', () => ({
   AppShellV4: ({ header }: {
@@ -319,41 +319,55 @@ describe('App Runtime Gateway V4 integration', () => {
     expect(jointValues.__proto__).toBe(active.robots[0]!.initialJointValues.__proto__)
   })
 
-  it('deactivates a prior Server without mutating an imported unsupported Client Project', async () => {
+  it('activates an imported Client Project unchanged and owns one browser stream lifecycle', async () => {
     const server = project('revision-client-mode-v4')
     const active = validateWorkcellProjectV4({
       ...server,
       opcUa: { ...server.opcUa, mode: 'client' },
     })
     const resources = resourcesForProject(active)
-    const deactivateProject = vi.fn(async (candidate: WorkcellProjectV4) => ({
+    const activateClientProject = vi.fn(async (candidate: WorkcellProjectV4) => ({
       ...status(candidate),
-      mode: 'off' as const,
-      opcUaStarted: false,
+      mode: 'client' as const,
+      opcUaStarted: true,
       endpointUrl: null,
+      opcUaClientEndpoints: candidate.opcUa.endpoints.map(({ endpointId }) => ({
+        endpointId,
+        connected: false,
+        lastError: null,
+      })),
     }))
-    const gateway = publisher({ activateProject: deactivateProject })
+    const gateway = publisher({ activateProject: activateClientProject })
+    const start = vi.fn()
+    const stop = vi.fn()
+    const gatewayStreamFactory = vi.fn((() => ({
+      start,
+      stop,
+      status: () => ({ phase: 'open' as const, reconnectScheduled: false }),
+    })) satisfies RuntimeGatewayStreamFactoryV4)
 
-    render(<App gatewayPublisher={gateway.value} resources={resources} />)
+    const view = render(
+      <App
+        gatewayPublisher={gateway.value}
+        gatewayStreamFactory={gatewayStreamFactory}
+        resources={resources}
+      />,
+    )
 
     await waitFor(() => expect(
-      screen.getByRole('button', { name: /Gateway details: Unavailable.*OPC UA mode client/ }),
+      screen.getByRole('button', { name: /Gateway details: OPC UA Client.*Ready/ }),
     ).toBeInTheDocument())
-    expect(deactivateProject).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId: active.projectId,
-        revisionId: active.revisionId,
-        opcUa: {
-          mode: 'off',
-          endpoints: [],
-          mappings: [],
-          actionBindings: [],
-          bridgeRoutes: [],
-        },
-      }),
+    expect(activateClientProject).toHaveBeenCalledWith(
+      active,
       expect.any(AbortSignal),
     )
     expect(active.opcUa.mode).toBe('client')
+    expect(gateway.publishRobotState).not.toHaveBeenCalled()
+    expect(gatewayStreamFactory).toHaveBeenCalledOnce()
+    expect(start).toHaveBeenCalledOnce()
+
+    view.unmount()
+    expect(stop).toHaveBeenCalledOnce()
   })
 
   it('keeps a valid zero-Robot Server Project ready without posting an empty state batch', async () => {

@@ -42,6 +42,8 @@ function sourceLabel(source: 'simulation' | 'manual' | `opcua:${string}`): strin
 }
 
 function gatewayModeLabel(gateway: RuntimeGatewayPresentationV4): string {
+  if (gateway.mode === 'bridge') return 'OPC UA Bridge'
+  if (gateway.mode === 'client') return 'OPC UA Client'
   if (gateway.mode === 'server') return 'OPC UA Server'
   if (gateway.mode === 'off') return 'Off'
   return 'Unavailable'

@@ -62,6 +62,14 @@ import {
   type RuntimeGatewayStatusV4,
 } from '../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
 import {
+  createObjectRuntimeStateV4,
+  type ObjectRuntimeStateV4,
+} from '../features/runtime-gateway/v4/object-runtime-state-v4.js'
+import {
+  createRuntimeGatewayStreamV4,
+  type RuntimeGatewayStreamV4,
+} from '../features/runtime-gateway/v4/runtime-gateway-stream-v4.js'
+import {
   SceneCanvasV4,
   type SceneCameraCommandV4,
   type SceneCameraRequestV4,
@@ -94,9 +102,17 @@ import { createInitialProjectBootstrapV4 } from './initial-project-bootstrap.js'
 export interface AppPropsV4 {
   readonly resources?: BrowserProjectResourcesV4
   readonly gatewayPublisher?: RuntimeGatewayPublisherV4 | null
+  readonly gatewayStreamFactory?: RuntimeGatewayStreamFactoryV4 | null
 }
 
+export type RuntimeGatewayStreamFactoryV4 = (
+  runtime: ObjectRuntimeStateV4,
+) => RuntimeGatewayStreamV4
+
 const browserRuntimeGatewayPublisherV4 = createRuntimeGatewayPublisherV4()
+const browserRuntimeGatewayStreamFactoryV4: RuntimeGatewayStreamFactoryV4 = (runtime) => (
+  createRuntimeGatewayStreamV4({ ingest: runtime.ingest })
+)
 
 const IDLE_GATEWAY_PRESENTATION_V4: RuntimeGatewayPresentationV4 = Object.freeze({
   phase: 'idle',
@@ -257,6 +273,7 @@ function RuntimePendingV4({
 export function App({
   resources = browserProjectResourcesV4,
   gatewayPublisher = browserRuntimeGatewayPublisherV4,
+  gatewayStreamFactory = browserRuntimeGatewayStreamFactoryV4,
 }: AppPropsV4) {
   const projectState = useStore(resources.projectStore)
   const runtimeBundle = useStore(resources.runtimeBundle, (state) => state)
@@ -390,6 +407,20 @@ export function App({
 
   const project = projectState.activeProject
   const revisionId = project?.revisionId ?? null
+  const objectRuntime = useMemo(() => (
+    project === null ? null : createObjectRuntimeStateV4(project)
+  ), [project])
+  useEffect(() => {
+    if (
+      gatewayStreamFactory === null
+      || objectRuntime === null
+      || project === null
+      || (project.opcUa.mode !== 'client' && project.opcUa.mode !== 'bridge')
+    ) return
+    const stream = gatewayStreamFactory(objectRuntime)
+    stream.start()
+    return () => stream.stop()
+  }, [gatewayStreamFactory, objectRuntime, project])
   const setCurrentContextRequest = useCallback((
     request: SceneContextRequestV4 | null,
   ): void => {
@@ -486,61 +517,6 @@ export function App({
   useEffect(() => {
     if (gatewayPublisher === null || project === null || !ready) return
     const projectRevisionId = project.revisionId
-    if (project.opcUa.mode !== 'off' && project.opcUa.mode !== 'server') {
-      const unsupportedMode = project.opcUa.mode
-      const abortController = new AbortController()
-      let active = true
-      setGatewayPresentation({
-        phase: 'activating',
-        projectRevisionId,
-        mode: null,
-        endpointUrl: null,
-        message: null,
-      })
-      const runtimeOffProject: WorkcellProjectV4 = {
-        ...project,
-        opcUa: {
-          mode: 'off',
-          endpoints: [],
-          mappings: [],
-          actionBindings: [],
-          bridgeRoutes: [],
-        },
-      }
-      void gatewayPublisher.activateProject(
-        runtimeOffProject,
-        abortController.signal,
-      ).then((status) => {
-        if (!active) return
-        if (
-          status.projectId !== project.projectId
-          || status.revisionId !== projectRevisionId
-          || status.mode !== 'off'
-        ) {
-          throw new Error('Runtime Gateway did not deactivate the prior OPC UA runtime.')
-        }
-        setGatewayPresentation({
-          phase: 'error',
-          projectRevisionId,
-          mode: null,
-          endpointUrl: null,
-          message: `OPC UA mode ${unsupportedMode} is not supported by this Runtime Gateway.`,
-        })
-      }).catch((error: unknown) => {
-        if (!active) return
-        setGatewayPresentation({
-          phase: 'error',
-          projectRevisionId,
-          mode: null,
-          endpointUrl: null,
-          message: error instanceof Error ? error.message : String(error),
-        })
-      })
-      return () => {
-        active = false
-        abortController.abort()
-      }
-    }
     const abortController = new AbortController()
     let active = true
     let unsubscribeRobots: (() => void) | null = null
@@ -557,7 +533,7 @@ export function App({
       setGatewayPresentation({
         phase: 'error',
         projectRevisionId,
-        mode: project.opcUa.mode === 'server' ? 'server' : 'off',
+        mode: project.opcUa.mode,
         endpointUrl: null,
         message: error instanceof Error ? error.message : String(error),
       })
@@ -583,7 +559,7 @@ export function App({
       setGatewayPresentation({
         phase: 'activating',
         projectRevisionId,
-        mode: 'server',
+        mode: project.opcUa.mode,
         endpointUrl: null,
         message: null,
       })
@@ -595,11 +571,15 @@ export function App({
         )
         if (!publishStatus(activationStatus) || !active) return
         stateChangedDuringRecovery = false
-        const retryStatus = await gatewayPublisher.publishRobotState(
-          currentRobotStatePayload(),
-          abortController.signal,
-        )
-        retrySucceeded = publishStatus(retryStatus)
+        if (project.opcUa.mode === 'server' || project.opcUa.mode === 'bridge') {
+          const retryStatus = await gatewayPublisher.publishRobotState(
+            currentRobotStatePayload(),
+            abortController.signal,
+          )
+          retrySucceeded = publishStatus(retryStatus)
+        } else {
+          retrySucceeded = true
+        }
       }).catch(publishFailure)
       recoveryPromise = recovery
       void recovery.finally(() => {
@@ -648,7 +628,7 @@ export function App({
     setGatewayPresentation({
       phase: 'activating',
       projectRevisionId,
-      mode: project.opcUa.mode === 'server' ? 'server' : 'off',
+      mode: project.opcUa.mode,
       endpointUrl: null,
       message: null,
     })
@@ -656,7 +636,10 @@ export function App({
       project,
       abortController.signal,
     ).then((status) => {
-      if (!publishStatus(status) || project.opcUa.mode !== 'server') return
+      if (
+        !publishStatus(status)
+        || (project.opcUa.mode !== 'server' && project.opcUa.mode !== 'bridge')
+      ) return
       if (project.robots.length === 0) return
       unsubscribeRobots = resources.robots.subscribe(publishRobotState)
       publishRobotState()
@@ -1067,6 +1050,7 @@ export function App({
                 })
               }}
               onStatusChange={handleSceneStatusChange}
+              objectRuntime={objectRuntime}
               project={project}
               safeAreaInsets={safeAreaInsets}
               sceneRuntime={sceneRuntime}

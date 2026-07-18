@@ -3,17 +3,22 @@ import type { WorkcellProjectV4 } from '../../../core/project-v4/index.js'
 export interface RuntimeGatewayStatusV4 {
   readonly projectId: string | null
   readonly revisionId: string | null
-  readonly mode: 'off' | 'server'
+  readonly mode: 'off' | 'server' | 'client' | 'bridge'
   readonly ready: boolean
   readonly opcUaStarted: boolean
   readonly endpointUrl: string | null
+  readonly opcUaClientEndpoints?: readonly {
+    readonly endpointId: string
+    readonly connected: boolean
+    readonly lastError: string | null
+  }[]
   readonly errorCode?: string
 }
 
 export interface RuntimeGatewayPresentationV4 {
   readonly phase: 'idle' | 'activating' | 'ready' | 'error'
   readonly projectRevisionId: string | null
-  readonly mode: 'off' | 'server' | null
+  readonly mode: 'off' | 'server' | 'client' | 'bridge' | null
   readonly endpointUrl: string | null
   readonly message: string | null
 }
@@ -133,10 +138,15 @@ function decodeStatusV4(value: unknown): RuntimeGatewayStatusV4 {
   }
   const projectId = nullableStringV4(value.projectId, 'projectId')
   const revisionId = nullableStringV4(value.revisionId, 'revisionId')
-  if (value.mode !== 'off' && value.mode !== 'server') {
+  if (
+    value.mode !== 'off'
+    && value.mode !== 'server'
+    && value.mode !== 'client'
+    && value.mode !== 'bridge'
+  ) {
     return gatewayFailureV4(
       'RUNTIME_GATEWAY_RESPONSE_INVALID',
-      'Runtime Gateway mode must be off or server.',
+      'Runtime Gateway mode must be off, server, client, or bridge.',
     )
   }
   if (
@@ -149,6 +159,34 @@ function decodeStatusV4(value: unknown): RuntimeGatewayStatusV4 {
     )
   }
   const endpointUrl = nullableStringV4(value.endpointUrl, 'endpointUrl')
+  let opcUaClientEndpoints: RuntimeGatewayStatusV4['opcUaClientEndpoints']
+  if (value.opcUaClientEndpoints !== undefined) {
+    if (!Array.isArray(value.opcUaClientEndpoints)) {
+      return gatewayFailureV4(
+        'RUNTIME_GATEWAY_RESPONSE_INVALID',
+        'Runtime Gateway opcUaClientEndpoints must be an array when present.',
+      )
+    }
+    opcUaClientEndpoints = Object.freeze(value.opcUaClientEndpoints.map((candidate, index) => {
+      if (
+        !isRecordV4(candidate)
+        || typeof candidate.endpointId !== 'string'
+        || candidate.endpointId.trim().length === 0
+        || typeof candidate.connected !== 'boolean'
+        || (candidate.lastError !== null && typeof candidate.lastError !== 'string')
+      ) {
+        return gatewayFailureV4(
+          'RUNTIME_GATEWAY_RESPONSE_INVALID',
+          `Runtime Gateway opcUaClientEndpoints[${index}] is invalid.`,
+        )
+      }
+      return Object.freeze({
+        endpointId: candidate.endpointId,
+        connected: candidate.connected,
+        lastError: candidate.lastError,
+      })
+    }))
+  }
   const errorCode = value.errorCode
   if (
     errorCode !== undefined
@@ -166,6 +204,7 @@ function decodeStatusV4(value: unknown): RuntimeGatewayStatusV4 {
     ready: value.ready,
     opcUaStarted: value.opcUaStarted,
     endpointUrl,
+    ...(opcUaClientEndpoints === undefined ? {} : { opcUaClientEndpoints }),
     ...(errorCode === undefined ? {} : { errorCode }),
   })
 }

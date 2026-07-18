@@ -59,4 +59,18 @@ describe('composeAppHeaderStatusV4', () => {
     expect(result.jointSource).toEqual({ activeRobotName: null, sourceLabel: null })
     expect(result.gateway.endpoint).toBeNull()
   })
+
+  it.each([
+    ['client', 'OPC UA Client'],
+    ['bridge', 'OPC UA Bridge'],
+  ] as const)('labels %s connectivity without treating it as unavailable', (mode, modeLabel) => {
+    const result = composeAppHeaderStatusV4({
+      projectState: projectState('ready'),
+      jobRuntime: { byRobotId: {} },
+      robotRuntime: runtime(),
+      activeRobotId: null,
+      gateway: { ...gateway, mode, endpointUrl: null },
+    })
+    expect(result.gateway.modeLabel).toBe(modeLabel)
+  })
 })
