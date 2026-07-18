@@ -84,6 +84,25 @@ describe('composeAppCommandsV4', () => {
     expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.view.find(({ commandId }) => commandId === 'view.theme.system')).toMatchObject({ submenu: { id: 'view.theme', label: 'Theme' } })
     expect(() => (APP_COMMAND_PLACEMENTS_BY_SECTION_V4.project as unknown as object[]).push({})).toThrow()
     expect(() => (APP_CONTEXT_COMMAND_IDS_V4.robot as unknown as string[]).push('bad')).toThrow()
+    expect(Object.isFrozen(APP_COMMAND_PLACEMENTS_BY_SECTION_V4)).toBe(true)
+    for (const entries of Object.values(APP_COMMAND_PLACEMENTS_BY_SECTION_V4)) {
+      expect(Object.isFrozen(entries)).toBe(true)
+      for (const entry of entries) {
+        expect(Object.isFrozen(entry)).toBe(true)
+        if (entry.submenu !== null) expect(Object.isFrozen(entry.submenu)).toBe(true)
+      }
+    }
+    for (const ids of Object.values(APP_CONTEXT_COMMAND_IDS_V4)) expect(Object.isFrozen(ids)).toBe(true)
+    expect(Object.isFrozen(APP_QUICK_ACTION_IDS_V4)).toBe(true)
+    expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.connectivity.slice(0, 2).map(({ submenu }) => submenu)).toEqual([
+      { id: 'connectivity.runtime-mode', label: 'Runtime Mode' }, { id: 'connectivity.runtime-mode', label: 'Runtime Mode' },
+    ])
+    for (const [section, submenu] of [
+      ['view.sidebar', { id: 'view.panels', label: 'Panels' }], ['view.theme.system', { id: 'view.theme', label: 'Theme' }], ['view.layer.grid', { id: 'view.layers', label: 'Layers' }], ['view.home', { id: 'view.camera', label: 'Camera' }], ['view.orientation.top', { id: 'view.standard-views', label: 'Standard Views' }],
+    ] as const) {
+      expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.view.find(({ commandId }) => commandId === section)?.submenu).toEqual(submenu)
+    }
+    expect(Object.values(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).flat().filter(({ submenu }) => submenu === null).every(({ submenu }) => submenu === null)).toBe(true)
   })
 
   it('exposes the approved placement and context tuples without duplicate definitions', () => {
@@ -165,14 +184,33 @@ describe('composeAppCommandsV4', () => {
     await registry.get('job.start')!.execute()
     await registry.get('job.cancel')!.execute()
     await registry.get('job.rename')!.execute()
+    await registry.get('job.delete')!.execute()
     expect(composed.robotOperator.home).toHaveBeenCalledWith('robot-2')
     expect(composed.robotOperator.setGripper).toHaveBeenCalledWith('robot-2', 'OPEN')
     expect(composed.robotOperator.savePose).toHaveBeenCalledWith('robot-2', 'job-2')
     expect(composed.jobOperator.start).toHaveBeenCalledWith('robot-2', 'job-2')
     expect(composed.jobOperator.cancel).toHaveBeenCalledWith('robot-2')
     expect(composed.jobs.renameJob).toHaveBeenCalledWith('job-2', 'Job')
+    expect(composed.jobs.deleteJob).toHaveBeenCalledWith('job-2')
     expect(composed.interaction.getState()).toMatchObject({ activeRobotId: 'robot-2', selection: { kind: 'spatial-entity', entityId: 'object-1' } })
     expect(composed.interaction.getState().selectedJobIdsByRobotId.get('robot-2')).toBe('job-2')
+  })
+
+  it('selects Robot 2 duplicate and new Job return values on the live pair', async () => {
+    const composed = context()
+    const registry = composeAppCommandsV4(composed)
+    composed.interaction.getState().activateRobot('robot-2')
+    composed.interaction.getState().selectJob('robot-2', 'job-2')
+    const duplicated = { ...composed.project, jobs: [...composed.project.jobs, { id: 'job-2-copy', name: 'Copy', robotId: 'robot-2', steps: [] }] }
+    vi.mocked(composed.jobs.duplicateJob).mockImplementation(async () => { composed.interaction.getState().replaceProject(duplicated); return 'job-2-copy' })
+    await registry.get('job.duplicate')!.execute()
+    expect(composed.jobs.duplicateJob).toHaveBeenCalledWith('job-2')
+    expect(composed.interaction.getState().selectedJobIdsByRobotId.get('robot-2')).toBe('job-2-copy')
+    const withNew = { ...duplicated, jobs: [...duplicated.jobs, { id: 'job-2-new', name: 'Job', robotId: 'robot-2', steps: [] }] }
+    vi.mocked(composed.jobs.createJob).mockImplementation(async () => { composed.interaction.getState().replaceProject(withNew); return 'job-2-new' })
+    await registry.get('job.new')!.execute()
+    expect(composed.jobs.createJob).toHaveBeenCalledWith('robot-2', 'Job')
+    expect(composed.interaction.getState().selectedJobIdsByRobotId.get('robot-2')).toBe('job-2-new')
   })
 
   it('selects returned duplicate/new jobs and does not mutate services for cancellation or required prompt failure', async () => {
@@ -248,6 +286,21 @@ describe('composeAppCommandsV4', () => {
     expect(registry.get('model.importRobotStep')).toBeNull()
   })
 
+  it('flips every Shell checked state and reset restores its deterministic defaults', async () => {
+    const composed = context()
+    const registry = composeAppCommandsV4(composed)
+    for (const id of ['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon'] as const) await registry.get(id)!.execute()
+    expect(registry.get('view.sidebar')).toMatchObject({ checked: false })
+    expect(registry.get('view.inspector')).toMatchObject({ checked: false })
+    expect(registry.get('view.bottom')).toMatchObject({ checked: true })
+    expect(registry.get('view.ribbon')).toMatchObject({ checked: false })
+    await registry.get('view.layout.reset')!.execute()
+    expect(registry.get('view.sidebar')).toMatchObject({ checked: true })
+    expect(registry.get('view.inspector')).toMatchObject({ checked: true })
+    expect(registry.get('view.bottom')).toMatchObject({ checked: false })
+    expect(registry.get('view.ribbon')).toMatchObject({ checked: true })
+  })
+
   it('routes all remaining shell, view, connectivity, presentation, and available Help actions exactly once', async () => {
     const composed = context()
     const registry = composeAppCommandsV4(composed)
@@ -312,6 +365,11 @@ describe('composeAppCommandsV4', () => {
     expect(noActiveRegistry.get('project.save')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
     expect(noActiveRegistry.get('project.export')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
     expect(noActiveRegistry.get('project.sample.dual')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
+    for (const status of ['loading', 'importing'] as const) {
+      const next = { ...initialEmpty, projectState: { ...initialEmpty.projectState, status } }
+      expect(composeAppCommandsV4(next).get('project.new')).toMatchObject({ enabled: false, disabledReason: 'Project operation is in progress.' })
+      expect(composeAppCommandsV4(next).get('project.import')).toMatchObject({ enabled: false, disabledReason: 'Project operation is in progress.' })
+    }
   })
 
   it('keeps an existing registry on its snapshot until a replacement context is composed', () => {
@@ -322,5 +380,17 @@ describe('composeAppCommandsV4', () => {
     const replacementRegistry = composeAppCommandsV4(replacement)
     expect(firstRegistry.get('connectivity.mode.server')).toMatchObject({ checked: false })
     expect(replacementRegistry.get('connectivity.mode.server')).toMatchObject({ checked: true })
+  })
+
+  it('registers and executes the optional OPC UA Help topic when it is available', async () => {
+    const initial = context()
+    const help = { ...initial.help, hasTopic: vi.fn(() => true) }
+    const registry = composeAppCommandsV4({ ...initial, help })
+    for (const id of ['help.controls', 'help.stepImport', 'help.opcUaMapping', 'help.about'] as const) await registry.get(id)!.execute()
+    expect(help.open).toHaveBeenCalledWith('controls')
+    expect(help.open).toHaveBeenCalledWith('stepImport')
+    expect(help.open).toHaveBeenCalledWith('opcUaMapping')
+    expect(help.open).toHaveBeenCalledWith('about')
+    for (const id of ['job.pause', 'job.resume', 'connectivity.mode.client', 'connectivity.mode.bridge', 'model.importRobotStep', 'robot.geometry.open', 'robot.kinematics.open', 'robot.rapid.open', 'scene.opcUaMapping.open', 'coordinate.frames.open'] as const) expect(registry.get(id)).toBeNull()
   })
 })

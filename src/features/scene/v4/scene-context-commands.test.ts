@@ -149,6 +149,12 @@ describe('scene context commands', () => {
     expect(scene.createBox).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Box', parentFrameId: 'mcp', dimensionsM: [0.1, 0.1, 0.1], color: '#38BDF8', groupId: 'group-a',
     }))
+    await commandById(commands, 'model.add.cylinder').execute()
+    await commandById(commands, 'model.add.group').execute()
+    expect(scene.createCylinder).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Cylinder', parentFrameId: 'mcp', radiusM: 0.05, heightM: 0.1, color: '#38BDF8', groupId: 'group-a',
+    }))
+    expect(scene.createGroup).toHaveBeenCalledWith('Group', 'group-a')
     interaction.getState().select({ kind: 'entity-frame', entityId: 'entity-a', frameId: 'moving-a' })
     await commandById(commands, 'scene.parent.edit').execute()
     expect(openInspector).toHaveBeenCalledWith({
@@ -216,6 +222,22 @@ describe('scene context commands', () => {
     interaction.getState().select({ kind: 'entity-frame', entityId: 'entity-a', frameId: 'grasp-a' })
     expect(commandById(commands, 'scene.parent.edit').visible).toBe(false)
     expect(commandById(commands, 'scene.pose.edit').visible).toBe(false)
+  })
+
+  it('defines exactly the approved 19 Scene commands with canonical sections and kinds', () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    const commands = composeSceneContextCommandsV4({ project, interaction, scene: sceneService(), prompt: { requestText: vi.fn(async () => null) }, presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() } })
+    expect(commands).toHaveLength(19)
+    expect(new Set(commands.map(({ id }) => id)).size).toBe(19)
+    expect(commands.filter(({ kind }) => kind === 'toggle').map(({ id }) => id)).toEqual(['scene.visibility.toggle'])
+    expect(commands.filter(({ section }) => section === 'home').map(({ id }) => id)).toEqual([
+      'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'scene.showAll', 'scene.delete', 'robot.jog.open',
+    ])
+    expect(commands.filter(({ section }) => section === 'model').map(({ id }) => id)).toEqual([
+      'model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit', 'scene.pose.edit', 'scene.parent.edit', 'scene.status.edit',
+    ])
   })
 
   it('rejects a required blank prompt before rename service dispatch', async () => {
@@ -290,7 +312,12 @@ describe('scene context commands', () => {
     expect(scene.setSpatialEntityLocalPose).toHaveBeenNthCalledWith(2, 'entity-a', expect.objectContaining({ positionM: [0, 0, 0] }))
     expect(scene.setSpatialEntityGroup).toHaveBeenCalledWith('entity-a', null)
     interaction.getState().select({ kind: 'scene-group', groupId: 'group-a' })
+    expect(commandById(commands, 'scene.group.move')).toMatchObject({ label: 'Move Group', enabled: true })
+    expect(commandById(commands, 'scene.group.remove')).toMatchObject({ label: 'Ungroup', enabled: true })
+    expect(commandById(commands, 'scene.visibility.toggle')).toMatchObject({ label: 'Hide', checked: true })
+    await commandById(commands, 'scene.group.move').execute()
     await commandById(commands, 'scene.group.remove').execute()
+    expect(scene.ungroup).toHaveBeenCalledWith('group-a')
     expect(scene.ungroup).toHaveBeenCalledWith('group-a')
   })
 
@@ -329,5 +356,21 @@ describe('scene context commands', () => {
     await commandById(commands, 'scene.visibility.toggle').execute()
     expect(scene.setPersistedVisibility).toHaveBeenCalledWith({ kind: 'spatial-entity', entityId: 'entity-a' }, false)
     expect(interaction.getState().selection).toBeNull()
+  })
+
+  it('routes Isolate and Show All directly through live Interaction state and deletes the exact removable Object', async () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
+    const scene = sceneService()
+    const commands = composeSceneContextCommandsV4({ project, interaction, scene, prompt: { requestText: vi.fn(async () => 'unused') }, presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() } })
+    await commandById(commands, 'scene.isolate').execute()
+    expect(interaction.getState().isolation).toEqual({ kind: 'spatial-entity', entityId: 'entity-a' })
+    expect(commandById(commands, 'scene.showAll')).toMatchObject({ enabled: true })
+    await commandById(commands, 'scene.showAll').execute()
+    expect(interaction.getState().isolation).toBeNull()
+    await commandById(commands, 'scene.delete').execute()
+    expect(scene.deleteSpatialEntity).toHaveBeenCalledWith('entity-a')
   })
 })
