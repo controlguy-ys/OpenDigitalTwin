@@ -218,6 +218,32 @@ describe('SceneCanvasV4', () => {
     expect(fireEvent(document, nativeMenu)).toBe(false)
   })
 
+  it('forwards the V4 gizmo preference and narrow pose commit while gating Orbit during a drag', async () => {
+    const commitLocalPose = vi.fn(async () => undefined)
+    const data = renderCanvas({ onCommitSpatialEntityLocalPose: commitLocalPose })
+    act(() => data.viewportPreferences.getState().setGizmoFrame('parent'))
+
+    expect(capture.workcell).toMatchObject({ gizmoFrame: 'parent' })
+    const onCommitLocalPose = capture.workcell?.onCommitLocalPose as (
+      entityId: string,
+      localPose: { readonly positionM: readonly number[]; readonly quaternion: readonly number[] },
+    ) => Promise<void>
+    await onCommitLocalPose('entity-a', {
+      positionM: [1, 2, 3],
+      quaternion: [0, 0, 0, 1],
+    })
+    expect(commitLocalPose).toHaveBeenCalledWith('entity-a', {
+      positionM: [1, 2, 3],
+      quaternion: [0, 0, 0, 1],
+    })
+
+    const onDraggingChange = capture.workcell?.onDraggingChange as (dragging: boolean) => void
+    act(() => onDraggingChange(true))
+    expect(capture.runtime).toMatchObject({ transformDragging: true })
+    act(() => onDraggingChange(false))
+    expect(capture.runtime).toMatchObject({ transformDragging: false })
+  })
+
   it('notifies the explicit context target for ordinary selection and primary empty clears', () => {
     const onExplicitContextTarget = vi.fn()
     renderCanvas({ onExplicitContextTarget })

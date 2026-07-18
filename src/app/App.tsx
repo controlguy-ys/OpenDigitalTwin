@@ -1055,6 +1055,7 @@ export function App({
               commandBindings={activeCommandEnvironment.bindings}
               geometryRepository={resources.geometry}
               interaction={resources.interaction}
+              onCommitSpatialEntityLocalPose={resources.sceneCommands.setSpatialEntityLocalPose}
               onContextRequest={setCurrentContextRequest}
               onExplicitContextTarget={(selection) => {
                 setContextTargetSource(selection === null ? 'empty' : 'scene')

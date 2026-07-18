@@ -34,7 +34,12 @@ import {
   spatialEntityCollisionProxyV4,
   type CollisionGeometryProxyV4,
 } from '../../collision/v4/scene-entity-adapter-v4.js'
-import type { SceneIsolationTargetV4 } from '../../interaction/v4/scene-selection.js'
+import type {
+  SceneIsolationTargetV4,
+  SceneSelectionV4,
+} from '../../interaction/v4/scene-selection.js'
+import type { GizmoFramePreferenceV4 } from '../../viewport/v4/viewport-preference-store.js'
+import { SpatialEntityTransformControlsV4 } from './SpatialEntityTransformControls.js'
 import type { WorkcellInteractionHandlersV4 } from './scene-context-request.js'
 import type {
   SceneRuntimeProjectionV4,
@@ -54,6 +59,13 @@ export interface SpatialEntityScenePropsV4 {
   ) => void
   readonly interaction?: WorkcellInteractionHandlersV4
   readonly viewIsolation?: SceneIsolationTargetV4 | null
+  readonly selection?: SceneSelectionV4
+  readonly gizmoFrame?: GizmoFramePreferenceV4
+  readonly onCommitLocalPose?: (
+    entityId: SpatialEntityIdV4,
+    localPose: RigidTransformV4,
+  ) => Promise<void>
+  readonly onDraggingChange?: (dragging: boolean) => void
 }
 
 interface LocalBoundsV4 {
@@ -443,6 +455,10 @@ export function SpatialEntitySceneV4({
   onRegister,
   interaction,
   viewIsolation = null,
+  selection = null,
+  gizmoFrame = 'world',
+  onCommitLocalPose,
+  onDraggingChange,
 }: SpatialEntityScenePropsV4): ReactNode {
   const [resources, setResources] = useState<SpatialSceneResourcesV4 | null>(null)
   const [renderState, setRenderState] = useState<SpatialRenderStateV4 | null>(null)
@@ -556,6 +572,35 @@ export function SpatialEntitySceneV4({
           value={value}
         />
       ))}
+      {selection?.kind === 'spatial-entity'
+        ? (() => {
+            const entity = project.spatialEntities.find(
+              ({ id }) => id === selection.entityId,
+            )
+            const root = renderState.registration.roots.get(selection.entityId)
+            const runtime = sceneRuntime.entities.get(selection.entityId)
+            const parentWorldPose = entity === undefined
+              ? undefined
+              : sceneRuntime.globalFrames.get(entity.parentFrameId)?.worldPose
+            return entity?.transformOwner === 'manual'
+              && root !== undefined
+              && runtime?.kind === 'spatial-entity'
+              && parentWorldPose !== undefined
+              && onCommitLocalPose !== undefined
+              ? (
+                  <SpatialEntityTransformControlsV4
+                    entityId={entity.id}
+                    gizmoFrame={gizmoFrame}
+                    object={root}
+                    onCommitLocalPose={onCommitLocalPose}
+                    onDraggingChange={onDraggingChange ?? (() => undefined)}
+                    parentWorldPose={parentWorldPose}
+                    persistedWorldPose={runtime.worldPose}
+                  />
+                )
+              : null
+          })()
+        : null}
     </>
   )
 }

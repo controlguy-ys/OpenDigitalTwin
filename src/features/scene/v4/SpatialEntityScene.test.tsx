@@ -37,6 +37,17 @@ vi.mock('@react-three/drei/web/Html.js', () => ({
   Html: ({ children }: { children: unknown }) => children,
 }))
 
+const transformControlsCapture = vi.hoisted(() => ({
+  props: null as Record<string, unknown> | null,
+}))
+
+vi.mock('./SpatialEntityTransformControls.js', () => ({
+  SpatialEntityTransformControlsV4: (props: Record<string, unknown>) => {
+    transformControlsCapture.props = props
+    return <output data-testid="spatial-transform-controls" />
+  },
+}))
+
 function entity(
   id: string,
   geometry: SpatialEntityV4['geometry'],
@@ -163,6 +174,69 @@ function expectRuntimeReadonlyMap(map: ReadonlyMap<unknown, unknown>): void {
 }
 
 describe('SpatialEntitySceneV4', () => {
+  it('shows a translate gizmo only for the selected manually owned Spatial Entity', async () => {
+    const project = spatialProject()
+    let registration: SpatialEntitySceneRegistrationV4 | null = null
+    const commitLocalPose = vi.fn(async () => undefined)
+    const { rerender } = render(
+      <SpatialEntitySceneV4
+        gizmoFrame="world"
+        onCommitLocalPose={commitLocalPose}
+        onRegister={(value) => {
+          registration = value
+        }}
+        project={project}
+        sceneRuntime={runtimeFor(project)}
+        selection={{ kind: 'spatial-entity', entityId: 'box-entity' }}
+      />,
+    )
+
+    await waitFor(() => expect(registration?.roots.size).toBe(3))
+    expect(screen.getByTestId('spatial-transform-controls')).toBeInTheDocument()
+    expect(transformControlsCapture.props).toMatchObject({
+      entityId: 'box-entity',
+      persistedWorldPose: { positionM: [10, 0, 0], quaternion: [0, 0, 0, 1] },
+      gizmoFrame: 'world',
+    })
+
+    for (const entityId of ['cylinder-entity', 'asset-entity']) {
+      rerender(
+        <SpatialEntitySceneV4
+          gizmoFrame="world"
+          onCommitLocalPose={commitLocalPose}
+          onRegister={(value) => {
+            registration = value
+          }}
+          project={project}
+          sceneRuntime={runtimeFor(project)}
+          selection={{ kind: 'spatial-entity', entityId }}
+        />,
+      )
+      expect(transformControlsCapture.props).toMatchObject({ entityId })
+    }
+
+    rerender(
+      <SpatialEntitySceneV4
+        gizmoFrame="parent"
+        onCommitLocalPose={commitLocalPose}
+        onRegister={(value) => {
+          registration = value
+        }}
+        project={{
+          ...project,
+          spatialEntities: project.spatialEntities.map((candidate) => (
+            candidate.id === 'box-entity'
+              ? { ...candidate, transformOwner: 'opcua:endpoint-a' as const }
+              : candidate
+          )),
+        }}
+        sceneRuntime={runtimeFor(project)}
+        selection={{ kind: 'spatial-entity', entityId: 'box-entity' }}
+      />,
+    )
+    expect(screen.queryByTestId('spatial-transform-controls')).toBeNull()
+  })
+
   it('renders visible primitives and bounded unresolved Assets with Z-axis cylinders', async () => {
     const project = spatialProject()
     const sceneRuntime = runtimeFor(project)

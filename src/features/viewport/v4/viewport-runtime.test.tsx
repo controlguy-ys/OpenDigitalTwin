@@ -340,6 +340,40 @@ describe('viewport bound resolvers V4', () => {
     expect(viewportHarness.orbitProps).not.toHaveProperty('maxDistance')
   })
 
+  it('disables Orbit only while a Spatial Entity transform drag is active', async () => {
+    const project = projectFixture()
+    viewportHarness.camera = new PerspectiveCamera()
+    viewportHarness.orbitProps = null
+    const { rerender } = render(
+      <ViewportRuntimeV4
+        commandBindings={commandBindings}
+        onRegister={vi.fn()}
+        preferences={createViewportPreferenceStoreV4(null)}
+        project={project}
+        registration={registration()}
+        runtime={runtime(project)}
+        selection={null}
+        transformDragging
+      />,
+    )
+
+    await waitFor(() => expect(viewportHarness.orbitProps).not.toBeNull())
+    expect(viewportHarness.orbitProps).toMatchObject({ enabled: false })
+    rerender(
+      <ViewportRuntimeV4
+        commandBindings={commandBindings}
+        onRegister={vi.fn()}
+        preferences={createViewportPreferenceStoreV4(null)}
+        project={project}
+        registration={registration()}
+        runtime={runtime(project)}
+        selection={null}
+        transformDragging={false}
+      />,
+    )
+    expect(viewportHarness.orbitProps).toMatchObject({ enabled: true })
+  })
+
   it('passes the exact safe-area object through to the World View Cube', async () => {
     const project = projectFixture()
     const insets = { top: 11, right: 13, bottom: 17, left: 19 }

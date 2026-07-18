@@ -15,6 +15,8 @@ import type {
   RevisionIdV4,
   WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
+import type { RigidTransformV4 } from '../../../core/project-v4/rigid-transform.js'
+import type { SpatialEntityIdV4 } from '../../../core/project-v4/types.js'
 import type { CoordinateDisplayStoreStateV4 } from '../../frames/v4/coordinate-display-store.js'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
 import type { SceneSelectionTargetV4 } from '../../interaction/v4/scene-selection.js'
@@ -77,6 +79,10 @@ export interface SceneCanvasPropsV4 {
   readonly onRegistration?: (
     registration: WorkcellRegistrationV4 | null,
   ) => void
+  readonly onCommitSpatialEntityLocalPose?: (
+    entityId: SpatialEntityIdV4,
+    localPose: RigidTransformV4,
+  ) => Promise<void>
 }
 
 interface RevisionRegistrationV4 {
@@ -98,10 +104,12 @@ export function SceneCanvasV4({
   onExplicitContextTarget,
   onStatusChange,
   onRegistration,
+  onCommitSpatialEntityLocalPose,
 }: SceneCanvasPropsV4): ReactNode {
   const selection = useStore(interaction, (state) => state.selection)
   const viewIsolation = useStore(interaction, (state) => state.isolation)
   const layers = useStore(viewportPreferences, (state) => state.layers)
+  const gizmoFrame = useStore(viewportPreferences, (state) => state.gizmoFrame)
   const initialCameraState = useRef(viewportPreferences.getState().cameraState)
   const gestureRef = useRef(createRightButtonGestureControllerV4())
   const currentRevisionId = useRef(project.revisionId)
@@ -114,6 +122,7 @@ export function SceneCanvasV4({
   const [viewportController, setViewportController] = useState<ViewportRuntimeControllerV4 | null>(null)
   const [sceneAttempt, setSceneAttempt] = useState(0)
   const [failedAttempt, setFailedAttempt] = useState<string | null>(null)
+  const [transformDragging, setTransformDragging] = useState(false)
   const sceneAttemptKey = `${project.revisionId}:${sceneAttempt}`
   const registration = registrationState?.projectRevisionId === project.revisionId
     ? registrationState.value
@@ -325,16 +334,22 @@ export function SceneCanvasV4({
             <Suspense fallback={null}>
               <WorkcellV4
                 geometryRepository={geometryRepository}
+                gizmoFrame={gizmoFrame}
                 interaction={{
                   onSelect: handleSelect,
                   onContextCandidate: (selection, pointerId) => {
                     gestureRef.current.setCandidate(pointerId, selection)
                   },
                 }}
+                onDraggingChange={setTransformDragging}
                 onRegister={handleRegistration}
                 project={project}
                 sceneRuntime={sceneRuntime}
+                selection={selection}
                 viewIsolation={viewIsolation}
+                {...(onCommitSpatialEntityLocalPose === undefined
+                  ? {}
+                  : { onCommitLocalPose: onCommitSpatialEntityLocalPose })}
               />
               <CoordinateFrameLayersV4
                 layers={layers}
@@ -357,6 +372,7 @@ export function SceneCanvasV4({
                 runtime={sceneRuntime}
                 safeAreaInsets={safeAreaInsets}
                 selection={selection}
+                transformDragging={transformDragging}
               />
             </Suspense>
           </Canvas>

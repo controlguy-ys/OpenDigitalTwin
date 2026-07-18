@@ -23,6 +23,9 @@ import type {
 } from '../../../core/project-v4/types.js'
 import type { CollisionGeometryProxyV4 } from '../../collision/v4/scene-entity-adapter-v4.js'
 import type { SceneIsolationTargetV4 } from '../../interaction/v4/scene-selection.js'
+import type { SceneSelectionV4 } from '../../interaction/v4/scene-selection.js'
+import type { GizmoFramePreferenceV4 } from '../../viewport/v4/viewport-preference-store.js'
+import type { RigidTransformV4 } from '../../../core/project-v4/rigid-transform.js'
 import {
   RobotFleetV4,
   type RobotFleetRegistrationV4,
@@ -52,6 +55,13 @@ export interface WorkcellPropsV4 {
   readonly onRegister: (registration: WorkcellRegistrationV4 | null) => void
   readonly interaction?: WorkcellInteractionHandlersV4
   readonly viewIsolation?: SceneIsolationTargetV4 | null
+  readonly selection?: SceneSelectionV4
+  readonly gizmoFrame?: GizmoFramePreferenceV4
+  readonly onCommitLocalPose?: (
+    entityId: SpatialEntityIdV4,
+    localPose: RigidTransformV4,
+  ) => Promise<void>
+  readonly onDraggingChange?: (dragging: boolean) => void
 }
 
 interface WorkcellChildRegistrationV4<T> {
@@ -147,6 +157,10 @@ export function WorkcellV4({
   onRegister,
   interaction,
   viewIsolation = null,
+  selection = null,
+  gizmoFrame = 'world',
+  onCommitLocalPose,
+  onDraggingChange,
 }: WorkcellPropsV4): ReactNode {
   const repositoryVersion = useSyncExternalStore(
     geometryRepository.subscribe,
@@ -262,9 +276,13 @@ export function WorkcellV4({
         {...(interaction === undefined ? {} : { interaction })}
       />
       <SpatialEntitySceneV4
+        gizmoFrame={gizmoFrame}
+        {...(onCommitLocalPose === undefined ? {} : { onCommitLocalPose })}
+        {...(onDraggingChange === undefined ? {} : { onDraggingChange })}
         onRegister={handleSpatialRegistration}
         project={project}
         sceneRuntime={sceneRuntime}
+        selection={selection}
         viewIsolation={viewIsolation}
         {...(interaction === undefined ? {} : { interaction })}
       />

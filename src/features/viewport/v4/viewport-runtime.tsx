@@ -269,6 +269,7 @@ export interface ViewportRuntimePropsV4 {
   readonly onRegister: (controller: ViewportRuntimeControllerV4 | null) => void
   readonly safeAreaInsets?: ViewportSafeAreaInsetsV4
   readonly commandBindings: AppCommandBindingsV4
+  readonly transformDragging?: boolean
 }
 
 export function ViewportRuntimeV4({
@@ -280,6 +281,7 @@ export function ViewportRuntimeV4({
   onRegister,
   safeAreaInsets = ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
   commandBindings,
+  transformDragging = false,
 }: ViewportRuntimePropsV4): ReactNode {
   const camera = useThree((state) => state.camera)
   const [controls, setControls] = useState<ComponentRef<typeof OrbitControls> | null>(null)
@@ -350,6 +352,7 @@ export function ViewportRuntimeV4({
   return (
     <>
       <OrbitControls
+        enabled={!transformDragging}
         enableDamping
         makeDefault
         minDistance={0.8}
