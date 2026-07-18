@@ -1,444 +1,191 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  validateWorkcellProjectV4,
-  type RobotJobStepV4,
-  type WorkcellProjectV4,
-} from '../../../core/project-v4/index.js'
+import { describe, expect, it, vi } from 'vitest'
+import { validateWorkcellProjectV4, type RobotJobStepV4, type WorkcellProjectV4 } from '../../../core/project-v4/index.js'
 import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-support.js'
+import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from '../../commands/v4/app-command-runtime.js'
+import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-registry.js'
 import type { JobCommandServiceV4 } from '../../jobs/v4/job-command-service.js'
 import { createJobRuntimeStoreV4 } from '../../jobs/v4/job-runtime-store.js'
-import type { RobotJobPlaybackControllerV4 } from '../../jobs/v4/simulation-clock.js'
 import { TimelineV4 } from './Timeline.js'
-import type { JobOperatorServiceV4 } from '../../jobs/v4/job-operator-service.js'
 
-function pose(speedPercentToNext: number): RobotJobStepV4 {
-  return {
-    kind: 'joint-pose',
-    jointValues: { 'prismatic:Z': 0.2 },
-    speedPercentToNext,
-  }
-}
+function pose(speedPercentToNext: number): RobotJobStepV4 { return { kind: 'joint-pose', jointValues: { 'prismatic:Z': 0.2 }, speedPercentToNext } }
 
 function projectFixture(): WorkcellProjectV4 {
   const source = structuredClone(makeMinimalWorkcellProjectV4())
   const definition = source.robotDefinitions[0]!
-  const robotDefinitions = [{
-    ...definition,
-    joints: definition.joints.map((joint) => ({ ...joint, id: 'prismatic:Z' })),
-  }]
-  const template = {
-    ...source.robots[0]!,
-    initialJointValues: { 'prismatic:Z': 0 },
-  }
+  const template = { ...source.robots[0]!, initialJointValues: { 'prismatic:Z': 0 }, jointSource: 'simulation' as const }
   return validateWorkcellProjectV4({
     ...source,
-    robotDefinitions,
-    robots: [
-      { ...template, id: 'robot-A', name: 'Robot Alpha' },
-      { ...template, id: 'robot-B', name: 'Robot Beta' },
-    ],
-    actions: [{
-      id: 'action:open:α',
-      kind: 'set-gripper-state',
-      robotId: 'robot-A',
-      state: 'OPEN',
-    }],
-    jobs: [
-      {
-        id: 'job-A',
-        name: 'Alpha Sequence',
-        robotId: 'robot-A',
-        steps: [pose(35), { kind: 'action-reference', actionId: 'action:open:α' }, pose(100)],
-      },
-      { id: 'job-B', name: 'Beta Sequence', robotId: 'robot-B', steps: [pose(100)] },
-    ],
+    robotDefinitions: [{ ...definition, joints: definition.joints.map((joint) => ({ ...joint, id: 'prismatic:Z' })) }],
+    robots: [{ ...template, id: 'robot-A', name: 'Robot Alpha' }, { ...template, id: 'robot-B', name: 'Robot Beta' }],
+    actions: [{ id: 'action:open', kind: 'set-gripper-state', robotId: 'robot-A', state: 'OPEN' }],
+    jobs: [{ id: 'job-A', name: 'Alpha Sequence', robotId: 'robot-A', steps: [pose(35), { kind: 'action-reference', actionId: 'action:open' }, pose(100)] }, { id: 'job-B', name: 'Beta Sequence', robotId: 'robot-B', steps: [pose(100)] }],
   })
 }
 
-function commands(): JobCommandServiceV4 {
-  return {
-    createJob: vi.fn(async () => 'unused'),
-    renameJob: vi.fn(async () => undefined),
-    duplicateJob: vi.fn(async () => 'unused'),
-    deleteJob: vi.fn(async () => undefined),
-    saveJointPose: vi.fn(async () => undefined),
-    addActionReference: vi.fn(async () => undefined),
-    moveStep: vi.fn(async () => undefined),
-    deleteStep: vi.fn(async () => undefined),
-    setJointPoseSpeed: vi.fn(async () => undefined),
-  }
+function localCommands(): JobCommandServiceV4 {
+  return { createJob: vi.fn(async () => 'unused'), renameJob: vi.fn(async () => undefined), duplicateJob: vi.fn(async () => 'unused'), deleteJob: vi.fn(async () => undefined), saveJointPose: vi.fn(async () => undefined), addActionReference: vi.fn(async () => undefined), moveStep: vi.fn(async () => undefined), deleteStep: vi.fn(async () => undefined), setJointPoseSpeed: vi.fn(async () => undefined) }
 }
 
-function playback() {
-  return {
-    startJob: vi.fn((_jobId: string) => ({ runId: 'run-new' })),
-    cancelRobotJob: vi.fn((_robotId: string, _reason: string) => undefined),
-    ensureRunning: vi.fn(),
-    quiesce: vi.fn(async () => undefined),
-    resume: vi.fn(),
-    dispose: vi.fn(),
-  } satisfies RobotJobPlaybackControllerV4
+function running(robotId = 'robot-A', jobId = 'job-A') {
+  return { robotId, jobId, runId: `run-${robotId}`, state: 'RUNNING' as const, stepIndex: 0, startedAtSimulationMs: 0, completedAtSimulationMs: null, failureCode: null, message: '' }
 }
 
 function harness() {
   const project = projectFixture()
-  const jobs = createJobRuntimeStoreV4()
-  jobs.getState().replaceProject(project)
-  return { project, jobs, commands: commands(), playback: playback() }
-}
-
-function runningRobotState() {
-  return {
-    robotId: 'robot-A',
-    jobId: 'job-A',
-    runId: 'run-A',
-    state: 'RUNNING' as const,
-    stepIndex: 0,
-    startedAtSimulationMs: 0,
-    completedAtSimulationMs: null,
-    failureCode: null,
-    message: '',
+  const jobs = createJobRuntimeStoreV4(); jobs.getState().replaceProject(project)
+  const commands = localCommands()
+  const calls = {
+    start: vi.fn<(robotId: string, jobId: string) => Promise<void>>(async (): Promise<void> => {}),
+    cancel: vi.fn<(robotId: string) => Promise<void>>(async (): Promise<void> => {}),
   }
+  let target = { robotId: 'robot-A', jobId: 'job-A' }
+  const runtime = createAppCommandRuntimeV4(createAppCommandRegistryV4([
+    { id: 'job.start', label: 'Start Job', section: 'job', kind: 'action', visible: true, get enabled() { return jobs.getState().projectRevisionId === project.revisionId && jobs.getState().byRobotId[target.robotId]?.state !== 'RUNNING' }, execute: () => calls.start(target.robotId, target.jobId) },
+    { id: 'job.cancel', label: 'Cancel Active Robot Job', section: 'job', kind: 'action', visible: true, get enabled() { return jobs.getState().projectRevisionId === project.revisionId && jobs.getState().byRobotId[target.robotId]?.state === 'RUNNING' }, execute: () => calls.cancel(target.robotId) },
+  ]))
+  return { project, jobs, commands, calls, commandBindings: createAppCommandBindingsV4(runtime), setTarget: (robotId: 'robot-A' | 'robot-B', jobId: 'job-A' | 'job-B') => { target = { robotId, jobId } }, runtime }
 }
 
-afterEach(() => {
-  vi.restoreAllMocks()
-})
+function timeline(state: ReturnType<typeof harness>, robotId: 'robot-A' | 'robot-B' = 'robot-A', jobId: 'job-A' | 'job-B' = robotId === 'robot-A' ? 'job-A' : 'job-B') { return <TimelineV4 {...state} jobId={jobId} robotId={robotId} /> }
 
 describe('TimelineV4', () => {
-  it('renders stored Joint-Pose and Action-reference order with runtime cursor and state', () => {
-    const state = harness()
-    state.jobs.getState().setRobotState({
-      robotId: 'robot-A',
-      jobId: 'job-A',
-      runId: 'run-A',
-      state: 'RUNNING',
-      stepIndex: 1,
-      startedAtSimulationMs: 10,
-      completedAtSimulationMs: null,
-      failureCode: null,
-      message: 'Executing Action',
-    })
-    render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-
+  it('renders stored Joint-Pose/Action order and terminal runtime state', () => {
+    const state = harness(); state.jobs.getState().setRobotState({ ...running(), state: 'FAILED', stepIndex: 1, completedAtSimulationMs: 90, failureCode: 'ACTION_FAILED', message: 'Gripper unavailable' })
+    render(timeline(state))
     const steps = within(screen.getByRole('list', { name: 'Job steps' })).getAllByRole('listitem')
-    expect(steps).toHaveLength(3)
-    expect(steps[0]).toHaveTextContent('Step 1')
-    expect(steps[0]).toHaveTextContent('Joint Pose')
-    expect(steps[1]).toHaveTextContent('Step 2')
-    expect(steps[1]).toHaveTextContent('Action action:open:α')
-    expect(steps[1]).toHaveAttribute('aria-current', 'step')
-    expect(steps[2]).toHaveTextContent('Step 3')
-    expect(screen.getByRole('status', { name: 'Timeline runtime' }))
-      .toHaveTextContent('RUNNING')
-    expect(screen.getByRole('status', { name: 'Timeline runtime' }))
-      .toHaveTextContent('Step 2 of 3')
+    expect(steps).toHaveLength(3); expect(steps[1]).toHaveTextContent('Action action:open'); expect(steps[1]).toHaveAttribute('aria-current', 'step')
+    expect(screen.getByRole('status', { name: 'Timeline runtime' })).toHaveTextContent('FAILED')
+    expect(screen.getByRole('status', { name: 'Timeline runtime' })).toHaveTextContent('Gripper unavailable')
   })
 
-  it('routes move and delete commands by the exact stored step index', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-
-    await user.click(screen.getByRole('button', { name: 'Move step 2 up' }))
-    expect(state.commands.moveStep).toHaveBeenCalledWith('job-A', 1, -1)
-
-    await user.click(screen.getByRole('button', { name: 'Move step 2 down' }))
-    expect(state.commands.moveStep).toHaveBeenCalledWith('job-A', 1, 1)
-
-    await user.click(screen.getByRole('button', { name: 'Delete step 2' }))
-    expect(state.commands.deleteStep).toHaveBeenCalledWith('job-A', 1)
-  })
-
-  it('edits speed only when a later Joint Pose exists across intervening Actions', () => {
-    const state = harness()
-    render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-
-    const firstSpeed = screen.getByRole('spinbutton', {
-      name: 'Step 1 speed to next Joint Pose',
-    })
-    expect(firstSpeed).toBeEnabled()
-    expect(firstSpeed).toHaveValue(35)
-    expect(screen.queryByRole('spinbutton', {
-      name: 'Step 2 speed to next Joint Pose',
-    })).not.toBeInTheDocument()
-    expect(screen.getByRole('spinbutton', {
-      name: 'Step 3 speed to next Joint Pose',
-    })).toBeDisabled()
-
-    fireEvent.change(firstSpeed, { target: { value: '67' } })
+  it('keeps local speed, move, and delete authoring mapped to exact stored steps', async () => {
+    const user = userEvent.setup(); const state = harness(); render(timeline(state))
+    const speed = screen.getByRole('spinbutton', { name: 'Step 1 speed to next Joint Pose' })
+    expect(speed).toHaveValue(35); expect(screen.getByRole('spinbutton', { name: 'Step 3 speed to next Joint Pose' })).toBeDisabled()
+    fireEvent.change(speed, { target: { value: '67' } })
+    await user.click(screen.getByRole('button', { name: 'Move step 2 up' })); await user.click(screen.getByRole('button', { name: 'Delete step 2' }))
     expect(state.commands.setJointPoseSpeed).toHaveBeenCalledWith('job-A', 0, 67)
+    expect(state.commands.moveStep).toHaveBeenCalledWith('job-A', 1, -1); expect(state.commands.deleteStep).toHaveBeenCalledWith('job-A', 1)
   })
 
-  it('locks the running Robot but leaves an unrelated Robot Timeline authorable and startable', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    act(() => {
-      state.jobs.getState().setRobotState({
-        robotId: 'robot-A',
-        jobId: 'job-A',
-        runId: 'run-A',
-        state: 'RUNNING',
-        stepIndex: 0,
-        startedAtSimulationMs: 0,
-        completedAtSimulationMs: null,
-        failureCode: null,
-        message: '',
-      })
-    })
-    render(
-      <>
-        <section aria-label="Alpha timeline">
-          <TimelineV4 {...state} jobId="job-A" robotId="robot-A" />
-        </section>
-        <section aria-label="Beta timeline">
-          <TimelineV4 {...state} jobId="job-B" robotId="robot-B" />
-        </section>
-      </>,
-    )
-    const alpha = within(screen.getByRole('region', { name: 'Alpha timeline' }))
-    const beta = within(screen.getByRole('region', { name: 'Beta timeline' }))
-
-    expect(alpha.getByRole('button', { name: 'Start Job' })).toBeDisabled()
-    expect(alpha.getByRole('button', { name: 'Stop Job' })).toBeEnabled()
-    expect(alpha.getByRole('button', { name: 'Delete step 1' })).toBeDisabled()
-    expect(beta.getByRole('button', { name: 'Start Job' })).toBeEnabled()
-    expect(beta.getByRole('button', { name: 'Delete step 1' })).toBeEnabled()
-
-    await user.click(beta.getByRole('button', { name: 'Start Job' }))
-    expect(state.playback.startJob).toHaveBeenCalledWith('job-B')
-    await user.click(alpha.getByRole('button', { name: 'Stop Job' }))
-    expect(state.playback.cancelRobotJob).toHaveBeenCalledWith('robot-A', expect.any(String))
+  it('routes Start and Stop only through exact shared command IDs', async () => {
+    const user = userEvent.setup(); const state = harness(); render(timeline(state))
+    await user.click(screen.getByRole('button', { name: 'Start Job' })); expect(state.calls.start).toHaveBeenCalledWith('robot-A', 'job-A')
+    act(() => state.jobs.getState().setRobotState(running()))
+    await user.click(screen.getByRole('button', { name: 'Stop Job' })); expect(state.calls.cancel).toHaveBeenCalledWith('robot-A')
   })
 
-  it('shows terminal state and safely rejects a Job owned by another Robot', () => {
+  it('holds shared Start until an in-flight local authoring edit settles', async () => {
     const state = harness()
-    const view = render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-    act(() => {
-      state.jobs.getState().setRobotState({
-        robotId: 'robot-A',
-        jobId: 'job-A',
-        runId: 'run-A',
-        state: 'FAILED',
-        stepIndex: 2,
-        startedAtSimulationMs: 0,
-        completedAtSimulationMs: 90,
-        failureCode: 'ACTION_FAILED',
-        message: 'Gripper unavailable',
-      })
-    })
-    expect(screen.getByRole('status', { name: 'Timeline runtime' }))
-      .toHaveTextContent('FAILED')
-    expect(screen.getByRole('status', { name: 'Timeline runtime' }))
-      .toHaveTextContent('Gripper unavailable')
-
-    view.rerender(<TimelineV4 {...state} jobId="job-B" robotId="robot-A" />)
-    expect(screen.getByText('No Job selected for this Robot.')).toBeVisible()
-    expect(screen.queryByRole('list', { name: 'Job steps' })).not.toBeInTheDocument()
-  })
-
-  it('uses the injected playback boundary without browser frame scheduling or interpolation', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    const requestFrame = vi.fn()
-    vi.stubGlobal('requestAnimationFrame', requestFrame)
-    render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-
-    await user.click(screen.getByRole('button', { name: 'Start Job' }))
-    expect(state.playback.startJob).toHaveBeenCalledWith('job-A')
-    expect(requestFrame).not.toHaveBeenCalled()
-  })
-
-  it.each(['speed', 'move', 'delete', 'start'] as const)(
-    'rechecks latest Robot runtime before a stale IDLE-render %s event',
-    (operation) => {
-      const state = harness()
-      render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-
-      let target: HTMLElement
-      if (operation === 'speed') {
-        target = screen.getByRole('spinbutton', {
-          name: 'Step 1 speed to next Joint Pose',
-        })
-        target.addEventListener('change', () => {
-          state.jobs.getState().setRobotState(runningRobotState())
-        }, { capture: true, once: true })
-        fireEvent.change(target, { target: { value: '55' } })
-      } else {
-        target = screen.getByRole('button', {
-          name: operation === 'move'
-            ? 'Move step 2 up'
-            : operation === 'delete'
-              ? 'Delete step 2'
-              : 'Start Job',
-        })
-        target.addEventListener('click', () => {
-          state.jobs.getState().setRobotState(runningRobotState())
-        }, { capture: true, once: true })
-        fireEvent.click(target)
-      }
-
-      expect(state.commands.setJointPoseSpeed).not.toHaveBeenCalled()
-      expect(state.commands.moveStep).not.toHaveBeenCalled()
-      expect(state.commands.deleteStep).not.toHaveBeenCalled()
-      expect(state.playback.startJob).not.toHaveBeenCalled()
-    },
-  )
-
-  it('rechecks terminal runtime before a stale RUNNING-render Stop event', () => {
-    const state = harness()
-    state.jobs.getState().setRobotState(runningRobotState())
-    render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-    const stop = screen.getByRole('button', { name: 'Stop Job' })
-    stop.addEventListener('click', () => {
-      state.jobs.getState().setRobotState({
-        ...runningRobotState(),
-        state: 'SUCCEEDED',
-        completedAtSimulationMs: 10,
-      })
-    }, { capture: true, once: true })
-
-    fireEvent.click(stop)
-
-    expect(state.playback.cancelRobotJob).not.toHaveBeenCalled()
-  })
-
-  it('blocks stale selected Job handlers after the runtime Project revision advances', () => {
-    const state = harness()
-    render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-    const start = screen.getByRole('button', { name: 'Start Job' })
-    start.addEventListener('click', () => {
-      state.jobs.getState().replaceProject({
-        ...state.project,
-        revisionId: 'revision-after-render',
-      })
-    }, { capture: true, once: true })
-
-    fireEvent.click(start)
-
-    expect(state.playback.startJob).not.toHaveBeenCalled()
-  })
-
-  it('blocks synchronous authoring reentry before pending state renders', async () => {
-    const state = harness()
-    let moveButton: HTMLElement
-    const moveStep = vi.fn(async () => {
-      if (moveStep.mock.calls.length === 1) fireEvent.click(moveButton)
-    })
-    state.commands.moveStep = moveStep
-    render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-    moveButton = screen.getByRole('button', { name: 'Move step 2 up' })
-
-    fireEvent.click(moveButton)
-
-    await waitFor(() => expect(moveStep).toHaveBeenCalledTimes(1))
-  })
-
-  it.each(['speed', 'delete'] as const)(
-    'blocks synchronous %s authoring reentry before pending state renders',
-    async (operation) => {
-      const state = harness()
-      let target: HTMLElement
-      const setJointPoseSpeed = vi.fn(async () => {
-        if (operation === 'speed' && setJointPoseSpeed.mock.calls.length === 1) {
-          fireEvent.change(target, { target: { value: '55' } })
-        }
-      })
-      const deleteStep = vi.fn(async () => {
-        if (operation === 'delete' && deleteStep.mock.calls.length === 1) {
-          fireEvent.click(target)
-        }
-      })
-      state.commands.setJointPoseSpeed = setJointPoseSpeed
-      state.commands.deleteStep = deleteStep
-      render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-
-      if (operation === 'speed') {
-        target = screen.getByRole('spinbutton', {
-          name: 'Step 1 speed to next Joint Pose',
-        })
-        fireEvent.change(target, { target: { value: '55' } })
-      } else {
-        target = screen.getByRole('button', { name: 'Delete step 2' })
-        fireEvent.click(target)
-      }
-
-      const selectedCommand = operation === 'speed' ? setJointPoseSpeed : deleteStep
-      await waitFor(() => expect(selectedCommand).toHaveBeenCalledTimes(1))
-    },
-  )
-
-  it.each(['start', 'stop'] as const)(
-    'blocks synchronous %s playback reentry before runtime publication',
-    (operation) => {
-      const state = harness()
-      if (operation === 'stop') state.jobs.getState().setRobotState(runningRobotState())
-      let target: HTMLElement
-      state.playback.startJob.mockImplementation((_jobId: string) => {
-        if (state.playback.startJob.mock.calls.length === 1) fireEvent.click(target)
-        return { runId: 'run-new' }
-      })
-      state.playback.cancelRobotJob.mockImplementation((_robotId: string, _reason: string) => {
-        if (state.playback.cancelRobotJob.mock.calls.length === 1) fireEvent.click(target)
-      })
-      render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-      target = screen.getByRole('button', {
-        name: operation === 'start' ? 'Start Job' : 'Stop Job',
-      })
-
-      fireEvent.click(target)
-
-      const selectedPlayback = operation === 'start'
-        ? state.playback.startJob
-        : state.playback.cancelRobotJob
-      expect(selectedPlayback).toHaveBeenCalledTimes(1)
-    },
-  )
-
-  it('blocks Start during same-batch authoring', async () => {
-    const state = harness()
-    let startButton: HTMLElement
-    const setJointPoseSpeed = vi.fn(async () => {
-      fireEvent.click(startButton)
-    })
-    state.commands.setJointPoseSpeed = setJointPoseSpeed
-    render(<TimelineV4 {...state} jobId="job-A" robotId="robot-A" />)
-    startButton = screen.getByRole('button', { name: 'Start Job' })
+    let resolveEdit!: () => void
+    vi.mocked(state.commands.setJointPoseSpeed).mockImplementationOnce(() => (
+      new Promise<void>((resolve) => { resolveEdit = resolve })
+    ))
+    render(timeline(state))
 
     fireEvent.change(screen.getByRole('spinbutton', {
       name: 'Step 1 speed to next Joint Pose',
     }), { target: { value: '55' } })
+    const start = screen.getByRole('button', { name: 'Start Job' })
+    expect(start).toBeDisabled()
+    fireEvent.click(start)
+    expect(state.calls.start).not.toHaveBeenCalled()
 
-    await waitFor(() => expect(setJointPoseSpeed).toHaveBeenCalledOnce())
-    expect(state.playback.startJob).not.toHaveBeenCalled()
+    resolveEdit()
+    await waitFor(() => expect(start).toBeEnabled())
+    fireEvent.click(start)
+    await waitFor(() => expect(state.calls.start).toHaveBeenCalledWith('robot-A', 'job-A'))
   })
 
-  it('delegates explicit Start and Stop actions through an injected Job operator', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    const operator: JobOperatorServiceV4 = {
-      canStart: vi.fn(() => true),
-      start: vi.fn(async () => undefined),
-      canCancel: vi.fn(() => false),
-      cancel: vi.fn(async () => undefined),
-    }
-    render(<TimelineV4 {...state} jobId="job-A" jobOperator={operator} robotId="robot-A" />)
-    await user.click(screen.getByRole('button', { name: 'Start Job' }))
-    expect(operator.start).toHaveBeenCalledWith('robot-A', 'job-A')
+  it('honors shared enabled, visible, pending, and error state', async () => {
+    const user = userEvent.setup(); const state = harness(); let reject!: (reason: Error) => void
+    state.calls.start.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail }))
+    render(timeline(state)); await user.click(screen.getByRole('button', { name: 'Start Job' }))
+    expect(screen.getByRole('button', { name: 'Start Job' })).toBeDisabled(); reject(new Error('start rejected'))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('start rejected'))
+    state.runtime.replaceRegistry(createAppCommandRegistryV4([{ id: 'job.start', label: 'Start Job', section: 'job', kind: 'action', visible: false, enabled: true, execute() {} }, { id: 'job.cancel', label: 'Cancel Active Robot Job', section: 'job', kind: 'action', visible: true, enabled: false, execute() {} }]))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start Job' })).toBeDisabled())
   })
 
-  it('delegates Stop for only the explicit running Robot through an injected Job operator', async () => {
-    const user = userEvent.setup()
+  it('shares pending/error and one execution across simultaneous Timeline surfaces bound to one runtime', async () => {
+    const user = userEvent.setup(); const state = harness(); let reject!: (reason: Error) => void
+    state.calls.start.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail }))
+    render(<><section aria-label="first">{timeline(state)}</section><section aria-label="second">{timeline(state)}</section></>)
+    const first = within(screen.getByRole('region', { name: 'first' })); const second = within(screen.getByRole('region', { name: 'second' }))
+    await user.click(first.getByRole('button', { name: 'Start Job' })); await user.click(second.getByRole('button', { name: 'Start Job' }))
+    expect(state.calls.start).toHaveBeenCalledTimes(1); expect(second.getByRole('button', { name: 'Start Job' })).toBeDisabled()
+    reject(new Error('shared start failure')); await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2))
+  })
+
+  it('keeps a RUNNING Robot local timeline locked while a second active target can start', async () => {
+    const user = userEvent.setup(); const state = harness(); act(() => state.jobs.getState().setRobotState(running()))
+    state.setTarget('robot-B', 'job-B')
+    render(<><section aria-label="Alpha timeline">{timeline(state, 'robot-A')}</section><section aria-label="Beta timeline">{timeline(state, 'robot-B', 'job-B')}</section></>)
+    const alpha = within(screen.getByRole('region', { name: 'Alpha timeline' })); const beta = within(screen.getByRole('region', { name: 'Beta timeline' }))
+    expect(alpha.getByRole('button', { name: 'Delete step 1' })).toBeDisabled(); expect(beta.getByRole('button', { name: 'Delete step 1' })).toBeEnabled()
+    await user.click(beta.getByRole('button', { name: 'Start Job' })); expect(state.calls.start).toHaveBeenCalledWith('robot-B', 'job-B')
+  })
+
+  it('blocks synchronous same-ID Start reentry and stale local authoring events', async () => {
+    const state = harness(); let start: HTMLElement
+    state.calls.start.mockImplementationOnce(async () => { fireEvent.click(start) })
+    render(timeline(state)); start = screen.getByRole('button', { name: 'Start Job' }); fireEvent.click(start)
+    expect(state.calls.start).toHaveBeenCalledTimes(1)
+    const move = screen.getByRole('button', { name: 'Move step 2 up' })
+    move.addEventListener('click', () => state.jobs.getState().setRobotState(running()), { capture: true, once: true }); fireEvent.click(move)
+    expect(state.commands.moveStep).not.toHaveBeenCalled()
+  })
+
+  it('blocks a same-tick Start reentry launched from local authoring', async () => {
     const state = harness()
-    act(() => state.jobs.getState().setRobotState(runningRobotState()))
-    const operator: JobOperatorServiceV4 = {
-      canStart: vi.fn(() => false), start: vi.fn(async () => undefined),
-      canCancel: vi.fn((robotId) => robotId === 'robot-A'), cancel: vi.fn(async () => undefined),
-    }
-    render(<TimelineV4 {...state} jobId="job-A" jobOperator={operator} robotId="robot-A" />)
-    await user.click(screen.getByRole('button', { name: 'Stop Job' }))
-    expect(operator.cancel).toHaveBeenCalledWith('robot-A')
+    let start: HTMLElement
+    vi.mocked(state.commands.setJointPoseSpeed).mockImplementationOnce(async () => {
+      fireEvent.click(start)
+    })
+    render(timeline(state))
+    start = screen.getByRole('button', { name: 'Start Job' })
+    fireEvent.change(screen.getByRole('spinbutton', {
+      name: 'Step 1 speed to next Joint Pose',
+    }), { target: { value: '55' } })
+
+    expect(state.calls.start).not.toHaveBeenCalled()
+  })
+
+  it('rejects a Job owned by another Robot without rendering its steps', () => {
+    const state = harness(); render(<TimelineV4 {...state} jobId="job-B" robotId="robot-A" />)
+    expect(screen.getByText('No Job selected for this Robot.')).toBeVisible(); expect(screen.queryByRole('list', { name: 'Job steps' })).not.toBeInTheDocument()
+  })
+
+  it('does not schedule browser interpolation when a shared Start command executes', async () => {
+    const user = userEvent.setup(); const state = harness(); const frame = vi.fn(); vi.stubGlobal('requestAnimationFrame', frame); render(timeline(state))
+    await user.click(screen.getByRole('button', { name: 'Start Job' })); expect(state.calls.start).toHaveBeenCalledOnce(); expect(frame).not.toHaveBeenCalled()
+  })
+
+  it.each(['speed', 'move', 'delete', 'start'] as const)('rechecks latest Robot runtime before stale %s events', (operation) => {
+    const state = harness(); render(timeline(state)); const target = operation === 'speed' ? screen.getByRole('spinbutton', { name: 'Step 1 speed to next Joint Pose' }) : screen.getByRole('button', { name: operation === 'move' ? 'Move step 2 up' : operation === 'delete' ? 'Delete step 2' : 'Start Job' })
+    target.addEventListener(operation === 'speed' ? 'change' : 'click', () => state.jobs.getState().setRobotState(running()), { capture: true, once: true })
+    if (operation === 'speed') fireEvent.change(target, { target: { value: '55' } }); else fireEvent.click(target)
+    expect(state.commands.setJointPoseSpeed).not.toHaveBeenCalled(); expect(state.commands.moveStep).not.toHaveBeenCalled(); expect(state.commands.deleteStep).not.toHaveBeenCalled(); expect(state.calls.start).not.toHaveBeenCalled()
+  })
+
+  it('rechecks terminal runtime before stale Stop and project revision before stale Start', () => {
+    const state = harness(); state.jobs.getState().setRobotState(running()); render(timeline(state)); const stop = screen.getByRole('button', { name: 'Stop Job' })
+    stop.addEventListener('click', () => state.jobs.getState().setRobotState({ ...running(), state: 'SUCCEEDED', completedAtSimulationMs: 1 }), { capture: true, once: true }); fireEvent.click(stop); expect(state.calls.cancel).not.toHaveBeenCalled()
+    state.jobs.getState().replaceProject({ ...state.project, revisionId: 'advanced' }); fireEvent.click(screen.getByRole('button', { name: 'Start Job' })); expect(state.calls.start).not.toHaveBeenCalled()
+  })
+
+  it.each(['speed', 'move', 'delete'] as const)('blocks synchronous local %s reentry before pending renders', async (operation) => {
+    const state = harness(); let target: HTMLElement; const local = operation === 'speed' ? state.commands.setJointPoseSpeed : operation === 'move' ? state.commands.moveStep : state.commands.deleteStep
+    vi.mocked(local).mockImplementationOnce(async () => { if (operation === 'speed') fireEvent.change(target, { target: { value: '55' } }); else fireEvent.click(target) })
+    render(timeline(state)); target = operation === 'speed' ? screen.getByRole('spinbutton', { name: 'Step 1 speed to next Joint Pose' }) : screen.getByRole('button', { name: operation === 'move' ? 'Move step 2 up' : 'Delete step 2' })
+    if (operation === 'speed') fireEvent.change(target, { target: { value: '55' } }); else fireEvent.click(target); await waitFor(() => expect(local).toHaveBeenCalledTimes(1))
+  })
+
+  it('releases local authoring after an asynchronous speed failure and permits a retry', async () => {
+    const state = harness(); vi.mocked(state.commands.setJointPoseSpeed).mockRejectedValueOnce(new Error('speed rejected')); render(timeline(state))
+    const speed = screen.getByRole('spinbutton', { name: 'Step 1 speed to next Joint Pose' }); fireEvent.change(speed, { target: { value: '55' } })
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('speed rejected')); fireEvent.change(speed, { target: { value: '56' } }); await waitFor(() => expect(state.commands.setJointPoseSpeed).toHaveBeenCalledTimes(2))
   })
 })

@@ -10,10 +10,8 @@ import type {
   RobotDefinitionV4,
   RobotIdV4,
   RobotJointDefinitionV4,
-  RobotJobIdV4,
   WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
-import type { JobCommandServiceV4 } from '../../jobs/v4/job-command-service.js'
 import type {
   JobRuntimeStoreV4,
   RobotJobRuntimeStateV4,
@@ -25,19 +23,15 @@ import type {
 } from '../../robot/v4/robot-runtime-registry.js'
 import { useStore } from 'zustand'
 import type { StoreApi } from 'zustand/vanilla'
-import {
-  createRobotOperatorCommandServiceV4,
-  type RobotOperatorCommandServiceV4,
-} from './robot-operator-command-service.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
+import { useAppCommandV4 } from '../../commands/v4/use-app-command.js'
 
 export interface JointInspectorPropsV4 {
   readonly project: WorkcellProjectV4
   readonly robotId: RobotIdV4
-  readonly selectedJobId: RobotJobIdV4 | null
   readonly robots: StoreApi<RobotRuntimeRegistryV4>
   readonly jobs: StoreApi<JobRuntimeStoreV4>
-  readonly commands: JobCommandServiceV4
-  readonly robotOperator?: RobotOperatorCommandServiceV4
+  readonly commandBindings: AppCommandBindingsV4
 }
 
 type JointDraftsV4 = Record<string, string>
@@ -139,14 +133,35 @@ function errorMessageV4(error: unknown): string {
   return error instanceof Error ? error.message : 'The Robot command was rejected.'
 }
 
+function BoundJointActionV4({
+  commandBindings,
+  commandId,
+}: {
+  readonly commandBindings: AppCommandBindingsV4
+  readonly commandId: 'robot.home' | 'robot.gripper.open' | 'robot.gripper.close' | 'job.pose.save'
+}): ReactNode {
+  const bound = useAppCommandV4(commandBindings, commandId)
+  if (bound.command?.visible !== true) return null
+  const disabled = bound.command.enabled !== true || bound.pending
+  const errorId = `joint-command-error-${commandId.replaceAll('.', '-')}`
+  return <>
+    <button
+      aria-describedby={bound.error === null ? undefined : errorId}
+      aria-label={bound.command.label}
+      disabled={disabled}
+      onClick={() => { if (!disabled) void bound.invoke() }}
+      type="button"
+    >{bound.pending && commandId === 'job.pose.save' ? 'Saving Pose' : bound.command.label}</button>
+    {bound.error === null ? null : <p id={errorId} role="alert">{bound.error}</p>}
+  </>
+}
+
 export function JointInspectorV4({
   project,
   robotId,
-  selectedJobId,
   robots,
   jobs,
-  commands,
-  robotOperator: suppliedRobotOperator,
+  commandBindings,
 }: JointInspectorPropsV4): ReactNode {
   const runtimeSelector = useCallback(
     (state: RobotRuntimeRegistryV4) => selectedRuntimeV4(state, robotId),
@@ -172,21 +187,12 @@ export function JointInspectorV4({
       : project.robotDefinitions.find((candidate) => candidate.id === robot.definitionId) ?? null,
     [project, robot],
   )
-  const defaultRobotOperator = useMemo(() => createRobotOperatorCommandServiceV4({
-    readProject: () => project,
-    robots,
-    jobs,
-    jobCommands: commands,
-  }), [commands, jobs, project, robots])
-  const robotOperator = suppliedRobotOperator ?? defaultRobotOperator
   const [drafts, setDrafts] = useState<JointDraftsV4>(() => (
     createJointDraftsV4(definition, selectedRuntime)
   ))
   const dirtyJointId = useRef<string | null>(null)
   const draftRobotId = useRef(robotId)
   const [commandError, setCommandError] = useState<string | null>(null)
-  const [savePending, setSavePending] = useState(false)
-  const savePendingRef = useRef(false)
   const selectedRobotRunning = selectedJobRuntime?.state === 'RUNNING'
   const liveWriter = selectedRuntime?.jointSource ?? null
   const allowedWriter: RobotJointWriterV4 | null = liveWriter === 'manual'
@@ -252,41 +258,6 @@ export function JointInspectorV4({
     writeJoint(jointId, value)
   }
 
-  const writeHome = (): void => {
-    if (!robotOperator.canHome(robotId)) return
-    setCommandError(null)
-    try {
-      robotOperator.home(robotId)
-    } catch (error) {
-      setCommandError(errorMessageV4(error))
-    }
-  }
-
-  const setGripper = (state: 'OPEN' | 'CLOSED'): void => {
-    setCommandError(null)
-    try {
-      robotOperator.setGripper(robotId, state)
-    } catch (error) {
-      setCommandError(errorMessageV4(error))
-    }
-  }
-
-  const saveAllowed = robotOperator.canSavePose(robotId, selectedJobId) && !savePending
-
-  const savePose = (): void => {
-    if (savePendingRef.current || selectedJobId === null || !robotOperator.canSavePose(robotId, selectedJobId)) return
-    savePendingRef.current = true
-    setSavePending(true)
-    setCommandError(null)
-    void Promise.resolve()
-      .then(() => robotOperator.savePose(robotId, selectedJobId))
-      .catch((error: unknown) => setCommandError(errorMessageV4(error)))
-      .finally(() => {
-        savePendingRef.current = false
-        setSavePending(false)
-      })
-  }
-
   const robotLabel = robot?.name ?? robotId
 
   return (
@@ -303,7 +274,7 @@ export function JointInspectorV4({
         <p role="status">Robot runtime is unavailable.</p>
       ) : (
         <div aria-label={`${robotLabel} Joint controls`} role="group">
-          {definition.joints.map((joint) => (
+          {definition.joints.map((joint: RobotJointDefinitionV4) => (
             <div className="joint-control-v4" data-joint-id={joint.id} key={joint.id}>
               <label>{joint.id}</label>
               <span aria-hidden="true">{displayUnitV4(joint)}</span>
@@ -354,18 +325,10 @@ export function JointInspectorV4({
       )}
 
       <div className="inspector-actions-v4">
-        <button disabled={!robotOperator.canHome(robotId)} onClick={writeHome} type="button">
-          Robot Home
-        </button>
-        <button disabled={selectedRuntime === null} onClick={() => setGripper('OPEN')} type="button">
-          Open Gripper
-        </button>
-        <button disabled={selectedRuntime === null} onClick={() => setGripper('CLOSED')} type="button">
-          Close Gripper
-        </button>
-        <button disabled={!saveAllowed} onClick={savePose} type="button">
-          {savePending ? 'Saving Pose' : 'Save Pose'}
-        </button>
+        <BoundJointActionV4 commandBindings={commandBindings} commandId="robot.home" />
+        <BoundJointActionV4 commandBindings={commandBindings} commandId="robot.gripper.open" />
+        <BoundJointActionV4 commandBindings={commandBindings} commandId="robot.gripper.close" />
+        <BoundJointActionV4 commandBindings={commandBindings} commandId="job.pose.save" />
       </div>
 
       {commandError === null ? null : <p role="alert">{commandError}</p>}

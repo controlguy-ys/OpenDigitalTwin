@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { deriveCollisionPolicyV4 } from '../domain/collision/collision-policy-v4.js'
 import { createCoordinateDisplayStoreV4 } from '../features/frames/v4/coordinate-display-store.js'
+import type { AppCommandRegistryV4 } from '../features/commands/v4/app-command-registry.js'
 import { createInteractionStoreV4 } from '../features/interaction/v4/interaction-store.js'
 import type { SceneSelectionTargetV4 } from '../features/interaction/v4/scene-selection.js'
 import { createJobRuntimeStoreV4 } from '../features/jobs/v4/job-runtime-store.js'
@@ -34,7 +35,14 @@ const observed = vi.hoisted(() => ({
   jobList: null as null | Record<string, unknown>,
   timeline: null as null | Record<string, unknown>,
   contextMenuProjectRevisions: [] as string[],
-  shellControlsDisabled: [] as boolean[],
+  commandBindings: [] as Array<{ readonly runtime: {
+    getState(): {
+      readonly pendingCommandIds: ReadonlySet<string>
+      readonly errorByCommandId: ReadonlyMap<string, string>
+    }
+    getRegistry(): AppCommandRegistryV4
+    invoke(commandId: string): Promise<unknown>
+  } }>,
   shellLayoutControllers: [] as ShellLayoutControllerV4[],
 }))
 
@@ -43,11 +51,8 @@ vi.mock('./AppShell.js', async (importOriginal) => {
   return {
     ...actual,
     AppShellV4: (props: Parameters<typeof actual.AppShellV4>[0]) => {
-      observed.shellControlsDisabled.push(props.controlsDisabled ?? false)
-      const controller = (props as Parameters<typeof actual.AppShellV4>[0] & {
-        readonly shellLayoutController?: ShellLayoutControllerV4
-      }).shellLayoutController
-      if (controller !== undefined) observed.shellLayoutControllers.push(controller)
+      observed.shellLayoutControllers.push(props.shellLayoutController)
+      observed.commandBindings.push(props.commandBindings)
       return <actual.AppShellV4 {...props} />
     },
   }
@@ -136,20 +141,16 @@ vi.mock('../features/ui/v4/Timeline.js', () => ({
 
 vi.mock('../features/scene/v4/SceneContextMenu.js', () => ({
   SceneContextMenuV4: (props: {
-    onFitAll: () => void
-    onOpenCollision: (selection: SceneSelectionTargetV4) => void
+    commandBindings: { readonly runtime: { invoke(commandId: string): Promise<unknown> } }
     project: { readonly revisionId: string }
   }) => (
     (() => {
       observed.contextMenuProjectRevisions.push(props.project.revisionId)
       return (
         <div data-testid="scene-context-menu-v4">
-          <button onClick={props.onFitAll} type="button">Fit All</button>
+          <button onClick={() => { void props.commandBindings.runtime.invoke('view.fitAll') }} type="button">Context Fit All</button>
           <button
-            onClick={() => props.onOpenCollision({
-              kind: 'robot',
-              robotId: 'robot-default',
-            })}
+            onClick={() => { void props.commandBindings.runtime.invoke('view.collision.open') }}
             type="button"
           >
             Open Collision
@@ -257,6 +258,11 @@ function resourcesForTest(): BrowserProjectResourcesV4 & {
     runtimeBundle,
     sceneCommands,
     jobCommands: {} as BrowserProjectResourcesV4['jobCommands'],
+    projectFiles: {
+      pickProject: vi.fn(async () => null),
+      downloadProject: vi.fn(),
+    },
+    userPrompt: { requestText: vi.fn(async () => null) },
   }
 }
 
@@ -268,7 +274,7 @@ describe('App Project V4 production composition', () => {
     observed.jobList = null
     observed.timeline = null
     observed.contextMenuProjectRevisions.length = 0
-    observed.shellControlsDisabled.length = 0
+    observed.commandBindings.length = 0
     observed.shellLayoutControllers.length = 0
     localStorage.clear()
   })
@@ -318,10 +324,8 @@ describe('App Project V4 production composition', () => {
     render(<App gatewayPublisher={null} resources={resources} />)
 
     expect(screen.getByTestId('scene-canvas-v4')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'New' })).toBeEnabled()
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Imported Project is invalid.',
-    )
+    expect(screen.getByRole('menubar', { name: 'Application menu' })).toBeInTheDocument()
+    expect(document.querySelector('[data-phase="error"]')).toHaveTextContent('error')
   })
 
   it('composes the V4 Scene, Inspector, Jobs, Timeline, and Collision surfaces', async () => {
@@ -342,7 +346,9 @@ describe('App Project V4 production composition', () => {
     await user.click(screen.getByRole('tab', { name: /^Collision/ }))
     expect(screen.getByTestId('collision-v4')).toBeInTheDocument()
     expect(screen.queryByTestId('timeline-v4')).not.toBeInTheDocument()
-    expect(screen.getByText('Joint source: Simulation')).toBeVisible()
+    expect(screen.getByText((content) => (
+      content.includes('CRB15000') && content.includes('Simulation')
+    ))).toBeVisible()
     expect(screen.queryByText('Import STEP')).not.toBeInTheDocument()
     expect(screen.queryByText('Import Robot')).not.toBeInTheDocument()
     expect(screen.queryByText('Linear Axis')).not.toBeInTheDocument()
@@ -359,9 +365,9 @@ describe('App Project V4 production composition', () => {
     await waitFor(() => {
       expect(observed.jobList?.selectedRobotId).toBe('robot-default')
       expect(observed.timeline?.robotId).toBe('robot-default')
-      expect(observed.inspector?.selectedJobId).toBe(
-        resources.interaction.getState().selectedJobIdsByRobotId.get('robot-default') ?? null,
-      )
+      expect(resources.interaction.getState().activeRobotId).toBe('robot-default')
+      expect(observed.inspector?.selection).toEqual({ kind: 'scene-frame', frameId: 'world' })
+      expect(observed.inspector?.commandBindings).toBe(observed.timeline?.commandBindings)
     })
   })
 
@@ -391,17 +397,34 @@ describe('App Project V4 production composition', () => {
     await waitFor(() => expect(jointValue()).toBe(35))
   })
 
+  it('keeps the mounted viewport while live Joint and Scene selection state churn', () => {
+    const resources = resourcesForTest()
+    render(<App gatewayPublisher={null} resources={resources} />)
+    const canvas = screen.getByTestId('scene-canvas-v4')
+
+    act(() => {
+      for (const jointValue of [5, 10, 15, 20]) {
+        resources.robots.getState().writeJointValues(
+          'robot-default',
+          { J1: jointValue },
+          'simulation',
+        )
+        resources.interaction.getState().select({ kind: 'scene-frame', frameId: 'world' })
+        resources.interaction.getState().select({ kind: 'robot', robotId: 'robot-default' })
+      }
+    })
+
+    expect(screen.getByTestId('scene-canvas-v4')).toBe(canvas)
+    expect(screen.queryByText('Synchronizing Project V4…')).not.toBeInTheDocument()
+  })
+
   it('routes primitive creation and revision-qualified Focus and Fit requests', async () => {
     const resources = resourcesForTest()
     const user = userEvent.setup()
     render(<App gatewayPublisher={null} resources={resources} />)
 
-    await user.click(screen.getByRole('button', { name: 'Scene ready' }))
-    await waitFor(() => expect(
-      screen.getByRole('button', { name: 'Add' }),
-    ).toBeEnabled())
-    await user.click(screen.getByRole('button', { name: 'Add' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Box' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Model' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Add Box' }))
     expect(resources.sceneCommands.createBox).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'Box',
@@ -417,7 +440,7 @@ describe('App Project V4 production composition', () => {
     }))
 
     await user.click(screen.getByRole('button', { name: 'Empty context' }))
-    await user.click(screen.getByRole('button', { name: 'Fit All' }))
+    await user.click(screen.getByRole('button', { name: 'Context Fit All' }))
     await waitFor(() => expect(observed.canvas?.cameraRequest).toMatchObject({
       projectRevisionId: 'revision-app-v4',
       command: 'fit-all',
@@ -436,14 +459,20 @@ describe('App Project V4 production composition', () => {
       name: 'Bottom Workspace sheet',
     }))
     await user.click(screen.getByRole('tab', { name: /^Collision/ }))
-    await waitFor(() => expect(observed.collision?.proxies).toEqual([
-      { marker: 'proxy-v4' },
-    ]))
+    await waitFor(() => expect(
+      (observed.collision?.controller as { getState(): { canValidate: boolean } } | undefined)
+        ?.getState().canValidate,
+    ).toBe(true))
 
+    await user.click(screen.getByRole('button', { name: 'Focus Robot' }))
     await user.click(screen.getByRole('button', { name: 'Empty context' }))
     await user.click(screen.getByRole('button', { name: 'Open Collision' }))
 
     expect(screen.getByRole('tabpanel', { name: 'Collision' })).toBeVisible()
+    const collision = observed.collision?.controller as {
+      getState(): { readonly result: unknown }
+    }
+    expect(collision.getState().result).toBeNull()
   })
 
   it('owns one Shell controller that opens the controlled Collision tab immediately', async () => {
@@ -455,6 +484,7 @@ describe('App Project V4 production composition', () => {
     expect(controller).toBeDefined()
     expect(observed.shellLayoutControllers.every((candidate) => candidate === controller)).toBe(true)
 
+    await user.click(screen.getByRole('button', { name: 'Focus Robot' }))
     await user.click(screen.getByRole('button', { name: 'Empty context' }))
     await user.click(screen.getByRole('button', { name: 'Open Collision' }))
 
@@ -493,7 +523,8 @@ describe('App Project V4 production composition', () => {
     await waitFor(() => expect(liveSubscriptions).toBe(1))
     expect(subscribeCalls).toBeGreaterThanOrEqual(2)
     const controller = observed.shellLayoutControllers.at(-1)!
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'dark')
+    act(() => controller.setTheme('dark'))
+    await user.click(screen.getByRole('button', { name: 'Focus Robot' }))
     await user.click(screen.getByRole('button', { name: 'Empty context' }))
     await user.click(screen.getByRole('button', { name: 'Open Collision' }))
 
@@ -503,6 +534,100 @@ describe('App Project V4 production composition', () => {
 
     view.unmount()
     expect(liveSubscriptions).toBe(0)
+  })
+
+  it('owns one live StrictMode command runtime/key listener and disposes it without post-unmount publication', async () => {
+    const resources = resourcesForTest()
+    const add = window.addEventListener.bind(window)
+    const remove = window.removeEventListener.bind(window)
+    const listeners = new Set<EventListenerOrEventListenerObject>()
+    const addSpy = vi.spyOn(window, 'addEventListener').mockImplementation(((type: string, listener: EventListenerOrEventListenerObject | null, options?: boolean | AddEventListenerOptions) => {
+      if (listener === null) return
+      if (type === 'keydown' && listener !== null) listeners.add(listener)
+      add(type, listener, options)
+    }) as typeof window.addEventListener)
+    const removeSpy = vi.spyOn(window, 'removeEventListener').mockImplementation(((type: string, listener: EventListenerOrEventListenerObject | null, options?: boolean | EventListenerOptions) => {
+      if (listener === null) return
+      if (type === 'keydown' && listener !== null) listeners.delete(listener)
+      remove(type, listener, options)
+    }) as typeof window.removeEventListener)
+    const view = render(<StrictMode><App gatewayPublisher={null} resources={resources} /></StrictMode>)
+    await waitFor(() => expect(listeners.size).toBe(1))
+    const bindings = observed.commandBindings.at(-1)!
+    expect(observed.commandBindings.filter((candidate) => candidate === bindings).length).toBeGreaterThan(0)
+    view.unmount()
+    expect(listeners.size).toBe(0)
+    await expect(bindings.runtime.invoke('project.save')).resolves.toBe('ignored')
+    expect(resources.projectStore.getState().saveActiveProject).not.toHaveBeenCalled()
+    expect(addSpy).toHaveBeenCalled(); expect(removeSpy).toHaveBeenCalled()
+  })
+
+  it('routes Project and connectivity commands through only the injected App resource ports', async () => {
+    const resources = resourcesForTest()
+    render(<App gatewayPublisher={null} resources={resources} />)
+    const runtime = observed.commandBindings.at(-1)!.runtime
+    await expect(runtime.invoke('project.new')).resolves.toBe('completed')
+    await expect(runtime.invoke('project.save')).resolves.toBe('completed')
+    await expect(runtime.invoke('project.import')).resolves.toBe('cancelled')
+    await expect(runtime.invoke('project.export')).resolves.toBe('completed')
+    await expect(runtime.invoke('project.sample.dual')).resolves.toBe('completed')
+    await expect(runtime.invoke('connectivity.mode.server')).resolves.toBe('completed')
+    expect(resources.projectStore.getState().newProject).toHaveBeenCalledOnce()
+    expect(resources.projectStore.getState().saveActiveProject).toHaveBeenCalledOnce()
+    expect(resources.projectFiles.pickProject).toHaveBeenCalledOnce()
+    expect(resources.projectFiles.downloadProject).toHaveBeenCalledWith(expect.any(Blob), 'Untitled Workcell.json')
+    expect(vi.mocked(resources.mutations.replaceFromActive)).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains the App binding across a registry replacement while an accepted command settles with its own error', async () => {
+    const resources = resourcesForTest()
+    let rejectSave: (error: Error) => void = () => undefined
+    const save = new Promise<never>((_resolve, reject) => {
+      rejectSave = reject
+    })
+    resources.projectStore.setState((state) => ({
+      ...state,
+      saveActiveProject: vi.fn(() => save),
+    }), true)
+    render(<App gatewayPublisher={null} resources={resources} />)
+
+    const bindings = observed.commandBindings.at(-1)!
+    const invocation = bindings.runtime.invoke('project.save')
+    await waitFor(() => expect(
+      bindings.runtime.getState().pendingCommandIds.has('project.save'),
+    ).toBe(true))
+
+    act(() => {
+      resources.projectStore.setState((state) => ({ ...state, status: 'saving' }), true)
+    })
+    await waitFor(() => expect(observed.commandBindings.at(-1)).toBe(bindings))
+    expect(bindings.runtime.getState().pendingCommandIds.has('project.save')).toBe(true)
+
+    rejectSave(new Error('disk rejected'))
+    await expect(invocation).resolves.toBe('failed')
+    expect(bindings.runtime.getState().errorByCommandId.get('project.save')).toBe('disk rejected')
+  })
+
+  it('wires Ctrl+S, H, and F once through App shortcuts while excluding an editor target', async () => {
+    const resources = resourcesForTest()
+    const user = userEvent.setup()
+    render(<App gatewayPublisher={null} resources={resources} />)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ctrlKey: true, key: 's' }))
+    await waitFor(() => expect(resources.projectStore.getState().saveActiveProject).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'h' }))
+    await waitFor(() => expect(observed.canvas?.cameraRequest).toMatchObject({ command: 'home' }))
+
+    await user.click(screen.getByRole('button', { name: 'Focus Robot' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'f' }))
+    await waitFor(() => expect(observed.canvas?.cameraRequest).toMatchObject({ command: 'focus-selection' }))
+
+    const input = document.createElement('input')
+    document.body.append(input)
+    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ctrlKey: true, key: 's' }))
+    expect(resources.projectStore.getState().saveActiveProject).toHaveBeenCalledOnce()
+    input.remove()
   })
 
   it('drops a camera request from the previous Project revision', async () => {
@@ -554,6 +679,60 @@ describe('App Project V4 production composition', () => {
     })
   })
 
+  it('fails a Focus command captured by a stale registry instead of completing a discarded camera request', async () => {
+    const resources = resourcesForTest()
+    const user = userEvent.setup()
+    render(<App gatewayPublisher={null} resources={resources} />)
+    await user.click(screen.getByRole('button', { name: 'Register collision proxies' }))
+    act(() => {
+      resources.interaction.getState().select({ kind: 'scene-frame', frameId: 'world' })
+    })
+    await waitFor(() => expect(
+      observed.commandBindings.at(-1)!.runtime.getRegistry().get('view.focusSelection')!.enabled,
+    ).toBe(true))
+    const staleFocus = observed.commandBindings.at(-1)!
+      .runtime.getRegistry().get('view.focusSelection')!
+
+    const nextProject = createDefaultProjectV4({
+      projectId: 'project-app-v4',
+      revisionId: 'revision-app-v4-stale-focus',
+      nowIso: '2026-07-17T01:30:00.000Z',
+    })
+    act(() => {
+      resources.robots.getState().replaceProject(nextProject)
+      resources.jobs.getState().replaceProject(nextProject)
+      const projection = selectSceneRuntimeV4(nextProject, resources.robots.getState())
+      resources.scene.getState().replaceProjection(projection)
+      resources.interaction.getState().replaceProject(nextProject)
+      resources.coordinateDisplay.getState().replaceProject(nextProject)
+      const priorJobs = resources.runtimeBundle.getState().active!.jobs
+      resources.runtimeBundle.getState().replaceActive({
+        project: nextProject,
+        sceneRuntime: projection,
+        collisionPolicy: deriveCollisionPolicyV4(
+          nextProject.robots,
+          nextProject.robotDefinitions,
+          { enabled: true, nearMissMarginM: 0.05 },
+        ),
+        jobs: priorJobs,
+      })
+      resources.projectStore.setState((state) => ({
+        ...state,
+        activeProject: nextProject,
+      }), true)
+    })
+
+    await waitFor(() => expect(staleFocus.enabled).toBe(false))
+    const outcome = await Promise.resolve()
+      .then(() => staleFocus.execute())
+      .then(() => 'completed' as const, () => 'failed' as const)
+    expect(outcome).toBe('failed')
+    expect(observed.canvas?.cameraRequest).not.toMatchObject({
+      projectRevisionId: 'revision-app-v4',
+      command: 'focus-selection',
+    })
+  })
+
   it('never exposes prior Scene readiness or context during Project replacement', async () => {
     const resources = resourcesForTest()
     const user = userEvent.setup()
@@ -563,7 +742,6 @@ describe('App Project V4 production composition', () => {
     await user.click(screen.getByRole('button', { name: 'Empty context' }))
     expect(screen.getByTestId('scene-context-menu-v4')).toBeInTheDocument()
 
-    const shellRenderCount = observed.shellControlsDisabled.length
     const nextProject = createDefaultProjectV4({
       projectId: 'project-app-v4',
       revisionId: 'revision-app-v4-replacement',
@@ -599,8 +777,6 @@ describe('App Project V4 production composition', () => {
     expect(
       observed.contextMenuProjectRevisions,
     ).not.toContain('revision-app-v4-replacement')
-    expect(
-      observed.shellControlsDisabled.slice(shellRenderCount),
-    ).not.toContain(false)
+    expect(screen.queryByTestId('scene-context-menu-v4')).not.toBeInTheDocument()
   })
 })

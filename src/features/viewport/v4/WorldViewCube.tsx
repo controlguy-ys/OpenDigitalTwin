@@ -4,12 +4,14 @@ import type { ThreeEvent } from '@react-three/fiber'
 import type { ReactNode } from 'react'
 import { Vector3 } from 'three'
 import type { WorldViewDirectionV4 } from '../camera-actions.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
 import {
   ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
   type ViewportSafeAreaInsetsV4,
 } from './viewport-safe-area.js'
 
 export interface WorldViewCubePropsV4 {
+  readonly commandBindings: AppCommandBindingsV4
   readonly onDirection: (direction: WorldViewDirectionV4) => void
   readonly safeAreaInsets?: ViewportSafeAreaInsetsV4
 }
@@ -22,6 +24,7 @@ const WORLD_VIEW_CUBE_FACES_V4: string[] = [
 Object.freeze(WORLD_VIEW_CUBE_FACES_V4)
 
 export function WorldViewCubeV4({
+  commandBindings,
   onDirection,
   safeAreaInsets = ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
 }: WorldViewCubePropsV4): ReactNode {
@@ -31,7 +34,23 @@ export function WorldViewCubeV4({
     const source = objectDirection.lengthSq() > 1e-8
       ? objectDirection
       : event.face?.normal ?? new Vector3()
-    onDirection([source.x, source.y, source.z])
+    const direction: WorldViewDirectionV4 = [source.x, source.y, source.z]
+    const material = direction.filter((value) => Math.abs(value) > 1e-8)
+    if (material.length === 1) {
+      const [x, y, z] = direction
+      const id = x > 0 ? 'view.orientation.right'
+        : x < 0 ? 'view.orientation.left'
+          : y < 0 ? 'view.orientation.front'
+            : y > 0 ? 'view.orientation.back'
+              : z > 0 ? 'view.orientation.top'
+                : z < 0 ? 'view.orientation.bottom'
+                  : null
+      if (id !== null && commandBindings.getRegistry().get(id)?.visible === true) {
+        void commandBindings.runtime.invoke(id)
+      }
+    } else if (material.length > 1) {
+      onDirection(direction)
+    }
     return null
   }
 

@@ -8,7 +8,8 @@ import {
   type WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import { projectAtLimit } from '../../../core/project-v4/test-support.js'
-import type { JobCommandServiceV4 } from '../../jobs/v4/job-command-service.js'
+import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from '../../commands/v4/app-command-runtime.js'
+import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-registry.js'
 import { createJobRuntimeStoreV4 } from '../../jobs/v4/job-runtime-store.js'
 import { createRobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
 import { createInteractionStoreV4 } from '../../interaction/v4/interaction-store.js'
@@ -168,20 +169,6 @@ function sceneCommands(overrides: Partial<SceneCommandServiceV4> = {}): SceneCom
   }
 }
 
-function jobCommands(): JobCommandServiceV4 {
-  return {
-    createJob: vi.fn(async () => 'new-job'),
-    renameJob: vi.fn(async () => undefined),
-    duplicateJob: vi.fn(async () => 'duplicate-job'),
-    deleteJob: vi.fn(async () => undefined),
-    saveJointPose: vi.fn(async () => undefined),
-    addActionReference: vi.fn(async () => undefined),
-    moveStep: vi.fn(async () => undefined),
-    deleteStep: vi.fn(async () => undefined),
-    setJointPoseSpeed: vi.fn(async () => undefined),
-  }
-}
-
 function renderInspector(
   selection: SceneSelectionV4,
   commands = sceneCommands(),
@@ -194,6 +181,9 @@ function renderInspector(
   jobs.getState().replaceProject(project)
   interaction.getState().replaceProject(project)
   interaction.getState().select(selection)
+  const commandBindings = createAppCommandBindingsV4(
+    createAppCommandRuntimeV4(createAppCommandRegistryV4([])),
+  )
   const props = {
     project,
     runtime: selectSceneRuntimeV4(project, robots.getState()),
@@ -203,7 +193,7 @@ function renderInspector(
     robots,
     jobs,
     sceneCommands: commands,
-    jobCommands: jobCommands(),
+    commandBindings,
   }
   const view = render(<SceneEntityInspectorV4 {...props} />)
   return { ...view, commands, props, project, robots, jobs, interaction }
@@ -255,6 +245,55 @@ describe('SceneEntityInspectorV4', () => {
     await user.click(screen.getByRole('button', { name: 'Apply Tool / TCP' }))
     await waitFor(() => expect(harness.commands.setSelectedToolFrames)
       .toHaveBeenCalledWith('robot-2', 'CustomTool', 'TCP2'))
+  })
+
+  it('consumes a revision-qualified focus request only for its exact selection and refocuses a repeated section', () => {
+    const harness = renderInspector({ kind: 'spatial-entity', entityId: 'platform' })
+    const request = {
+      id: 1,
+      projectRevisionId: harness.project.revisionId,
+      selection: { kind: 'spatial-entity' as const, entityId: 'platform' },
+      section: 'group' as const,
+    }
+    harness.rerender(<SceneEntityInspectorV4 {...harness.props} focusRequest={request} />)
+    expect(screen.getByLabelText('Entity Group')).toHaveFocus()
+
+    harness.rerender(<SceneEntityInspectorV4 {...harness.props} focusRequest={{ ...request, id: 2 }} />)
+    expect(screen.getByLabelText('Entity Group')).toHaveFocus()
+
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    harness.rerender(<SceneEntityInspectorV4
+      {...harness.props}
+      focusRequest={{ ...request, id: 3, selection: { kind: 'robot', robotId: 'robot-1' } }}
+    />)
+    expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('focuses a manual Moving Frame parent editor again for a repeated monotonic request', () => {
+    const selection = {
+      kind: 'entity-frame' as const,
+      entityId: 'platform',
+      frameId: 'carriage',
+    }
+    const harness = renderInspector(selection)
+    const target = document.querySelector<HTMLElement>(
+      '[data-inspector-section-v4="parent"]',
+    )!
+    const focus = vi.spyOn(target, 'focus')
+    const request = {
+      id: 1,
+      projectRevisionId: harness.project.revisionId,
+      selection,
+      section: 'parent' as const,
+    }
+
+    harness.rerender(<SceneEntityInspectorV4 {...harness.props} focusRequest={request} />)
+    harness.rerender(<SceneEntityInspectorV4
+      {...harness.props}
+      focusRequest={{ ...request, id: 2 }}
+    />)
+
+    expect(focus).toHaveBeenCalledTimes(2)
   })
 
   it('edits manual Robot numeric Status and overlay through the exact Robot target', async () => {
@@ -627,6 +666,7 @@ describe('SceneEntityInspectorV4', () => {
     const harness = renderInspector({ kind: 'scene-group', groupId: 'child-group' })
     expect(screen.getByText('Parent Group: Root Group')).toBeVisible()
     expect(screen.getByText('Effective visibility: Hidden')).toBeVisible()
+    await user.selectOptions(screen.getByLabelText('Parent Group'), '')
     await user.clear(screen.getByLabelText('Group Name'))
     await user.type(screen.getByLabelText('Group Name'), 'Renamed Child')
     await user.click(screen.getByLabelText('Group Visible'))
@@ -640,6 +680,7 @@ describe('SceneEntityInspectorV4', () => {
       { kind: 'scene-group', groupId: 'child-group' },
       false,
     )
+    expect(harness.commands.reparentGroup).toHaveBeenCalledWith('child-group', null)
   })
 
   it('keeps a selected Group until its deferred hide commits successfully', async () => {

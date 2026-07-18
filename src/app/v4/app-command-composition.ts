@@ -242,8 +242,25 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
     activeRobotCommand(context, 'robot.gripper.close', 'Close Gripper', (robotId) => context.robotOperator.setGripper(robotId, 'CLOSED')),
     command('job.new', 'New Job', 'job', {
       kind: 'action', visible: true,
-      get enabled() { return activeRobot(context) !== null }, get disabledReason() { return activeRobotReason(context) },
-      async execute() { const robot = activeRobot(context); if (robot === null) throw new Error('No active Robot.'); const name = await context.prompt.requestText({ title: 'Job name', initialValue: 'Job', required: true }); if (name === null) return 'cancelled'; const id = await context.jobs.createJob(robot.id, name.trim()); context.interaction.getState().selectJob(robot.id, id) },
+      get enabled() { const robot = activeRobot(context); return robot !== null && context.jobOperator.canAuthor(robot.id) },
+      get disabledReason() {
+        const robot = activeRobot(context)
+        return activeRobotReason(context) ?? (
+          robot !== null && !context.jobOperator.canAuthor(robot.id)
+            ? 'Job authoring is unavailable while this Robot is running or stale.'
+            : undefined
+        )
+      },
+      async execute() {
+        const robot = activeRobot(context)
+        if (robot === null || !context.jobOperator.canAuthor(robot.id)) {
+          throw new Error(activeRobotReason(context) ?? 'Job authoring is unavailable while this Robot is running or stale.')
+        }
+        const name = await context.prompt.requestText({ title: 'Job name', initialValue: 'Job', required: true })
+        if (name === null) return 'cancelled'
+        const id = await context.jobs.createJob(robot.id, name.trim())
+        context.interaction.getState().selectJob(robot.id, id)
+      },
     }),
     activeJobCommand(context, 'job.pose.save', 'Save Current Pose', (robotId, jobId) => context.robotOperator.savePose(robotId, jobId), (robotId, jobId) => context.robotOperator.canSavePose(robotId, jobId)),
     activeJobCommand(context, 'job.start', 'Start Job', (robotId, jobId) => context.jobOperator.start(robotId, jobId), (robotId, jobId) => context.jobOperator.canStart(robotId, jobId)),
@@ -253,9 +270,9 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
       get disabledReason() { const robot = activeRobot(context); return robot !== null && context.jobOperator.canCancel(robot.id) ? undefined : activeRobotReason(context) ?? 'No active Job for the active Robot.' },
       execute() { const robot = activeRobot(context); if (robot === null || !context.jobOperator.canCancel(robot.id)) throw new Error(activeRobotReason(context) ?? 'No active Job for the active Robot.'); return context.jobOperator.cancel(robot.id) },
     }),
-    activeJobCommand(context, 'job.rename', 'Rename Job', async (_robotId, jobId) => { const job = activeJob(context); if (job === null || job.id !== jobId) throw new Error('No active Job for the active Robot.'); const name = await context.prompt.requestText({ title: 'Job name', initialValue: job.name, required: true }); if (name === null) return 'cancelled'; await context.jobs.renameJob(jobId, name.trim()) }),
-    activeJobCommand(context, 'job.duplicate', 'Duplicate Job', async (robotId, jobId) => { const duplicate = await context.jobs.duplicateJob(jobId); context.interaction.getState().selectJob(robotId, duplicate) }),
-    activeJobCommand(context, 'job.delete', 'Delete Job', (_robotId, jobId) => context.jobs.deleteJob(jobId), undefined, true),
+    activeJobCommand(context, 'job.rename', 'Rename Job', async (_robotId, jobId) => { const job = activeJob(context); if (job === null || job.id !== jobId) throw new Error('No active Job for the active Robot.'); const name = await context.prompt.requestText({ title: 'Job name', initialValue: job.name, required: true }); if (name === null) return 'cancelled'; await context.jobs.renameJob(jobId, name.trim()) }, (robotId) => context.jobOperator.canAuthor(robotId)),
+    activeJobCommand(context, 'job.duplicate', 'Duplicate Job', async (robotId, jobId) => { const duplicate = await context.jobs.duplicateJob(jobId); context.interaction.getState().selectJob(robotId, duplicate) }, (robotId) => context.jobOperator.canAuthor(robotId)),
+    activeJobCommand(context, 'job.delete', 'Delete Job', (_robotId, jobId) => context.jobs.deleteJob(jobId), (robotId) => context.jobOperator.canAuthor(robotId), true),
     command('view.timeline.open', 'Open Timeline', 'job', { kind: 'action', visible: true, enabled: true, execute: () => context.actions.presentation.openTimeline() }),
     command('collision.validate', 'Validate Geometry Collision', 'simulation', {
       kind: 'action', visible: true,
@@ -305,7 +322,10 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
     kind: 'action', visible: true, shortcut: 'F',
     get enabled() { return context.camera.canFocusSelection() },
     get disabledReason() { return context.camera.canFocusSelection() ? undefined : 'Select a focusable Scene item.' },
-    execute() { if (!context.camera.canFocusSelection()) throw new Error('Select a focusable Scene item.'); context.camera.focusSelection() },
+    // The camera port repeats its revision/selection preflight at execution
+    // time, so a registry captured before a Project replacement cannot report
+    // a completed focus request that the current Scene would discard.
+    execute() { context.camera.focusSelection() },
   }))
   const views: readonly (readonly [StandardWorldView, string])[] = [
     ['isometric', 'Isometric'], ['top', 'Top'], ['front', 'Front'], ['right', 'Right'], ['back', 'Back'], ['left', 'Left'], ['bottom', 'Bottom'],

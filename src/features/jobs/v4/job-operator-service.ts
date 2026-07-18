@@ -8,6 +8,8 @@ import type { JobRuntimeStoreV4 } from './job-runtime-store.js'
 import type { RobotJobPlaybackControllerV4 } from './simulation-clock.js'
 
 export interface JobOperatorServiceV4 {
+  /** Allows Job authoring only for the current, idle runtime owner. */
+  canAuthor(robotId: RobotIdV4): boolean
   canStart(robotId: RobotIdV4, jobId: RobotJobIdV4 | null): boolean
   start(robotId: RobotIdV4, jobId: RobotJobIdV4): Promise<void>
   canCancel(robotId: RobotIdV4): boolean
@@ -27,15 +29,26 @@ function startable(
   jobId: RobotJobIdV4 | null,
 ): boolean {
   if (jobId === null) return false
-  const runtime = options.jobs.getState()
   const robot = project.robots.find((candidate) => candidate.id === robotId)
   const job = project.jobs.find((candidate) => candidate.id === jobId)
-  return runtime.projectRevisionId === project.revisionId
+  return authorable(options, project, robotId)
     && robot !== undefined
     && robot.jointSource === 'simulation'
     && job !== undefined
     && job.robotId === robotId
+}
+
+function authorable(
+  options: CreateJobOperatorServiceOptionsV4,
+  project: WorkcellProjectV4,
+  robotId: RobotIdV4,
+): boolean {
+  const runtime = options.jobs.getState()
+  const robot = project.robots.find((candidate) => candidate.id === robotId)
+  return runtime.projectRevisionId === project.revisionId
+    && robot !== undefined
     && Object.hasOwn(runtime.byRobotId, robotId)
+    && runtime.byRobotId[robotId]?.robotId === robotId
     && runtime.byRobotId[robotId]?.state !== 'RUNNING'
 }
 
@@ -55,6 +68,9 @@ export function createJobOperatorServiceV4(
   options: CreateJobOperatorServiceOptionsV4,
 ): JobOperatorServiceV4 {
   return Object.freeze({
+    canAuthor(robotId: RobotIdV4) {
+      try { return authorable(options, options.readProject(), robotId) } catch { return false }
+    },
     canStart(robotId: RobotIdV4, jobId: RobotJobIdV4 | null) {
       try { return startable(options, options.readProject(), robotId, jobId) } catch { return false }
     },

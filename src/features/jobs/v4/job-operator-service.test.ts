@@ -46,6 +46,7 @@ function harness(project = projectFixture()) {
 describe('createJobOperatorServiceV4', () => {
   it('starts only a non-running simulation Robot with an explicitly owned Job', async () => {
     const state = harness()
+    expect(state.service.canAuthor('robot-a')).toBe(true)
     expect(state.service.canStart('robot-a', 'job-a')).toBe(true)
     expect(state.service.canStart('robot-a', null)).toBe(false)
     expect(state.service.canStart('robot-a', 'job-b')).toBe(false)
@@ -68,6 +69,7 @@ describe('createJobOperatorServiceV4', () => {
     const race = harness()
     expect(race.service.canStart('robot-a', 'job-a')).toBe(true)
     race.jobs.getState().setRobotState(running('robot-a', 'job-a'))
+    expect(race.service.canAuthor('robot-a')).toBe(false)
     await expect(race.service.start('robot-a', 'job-a')).rejects.toThrow(/Start is unavailable/)
   })
 

@@ -1,7 +1,6 @@
 import { MoreHorizontal, Play, Plus, Square } from 'lucide-react'
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -9,37 +8,27 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  MAX_JOBS_V4,
   type RobotIdV4,
   type RobotJobIdV4,
   type WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import type { StoreApi } from 'zustand/vanilla'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
-import type { JobCommandServiceV4 } from './job-command-service.js'
 import type {
   JobRuntimeStoreV4,
   RobotJobRuntimeStateV4,
 } from './job-runtime-store.js'
-import type { RobotJobPlaybackControllerV4 } from './simulation-clock.js'
-import {
-  createBrowserUserPromptPortV4,
-  type UserPromptPortV4,
-} from '../../ui/v4/user-prompt-port.js'
-import {
-  createJobOperatorServiceV4,
-  type JobOperatorServiceV4,
-} from './job-operator-service.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
+import { useAppCommandV4 } from '../../commands/v4/use-app-command.js'
 
 export interface RobotJobListPropsV4 {
   readonly project: WorkcellProjectV4
   readonly selectedRobotId: RobotIdV4 | null
   readonly interaction: StoreApi<InteractionStoreStateV4>
   readonly jobs: StoreApi<JobRuntimeStoreV4>
-  readonly commands: JobCommandServiceV4
-  readonly playback: RobotJobPlaybackControllerV4
-  readonly jobOperator?: JobOperatorServiceV4
-  readonly promptPort?: UserPromptPortV4
+  readonly commandBindings: AppCommandBindingsV4
+  /** Called only after an explicit user row/action selected this exact Job. */
+  readonly onExplicitJobSelection?: (robotId: RobotIdV4, jobId: RobotJobIdV4) => void
 }
 
 function countLabel(count: number, singular: string, plural: string): string {
@@ -103,24 +92,132 @@ function currentRobotRuntimeV4(
   return runtime?.robotId === robotId ? runtime : null
 }
 
+function canAuthorExactJobV4(
+  project: WorkcellProjectV4,
+  jobs: StoreApi<JobRuntimeStoreV4>,
+  interaction: StoreApi<InteractionStoreStateV4>,
+  robotId: RobotIdV4,
+  jobId: RobotJobIdV4,
+): boolean {
+  const interactionState = interaction.getState()
+  const runtime = currentRobotRuntimeV4(jobs, project.revisionId, robotId)
+  return interactionState.projectRevisionId === project.revisionId
+    && interactionState.activeRobotId === robotId
+    && runtime !== null
+    && runtime.state !== 'RUNNING'
+    && project.jobs.some((job) => job.id === jobId && job.robotId === robotId)
+}
+
+function canAuthorExactRobotV4(
+  project: WorkcellProjectV4,
+  jobs: StoreApi<JobRuntimeStoreV4>,
+  interaction: StoreApi<InteractionStoreStateV4>,
+  robotId: RobotIdV4,
+): boolean {
+  const interactionState = interaction.getState()
+  const runtime = currentRobotRuntimeV4(jobs, project.revisionId, robotId)
+  return interactionState.projectRevisionId === project.revisionId
+    && interactionState.activeRobotId === robotId
+    && runtime !== null
+    && runtime.state !== 'RUNNING'
+    && project.robots.some((robot) => robot.id === robotId)
+}
+
+function canStartExactJobV4(
+  project: WorkcellProjectV4,
+  jobs: StoreApi<JobRuntimeStoreV4>,
+  interaction: StoreApi<InteractionStoreStateV4>,
+  robotId: RobotIdV4,
+  jobId: RobotJobIdV4 | null,
+): jobId is RobotJobIdV4 {
+  if (jobId === null || !canAuthorExactJobV4(project, jobs, interaction, robotId, jobId)) return false
+  return project.robots.some((robot) => robot.id === robotId && robot.jointSource === 'simulation')
+}
+
+function ContextJobCommandV4({
+  commandBindings,
+  commandId,
+  job,
+  canInvoke,
+  onInvokeTarget,
+  onCompleted,
+  buttonRef,
+  onBeforeInvoke,
+  onOutcome,
+}: {
+  readonly commandBindings: AppCommandBindingsV4
+  readonly commandId: 'job.rename' | 'job.duplicate' | 'job.delete'
+  readonly job: WorkcellProjectV4['jobs'][number]
+  readonly canInvoke: () => boolean
+  readonly onInvokeTarget: (robotId: RobotIdV4, jobId: RobotJobIdV4) => void
+  readonly onCompleted: () => void
+  readonly buttonRef?: (node: HTMLButtonElement | null) => void
+  readonly onBeforeInvoke?: () => void
+  readonly onOutcome?: (outcome: 'completed' | 'cancelled' | 'ignored' | 'failed') => void
+}): ReactNode {
+  const bound = useAppCommandV4(commandBindings, commandId)
+  const canInvokeNow = (): boolean => {
+    const command = commandBindings.getRegistry().get(commandId)
+    return canInvoke()
+      && command?.visible === true
+      && command.enabled === true
+      && !commandBindings.runtime.getState().pendingCommandIds.has(commandId)
+  }
+  const disabled = bound.command?.visible !== true
+    || bound.command.enabled !== true
+    || bound.pending
+    || !canInvoke()
+  return (
+    <button
+      disabled={disabled}
+      onClick={() => {
+        // The menu can remain mounted while another surface retargets the
+        // Interaction store. Re-evaluate every ownership constraint before
+        // this row is allowed to select or mutate its captured Job.
+        if (!canInvokeNow()) return
+        onBeforeInvoke?.()
+        onInvokeTarget(job.robotId, job.id)
+        void bound.invoke().then((outcome) => {
+          onOutcome?.(outcome)
+          if (outcome === 'completed') onCompleted()
+        })
+      }}
+      role="menuitem"
+      ref={buttonRef}
+      type="button"
+    >{bound.command?.label ?? commandId}</button>
+  )
+}
+
+function ContextJobErrorsV4({
+  commandBindings,
+}: {
+  readonly commandBindings: AppCommandBindingsV4
+}): ReactNode {
+  const rename = useAppCommandV4(commandBindings, 'job.rename')
+  const duplicate = useAppCommandV4(commandBindings, 'job.duplicate')
+  const remove = useAppCommandV4(commandBindings, 'job.delete')
+  const errors = [rename.error, duplicate.error, remove.error].filter(
+    (error): error is string => error !== null,
+  )
+  return errors.length === 0 ? null : <>
+    {errors.map((message, index) => (
+      <p key={`${index}:${message}`} role="alert">{message}</p>
+    ))}
+  </>
+}
+
 export function RobotJobListV4({
   project,
   selectedRobotId,
   interaction,
   jobs,
-  commands,
-  playback,
-  jobOperator: suppliedJobOperator,
-  promptPort: suppliedPromptPort,
+  commandBindings,
+  onExplicitJobSelection,
 }: RobotJobListPropsV4): ReactNode {
-  const defaultJobOperator = useMemo(() => createJobOperatorServiceV4({
-    readProject: () => project,
-    jobs,
-    playback,
-  }), [jobs, playback, project])
-  const jobOperator = suppliedJobOperator ?? defaultJobOperator
-  const defaultPromptPort = useMemo(() => createBrowserUserPromptPortV4(), [])
-  const promptPort = suppliedPromptPort ?? defaultPromptPort
+  const newJob = useAppCommandV4(commandBindings, 'job.new')
+  const startJob = useAppCommandV4(commandBindings, 'job.start')
+  const cancelJob = useAppCommandV4(commandBindings, 'job.cancel')
   const selectedJobId = useSelectedJobIdV4(interaction, selectedRobotId)
   const runtime = useRobotJobRuntimeV4(jobs, selectedRobotId)
   const robotJobs = project.jobs.filter((job) => job.robotId === selectedRobotId)
@@ -129,10 +226,7 @@ export function RobotJobListV4({
   const [focusedJobId, setFocusedJobId] = useState<RobotJobIdV4 | null>(
     selectedJob?.id ?? robotJobs[0]?.id ?? null,
   )
-  const [pendingCommand, setPendingCommand] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const pendingCommandTokenRef = useRef<symbol | null>(null)
-  const playbackCommandTokenRef = useRef<symbol | null>(null)
   const rowRefs = useRef(new Map<RobotJobIdV4, HTMLButtonElement>())
   const menuItemRefs = useRef<HTMLButtonElement[]>([])
   const menuRef = useRef<HTMLDivElement>(null)
@@ -140,9 +234,6 @@ export function RobotJobListV4({
   const restoreFocusAfterRemovalRef = useRef(false)
   const newJobRef = useRef<HTMLButtonElement>(null)
 
-  const running = runtime?.state === 'RUNNING'
-  const authoringLocked = running || pendingCommand !== null
-  const jobLimitReached = project.jobs.length >= MAX_JOBS_V4
   const contextJob = robotJobs.find((job) => job.id === contextJobId)
   const reconciledFocusedJobId = robotJobs.some((job) => job.id === focusedJobId)
     ? focusedJobId
@@ -159,70 +250,11 @@ export function RobotJobListV4({
     }
   }
 
-  const runPlaybackCommand = (key: string, operation: () => unknown): void => {
-    if (playbackCommandTokenRef.current !== null) return
-    const token = Symbol(key)
-    playbackCommandTokenRef.current = token
-    setError(null)
-    const release = (): void => {
-      if (playbackCommandTokenRef.current === token) {
-        playbackCommandTokenRef.current = null
-      }
-    }
-    try {
-      void Promise.resolve(operation())
-        .catch((caught: unknown) => {
-          if (playbackCommandTokenRef.current === token) {
-            setError(errorMessage(caught))
-          }
-        })
-        .finally(release)
-    } catch (caught) {
-      if (playbackCommandTokenRef.current === token) setError(errorMessage(caught))
-      release()
-    }
-  }
-
-  const isCurrentActiveRobot = (robotId: RobotIdV4): boolean => {
-    const state = interaction.getState()
-    return state.projectRevisionId === project.revisionId
-      && state.activeRobotId === robotId
-  }
-
-  const canAuthorRobot = (robotId: RobotIdV4, jobId?: RobotJobIdV4): boolean => {
-    const currentRuntime = currentRobotRuntimeV4(jobs, project.revisionId, robotId)
-    return isCurrentActiveRobot(robotId)
-      && currentRuntime !== null
-      && currentRuntime.state !== 'RUNNING'
-      && (jobId === undefined || project.jobs.some((job) => (
-        job.id === jobId && job.robotId === robotId
-      )))
-  }
-
-  const runAuthoringCommand = async (
-    key: string,
-    robotId: RobotIdV4,
-    operation: () => Promise<void>,
-    jobId?: RobotJobIdV4,
-  ): Promise<void> => {
-    if (
-      pendingCommandTokenRef.current !== null
-      || !canAuthorRobot(robotId, jobId)
-    ) return
-    const token = Symbol(key)
-    pendingCommandTokenRef.current = token
-    setPendingCommand(key)
-    setError(null)
-    try {
-      await operation()
-    } catch (caught) {
-      setError(errorMessage(caught))
-    } finally {
-      if (pendingCommandTokenRef.current === token) {
-        pendingCommandTokenRef.current = null
-        setPendingCommand(null)
-      }
-    }
+  const selectExplicitJob = (robotId: RobotIdV4, jobId: RobotJobIdV4): void => {
+    reportSyncFailure(() => {
+      interaction.getState().selectJob(robotId, jobId)
+      onExplicitJobSelection?.(robotId, jobId)
+    })
   }
 
   useEffect(() => {
@@ -255,9 +287,7 @@ export function RobotJobListV4({
   const openContextMenu = (jobId: RobotJobIdV4, returnFocus: HTMLElement): void => {
     const job = robotJobs.find((candidate) => candidate.id === jobId)
     if (job === undefined) return
-    reportSyncFailure(() => {
-      interaction.getState().selectJob(job.robotId, job.id)
-    })
+    selectExplicitJob(job.robotId, job.id)
     contextReturnFocusRef.current = returnFocus
     setContextJobId(jobId)
   }
@@ -320,13 +350,27 @@ export function RobotJobListV4({
       <header>
         <h2>Robot Jobs</h2>
         <button
-          disabled={selectedRobotId === null || authoringLocked || jobLimitReached}
+          aria-describedby={newJob.error === null ? undefined : 'robot-job-new-error'}
+          disabled={selectedRobotId === null
+            || newJob.command?.visible !== true
+            || newJob.command.enabled !== true
+            || newJob.pending
+            || !canAuthorExactRobotV4(project, jobs, interaction, selectedRobotId)}
           onClick={() => {
-            if (selectedRobotId === null) return
-            const name = `Job ${robotJobs.length + 1}`
-            void runAuthoringCommand('create', selectedRobotId, async () => {
-              const createdJobId = await commands.createJob(selectedRobotId, name)
-              interaction.getState().selectJob(selectedRobotId, createdJobId)
+            if (
+              selectedRobotId === null
+              || newJob.pending
+              || newJob.command?.visible !== true
+              || newJob.command.enabled !== true
+              || !canAuthorExactRobotV4(project, jobs, interaction, selectedRobotId)
+            ) return
+            void newJob.invoke().then((outcome) => {
+              if (outcome !== 'completed') return
+              const current = interaction.getState()
+              const jobId = current.selectedJobIdsByRobotId.get(selectedRobotId) ?? null
+              if (current.activeRobotId === selectedRobotId && jobId !== null) {
+                onExplicitJobSelection?.(selectedRobotId, jobId)
+              }
             })
           }}
           ref={newJobRef}
@@ -335,38 +379,44 @@ export function RobotJobListV4({
           <Plus aria-hidden="true" size={14} />
           + New Job
         </button>
+        {newJob.error === null ? null : <p id="robot-job-new-error" role="alert">{newJob.error}</p>}
         <button
           aria-label="Start Job"
-          disabled={selectedRobotId === null || authoringLocked || !jobOperator.canStart(selectedRobotId, selectedJobId)}
+          aria-describedby={startJob.error === null ? undefined : 'robot-job-start-error'}
+          disabled={selectedRobotId === null || startJob.command?.visible !== true || startJob.command.enabled !== true || startJob.pending || !canStartExactJobV4(project, jobs, interaction, selectedRobotId, selectedJobId)}
           onClick={() => {
+            const currentStart = commandBindings.getRegistry().get('job.start')
             if (
               selectedRobotId === null
-              || pendingCommandTokenRef.current !== null
-              || !isCurrentActiveRobot(selectedRobotId)
+              || currentStart?.visible !== true
+              || currentStart.enabled !== true
+              || commandBindings.runtime.getState().pendingCommandIds.has('job.start')
             ) return
-            const currentJobId = interaction.getState()
-              .selectedJobIdsByRobotId.get(selectedRobotId) ?? null
-            if (!jobOperator.canStart(selectedRobotId, currentJobId)) return
-            runPlaybackCommand('start', () => jobOperator.start(selectedRobotId, currentJobId!))
+            const jobId = interaction.getState().selectedJobIdsByRobotId.get(selectedRobotId) ?? null
+            if (!canStartExactJobV4(project, jobs, interaction, selectedRobotId, jobId)) return
+            selectExplicitJob(selectedRobotId, jobId)
+            void commandBindings.runtime.invoke('job.start')
           }}
           title="Start Job"
           type="button"
         >
           <Play aria-hidden="true" size={14} />
         </button>
+        {startJob.error === null ? null : <p id="robot-job-start-error" role="alert">{startJob.error}</p>}
         <button
           aria-label="Cancel Job"
-          disabled={selectedRobotId === null || !jobOperator.canCancel(selectedRobotId)}
+          aria-describedby={cancelJob.error === null ? undefined : 'robot-job-cancel-error'}
+          disabled={selectedRobotId === null || cancelJob.command?.visible !== true || cancelJob.command.enabled !== true || cancelJob.pending}
           onClick={() => {
-            if (selectedRobotId === null || !isCurrentActiveRobot(selectedRobotId)) return
-            if (!jobOperator.canCancel(selectedRobotId)) return
-            runPlaybackCommand('cancel', () => jobOperator.cancel(selectedRobotId))
+            if (selectedRobotId === null || cancelJob.pending || cancelJob.command?.visible !== true || cancelJob.command.enabled !== true) return
+            void cancelJob.invoke()
           }}
           title="Cancel Job"
           type="button"
         >
           <Square aria-hidden="true" size={14} />
         </button>
+        {cancelJob.error === null ? null : <p id="robot-job-cancel-error" role="alert">{cancelJob.error}</p>}
       </header>
       {selectedRobotId === null ? (
         <div className="robot-job-scroll">
@@ -393,7 +443,6 @@ export function RobotJobListV4({
               {runtime.message.length === 0 ? null : ` — ${runtime.message}`}
             </p>
           )}
-          {pendingCommand === null ? null : <p aria-live="polite">Updating Job…</p>}
           {robotJobs.length === 0 ? (
             <p>No Jobs for the selected Robot.</p>
           ) : (
@@ -404,9 +453,7 @@ export function RobotJobListV4({
                     aria-label={jobLabel(job)}
                     aria-selected={selectedJobId === job.id}
                     className="robot-job-row"
-                    onClick={() => reportSyncFailure(() => {
-                      interaction.getState().selectJob(selectedRobotId, job.id)
-                    })}
+                    onClick={() => selectExplicitJob(selectedRobotId, job.id)}
                     onContextMenu={(event) => {
                       event.preventDefault()
                       openContextMenu(job.id, event.currentTarget)
@@ -446,85 +493,49 @@ export function RobotJobListV4({
         </div>
       )}
       {contextJob === undefined ? null : (
-        <div
-          aria-label={`${contextJob.name} commands`}
-          className="robot-job-menu"
-          onKeyDown={handleMenuKey}
-          ref={menuRef}
-          role="menu"
-          tabIndex={-1}
-        >
-          <button
-            disabled={authoringLocked}
-            onClick={() => {
-              void runAuthoringCommand(
-                `rename:${contextJob.id}`,
-                contextJob.robotId,
-                async () => {
-                  const name = await promptPort.requestText({
-                    title: 'Job name',
-                    initialValue: contextJob.name,
-                    required: true,
-                  })
-                  closeContextMenu()
-                  if (name !== null) await commands.renameJob(contextJob.id, name)
-                },
-                contextJob.id,
-              )
-            }}
-            ref={(node) => { if (node !== null) menuItemRefs.current[0] = node }}
-            role="menuitem"
-            type="button"
+        <>
+          <div
+            aria-label={`${contextJob.name} commands`}
+            className="robot-job-menu"
+            onKeyDown={handleMenuKey}
+            ref={menuRef}
+            role="menu"
+            tabIndex={-1}
           >
-            Rename
-          </button>
-          <button
-            disabled={authoringLocked || jobLimitReached}
-            onClick={() => {
-              closeContextMenu()
-              void runAuthoringCommand(
-                `duplicate:${contextJob.id}`,
-                contextJob.robotId,
-                async () => { await commands.duplicateJob(contextJob.id) },
-                contextJob.id,
-              )
-            }}
-            ref={(node) => { if (node !== null) menuItemRefs.current[1] = node }}
-            role="menuitem"
-            type="button"
-          >
-            Duplicate
-          </button>
-          <button
-            disabled={authoringLocked}
-            onClick={() => {
-              void runAuthoringCommand(
-                `delete:${contextJob.id}`,
-                contextJob.robotId,
-                async () => {
-                  closeContextMenu()
-                  if (window.confirm(`Delete Job "${contextJob.name}"?`)) {
-                    restoreFocusAfterRemovalRef.current = true
-                    try {
-                      await commands.deleteJob(contextJob.id)
-                    } catch (caught) {
-                      restoreFocusAfterRemovalRef.current = false
-                      throw caught
-                    }
-                  } else {
-                    restoreFocusAfterRemovalRef.current = false
-                  }
-                },
-                contextJob.id,
-              )
-            }}
-            ref={(node) => { if (node !== null) menuItemRefs.current[2] = node }}
-            role="menuitem"
-            type="button"
-          >
-            Delete
-          </button>
-        </div>
+            <ContextJobCommandV4
+              canInvoke={() => canAuthorExactJobV4(project, jobs, interaction, contextJob.robotId, contextJob.id)}
+              commandBindings={commandBindings}
+              commandId="job.rename"
+              job={contextJob}
+              onCompleted={closeContextMenu}
+              onInvokeTarget={selectExplicitJob}
+              buttonRef={(node) => { if (node !== null) menuItemRefs.current[0] = node }}
+            />
+            <ContextJobCommandV4
+              canInvoke={() => canAuthorExactJobV4(project, jobs, interaction, contextJob.robotId, contextJob.id)}
+              commandBindings={commandBindings}
+              commandId="job.duplicate"
+              job={contextJob}
+              onCompleted={closeContextMenu}
+              onInvokeTarget={selectExplicitJob}
+              buttonRef={(node) => { if (node !== null) menuItemRefs.current[1] = node }}
+            />
+            <ContextJobCommandV4
+              canInvoke={() => canAuthorExactJobV4(project, jobs, interaction, contextJob.robotId, contextJob.id)}
+              commandBindings={commandBindings}
+              commandId="job.delete"
+              job={contextJob}
+              onCompleted={closeContextMenu}
+              onInvokeTarget={selectExplicitJob}
+              onBeforeInvoke={() => { restoreFocusAfterRemovalRef.current = true }}
+              onOutcome={(outcome) => {
+                if (outcome !== 'completed') restoreFocusAfterRemovalRef.current = false
+              }}
+              buttonRef={(node) => { if (node !== null) menuItemRefs.current[2] = node }}
+            />
+          </div>
+          <ContextJobErrorsV4 commandBindings={commandBindings} />
+        </>
       )}
       {error === null ? null : <p role="alert">{error}</p>}
     </div>

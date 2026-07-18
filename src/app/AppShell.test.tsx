@@ -1,11 +1,16 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
+import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from '../features/commands/v4/app-command-runtime.js'
+import type { AppCommandV4 } from '../features/commands/v4/app-command.js'
+import { createAppCommandRegistryV4 } from '../features/commands/v4/app-command-registry.js'
 import { initialShellLayoutBoundsV4 } from '../features/ui/v4/shell-layout-geometry.js'
 import { createShellLayoutStoreV4, type ShellLayoutStoreV4 } from '../features/ui/v4/shell-layout-store.js'
 import type { ShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
+import type { ViewportSafeAreaInsetsV4 } from '../features/viewport/v4/viewport-safe-area.js'
 import { AppShellV4 } from './AppShell.js'
 
 class TestResizeObserver {
@@ -46,11 +51,40 @@ describe('AppShellV4', () => {
     vi.unstubAllGlobals()
   })
 
+  function layoutCommandBindings() {
+    const toggle = (
+      id: 'view.sidebar' | 'view.inspector' | 'view.bottom',
+      dock: 'sidebar' | 'inspector' | 'bottom',
+    ): AppCommandV4 => ({
+      id,
+      label: dock,
+      section: 'view',
+      kind: 'toggle',
+      visible: true,
+      enabled: true,
+      get checked() {
+        return shellLayoutController.getState().isDockVisible(dock)
+      },
+      execute() {
+        const snapshot = shellLayoutController.getState()
+        shellLayoutController.setDockVisible(dock, !snapshot.isDockVisible(dock))
+      },
+    })
+    return createAppCommandBindingsV4(createAppCommandRuntimeV4(createAppCommandRegistryV4([
+      toggle('view.sidebar', 'sidebar'),
+      toggle('view.inspector', 'inspector'),
+      toggle('view.bottom', 'bottom'),
+    ])))
+  }
+
   function renderShell(props: Partial<Parameters<typeof AppShellV4>[0]> = {}) {
+    const commandBindings = layoutCommandBindings()
     return render(
       <AppShellV4
         shellLayoutController={shellLayoutController}
-        viewport={<div>3D viewport</div>}
+        commandBindings={commandBindings}
+        header={<div>Header</div>}
+        renderViewport={() => <div>3D viewport</div>}
         {...props}
       />,
     )
@@ -75,21 +109,49 @@ describe('AppShellV4', () => {
     expect(workspace()).toBe(TestResizeObserver.instances[0]?.observed.values().next().value)
   })
 
-  it('retains the bounded Add controls and controller-owned Theme preference', async () => {
-    const user = userEvent.setup()
-    const createBox = vi.fn()
-    renderShell({ onCreateBox: createBox })
+  it('owns the Header and calls renderViewport once with the controller safe-area snapshot', () => {
+    const renderViewport = vi.fn<(safeAreaInsets: ViewportSafeAreaInsetsV4) => ReactNode>(
+      () => <div>Shared viewport</div>,
+    )
+    const bindings = createAppCommandBindingsV4(createAppCommandRuntimeV4(createAppCommandRegistryV4([])))
+    render(<AppShellV4
+      shellLayoutController={shellLayoutController}
+      commandBindings={bindings}
+      header={<div>Reviewed Header</div>}
+      renderViewport={renderViewport}
+    />)
 
-    await user.click(screen.getByRole('button', { name: 'Add' }))
-    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
-      'Box', 'Cylinder', 'Group',
-    ])
-    await user.click(screen.getByRole('menuitem', { name: 'Box' }))
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'dark')
+    expect(screen.getByText('Reviewed Header')).toBeInTheDocument()
+    expect(screen.getByText('Shared viewport')).toBeInTheDocument()
+    expect(renderViewport).toHaveBeenCalledOnce()
+    expect(renderViewport.mock.calls[0]?.[0]).toBe(shellLayoutController.getState().safeAreaInsets)
+  })
 
-    expect(createBox).toHaveBeenCalledOnce()
-    expect(shellLayoutController.getState().preferences.theme).toBe('dark')
+  it('allocates the reviewed ribbon height and restores the workspace offset when collapsed', () => {
+    renderShell()
+    const shell = screen.getByLabelText('3D viewport').closest('.app-shell') as HTMLElement
+
+    expect(shell.style.getPropertyValue('--ribbon-height')).toBe('38px')
+    act(() => shellLayoutController.setRibbonExpanded(false))
+    expect(shell.style.getPropertyValue('--ribbon-height')).toBe('0px')
+    act(() => shellLayoutController.setRibbonExpanded(true))
+    expect(shell.style.getPropertyValue('--ribbon-height')).toBe('38px')
+  })
+
+  it('removes the legacy top-bar Add and inline Theme controls', () => {
+    renderShell()
+
+    expect(screen.queryByRole('button', { name: 'Add' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Theme' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('toolbar', { name: 'Top bar controls' })).not.toBeInTheDocument()
+  })
+
+  it('applies controller Theme preferences after the inline selector is removed', () => {
+    renderShell()
+
+    act(() => shellLayoutController.setTheme('dark'))
     expect(document.documentElement).toHaveAttribute('data-theme', 'dark')
+    expect(document.documentElement.style.colorScheme).toBe('dark')
   })
 
   it('uses one observed workspace width for wide, compact, narrow, and restored layout modes', () => {

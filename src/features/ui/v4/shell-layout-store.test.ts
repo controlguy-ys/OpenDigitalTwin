@@ -7,9 +7,11 @@ import {
 
 class MemoryStorage {
   readonly values = new Map<string, string>()
+  readonly reads: string[] = []
   writes = 0
 
   getItem(key: string): string | null {
+    this.reads.push(key)
     return this.values.get(key) ?? null
   }
 
@@ -131,7 +133,7 @@ describe('ShellLayoutStoreV4', () => {
     expect(store.getState().preferences).toEqual(defaults)
   })
 
-  it('migrates the six legacy shell, tab, and Theme keys into one combined preference', () => {
+  it('ignores retired legacy keys and reads/writes only the canonical workspace preference', () => {
     const storage = new MemoryStorage()
     storage.values.set('robotsim.assetDrawerOpen', 'false')
     storage.values.set('robotsim.inspectorDrawerOpen', 'false')
@@ -142,15 +144,11 @@ describe('ShellLayoutStoreV4', () => {
 
     const store = createShellLayoutStoreV4({ storage })
 
-    expect(store.getState().preferences).toMatchObject({
-      modes: { wide: { dockVisible: { sidebar: false, inspector: false, bottom: true } } },
-      sidebar: { sceneJobSplitPercent: 67 },
-      bottom: { activeTab: 'collision' },
-      theme: 'dark',
-    })
-    expect([...storage.values.keys()]).toEqual([
-      WORKSPACE_PREFERENCES_STORAGE_KEY_V1,
-    ])
+    expect(store.getState().preferences).toEqual(defaults)
+    expect(storage.reads).toEqual([WORKSPACE_PREFERENCES_STORAGE_KEY_V1])
+    expect(storage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY_V1)).toBe(JSON.stringify(defaults))
+    expect(storage.values.get('robotsim.assetDrawerOpen')).toBe('false')
+    expect(storage.values.get('robotsim.theme')).toBe('dark')
   })
 
   it('resets malformed JSON and unsupported versions as a whole preference object', () => {
@@ -233,7 +231,7 @@ describe('ShellLayoutStoreV4', () => {
     expect(second.getState().preferences).toEqual(first.getState().preferences)
   })
 
-  it('tolerates storage read, write, and legacy cleanup exceptions', () => {
+  it('tolerates canonical workspace storage read and write exceptions', () => {
     const storage = {
       getItem: () => { throw new Error('read blocked') },
       setItem: () => { throw new Error('write blocked') },

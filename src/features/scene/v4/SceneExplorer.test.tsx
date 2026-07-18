@@ -10,8 +10,12 @@ import { projectAtLimit } from '../../../core/project-v4/test-support.js'
 import { createInteractionStoreV4 } from '../../interaction/v4/interaction-store.js'
 import { sceneSelectionKeyV4 } from '../../interaction/v4/scene-selection.js'
 import { createRobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
+import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from '../../commands/v4/app-command-runtime.js'
+import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-registry.js'
 import type { SceneCommandServiceV4 } from './scene-command-service.js'
+import { composeSceneContextCommandsV4 } from './scene-context-commands.js'
 import { selectSceneRuntimeV4 } from './scene-runtime-selector.js'
+import { SceneContextMenuV4 } from './SceneContextMenu.js'
 import { SceneExplorerV4 } from './SceneExplorer.js'
 
 const IDENTITY = Object.freeze({
@@ -92,14 +96,31 @@ function renderExplorer(command = commandHarness()) {
   const workcell = project()
   const interaction = createInteractionStoreV4()
   interaction.getState().replaceProject(workcell)
+  interaction.getState().select({ kind: 'robot', robotId: 'robot-1' })
   const onContextRequest = vi.fn()
   const onFocus = vi.fn()
+  const onSceneSelection = vi.fn()
+  const commandsFor = (currentProject: WorkcellProjectV4) => createAppCommandRegistryV4(
+    composeSceneContextCommandsV4({
+      project: currentProject,
+      interaction,
+      scene: command.service,
+      prompt: { requestText: vi.fn(async () => 'cancelled') },
+      presentation: {
+        openInspector: vi.fn(),
+        openRobotBase: vi.fn(),
+      },
+    }),
+  )
+  const commandRuntime = createAppCommandRuntimeV4(commandsFor(workcell))
+  const commandBindings = createAppCommandBindingsV4(commandRuntime)
   const result = render(
     <SceneExplorerV4
-      commands={command.service}
+      commandBindings={commandBindings}
       interaction={interaction}
       onContextRequest={onContextRequest}
       onFocus={onFocus}
+      onSceneSelection={onSceneSelection}
       project={workcell}
       runtime={runtime(workcell)}
     />,
@@ -107,9 +128,15 @@ function renderExplorer(command = commandHarness()) {
   return {
     ...result,
     command,
+    commandBindings,
+    commandRuntime,
     interaction,
     onContextRequest,
     onFocus,
+    onSceneSelection,
+    replaceCommandProject: (nextProject: WorkcellProjectV4) => {
+      commandRuntime.replaceRegistry(commandsFor(nextProject))
+    },
     workcell,
   }
 }
@@ -288,40 +315,30 @@ describe('SceneExplorerV4', () => {
       { kind: 'robot', robotId: 'robot-1' }, false,
     ))
     expect(harness.interaction.getState().selection).toEqual({
-      kind: 'robot-link', robotId: 'robot-1', linkId: 'L0',
+      kind: 'robot', robotId: 'robot-1',
     })
 
     resolveVisibility()
     await waitFor(() => expect(harness.interaction.getState().selection).toBeNull())
   })
 
-  it('preserves selection on rejection and respects Grasp versus Moving ownership', async () => {
+  it('keeps the exact retargeted Object selection on visibility rejection and success', async () => {
     const rejected = commandHarness()
     rejected.setPersistedVisibility.mockRejectedValueOnce(new Error('publication rejected'))
     const first = renderExplorer(rejected)
-    first.interaction.getState().select({
-      kind: 'entity-frame',
-      entityId: 'entity-a',
-      frameId: 'entity-a-grasp',
-    })
+    first.interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
     fireEvent.click(screen.getByRole('button', { name: 'Hide Grouped A' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('publication rejected')
     expect(first.interaction.getState().selection).toEqual({
-      kind: 'entity-frame', entityId: 'entity-a', frameId: 'entity-a-grasp',
+      kind: 'spatial-entity', entityId: 'entity-a',
     })
     first.unmount()
 
     const accepted = renderExplorer()
-    accepted.interaction.getState().select({
-      kind: 'entity-frame',
-      entityId: 'entity-a',
-      frameId: 'entity-a-moving',
-    })
+    accepted.interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
     fireEvent.click(screen.getByRole('button', { name: 'Hide Grouped A' }))
     await waitFor(() => expect(accepted.command.setPersistedVisibility).toHaveBeenCalledOnce())
-    expect(accepted.interaction.getState().selection).toEqual({
-      kind: 'entity-frame', entityId: 'entity-a', frameId: 'entity-a-moving',
-    })
+    expect(accepted.interaction.getState().selection).toBeNull()
   })
 
   it('does not let an obsolete visibility success clear selection in a newer Project revision', async () => {
@@ -349,12 +366,14 @@ describe('SceneExplorerV4', () => {
     })
     harness.interaction.getState().replaceProject(published)
     harness.interaction.getState().select(selection)
+    harness.replaceCommandProject(published)
     harness.rerender(
       <SceneExplorerV4
-        commands={command.service}
+        commandBindings={harness.commandBindings}
         interaction={harness.interaction}
         onContextRequest={harness.onContextRequest}
         onFocus={harness.onFocus}
+        onSceneSelection={harness.onSceneSelection}
         project={published}
         runtime={runtime(published)}
       />,
@@ -368,7 +387,7 @@ describe('SceneExplorerV4', () => {
     expect(harness.interaction.getState().selection).toEqual(selection)
   })
 
-  it('does not surface an obsolete visibility rejection in a newer Project revision', async () => {
+  it('surfaces a shared visibility rejection in both Explorer and Context after a same-ID registry replacement', async () => {
     let rejectVisibility!: (error: Error) => void
     const command = commandHarness()
     command.setPersistedVisibility.mockImplementationOnce(() => new Promise<undefined>((_resolve, reject) => {
@@ -377,6 +396,16 @@ describe('SceneExplorerV4', () => {
     const harness = renderExplorer(command)
     fireEvent.click(screen.getByRole('button', { name: 'Hide Robot 1' }))
     await waitFor(() => expect(command.setPersistedVisibility).toHaveBeenCalledOnce())
+    const context = render(
+      <SceneContextMenuV4
+        commandBindings={harness.commandBindings}
+        interaction={harness.interaction}
+        onClose={vi.fn()}
+        project={harness.workcell}
+        request={{ selection: { kind: 'robot', robotId: 'robot-1' }, position: { x: 10, y: 20 } }}
+        safeAreaInsets={{ top: 0, right: 0, bottom: 0, left: 0 }}
+      />,
+    )
 
     const published = validateWorkcellProjectV4({
       ...harness.workcell,
@@ -386,14 +415,26 @@ describe('SceneExplorerV4', () => {
       )),
     })
     harness.interaction.getState().replaceProject(published)
+    harness.replaceCommandProject(published)
     harness.rerender(
       <SceneExplorerV4
-        commands={command.service}
+        commandBindings={harness.commandBindings}
         interaction={harness.interaction}
         onContextRequest={harness.onContextRequest}
         onFocus={harness.onFocus}
+        onSceneSelection={harness.onSceneSelection}
         project={published}
         runtime={runtime(published)}
+      />,
+    )
+    context.rerender(
+      <SceneContextMenuV4
+        commandBindings={harness.commandBindings}
+        interaction={harness.interaction}
+        onClose={vi.fn()}
+        project={published}
+        request={{ selection: { kind: 'robot', robotId: 'robot-1' }, position: { x: 10, y: 20 } }}
+        safeAreaInsets={{ top: 0, right: 0, bottom: 0, left: 0 }}
       />,
     )
 
@@ -402,7 +443,50 @@ describe('SceneExplorerV4', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(screen.queryByText('obsolete visibility failure')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2))
+    expect(screen.getAllByRole('alert').every((alert) => (
+      alert.textContent === 'obsolete visibility failure'
+    ))).toBe(true)
+  })
+
+  it('leaves Scene context untouched when the shared visibility command is unavailable or stale', () => {
+    const unavailable = renderExplorer()
+    const before = unavailable.interaction.getState().selection
+    act(() => unavailable.commandRuntime.replaceRegistry(createAppCommandRegistryV4([])))
+    const disabled = screen.getByRole('button', { name: 'Hide Grouped A' })
+    expect(disabled).toBeDisabled()
+    fireEvent.click(disabled)
+    expect(unavailable.interaction.getState().selection).toEqual(before)
+    expect(unavailable.command.setPersistedVisibility).not.toHaveBeenCalled()
+    unavailable.unmount()
+
+    const stale = renderExplorer()
+    const staleBefore = stale.interaction.getState().selection
+    stale.interaction.getState().replaceProject({
+      ...stale.workcell,
+      revisionId: 'revision-scene-explorer-stale',
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Robot 1' }))
+    expect(stale.interaction.getState().selection).toEqual(staleBefore)
+    expect(stale.command.setPersistedVisibility).not.toHaveBeenCalled()
+  })
+
+  it('retargets an exact visibility row from empty or incompatible Scene selection in one click', async () => {
+    const harness = renderExplorer()
+    harness.interaction.getState().clearSelection()
+    const hide = screen.getByRole('button', { name: 'Hide Grouped A' })
+    expect(hide).toBeEnabled()
+    fireEvent.click(hide)
+    await waitFor(() => expect(harness.command.setPersistedVisibility).toHaveBeenCalledWith(
+      { kind: 'spatial-entity', entityId: 'entity-a' }, false,
+    ))
+    expect(harness.onSceneSelection).toHaveBeenLastCalledWith({
+      kind: 'spatial-entity', entityId: 'entity-a',
+    })
+
+    harness.interaction.getState().select({ kind: 'scene-frame', frameId: 'world' })
+    fireEvent.click(hide)
+    await waitFor(() => expect(harness.command.setPersistedVisibility).toHaveBeenCalledTimes(2))
   })
 
   it('dispatches one visibility command for two synchronous activations', async () => {
@@ -411,7 +495,7 @@ describe('SceneExplorerV4', () => {
     command.setPersistedVisibility.mockImplementationOnce(() => new Promise<undefined>((resolve) => {
       resolveVisibility = () => resolve(undefined)
     }))
-    renderExplorer(command)
+    const harness = renderExplorer(command)
     const hide = screen.getByRole('button', { name: 'Hide Robot 1' })
 
     act(() => {
@@ -419,6 +503,8 @@ describe('SceneExplorerV4', () => {
       hide.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     await waitFor(() => expect(command.setPersistedVisibility).toHaveBeenCalledOnce())
+    expect(harness.onSceneSelection).toHaveBeenCalledTimes(1)
+    expect(harness.interaction.getState().selection).toEqual({ kind: 'robot', robotId: 'robot-1' })
 
     await act(async () => {
       resolveVisibility()

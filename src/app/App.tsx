@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -9,23 +10,48 @@ import {
 import { useStore } from 'zustand'
 
 import type {
-  FrameIdV4,
-  RigidTransformV4,
   RobotIdV4,
+  RevisionIdV4,
   WorkcellProjectV4,
 } from '../core/project-v4/index.js'
 import { CollisionPanelV4 } from '../features/collision/v4/CollisionPanel.js'
+import {
+  createCollisionValidationControllerV4,
+  queryVisibleGeometryCollisionsV4,
+  type CollisionValidationControllerV4,
+} from '../features/collision/v4/collision-validation-controller.js'
+import { deriveCollisionPolicyV4 } from '../domain/collision/collision-policy-v4.js'
+import {
+  createAppCommandBindingsV4,
+  createAppCommandRuntimeV4,
+  type AppCommandBindingsV4,
+  type AppCommandRuntimeV4,
+  type AppCommandRuntimeStateV4,
+} from '../features/commands/v4/app-command-runtime.js'
+import { createAppCommandRegistryV4 } from '../features/commands/v4/app-command-registry.js'
+import type { AppCommandRegistryV4 } from '../features/commands/v4/app-command-registry.js'
+import {
+  createAppShortcutDispatcherV4,
+  type AppShortcutDispatcherV4,
+} from '../features/commands/v4/app-shortcut-dispatcher.js'
+import { LocalHelpPanelV4 } from '../features/help/v4/LocalHelpPanelV4.js'
+import {
+  createLocalHelpControllerV4,
+  type LocalHelpControllerV4,
+} from '../features/help/v4/local-help-controller.js'
 import type {
   CollisionGeometryProxyV4,
 } from '../features/collision/v4/scene-entity-adapter-v4.js'
 import { activeJobIdV4 } from '../features/interaction/v4/interaction-store.js'
 import type { SceneSelectionTargetV4 } from '../features/interaction/v4/scene-selection.js'
 import { RobotJobListV4 } from '../features/jobs/v4/RobotJobList.js'
+import { createJobOperatorServiceV4 } from '../features/jobs/v4/job-operator-service.js'
+import { createRobotOperatorCommandServiceV4 } from '../features/joints/v4/robot-operator-command-service.js'
 import {
   browserProjectResourcesV4,
   type BrowserProjectResourcesV4,
 } from '../features/project/project-store-browser.js'
-import { ProjectMenuV4 } from '../features/project/ProjectMenu.js'
+import { createDualRobotSampleV4 } from '../features/project/v4/dual-robot-sample-v4.js'
 import type { RobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
 import {
   createRuntimeGatewayPublisherV4,
@@ -37,6 +63,7 @@ import {
 } from '../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
 import {
   SceneCanvasV4,
+  type SceneCameraCommandV4,
   type SceneCameraRequestV4,
   type SceneRenderStatusV4,
 } from '../features/scene/v4/SceneCanvas.js'
@@ -48,6 +75,9 @@ import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selecto
 import type { WorkcellRegistrationV4 } from '../features/scene/v4/Workcell.js'
 import { BottomWorkspace } from '../features/ui/BottomWorkspace.js'
 import { TimelineV4 } from '../features/ui/v4/Timeline.js'
+import { buildAppMenuModelV4 } from '../features/ui/v4/app-menu-model.js'
+import { composeAppHeaderStatusV4 } from '../features/ui/v4/app-header-status.js'
+import { StudioHeaderV4 } from '../features/ui/v4/StudioHeaderV4.js'
 import {
   createShellLayoutControllerV4,
   type ShellLayoutControllerSnapshotV4,
@@ -55,13 +85,11 @@ import {
 } from '../features/ui/v4/shell-layout-controller.js'
 import { initialShellLayoutBoundsV4 } from '../features/ui/v4/shell-layout-geometry.js'
 import type { ShellDockV4 } from '../features/ui/v4/shell-layout-store.js'
+import { createViewportBoundResolversV4 } from '../features/viewport/v4/viewport-runtime.js'
+import type { StandardWorldView } from '../features/viewport/camera-actions.js'
 import { AppShellV4 } from './AppShell.js'
+import { APP_QUICK_ACTION_IDS_V4, composeAppCommandsV4 } from './v4/app-command-composition.js'
 import { createInitialProjectBootstrapV4 } from './initial-project-bootstrap.js'
-
-const IDENTITY_POSE_V4: RigidTransformV4 = Object.freeze({
-  positionM: Object.freeze([0, 0, 0] as const),
-  quaternion: Object.freeze([0, 0, 0, 1] as const),
-})
 
 export interface AppPropsV4 {
   readonly resources?: BrowserProjectResourcesV4
@@ -77,6 +105,41 @@ const IDLE_GATEWAY_PRESENTATION_V4: RuntimeGatewayPresentationV4 = Object.freeze
   endpointUrl: null,
   message: null,
 })
+
+const INACTIVE_COMMAND_RUNTIME_STATE_V4: AppCommandRuntimeStateV4 = Object.freeze({
+  pendingCommandIds: new Set<string>(),
+  errorByCommandId: new Map<string, string>(),
+})
+
+const INACTIVE_COMMAND_REVISION_V4 = '__app-command-environment-inactive__' as RevisionIdV4
+const EMPTY_COLLISION_PROXIES_V4: readonly CollisionGeometryProxyV4[] = Object.freeze([])
+
+const getInactiveCommandRuntimeStateV4 = () => INACTIVE_COMMAND_RUNTIME_STATE_V4
+const subscribeInactiveCommandRuntimeV4 = () => () => undefined
+
+interface AppCommandEnvironmentV4 {
+  readonly resources: BrowserProjectResourcesV4
+  readonly shellLayoutController: ShellLayoutControllerV4
+  readonly runtime: AppCommandRuntimeV4
+  readonly bindings: AppCommandBindingsV4
+  readonly collision: CollisionValidationControllerV4
+  readonly help: LocalHelpControllerV4
+  readonly shortcuts: AppShortcutDispatcherV4
+}
+
+interface InstalledCommandRegistryV4 {
+  readonly registry: AppCommandRegistryV4
+  readonly projectRevisionId: RevisionIdV4
+}
+
+interface AppInspectorFocusRequestV4 {
+  readonly id: number
+  readonly projectRevisionId: RevisionIdV4
+  readonly selection: SceneSelectionTargetV4
+  readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'numericStatus'
+}
+
+type AppContextTargetSourceV4 = 'scene' | 'job' | 'empty'
 
 const INACTIVE_SHELL_LAYOUT_SNAPSHOT_V4: ShellLayoutControllerSnapshotV4 = Object.freeze({
   mode: 'wide',
@@ -113,30 +176,16 @@ interface RevisionQualifiedContextRequestV4 {
   readonly request: SceneContextRequestV4
 }
 
-function sourceLabelV4(source: string | null): string | null {
-  if (source === null) return null
-  if (source === 'simulation') return 'Simulation'
-  if (source === 'manual') return 'Manual'
-  return source.startsWith('opcua:') ? 'OPC UA' : source
-}
-
 function nextCameraRequestV4(
   current: SceneCameraRequestV4 | undefined,
   projectRevisionId: string,
-  command: SceneCameraRequestV4['command'],
+  request: SceneCameraCommandV4,
 ): SceneCameraRequestV4 {
   return {
     id: (current?.id ?? 0) + 1,
     projectRevisionId,
-    command,
+    ...request,
   }
-}
-
-function projectFrameIdV4(
-  role: 'mcp' | 'world',
-  frames: readonly { readonly id: FrameIdV4; readonly role: string }[],
-): FrameIdV4 | null {
-  return frames.find((frame) => frame.role === role)?.id ?? null
 }
 
 function runtimeGatewayStatePayloadV4(
@@ -221,10 +270,29 @@ export function App({
   )
   const [shellLayoutController, setShellLayoutController] =
     useState<ShellLayoutControllerV4 | null>(null)
+  const [commandEnvironment, setCommandEnvironment] =
+    useState<AppCommandEnvironmentV4 | null>(null)
+  const [installedRegistry, setInstalledRegistry] =
+    useState<InstalledCommandRegistryV4 | null>(null)
+  const [inspectorFocusRequest, setInspectorFocusRequest] =
+    useState<AppInspectorFocusRequestV4 | null>(null)
+  const [gatewayDetailsOpen, setGatewayDetailsOpen] = useState(false)
+  const [contextTargetSource, setContextTargetSource] =
+    useState<AppContextTargetSourceV4>('empty')
   const shellLayoutSnapshot = useSyncExternalStore(
     shellLayoutController?.subscribe ?? subscribeInactiveShellLayoutV4,
     shellLayoutController?.getState ?? getInactiveShellLayoutSnapshotV4,
     shellLayoutController?.getState ?? getInactiveShellLayoutSnapshotV4,
+  )
+  const activeCommandEnvironment = commandEnvironment?.resources === resources
+    && commandEnvironment.shellLayoutController === shellLayoutController
+    ? commandEnvironment
+    : null
+  const commandRuntime = activeCommandEnvironment?.runtime ?? null
+  const commandRuntimeState = useSyncExternalStore(
+    commandRuntime?.subscribe ?? subscribeInactiveCommandRuntimeV4,
+    commandRuntime?.getState ?? getInactiveCommandRuntimeStateV4,
+    commandRuntime?.getState ?? getInactiveCommandRuntimeStateV4,
   )
   const [sceneStatusState, setSceneStatusState] =
     useState<RevisionQualifiedSceneStatusV4>({
@@ -275,8 +343,68 @@ export function App({
     }
   }, [resources.shellLayoutStore])
 
+  useEffect(() => {
+    if (shellLayoutController === null) return undefined
+    const collision = createCollisionValidationControllerV4({
+      initialInput: {
+        projectRevisionId: INACTIVE_COMMAND_REVISION_V4,
+        policy: deriveCollisionPolicyV4([], [], {
+          enabled: false,
+          nearMissMarginM: 0,
+        }),
+        proxies: EMPTY_COLLISION_PROXIES_V4,
+        jobRunning: false,
+        query: queryVisibleGeometryCollisionsV4,
+      },
+    })
+    const help = createLocalHelpControllerV4({
+      availableTopics: ['controls', 'stepImport', 'about'],
+    })
+    const runtime = createAppCommandRuntimeV4(createAppCommandRegistryV4([]))
+    const bindings = createAppCommandBindingsV4(runtime)
+    const shortcuts = createAppShortcutDispatcherV4({
+      target: window,
+      bindings,
+    })
+    const environment: AppCommandEnvironmentV4 = Object.freeze({
+      resources,
+      shellLayoutController,
+      runtime,
+      bindings,
+      collision,
+      help,
+      shortcuts,
+    })
+    setCommandEnvironment(environment)
+    return () => {
+      shortcuts.dispose()
+      collision.dispose()
+      help.dispose()
+      runtime.dispose()
+      setCommandEnvironment((current) => current === environment ? null : current)
+      setInstalledRegistry((current) => current?.registry === runtime.getRegistry() ? null : current)
+    }
+  }, [resources, shellLayoutController])
+
   const project = projectState.activeProject
   const revisionId = project?.revisionId ?? null
+  const setCurrentContextRequest = useCallback((
+    request: SceneContextRequestV4 | null,
+  ): void => {
+    if (project === null || request === null) {
+      setContextRequestState(null)
+      setContextTargetSource('empty')
+      return
+    }
+    setContextTargetSource(request.selection === null ? 'empty' : 'scene')
+    setContextRequestState({
+      projectRevisionId: project.revisionId,
+      request,
+    })
+  }, [project])
+  const closeContextMenuRequest = useCallback((): void => {
+    setContextRequestState(null)
+  }, [])
   const projectPublicationUsable = projectState.status !== 'loading'
     && projectState.status !== 'recovery-required'
   const liveSceneRuntime = useMemo(() => (
@@ -284,6 +412,19 @@ export function App({
       ? selectSceneRuntimeV4(project, robotRuntime)
       : null
   ), [project, robotRuntime])
+  const cameraContextRef = useRef({
+    project: null as WorkcellProjectV4 | null,
+    runtime: null as ReturnType<typeof selectSceneRuntimeV4> | null,
+    registration: null as {
+      readonly projectRevisionId: string
+      readonly value: WorkcellRegistrationV4
+    } | null,
+  })
+  cameraContextRef.current = {
+    project,
+    runtime: liveSceneRuntime,
+    registration,
+  }
   const ready = (
     projectPublicationUsable
     && project !== null
@@ -297,15 +438,41 @@ export function App({
     && interaction.projectRevisionId === revisionId
     && coordinateDisplay.projectRevisionId === revisionId
   )
+  const readPublishedProject = useCallback((): WorkcellProjectV4 => {
+    const current = resources.projectStore.getState().activeProject
+    if (current === null) throw new Error('No active Project is published.')
+    return current
+  }, [resources.projectStore])
+  const robotOperator = useMemo(() => createRobotOperatorCommandServiceV4({
+    readProject: readPublishedProject,
+    robots: resources.robots,
+    jobs: resources.jobs,
+    jobCommands: resources.jobCommands,
+  }), [readPublishedProject, resources.jobCommands, resources.jobs, resources.robots])
+  const playback = runtimeBundle.active?.jobs.playback ?? null
+  const jobOperator = useMemo(() => playback === null ? null : createJobOperatorServiceV4({
+    readProject: readPublishedProject,
+    jobs: resources.jobs,
+    playback,
+  }), [playback, readPublishedProject, resources.jobs])
+  const registeredCollisionProxies: readonly CollisionGeometryProxyV4[] = (
+    project !== null && registration?.projectRevisionId === project.revisionId
+  ) ? registration.value.collisionProxies : EMPTY_COLLISION_PROXIES_V4
+  const anyJobRunning = Object.values(jobRuntime.byRobotId)
+    .some((state) => state.state === 'RUNNING')
+  const activeRobotId = interaction.activeRobotId
+  const activeJobId = activeJobIdV4(interaction)
 
   useEffect(() => {
     setContextRequestState(null)
     setRegistration(null)
+    setInspectorFocusRequest(null)
+    setGatewayDetailsOpen(false)
+    setContextTargetSource('empty')
     setSceneStatusState({
       projectRevisionId: revisionId,
       status: 'loading',
     })
-    setCameraRequest(undefined)
     setGatewayPresentation({
       ...IDLE_GATEWAY_PRESENTATION_V4,
       projectRevisionId: revisionId,
@@ -499,15 +666,18 @@ export function App({
   }, [gatewayPublisher, project, ready, resources.robots])
 
   const issueCameraRequest = useCallback((
-    command: SceneCameraRequestV4['command'],
-  ) => {
-    if (revisionId === null) return
+    expectedProjectRevisionId: string,
+    request: SceneCameraCommandV4,
+  ): void => {
+    if (cameraContextRef.current.project?.revisionId !== expectedProjectRevisionId) {
+      throw new Error('Camera command is unavailable for a stale Project revision.')
+    }
     setCameraRequest((current) => nextCameraRequestV4(
       current,
-      revisionId,
-      command,
+      expectedProjectRevisionId,
+      request,
     ))
-  }, [revisionId])
+  }, [])
 
   const handleSceneStatusChange = useCallback((
     status: SceneRenderStatusV4,
@@ -522,28 +692,250 @@ export function App({
 
   const focusSelection = useCallback((selection: SceneSelectionTargetV4) => {
     resources.interaction.getState().select(selection)
-    issueCameraRequest('focus-selection')
+    setContextTargetSource('scene')
+    const expectedProjectRevisionId = cameraContextRef.current.project?.revisionId
+    if (expectedProjectRevisionId === undefined) {
+      throw new Error('Camera command is unavailable for a stale Project revision.')
+    }
+    issueCameraRequest(expectedProjectRevisionId, { command: 'focus-selection' })
   }, [issueCameraRequest, resources.interaction])
 
-  const runCommand = useCallback(async (
-    command: () => Promise<unknown>,
-  ): Promise<void> => {
-    setCommandError(null)
-    try {
-      await command()
-    } catch (error) {
-      setCommandError(
-        error instanceof Error ? error.message : 'Project V4 command failed.',
-      )
+  const currentGatewayPresentation = useMemo(() => (
+    project !== null && gatewayPresentation.projectRevisionId === project.revisionId
+      ? gatewayPresentation
+      : Object.freeze({
+          ...IDLE_GATEWAY_PRESENTATION_V4,
+          projectRevisionId: project?.revisionId ?? null,
+        })
+  ), [gatewayPresentation, project])
+  const camera = useMemo(() => {
+    if (project === null) return null
+    const expectedProjectRevisionId = project.revisionId
+    const contextMatchesExpectedRevision = (): boolean => (
+      cameraContextRef.current.project?.revisionId === expectedProjectRevisionId
+    )
+    const issue = (request: SceneCameraCommandV4): void => {
+      if (!contextMatchesExpectedRevision()) {
+        throw new Error('Camera command is unavailable for a stale Project revision.')
+      }
+      issueCameraRequest(expectedProjectRevisionId, request)
     }
-  }, [])
+    const canFocus = (): boolean => {
+      const current = cameraContextRef.current
+      if (
+        !contextMatchesExpectedRevision()
+        || current.project === null
+        || current.runtime === null
+      ) return false
+      return createViewportBoundResolversV4(
+        current.project,
+        current.runtime,
+        current.registration?.projectRevisionId === current.project.revisionId
+          ? current.registration.value
+          : null,
+        resources.interaction.getState().selection,
+      ).canFocusSelection
+    }
+    return Object.freeze({
+      home: () => issue({ command: 'home' }),
+      fitAll: () => issue({ command: 'fit-all' }),
+      canFocusSelection: canFocus,
+      focusSelection: () => {
+        if (!contextMatchesExpectedRevision()) {
+          throw new Error('Camera command is unavailable for a stale Project revision.')
+        }
+        if (!canFocus()) throw new Error('Select a focusable Scene item.')
+        issue({ command: 'focus-selection' })
+      },
+      setStandardView: (view: StandardWorldView) => {
+        issue({ command: 'standard-view', view })
+      },
+    })
+  }, [issueCameraRequest, project, resources.interaction])
+  const actions = useMemo(() => {
+    if (shellLayoutController === null || project === null) return null
+    const openInspector = (request: {
+      readonly selection: SceneSelectionTargetV4
+      readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'numericStatus'
+    }): void => {
+      resources.interaction.getState().select(request.selection)
+      setContextTargetSource('scene')
+      shellLayoutController.setDockVisible('inspector', true)
+      setInspectorFocusRequest((current) => ({
+        id: (current?.id ?? 0) + 1,
+        projectRevisionId: project.revisionId,
+        selection: request.selection,
+        section: request.section,
+      }))
+    }
+    return Object.freeze({
+      project: Object.freeze({
+        newProject: () => resources.projectStore.getState().newProject(),
+        saveProject: async () => { await resources.projectStore.getState().saveActiveProject() },
+        importProject: async () => {
+          const file = await resources.projectFiles.pickProject()
+          if (file === null) return 'cancelled' as const
+          await resources.projectStore.getState().importProject(file)
+        },
+        exportProject: async () => {
+          const current = resources.projectStore.getState().activeProject
+          if (current === null) throw new Error('No active Project is published.')
+          const blob = await resources.projectStore.getState().exportActiveProject()
+          resources.projectFiles.downloadProject(blob, `${current.metadata.name}.json`)
+        },
+        loadDualRobotSample: async () => {
+          await resources.mutations.replaceFromActive({
+            description: 'Load dual-Robot sample',
+            mutate: (active) => createDualRobotSampleV4({
+              projectId: active.projectId,
+              revisionId: active.revisionId,
+              nowIso: active.metadata.updatedAt,
+              opcUaMode: active.opcUa.mode === 'server' ? 'server' : 'off',
+            }),
+          })
+        },
+      }),
+      connectivity: Object.freeze({
+        setMode: async (mode: 'off' | 'server') => {
+          await resources.mutations.replaceFromActive({
+            description: `Set OPC UA mode to ${mode}`,
+            mutate: (active) => ({
+              ...active,
+              opcUa: { ...active.opcUa, mode },
+            }),
+          })
+        },
+      }),
+      presentation: Object.freeze({
+        openRobotBase: (robotId: RobotIdV4) => openInspector({
+          selection: { kind: 'robot', robotId },
+          section: 'pose',
+        }),
+        openInspector,
+        openTimeline: () => {
+          shellLayoutController.setBottomTab('timeline')
+          shellLayoutController.setDockVisible('bottom', true)
+        },
+        openCollision: (selection: SceneSelectionTargetV4 | null) => {
+          if (selection !== null) {
+            resources.interaction.getState().select(selection)
+            setContextTargetSource('scene')
+          }
+          closeContextMenuRequest()
+          shellLayoutController.setBottomTab('collision')
+          shellLayoutController.setDockVisible('bottom', true)
+        },
+        openGatewayDetails: () => setGatewayDetailsOpen(true),
+      }),
+    })
+  }, [closeContextMenuRequest, project, resources, shellLayoutController])
+  const candidateRegistry = useMemo(() => {
+    if (
+      activeCommandEnvironment === null
+      || project === null
+      || shellLayoutController === null
+      || camera === null
+      || actions === null
+      || jobOperator === null
+      || runtimeBundle.active === null
+    ) return null
+    return composeAppCommandsV4({
+      project,
+      projectState,
+      interaction: resources.interaction,
+      gateway: currentGatewayPresentation,
+      shellLayoutController,
+      scene: resources.sceneCommands,
+      jobs: resources.jobCommands,
+      viewportPreferences: resources.viewportPreferences,
+      projectFiles: resources.projectFiles,
+      robotOperator,
+      jobOperator,
+      collision: activeCommandEnvironment.collision,
+      camera,
+      prompt: resources.userPrompt,
+      help: activeCommandEnvironment.help,
+      actions,
+    })
+  }, [
+    actions,
+    activeCommandEnvironment,
+    camera,
+    currentGatewayPresentation,
+    jobOperator,
+    project,
+    projectState,
+    resources,
+    robotOperator,
+    runtimeBundle.active,
+    shellLayoutController,
+  ])
+  useEffect(() => {
+    if (activeCommandEnvironment === null) return
+    if (
+      candidateRegistry === null
+      || project === null
+      || runtimeBundle.active === null
+    ) {
+      activeCommandEnvironment.collision.replaceInput({
+        projectRevisionId: INACTIVE_COMMAND_REVISION_V4,
+        policy: deriveCollisionPolicyV4([], [], {
+          enabled: false,
+          nearMissMarginM: 0,
+        }),
+        proxies: EMPTY_COLLISION_PROXIES_V4,
+        jobRunning: false,
+        query: queryVisibleGeometryCollisionsV4,
+      })
+      return
+    }
+    activeCommandEnvironment.collision.replaceInput({
+      projectRevisionId: project.revisionId,
+      policy: runtimeBundle.active.collisionPolicy,
+      proxies: registeredCollisionProxies,
+      jobRunning: anyJobRunning,
+      query: queryVisibleGeometryCollisionsV4,
+    })
+  }, [anyJobRunning, activeCommandEnvironment, candidateRegistry, project, registeredCollisionProxies, runtimeBundle.active])
+
+  useEffect(() => {
+    if (activeCommandEnvironment === null) return
+    if (candidateRegistry === null || project === null) {
+      activeCommandEnvironment.runtime.replaceRegistry(createAppCommandRegistryV4([]))
+      setInstalledRegistry(null)
+      return
+    }
+    activeCommandEnvironment.runtime.replaceRegistry(candidateRegistry)
+    setInstalledRegistry({ registry: candidateRegistry, projectRevisionId: project.revisionId })
+  }, [activeCommandEnvironment, candidateRegistry])
+  const headerStatus = useMemo(() => composeAppHeaderStatusV4({
+    projectState,
+    jobRuntime,
+    robotRuntime,
+    activeRobotId,
+    gateway: currentGatewayPresentation,
+  }), [activeRobotId, currentGatewayPresentation, jobRuntime, projectState, robotRuntime])
+  const menuModel = useMemo(() => {
+    if (activeCommandEnvironment === null) return []
+    return buildAppMenuModelV4(activeCommandEnvironment.bindings.getRegistry())
+  }, [activeCommandEnvironment, commandRuntimeState, contextTargetSource, interaction])
 
   if (
     shellLayoutController === null
+    || activeCommandEnvironment === null
     || !ready
     || project === null
     || runtimeBundle.active === null
     || liveSceneRuntime === null
+    || actions === null
+    || camera === null
+    || candidateRegistry === null
+    || jobOperator === null
+    // A same-revision Project/Gateway snapshot may rebuild command metadata.
+    // Keep the mounted shell on its prior registry until the effect above
+    // atomically installs the replacement; only a new Project revision must
+    // enter the pending screen.
+    || installedRegistry?.projectRevisionId !== project.revisionId
   ) {
     return (
       <RuntimePendingV4
@@ -563,65 +955,40 @@ export function App({
   const activeCameraRequest = (
     cameraRequest?.projectRevisionId === project.revisionId
   ) ? cameraRequest : undefined
-  const setCurrentContextRequest = (
-    request: SceneContextRequestV4 | null,
-  ): void => {
-    setContextRequestState(request === null ? null : {
-      projectRevisionId: project.revisionId,
-      request,
-    })
-  }
-  const activeRobotId = interaction.activeRobotId
-  const activeJobId = activeJobIdV4(interaction)
-  const activeRobot = activeRobotId === null
-    ? null
-    : project.robots.find((robot) => robot.id === activeRobotId) ?? null
-  const placementFrameId = projectFrameIdV4('mcp', project.scene.frames)
-    ?? projectFrameIdV4('world', project.scene.frames)
-  if (placementFrameId === null) {
-    return (
-      <RuntimePendingV4
-        error="Project V4 has no placement Frame."
-        recoveryRequired={false}
-      />
-    )
-  }
-  const selectedGroupId = interaction.selection?.kind === 'scene-group'
-    ? interaction.selection.groupId
-    : null
-  const collisionProxies: readonly CollisionGeometryProxyV4[] =
-    registration?.projectRevisionId === project.revisionId
-      ? registration.value.collisionProxies
-      : []
-  const anyJobRunning = Object.values(jobRuntime.byRobotId)
-    .some((state) => state.state === 'RUNNING')
-  const controlsDisabled = sceneStatus !== 'ready'
-  const currentGatewayPresentation = (
-    gatewayPresentation.projectRevisionId === project.revisionId
-  ) ? gatewayPresentation : {
-      ...IDLE_GATEWAY_PRESENTATION_V4,
-      projectRevisionId: project.revisionId,
-    }
-
-  const openCollision = (selection: SceneSelectionTargetV4): void => {
-    resources.interaction.getState().select(selection)
-    setCurrentContextRequest(null)
-    shellLayoutController.setBottomTab('collision')
-    shellLayoutController.setDockVisible('bottom', true)
-  }
+  const timelineUnavailable = sceneStatus !== 'ready'
+  const ribbonContext = contextTargetSource === 'scene'
+    ? { selection: interaction.selection, activeRobotId, activeJobId: null }
+    : contextTargetSource === 'job'
+      ? { selection: null, activeRobotId, activeJobId }
+      : { selection: null, activeRobotId: null, activeJobId: null }
 
   return (
     <>
       {commandError === null ? null : (
         <p className="operation-feedback" role="alert">{commandError}</p>
       )}
+      <LocalHelpPanelV4 controller={activeCommandEnvironment.help} />
       <AppShellV4
+        commandBindings={activeCommandEnvironment.bindings}
+        header={(
+          <StudioHeaderV4
+            commandBindings={activeCommandEnvironment.bindings}
+            gatewayDetailsOpen={gatewayDetailsOpen}
+            menuModel={menuModel}
+            onGatewayDetailsOpenChange={setGatewayDetailsOpen}
+            quickActionIds={APP_QUICK_ACTION_IDS_V4}
+            ribbonContext={ribbonContext}
+            shellLayoutController={shellLayoutController}
+            status={headerStatus}
+          />
+        )}
         assetTree={(
           <SceneExplorerV4
-            commands={resources.sceneCommands}
+            commandBindings={activeCommandEnvironment.bindings}
             interaction={resources.interaction}
             onContextRequest={setCurrentContextRequest}
             onFocus={focusSelection}
+            onSceneSelection={() => setContextTargetSource('scene')}
             project={project}
             runtime={sceneRuntime}
           />
@@ -631,97 +998,63 @@ export function App({
             activeTab={shellLayoutSnapshot.preferences.bottom.activeTab}
             collision={(
               <CollisionPanelV4
-                jobRunning={anyJobRunning}
+                commandBindings={activeCommandEnvironment.bindings}
+                controller={activeCommandEnvironment.collision}
                 onFocus={focusSelection}
-                policy={runtimeBundle.active.collisionPolicy}
-                projectRevisionId={project.revisionId}
-                proxies={collisionProxies}
               />
             )}
             onActiveTabChange={shellLayoutController.setBottomTab}
             timeline={(
               <TimelineV4
+                commandBindings={activeCommandEnvironment.bindings}
                 commands={resources.jobCommands}
-                disabled={controlsDisabled}
+                disabled={timelineUnavailable}
                 jobId={activeJobId}
                 jobs={resources.jobs}
-                playback={runtimeBundle.active.jobs.playback}
                 project={project}
                 robotId={activeRobotId}
               />
             )}
           />
         )}
-        controlsDisabled={controlsDisabled}
         inspector={(
           <SceneEntityInspectorV4
+            commandBindings={activeCommandEnvironment.bindings}
+            focusRequest={inspectorFocusRequest}
             interaction={resources.interaction}
-            jobCommands={resources.jobCommands}
             jobs={resources.jobs}
             project={project}
             robots={resources.robots}
             runtime={sceneRuntime}
             sceneCommands={resources.sceneCommands}
-            selectedJobId={activeJobId}
             selection={interaction.selection}
           />
         )}
         jobTree={(
           <RobotJobListV4
-            commands={resources.jobCommands}
+            commandBindings={activeCommandEnvironment.bindings}
             interaction={resources.interaction}
             jobs={resources.jobs}
-            playback={runtimeBundle.active.jobs.playback}
             project={project}
+            onExplicitJobSelection={() => setContextTargetSource('job')}
             selectedRobotId={activeRobotId}
           />
         )}
-        onCreateBox={() => {
-          void runCommand(() => resources.sceneCommands.createBox({
-            name: 'Box',
-            parentFrameId: placementFrameId,
-            localPose: IDENTITY_POSE_V4,
-            dimensionsM: [0.1, 0.1, 0.1],
-            color: '#38BDF8',
-            groupId: selectedGroupId,
-          }))
-        }}
-        onCreateCylinder={() => {
-          void runCommand(() => resources.sceneCommands.createCylinder({
-            name: 'Cylinder',
-            parentFrameId: placementFrameId,
-            localPose: IDENTITY_POSE_V4,
-            radiusM: 0.05,
-            heightM: 0.1,
-            color: '#38BDF8',
-            groupId: selectedGroupId,
-          }))
-        }}
-        onCreateGroup={() => {
-          void runCommand(() => resources.sceneCommands.createGroup(
-            'Group',
-            selectedGroupId,
-          ))
-        }}
-        projectMenu={(
-          <ProjectMenuV4
-            gateway={currentGatewayPresentation}
-            mutations={resources.mutations}
-            store={resources.projectStore}
-          />
-        )}
         shellLayoutController={shellLayoutController}
-        robotSourceLabel={sourceLabelV4(activeRobot?.jointSource ?? null)}
-        viewport={(
+        renderViewport={(safeAreaInsets) => (
           <>
             <SceneCanvasV4
               {...(activeCameraRequest === undefined
                 ? {}
                 : { cameraRequest: activeCameraRequest })}
               coordinateDisplay={resources.coordinateDisplay}
+              commandBindings={activeCommandEnvironment.bindings}
               geometryRepository={resources.geometry}
               interaction={resources.interaction}
               onContextRequest={setCurrentContextRequest}
+              onExplicitContextTarget={(selection) => {
+                setContextTargetSource(selection === null ? 'empty' : 'scene')
+              }}
               onRegistration={(value) => {
                 setRegistration(value === null ? null : {
                   projectRevisionId: project.revisionId,
@@ -730,36 +1063,18 @@ export function App({
               }}
               onStatusChange={handleSceneStatusChange}
               project={project}
+              safeAreaInsets={safeAreaInsets}
               sceneRuntime={sceneRuntime}
               viewportPreferences={resources.viewportPreferences}
             />
             {contextRequest === null ? null : (
               <SceneContextMenuV4
-                commands={resources.sceneCommands}
-                defaultPlacementFrameId={placementFrameId}
+                commandBindings={activeCommandEnvironment.bindings}
                 interaction={resources.interaction}
-                onClose={() => setCurrentContextRequest(null)}
-                onFitAll={() => issueCameraRequest('fit-all')}
-                onFocus={focusSelection}
-                onOpenCollision={openCollision}
-                onOpenMovingFrame={(entityId, frameId) => {
-                  resources.interaction.getState().select({
-                    kind: 'entity-frame',
-                    entityId,
-                    frameId,
-                  })
-                  setCurrentContextRequest(null)
-                }}
-                onOpenRobotBase={(robotId: RobotIdV4) => {
-                  resources.interaction.getState().select({
-                    kind: 'robot',
-                    robotId,
-                  })
-                  setCurrentContextRequest(null)
-                }}
+                onClose={closeContextMenuRequest}
                 project={project}
                 request={contextRequest}
-                runtime={sceneRuntime}
+                safeAreaInsets={safeAreaInsets}
               />
             )}
           </>

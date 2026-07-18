@@ -22,9 +22,16 @@ import { selectSceneRuntimeV4 } from '../../scene/v4/scene-runtime-selector.js'
 import { createViewportBoundResolversV4 } from './viewport-runtime.js'
 import { ViewportRuntimeV4 } from './viewport-runtime.js'
 import { createViewportPreferenceStoreV4 } from './viewport-preference-store.js'
+import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from '../../commands/v4/app-command-runtime.js'
+import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-registry.js'
+
+const commandBindings = createAppCommandBindingsV4(createAppCommandRuntimeV4(createAppCommandRegistryV4(
+  ['right', 'left', 'front', 'back', 'top', 'bottom'].map((view) => ({ id: `view.orientation.${view}`, label: view, section: 'view' as const, kind: 'action' as const, visible: true, enabled: true, execute() {} })),
+)))
 
 const viewportHarness = vi.hoisted(() => ({
   camera: null as unknown,
+  cubeProps: null as unknown,
   gizmoProps: null as Record<string, unknown> | null,
   orbitProps: null as Record<string, unknown> | null,
 }))
@@ -64,6 +71,17 @@ vi.mock('@react-three/drei/core/GizmoViewcube.js', () => ({
     return null
   },
 }))
+
+vi.mock('./WorldViewCube.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./WorldViewCube.js')>()
+  return {
+    ...actual,
+    WorldViewCubeV4: (props: Parameters<typeof actual.WorldViewCubeV4>[0]) => {
+      viewportHarness.cubeProps = props
+      return <actual.WorldViewCubeV4 {...props} />
+    },
+  }
+})
 
 function entity(id: string, groupId: string | null, x: number): SpatialEntityV4 {
   return {
@@ -310,6 +328,7 @@ describe('viewport bound resolvers V4', () => {
     render(
       <ViewportRuntimeV4
         onRegister={vi.fn()}
+        commandBindings={commandBindings}
         preferences={createViewportPreferenceStoreV4(null)}
         project={project}
         registration={registration()}
@@ -319,6 +338,31 @@ describe('viewport bound resolvers V4', () => {
     )
     await waitFor(() => expect(viewportHarness.orbitProps).not.toBeNull())
     expect(viewportHarness.orbitProps).not.toHaveProperty('maxDistance')
+  })
+
+  it('passes the exact safe-area object through to the World View Cube', async () => {
+    const project = projectFixture()
+    const insets = { top: 11, right: 13, bottom: 17, left: 19 }
+    viewportHarness.camera = new PerspectiveCamera()
+    viewportHarness.cubeProps = null
+    viewportHarness.orbitProps = null
+    render(
+      <ViewportRuntimeV4
+        commandBindings={commandBindings}
+        onRegister={vi.fn()}
+        preferences={createViewportPreferenceStoreV4(null)}
+        project={project}
+        registration={registration()}
+        runtime={runtime(project)}
+        safeAreaInsets={insets}
+        selection={null}
+      />,
+    )
+
+    await waitFor(() => expect(viewportHarness.cubeProps).not.toBeNull())
+    expect((viewportHarness.cubeProps as {
+      readonly safeAreaInsets?: unknown
+    } | null)?.safeAreaInsets).toBe(insets)
   })
 
   it('persists one camera state through Orbit change for valid Cube directions only', async () => {
@@ -331,6 +375,7 @@ describe('viewport bound resolvers V4', () => {
     render(
       <ViewportRuntimeV4
         onRegister={vi.fn()}
+        commandBindings={commandBindings}
         preferences={preferences}
         project={project}
         registration={registration()}
@@ -354,7 +399,7 @@ describe('viewport bound resolvers V4', () => {
       object: { position: new Vector3() },
       stopPropagation: vi.fn(),
     }))
-    expect(setCameraState).toHaveBeenCalledTimes(1)
+    expect(setCameraState).not.toHaveBeenCalled()
 
     setCameraState.mockClear()
     act(() => onClick({
@@ -363,5 +408,12 @@ describe('viewport bound resolvers V4', () => {
       stopPropagation: vi.fn(),
     }))
     expect(setCameraState).not.toHaveBeenCalled()
+
+    act(() => onClick({
+      face: { normal: new Vector3(0, 0, 1) },
+      object: { position: new Vector3(1, -1, 1) },
+      stopPropagation: vi.fn(),
+    }))
+    expect(setCameraState).toHaveBeenCalledOnce()
   })
 })

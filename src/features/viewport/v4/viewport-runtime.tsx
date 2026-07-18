@@ -33,6 +33,7 @@ import {
   type WorldViewDirectionV4,
 } from '../camera-actions.js'
 import { WorldViewCubeV4 } from './WorldViewCube.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
 import type {
   ViewportCameraStateV4,
   ViewportPreferenceStoreV4,
@@ -267,6 +268,7 @@ export interface ViewportRuntimePropsV4 {
   readonly preferences: ViewportPreferenceStoreV4
   readonly onRegister: (controller: ViewportRuntimeControllerV4 | null) => void
   readonly safeAreaInsets?: ViewportSafeAreaInsetsV4
+  readonly commandBindings: AppCommandBindingsV4
 }
 
 export function ViewportRuntimeV4({
@@ -277,6 +279,7 @@ export function ViewportRuntimeV4({
   preferences,
   onRegister,
   safeAreaInsets = ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
+  commandBindings,
 }: ViewportRuntimePropsV4): ReactNode {
   const camera = useThree((state) => state.camera)
   const [controls, setControls] = useState<ComponentRef<typeof OrbitControls> | null>(null)
@@ -355,6 +358,7 @@ export function ViewportRuntimeV4({
         target={storedTarget}
       />
       <WorldViewCubeV4
+        commandBindings={commandBindings}
         onDirection={handleCubeDirection}
         safeAreaInsets={safeAreaInsets}
       />

@@ -1,19 +1,25 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
 import {
+  MAX_JOBS_V4,
   validateWorkcellProjectV4,
   type RobotJobStepV4,
   type WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-support.js'
+import {
+  createAppCommandBindingsV4,
+  createAppCommandRuntimeV4,
+  type AppCommandBindingsV4,
+} from '../../commands/v4/app-command-runtime.js'
+import type { AppCommandV4 } from '../../commands/v4/app-command.js'
+import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-registry.js'
 import { createInteractionStoreV4 } from '../../interaction/v4/interaction-store.js'
-import type { JobCommandServiceV4 } from './job-command-service.js'
-import { createJobRuntimeStoreV4 } from './job-runtime-store.js'
-import type { RobotJobPlaybackControllerV4 } from './simulation-clock.js'
-import { RobotJobListV4 } from './RobotJobList.js'
-import type { JobOperatorServiceV4 } from './job-operator-service.js'
 import type { UserPromptPortV4 } from '../../ui/v4/user-prompt-port.js'
+import { createJobRuntimeStoreV4 } from './job-runtime-store.js'
+import { RobotJobListV4 } from './RobotJobList.js'
 
 function jointPose(speedPercentToNext = 100): RobotJobStepV4 {
   return {
@@ -33,6 +39,7 @@ function twoRobotProject(): WorkcellProjectV4 {
   const template = {
     ...source.robots[0]!,
     initialJointValues: { 'axis.alpha:α': 0 },
+    jointSource: 'simulation' as const,
   }
   return validateWorkcellProjectV4({
     ...source,
@@ -41,64 +48,23 @@ function twoRobotProject(): WorkcellProjectV4 {
       { ...template, id: 'robot-A', name: 'Robot Alpha' },
       { ...template, id: 'robot-B', name: 'Robot Beta' },
     ],
-    actions: [
-      {
-        id: 'action:A:open',
-        kind: 'set-gripper-state',
-        robotId: 'robot-A',
-        state: 'OPEN',
-      },
-    ],
+    actions: [{ id: 'action:A:open', kind: 'set-gripper-state', robotId: 'robot-A', state: 'OPEN' }],
     jobs: [
       { id: 'job-B', name: 'Beta Job', robotId: 'robot-B', steps: [jointPose()] },
-      {
-        id: 'job-A-main',
-        name: 'Alpha Main',
-        robotId: 'robot-A',
-        steps: [
-          jointPose(30),
-          { kind: 'action-reference', actionId: 'action:A:open' },
-          jointPose(),
-        ],
-      },
+      { id: 'job-A-main', name: 'Alpha Main', robotId: 'robot-A', steps: [jointPose(30), { kind: 'action-reference', actionId: 'action:A:open' }, jointPose()] },
       { id: 'job-A-empty', name: 'Alpha Empty', robotId: 'robot-A', steps: [] },
     ],
   })
 }
 
-function commandService(overrides: Partial<JobCommandServiceV4> = {}): JobCommandServiceV4 {
-  return {
-    createJob: vi.fn(async () => 'job-created'),
-    renameJob: vi.fn(async () => undefined),
-    duplicateJob: vi.fn(async () => 'job-duplicate'),
-    deleteJob: vi.fn(async () => undefined),
-    saveJointPose: vi.fn(async () => undefined),
-    addActionReference: vi.fn(async () => undefined),
-    moveStep: vi.fn(async () => undefined),
-    deleteStep: vi.fn(async () => undefined),
-    setJointPoseSpeed: vi.fn(async () => undefined),
-    ...overrides,
-  }
-}
-
-function playbackController() {
-  return {
-    startJob: vi.fn((_jobId: string) => ({ runId: 'run-new' })),
-    cancelRobotJob: vi.fn((_robotId: string, _reason: string) => undefined),
-    ensureRunning: vi.fn(),
-    quiesce: vi.fn(async () => undefined),
-    resume: vi.fn(),
-    dispose: vi.fn(),
-  } satisfies RobotJobPlaybackControllerV4
-}
-
-function harness() {
-  const project = twoRobotProject()
-  const interaction = createInteractionStoreV4()
-  const jobs = createJobRuntimeStoreV4()
-  interaction.getState().replaceProject(project)
-  jobs.getState().replaceProject(project)
-  return { project, interaction, jobs }
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
 }
 
 function runningRobotState(robotId = 'robot-A', jobId = 'job-A-main') {
@@ -115,623 +81,352 @@ function runningRobotState(robotId = 'robot-A', jobId = 'job-A-main') {
   }
 }
 
-afterEach(() => {
-  vi.restoreAllMocks()
-})
+type CommandId = 'job.new' | 'job.start' | 'job.cancel' | 'job.rename' | 'job.duplicate' | 'job.delete'
+
+interface Harness {
+  readonly project: WorkcellProjectV4
+  readonly interaction: ReturnType<typeof createInteractionStoreV4>
+  readonly jobs: ReturnType<typeof createJobRuntimeStoreV4>
+  readonly commandBindings: AppCommandBindingsV4
+  readonly calls: Record<'create' | 'start' | 'cancel' | 'rename' | 'duplicate' | 'delete', ReturnType<typeof vi.fn>>
+  readonly prompt: { requestText: ReturnType<typeof vi.fn<UserPromptPortV4['requestText']>> }
+  replaceCommands(overrides?: Partial<Record<CommandId, Partial<Pick<AppCommandV4, 'visible' | 'enabled' | 'execute'>>>>): void
+}
+
+function harness(): Harness {
+  const project = twoRobotProject()
+  const interaction = createInteractionStoreV4()
+  const jobs = createJobRuntimeStoreV4()
+  interaction.getState().replaceProject(project)
+  jobs.getState().replaceProject(project)
+  interaction.getState().activateRobot('robot-A')
+  const calls = {
+    create: vi.fn(async (_robotId: string, _name: string) => 'job-created'),
+    start: vi.fn(async (_robotId: string, _jobId: string) => undefined),
+    cancel: vi.fn(async (_robotId: string) => undefined),
+    rename: vi.fn(async (_jobId: string, _name: string) => undefined),
+    duplicate: vi.fn(async (_jobId: string) => 'job-duplicate'),
+    delete: vi.fn(async (_jobId: string) => undefined),
+  }
+  const prompt = { requestText: vi.fn<UserPromptPortV4['requestText']>(async () => 'Job') }
+
+  const activeTarget = () => {
+    const state = interaction.getState()
+    const robotId = state.activeRobotId
+    return robotId === null ? null : {
+      robotId,
+      jobId: state.selectedJobIdsByRobotId.get(robotId) ?? null,
+    }
+  }
+  const authorable = (robotId: string) => jobs.getState().byRobotId[robotId]?.state !== 'RUNNING'
+  const command = (id: CommandId, label: string, execute: AppCommandV4['execute']): AppCommandV4 => ({
+    id, label, section: 'job', kind: 'action', visible: true,
+    get enabled() {
+      const target = activeTarget()
+      if (id === 'job.cancel') return target !== null && jobs.getState().byRobotId[target.robotId]?.state === 'RUNNING'
+      if (target === null || !authorable(target.robotId)) return false
+      return id === 'job.new' || target.jobId !== null
+    },
+    execute,
+  })
+  const commands = (): AppCommandV4[] => [
+    command('job.new', 'New Job', async () => {
+      const target = activeTarget()
+      if (target === null) throw new Error('No active Robot.')
+      const name = await prompt.requestText({ title: 'Job name', initialValue: 'Job', required: true })
+      if (name === null) return 'cancelled'
+      const id = await calls.create(target.robotId, name.trim())
+      interaction.getState().selectJob(target.robotId, id)
+    }),
+    command('job.start', 'Start Job', async () => {
+      const target = activeTarget()
+      if (target === null || target.jobId === null) throw new Error('No active Job for the active Robot.')
+      await calls.start(target.robotId, target.jobId)
+    }),
+    command('job.cancel', 'Cancel Active Robot Job', async () => {
+      const target = activeTarget()
+      if (target === null) throw new Error('No active Robot.')
+      await calls.cancel(target.robotId)
+    }),
+    command('job.rename', 'Rename Job', async () => {
+      const target = activeTarget()
+      if (target === null || target.jobId === null) throw new Error('No active Job for the active Robot.')
+      const name = await prompt.requestText({ title: 'Job name', initialValue: target.jobId, required: true })
+      if (name === null) return 'cancelled'
+      await calls.rename(target.jobId, name.trim())
+    }),
+    command('job.duplicate', 'Duplicate Job', async () => {
+      const target = activeTarget()
+      if (target === null || target.jobId === null) throw new Error('No active Job for the active Robot.')
+      const duplicate = await calls.duplicate(target.jobId)
+      interaction.getState().selectJob(target.robotId, duplicate)
+    }),
+    command('job.delete', 'Delete Job', async () => {
+      const target = activeTarget()
+      if (target === null || target.jobId === null) throw new Error('No active Job for the active Robot.')
+      await calls.delete(target.jobId)
+    }),
+  ]
+  const runtime = createAppCommandRuntimeV4(createAppCommandRegistryV4(commands()))
+  return {
+    project, interaction, jobs, commandBindings: createAppCommandBindingsV4(runtime), calls, prompt,
+    replaceCommands(overrides = {}) {
+      runtime.replaceRegistry(createAppCommandRegistryV4(commands().map((entry) => ({ ...entry, ...overrides[entry.id as CommandId] }))))
+    },
+  }
+}
+
+function list(state: Harness, selectedRobotId: 'robot-A' | 'robot-B' | null, onExplicitJobSelection?: (robotId: string, jobId: string) => void) {
+  return onExplicitJobSelection === undefined
+    ? <RobotJobListV4 {...state} selectedRobotId={selectedRobotId} />
+    : <RobotJobListV4 {...state} onExplicitJobSelection={onExplicitJobSelection} selectedRobotId={selectedRobotId} />
+}
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('RobotJobListV4', () => {
-  it('offers explicit Active Robot activation when no Robot is available to the Job list', async () => {
+  it('offers explicit Robot activation, scopes rows, preserves counts, and publishes exact row selection', async () => {
     const user = userEvent.setup()
     const state = harness()
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commandService()}
-        playback={playbackController()}
-        selectedRobotId={null}
-      />,
-    )
-
-    expect(screen.getByText('Select a Robot to view its Jobs.')).toBeVisible()
+    const selected = vi.fn()
+    const view = render(list(state, null, selected))
     await user.click(screen.getByRole('button', { name: 'Control Robot Beta' }))
-
     expect(state.interaction.getState().activeRobotId).toBe('robot-B')
-  })
 
-  it('activates a Job owner before opening its Job commands', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commandService()}
-        playback={playbackController()}
-        selectedRobotId="robot-B"
-      />,
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Beta Job commands' }))
-
-    expect(state.interaction.getState().activeRobotId).toBe('robot-B')
-    expect(state.interaction.getState().selectedJobIdsByRobotId.get('robot-B')).toBe('job-B')
-    expect(screen.getByRole('menu', { name: 'Beta Job commands' })).toBeVisible()
-  })
-
-  it('shows only the selected Robot Jobs with total-step and Joint-Pose counts', () => {
-    const state = harness()
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commandService()}
-        playback={playbackController()}
-        selectedRobotId="robot-A"
-      />,
-    )
-
-    expect(screen.getByRole('treeitem', {
-      name: 'Alpha Main, 3 steps, 2 Joint Poses',
-    })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('treeitem', {
-      name: 'Alpha Empty, 0 steps, 0 Joint Poses',
-    })).toHaveAttribute('aria-selected', 'false')
+    view.rerender(list(state, 'robot-A', selected))
+    const alpha = screen.getByRole('treeitem', { name: 'Alpha Main, 3 steps, 2 Joint Poses' })
     expect(screen.queryByText('Beta Job')).not.toBeInTheDocument()
+    await user.click(alpha)
+    expect(state.interaction.getState().selectedJobIdsByRobotId.get('robot-A')).toBe('job-A-main')
+    expect(selected).toHaveBeenLastCalledWith('robot-A', 'job-A-main')
   })
 
-  it('creates for the selected Robot and selects the published Job ephemerally', async () => {
+  it('keeps two Robot surfaces isolated while a different Robot is RUNNING and can start the active second Robot', async () => {
     const user = userEvent.setup()
     const state = harness()
-    const projectBefore = state.project
-    const published = validateWorkcellProjectV4({
-      ...state.project,
-      revisionId: 'revision-created',
-      jobs: [...state.project.jobs, {
-        id: 'job-created',
-        name: 'Job 3',
-        robotId: 'robot-A',
-        steps: [],
-      }],
+    act(() => {
+      state.jobs.getState().setRobotState(runningRobotState('robot-A', 'job-A-main'))
+      state.interaction.getState().activateRobot('robot-B')
     })
-    const commands = commandService({
-      createJob: vi.fn(async () => {
-        state.interaction.getState().replaceProject(published)
-        return 'job-created'
-      }),
-    })
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commands}
-        playback={playbackController()}
-        selectedRobotId="robot-A"
-      />,
-    )
+    render(<><section aria-label="Alpha workspace">{list(state, 'robot-A')}</section><section aria-label="Beta workspace">{list(state, 'robot-B')}</section></>)
+    const alpha = within(screen.getByRole('region', { name: 'Alpha workspace' }))
+    const beta = within(screen.getByRole('region', { name: 'Beta workspace' }))
+    expect(alpha.getByRole('button', { name: '+ New Job' })).toBeDisabled()
+    expect(alpha.getByRole('button', { name: 'Start Job' })).toBeDisabled()
+    expect(beta.getByRole('button', { name: '+ New Job' })).toBeEnabled()
+    expect(beta.getByRole('button', { name: 'Start Job' })).toBeEnabled()
+    await user.click(beta.getByRole('button', { name: 'Start Job' }))
+    expect(state.calls.start).toHaveBeenCalledWith('robot-B', 'job-B')
+  })
 
+  it('shares one pending/error state and one underlying execution across two surfaces bound to one runtime', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    const pending = deferred<string>()
+    state.calls.create.mockImplementationOnce(() => pending.promise)
+    render(<><section aria-label="first">{list(state, 'robot-A')}</section><section aria-label="second">{list(state, 'robot-A')}</section></>)
+    const first = within(screen.getByRole('region', { name: 'first' }))
+    const second = within(screen.getByRole('region', { name: 'second' }))
+    await user.click(first.getByRole('button', { name: '+ New Job' }))
+    expect(first.getByRole('button', { name: '+ New Job' })).toBeDisabled()
+    expect(second.getByRole('button', { name: '+ New Job' })).toBeDisabled()
+    await user.click(second.getByRole('button', { name: '+ New Job' }))
+    expect(state.calls.create).toHaveBeenCalledTimes(1)
+    act(() => pending.reject(new Error('Create rejected')))
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2))
+    expect(screen.getAllByRole('alert').every((alert) => alert.textContent === 'Create rejected')).toBe(true)
+    expect(second.getByRole('button', { name: '+ New Job' })).toBeEnabled()
+  })
+
+  it('honors visible state from the shared registry for header and context commands', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    state.replaceCommands({ 'job.new': { visible: false }, 'job.rename': { visible: false } })
+    render(list(state, 'robot-A'))
+    expect(screen.getByRole('button', { name: '+ New Job' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
+    expect(screen.getByRole('menuitem', { name: 'Rename Job' })).toBeDisabled()
+  })
+
+  it.each(['new', 'rename', 'duplicate', 'delete', 'start'] as const)(
+    'rechecks the latest exact target before a stale IDLE-render %s event',
+    async (operation) => {
+      const state = harness()
+      render(list(state, 'robot-A'))
+      let target: HTMLElement
+      if (operation === 'new') target = screen.getByRole('button', { name: '+ New Job' })
+      else if (operation === 'start') target = screen.getByRole('button', { name: 'Start Job' })
+      else {
+        fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
+        target = screen.getByRole('menuitem', { name: operation === 'rename' ? 'Rename Job' : operation === 'duplicate' ? 'Duplicate Job' : 'Delete Job' })
+      }
+      target.addEventListener('click', () => state.jobs.getState().setRobotState(runningRobotState()), { capture: true, once: true })
+      fireEvent.click(target)
+      expect(state.calls.create).not.toHaveBeenCalled()
+      expect(state.calls.rename).not.toHaveBeenCalled()
+      expect(state.calls.duplicate).not.toHaveBeenCalled()
+      expect(state.calls.delete).not.toHaveBeenCalled()
+      expect(state.calls.start).not.toHaveBeenCalled()
+      expect(state.prompt.requestText).not.toHaveBeenCalled()
+    },
+  )
+
+  it('uses the latest selected Job but blocks a stale selected-Robot Start event', () => {
+    const state = harness()
+    render(list(state, 'robot-A'))
+    const start = screen.getByRole('button', { name: 'Start Job' })
+    start.addEventListener('click', () => state.interaction.getState().selectJob('robot-A', 'job-A-empty'), { capture: true, once: true })
+    fireEvent.click(start)
+    expect(state.calls.start).toHaveBeenCalledWith('robot-A', 'job-A-empty')
+    state.calls.start.mockClear()
+    start.addEventListener('click', () => state.interaction.getState().activateRobot('robot-B'), { capture: true, once: true })
+    fireEvent.click(start)
+    expect(state.calls.start).not.toHaveBeenCalled()
+  })
+
+  it('does not retarget Job context when a same-tick registry replacement disables Start', () => {
+    const state = harness()
+    const selected = vi.fn()
+    render(list(state, 'robot-A', selected))
+    const before = state.interaction.getState().selectedJobIdsByRobotId.get('robot-A')
+    const start = screen.getByRole('button', { name: 'Start Job' })
+    start.addEventListener('click', () => {
+      state.replaceCommands({ 'job.start': { visible: false, enabled: false } })
+    }, { capture: true, once: true })
+
+    fireEvent.click(start)
+
+    expect(state.calls.start).not.toHaveBeenCalled()
+    expect(selected).not.toHaveBeenCalled()
+    expect(state.interaction.getState().selectedJobIdsByRobotId.get('robot-A')).toBe(before)
+  })
+
+  it('rechecks terminal runtime before a stale RUNNING-render Cancel event and publishes terminal runtime state', () => {
+    const state = harness()
+    state.jobs.getState().setRobotState(runningRobotState())
+    render(list(state, 'robot-A'))
+    const cancel = screen.getByRole('button', { name: 'Cancel Job' })
+    cancel.addEventListener('click', () => state.jobs.getState().setRobotState({ ...runningRobotState(), state: 'SUCCEEDED', completedAtSimulationMs: 10, message: 'Complete' }), { capture: true, once: true })
+    fireEvent.click(cancel)
+    expect(state.calls.cancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('status', { name: 'Robot Job state' })).toHaveTextContent('SUCCEEDED')
+    expect(screen.getByRole('status', { name: 'Robot Job state' })).toHaveTextContent('Complete')
+  })
+
+  it.each(['new', 'rename', 'duplicate', 'delete'] as const)(
+    'blocks synchronous shared-command %s reentry before React publishes pending state',
+    async (operation) => {
+      const state = harness()
+      let target: HTMLElement
+      const call = operation === 'new' ? state.calls.create : operation === 'rename' ? state.calls.rename : operation === 'duplicate' ? state.calls.duplicate : state.calls.delete
+      call.mockImplementationOnce(async () => { fireEvent.click(target); return operation === 'new' || operation === 'duplicate' ? 'job-A-empty' : undefined })
+      render(list(state, 'robot-A'))
+      if (operation === 'new') target = screen.getByRole('button', { name: '+ New Job' })
+      else {
+        fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
+        target = screen.getByRole('menuitem', { name: operation === 'rename' ? 'Rename Job' : operation === 'duplicate' ? 'Duplicate Job' : 'Delete Job' })
+      }
+      fireEvent.click(target)
+      await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
+    },
+  )
+
+  it('releases a failed shared duplicate command without poisoning a different command ID', async () => {
+    const state = harness()
+    let start: HTMLElement
+    state.calls.duplicate.mockImplementationOnce(async () => { fireEvent.click(start); throw new Error('Duplicate rejected') })
+    render(list(state, 'robot-A'))
+    start = screen.getByRole('button', { name: 'Start Job' })
+    fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate Job' }))
+    // The runtime serializes command IDs independently: a pending duplicate
+    // deliberately does not suppress a distinct job.start command.
+    expect(state.calls.start).toHaveBeenCalledWith('robot-A', 'job-A-main')
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Duplicate rejected'))
+    fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate Job' }))
+    await waitFor(() => expect(state.calls.duplicate).toHaveBeenCalledTimes(2))
+  })
+
+  it('blocks synchronous same-ID Start reentry before React publishes shared pending state', () => {
+    const state = harness()
+    let start: HTMLElement
+    state.calls.start.mockImplementationOnce(async () => {
+      fireEvent.click(start)
+    })
+    render(list(state, 'robot-A'))
+    start = screen.getByRole('button', { name: 'Start Job' })
+    fireEvent.click(start)
+    expect(state.calls.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes cancellation and prompt errors through injected shared commands without window.confirm or window.prompt', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    const nativePrompt = vi.spyOn(window, 'prompt')
+    const nativeConfirm = vi.spyOn(window, 'confirm')
+    state.prompt.requestText.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('Job name is required.'))
+    render(list(state, 'robot-A'))
+    await user.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Rename Job' }))
+    expect(state.calls.rename).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('menuitem', { name: 'Rename Job' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Job name is required.'))
+    expect(state.calls.rename).not.toHaveBeenCalled()
+    expect(nativePrompt).not.toHaveBeenCalled()
+    expect(nativeConfirm).not.toHaveBeenCalled()
+  })
+
+  it('surfaces MAX_JOBS rejection from the injected shared command and releases New for retry', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    state.calls.create.mockRejectedValueOnce(new Error(`A Project cannot exceed ${MAX_JOBS_V4} Jobs.`))
+    render(list(state, 'robot-A'))
     await user.click(screen.getByRole('button', { name: '+ New Job' }))
-
-    expect(commands.createJob).toHaveBeenCalledWith('robot-A', 'Job 3')
-    await waitFor(() => {
-      expect(state.interaction.getState().selectedJobIdsByRobotId.get('robot-A'))
-        .toBe('job-created')
-    })
-    expect(state.project).toBe(projectBefore)
-    expect(state.project.jobs).toHaveLength(3)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(`A Project cannot exceed ${MAX_JOBS_V4} Jobs.`))
+    expect(screen.getByRole('button', { name: '+ New Job' })).toBeEnabled()
   })
 
-  it('preserves tree navigation and exact context rename, duplicate, and delete commands', async () => {
+  it('publishes completed New through the exact explicit Job source selected by the shared command', async () => {
     const user = userEvent.setup()
     const state = harness()
-    const commands = commandService()
-    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('Renamed Alpha')
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commands}
-        playback={playbackController()}
-        selectedRobotId="robot-A"
-      />,
-    )
-    const first = screen.getByRole('treeitem', {
-      name: 'Alpha Main, 3 steps, 2 Joint Poses',
-    })
-    const second = screen.getByRole('treeitem', {
-      name: 'Alpha Empty, 0 steps, 0 Joint Poses',
-    })
+    const selected = vi.fn()
+    state.calls.create.mockResolvedValueOnce('job-A-empty')
+    render(list(state, 'robot-A', selected))
+    await user.click(screen.getByRole('button', { name: '+ New Job' }))
+    await waitFor(() => expect(selected).toHaveBeenCalledWith('robot-A', 'job-A-empty'))
+  })
 
+  it('returns focus to a surviving Job only after a completed delete publishes removal', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    const deletePending = deferred<void>()
+    state.calls.delete.mockImplementationOnce(() => deletePending.promise)
+    const view = render(list(state, 'robot-A'))
+    await user.click(screen.getByRole('button', { name: 'Alpha Empty commands' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Delete Job' }))
+    expect(screen.getByRole('menu')).toBeVisible()
+    act(() => deletePending.resolve())
+    const replacement = validateWorkcellProjectV4({ ...state.project, revisionId: 'revision-job-removed', jobs: state.project.jobs.filter((job) => job.id !== 'job-A-empty') })
+    act(() => state.interaction.getState().replaceProject(replacement))
+    view.rerender(list({ ...state, project: replacement }, 'robot-A'))
+    await waitFor(() => expect(screen.getByRole('treeitem', { name: 'Alpha Main, 3 steps, 2 Joint Poses' })).toHaveFocus())
+  })
+
+  it('preserves tree and context-menu keyboard focus', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    render(list(state, 'robot-A'))
+    const first = screen.getByRole('treeitem', { name: 'Alpha Main, 3 steps, 2 Joint Poses' })
+    const second = screen.getByRole('treeitem', { name: 'Alpha Empty, 0 steps, 0 Joint Poses' })
     first.focus()
     await user.keyboard('{ArrowDown}')
     expect(second).toHaveFocus()
     await user.keyboard('{Home}')
     expect(first).toHaveFocus()
     await user.keyboard('{Shift>}{F10}{/Shift}')
-    expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus()
-    await user.click(screen.getByRole('menuitem', { name: 'Rename' }))
-    expect(prompt).toHaveBeenCalledWith('Job name', 'Alpha Main')
-    expect(commands.renameJob).toHaveBeenCalledWith('job-A-main', 'Renamed Alpha')
-
-    await user.pointer({ keys: '[MouseRight]', target: first })
-    await user.click(screen.getByRole('menuitem', { name: 'Duplicate' }))
-    expect(commands.duplicateJob).toHaveBeenCalledWith('job-A-main')
-
-    await user.pointer({ keys: '[MouseRight]', target: first })
-    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
-    expect(confirm).toHaveBeenCalledWith('Delete Job "Alpha Main"?')
-    expect(commands.deleteJob).toHaveBeenCalledWith('job-A-main')
-  })
-
-  it('returns focus to a surviving Job after a context launcher is deleted', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    const commands = commandService()
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
-    const view = render(
-      <RobotJobListV4
-        {...state}
-        commands={commands}
-        playback={playbackController()}
-        selectedRobotId="robot-A"
-      />,
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Alpha Empty commands' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Delete' }))
-    const replacement = validateWorkcellProjectV4({
-      ...state.project,
-      revisionId: 'revision-job-removed',
-      jobs: state.project.jobs.filter((job) => job.id !== 'job-A-empty'),
-    })
-    act(() => { state.interaction.getState().replaceProject(replacement) })
-    view.rerender(
-      <RobotJobListV4
-        {...state}
-        project={replacement}
-        commands={commands}
-        playback={playbackController()}
-        selectedRobotId="robot-A"
-      />,
-    )
-
-    await waitFor(() => {
-      expect(screen.getByRole('treeitem', {
-        name: 'Alpha Main, 3 steps, 2 Joint Poses',
-      })).toHaveFocus()
-    })
-  })
-
-  it('locks only the RUNNING Robot while another Robot can author and start concurrently', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    const playback = playbackController()
-    act(() => {
-      state.jobs.getState().setRobotState({
-        robotId: 'robot-A',
-        jobId: 'job-A-main',
-        runId: 'run-A',
-        state: 'RUNNING',
-        stepIndex: 0,
-        startedAtSimulationMs: 5,
-        completedAtSimulationMs: null,
-        failureCode: null,
-        message: '',
-      })
-    })
-    render(
-      <>
-        <section aria-label="Alpha workspace">
-          <RobotJobListV4
-            {...state}
-            commands={commandService()}
-            playback={playback}
-            selectedRobotId="robot-A"
-          />
-        </section>
-        <section aria-label="Beta workspace">
-          <RobotJobListV4
-            {...state}
-            commands={commandService()}
-            playback={playback}
-            selectedRobotId="robot-B"
-          />
-        </section>
-      </>,
-    )
-    const alpha = within(screen.getByRole('region', { name: 'Alpha workspace' }))
-    const beta = within(screen.getByRole('region', { name: 'Beta workspace' }))
-
-    expect(alpha.getByRole('button', { name: '+ New Job' })).toBeDisabled()
-    expect(alpha.getByRole('button', { name: 'Start Job' })).toBeDisabled()
-    expect(alpha.getByRole('button', { name: 'Cancel Job' })).toBeEnabled()
-    expect(beta.getByRole('button', { name: '+ New Job' })).toBeEnabled()
-    expect(beta.getByRole('button', { name: 'Start Job' })).toBeEnabled()
-    expect(beta.getByRole('button', { name: 'Cancel Job' })).toBeDisabled()
-
-    await user.click(alpha.getByRole('button', { name: 'Alpha Main commands' }))
-    const lockedMenu = alpha.getByRole('menu')
-    expect(lockedMenu).toHaveFocus()
-    for (const item of alpha.getAllByRole('menuitem')) expect(item).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: 'Rename Job' })).toHaveFocus()
     await user.keyboard('{Escape}')
-    expect(alpha.queryByRole('menu')).not.toBeInTheDocument()
-
-    act(() => {
-      state.interaction.getState().select({ kind: 'robot', robotId: 'robot-B' })
-    })
-    await user.click(beta.getByRole('button', { name: 'Start Job' }))
-    expect(playback.startJob).toHaveBeenCalledWith('job-B')
-    act(() => {
-      state.interaction.getState().select({ kind: 'robot', robotId: 'robot-A' })
-    })
-    await user.click(alpha.getByRole('button', { name: 'Cancel Job' }))
-    expect(playback.cancelRobotJob).toHaveBeenCalledWith('robot-A', expect.any(String))
-  })
-
-  it('publishes terminal runtime state and contains playback failures as an alert', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    const failure = new Error('Start rejected')
-    const playback = playbackController()
-    playback.startJob.mockImplementation(() => { throw failure })
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commandService()}
-        playback={playback}
-        selectedRobotId="robot-A"
-      />,
-    )
-
-    await user.click(screen.getByRole('button', { name: 'Start Job' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('Start rejected')
-
-    act(() => {
-      state.jobs.getState().setRobotState({
-        robotId: 'robot-A',
-        jobId: 'job-A-main',
-        runId: 'run-terminal',
-        state: 'SUCCEEDED',
-        stepIndex: 2,
-        startedAtSimulationMs: 0,
-        completedAtSimulationMs: 100,
-        failureCode: null,
-        message: 'Complete',
-      })
-    })
-    expect(screen.getByRole('status', { name: 'Robot Job state' }))
-      .toHaveTextContent('SUCCEEDED')
-    expect(screen.getByRole('status', { name: 'Robot Job state' }))
-      .toHaveTextContent('Complete')
-  })
-
-  it.each([
-    'create',
-    'rename',
-    'duplicate',
-    'delete',
-    'start',
-  ] as const)(
-    'rechecks latest Robot runtime before a stale IDLE-render %s event',
-    async (operation) => {
-      const state = harness()
-      const commands = commandService()
-      const playback = playbackController()
-      const prompt = vi.spyOn(window, 'prompt').mockReturnValue('Should Not Rename')
-      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-      render(
-        <RobotJobListV4
-          {...state}
-          commands={commands}
-          playback={playback}
-          selectedRobotId="robot-A"
-        />,
-      )
-
-      let target: HTMLElement
-      if (operation === 'create') {
-        target = screen.getByRole('button', { name: '+ New Job' })
-      } else if (operation === 'start') {
-        target = screen.getByRole('button', { name: 'Start Job' })
-      } else {
-        await userEvent.setup().click(screen.getByRole('button', {
-          name: 'Alpha Main commands',
-        }))
-        target = screen.getByRole('menuitem', {
-          name: operation === 'rename'
-            ? 'Rename'
-            : operation === 'duplicate'
-              ? 'Duplicate'
-              : 'Delete',
-        })
-      }
-      target.addEventListener('click', () => {
-        state.jobs.getState().setRobotState(runningRobotState())
-      }, { capture: true, once: true })
-
-      fireEvent.click(target)
-
-      expect(commands.createJob).not.toHaveBeenCalled()
-      expect(commands.renameJob).not.toHaveBeenCalled()
-      expect(commands.duplicateJob).not.toHaveBeenCalled()
-      expect(commands.deleteJob).not.toHaveBeenCalled()
-      expect(playback.startJob).not.toHaveBeenCalled()
-      expect(prompt).not.toHaveBeenCalled()
-      expect(confirm).not.toHaveBeenCalled()
-    },
-  )
-
-  it('uses the exact latest selected Job and blocks a stale selected-Robot Start event', () => {
-    const state = harness()
-    const playback = playbackController()
-    const view = render(
-      <RobotJobListV4
-        {...state}
-        commands={commandService()}
-        playback={playback}
-        selectedRobotId="robot-A"
-      />,
-    )
-    const start = screen.getByRole('button', { name: 'Start Job' })
-    start.addEventListener('click', () => {
-      state.interaction.getState().selectJob('robot-A', 'job-A-empty')
-    }, { capture: true, once: true })
-
-    fireEvent.click(start)
-    expect(playback.startJob).toHaveBeenCalledWith('job-A-empty')
-
-    playback.startJob.mockClear()
-    view.rerender(
-      <RobotJobListV4
-        {...state}
-        commands={commandService()}
-        playback={playback}
-        selectedRobotId="robot-A"
-      />,
-    )
-    const currentStart = screen.getByRole('button', { name: 'Start Job' })
-    currentStart.addEventListener('click', () => {
-      state.interaction.getState().select({ kind: 'robot', robotId: 'robot-B' })
-    }, { capture: true, once: true })
-
-    fireEvent.click(currentStart)
-    expect(playback.startJob).not.toHaveBeenCalled()
-  })
-
-  it('rechecks terminal runtime before a stale RUNNING-render Cancel event', () => {
-    const state = harness()
-    const playback = playbackController()
-    state.jobs.getState().setRobotState(runningRobotState())
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commandService()}
-        playback={playback}
-        selectedRobotId="robot-A"
-      />,
-    )
-    const cancel = screen.getByRole('button', { name: 'Cancel Job' })
-    cancel.addEventListener('click', () => {
-      state.jobs.getState().setRobotState({
-        ...runningRobotState(),
-        state: 'SUCCEEDED',
-        completedAtSimulationMs: 10,
-      })
-    }, { capture: true, once: true })
-
-    fireEvent.click(cancel)
-
-    expect(playback.cancelRobotJob).not.toHaveBeenCalled()
-  })
-
-  it.each(['create', 'rename', 'duplicate', 'delete'] as const)(
-    'blocks synchronous %s reentry before React publishes pending authoring state',
-    async (operation) => {
-      const state = harness()
-      let target: HTMLElement
-      const createJob = vi.fn(async () => {
-        if (operation === 'create' && createJob.mock.calls.length === 1) {
-          fireEvent.click(target)
-        }
-        return 'job-A-empty'
-      })
-      const renameJob = vi.fn(async () => {
-        if (operation === 'rename' && renameJob.mock.calls.length === 1) {
-          fireEvent.click(target)
-        }
-      })
-      const duplicateJob = vi.fn(async () => {
-        if (operation === 'duplicate' && duplicateJob.mock.calls.length === 1) {
-          fireEvent.click(target)
-        }
-        return 'job-A-empty'
-      })
-      const deleteJob = vi.fn(async () => {
-        if (operation === 'delete' && deleteJob.mock.calls.length === 1) {
-          fireEvent.click(target)
-        }
-      })
-      const commands = commandService({ createJob, renameJob, duplicateJob, deleteJob })
-      vi.spyOn(window, 'prompt').mockReturnValue('Renamed once')
-      vi.spyOn(window, 'confirm').mockReturnValue(true)
-      render(
-        <RobotJobListV4
-          {...state}
-          commands={commands}
-          playback={playbackController()}
-          selectedRobotId="robot-A"
-        />,
-      )
-
-      if (operation === 'create') {
-        target = screen.getByRole('button', { name: '+ New Job' })
-      } else {
-        fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
-        target = screen.getByRole('menuitem', {
-          name: operation === 'rename'
-            ? 'Rename'
-            : operation === 'duplicate'
-              ? 'Duplicate'
-              : 'Delete',
-        })
-      }
-      fireEvent.click(target)
-
-      const selectedCommand = operation === 'create'
-        ? createJob
-        : operation === 'rename'
-          ? renameJob
-          : operation === 'duplicate'
-            ? duplicateJob
-            : deleteJob
-      await waitFor(() => expect(selectedCommand).toHaveBeenCalledTimes(1))
-    },
-  )
-
-  it.each(['start', 'cancel'] as const)(
-    'blocks synchronous %s playback reentry before runtime publication',
-    (operation) => {
-      const state = harness()
-      if (operation === 'cancel') state.jobs.getState().setRobotState(runningRobotState())
-      let target: HTMLElement
-      const playback = playbackController()
-      playback.startJob.mockImplementation((_jobId: string) => {
-        if (playback.startJob.mock.calls.length === 1) fireEvent.click(target)
-        return { runId: 'run-new' }
-      })
-      playback.cancelRobotJob.mockImplementation((_robotId: string, _reason: string) => {
-        if (playback.cancelRobotJob.mock.calls.length === 1) fireEvent.click(target)
-      })
-      render(
-        <RobotJobListV4
-          {...state}
-          commands={commandService()}
-          playback={playback}
-          selectedRobotId="robot-A"
-        />,
-      )
-      target = screen.getByRole('button', {
-        name: operation === 'start' ? 'Start Job' : 'Cancel Job',
-      })
-
-      fireEvent.click(target)
-
-      const selectedPlayback = operation === 'start'
-        ? playback.startJob
-        : playback.cancelRobotJob
-      expect(selectedPlayback).toHaveBeenCalledTimes(1)
-    },
-  )
-
-  it('blocks Start during same-batch authoring and releases after async failure', async () => {
-    const state = harness()
-    const playback = playbackController()
-    let startButton: HTMLElement
-    const duplicateJob = vi.fn(async () => {
-      if (duplicateJob.mock.calls.length === 1) {
-        fireEvent.click(startButton)
-        throw new Error('Duplicate rejected')
-      }
-      return 'job-copy'
-    })
-    const commands = commandService({ duplicateJob })
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commands}
-        playback={playback}
-        selectedRobotId="robot-A"
-      />,
-    )
-    startButton = screen.getByRole('button', { name: 'Start Job' })
-    fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }))
-
-    expect(playback.startJob).not.toHaveBeenCalled()
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Duplicate rejected'))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }))
-    await waitFor(() => expect(duplicateJob).toHaveBeenCalledTimes(2))
-  })
-
-  it('releases authoring after prompt and confirm cancellation', async () => {
-    const state = harness()
-    const commands = commandService()
-    const prompt = vi.spyOn(window, 'prompt')
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce('Renamed after cancel')
-    const confirm = vi.spyOn(window, 'confirm')
-      .mockReturnValueOnce(false)
-      .mockReturnValueOnce(true)
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commands}
-        playback={playbackController()}
-        selectedRobotId="robot-A"
-      />,
-    )
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
-      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
-    }
-    expect(prompt).toHaveBeenCalledTimes(2)
-    expect(commands.renameJob).toHaveBeenCalledOnce()
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      fireEvent.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
-      await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument())
-    }
-    expect(confirm).toHaveBeenCalledTimes(2)
-    expect(commands.deleteJob).toHaveBeenCalledOnce()
-  })
-
-  it('uses injected Job operator and prompt ports without retargeting the selected Robot', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    const operator: JobOperatorServiceV4 = {
-      canStart: vi.fn(() => true), start: vi.fn(async () => undefined),
-      canCancel: vi.fn(() => false), cancel: vi.fn(async () => undefined),
-    }
-    const promptPort: UserPromptPortV4 = { requestText: vi.fn(async () => null) }
-    const commands = commandService()
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commands}
-        jobOperator={operator}
-        playback={playbackController()}
-        promptPort={promptPort}
-        selectedRobotId="robot-A"
-      />,
-    )
-    await user.click(screen.getByRole('button', { name: 'Start Job' }))
-    expect(operator.start).toHaveBeenCalledWith('robot-A', 'job-A-main')
-    await user.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Rename' }))
-    await waitFor(() => expect(promptPort.requestText).toHaveBeenCalledOnce())
-    expect(commands.renameJob).not.toHaveBeenCalled()
-  })
-
-  it('renders required-name prompt rejection locally without invoking Job rename', async () => {
-    const user = userEvent.setup()
-    const state = harness()
-    const commands = commandService()
-    const promptPort: UserPromptPortV4 = {
-      requestText: vi.fn(async () => { throw new Error('Job name is required.') }),
-    }
-    render(
-      <RobotJobListV4
-        {...state}
-        commands={commands}
-        playback={playbackController()}
-        promptPort={promptPort}
-        selectedRobotId="robot-A"
-      />,
-    )
-    await user.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
-    await user.click(screen.getByRole('menuitem', { name: 'Rename' }))
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Job name is required.'))
-    expect(commands.renameJob).not.toHaveBeenCalled()
+    expect(first).toHaveFocus()
   })
 })

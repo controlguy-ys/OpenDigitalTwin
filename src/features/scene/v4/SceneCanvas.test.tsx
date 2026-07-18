@@ -7,6 +7,8 @@ import { createInteractionStoreV4 } from '../../interaction/v4/interaction-store
 import { createRobotDefinitionGeometryRepositoryV4 } from '../../robot/v4/robot-definition-geometry-repository.js'
 import { createRobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
 import { createViewportPreferenceStoreV4 } from '../../viewport/v4/viewport-preference-store.js'
+import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from '../../commands/v4/app-command-runtime.js'
+import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-registry.js'
 import { selectSceneRuntimeV4 } from './scene-runtime-selector.js'
 import { SceneCanvasV4 } from './SceneCanvas.js'
 
@@ -112,6 +114,7 @@ function fixture() {
     interaction,
     coordinateDisplay,
     viewportPreferences: createViewportPreferenceStoreV4(null),
+    commandBindings: createAppCommandBindingsV4(createAppCommandRuntimeV4(createAppCommandRegistryV4([]))),
   }
 }
 
@@ -127,18 +130,20 @@ function renderCanvas(
   capture.workcell = null
   const data = fixture()
   const onContextRequest = vi.fn()
+  const onExplicitContextTarget = vi.fn()
   const onRegistration = vi.fn()
   const onStatusChange = vi.fn()
   const result = render(
     <SceneCanvasV4
       {...data}
       onContextRequest={onContextRequest}
+      onExplicitContextTarget={onExplicitContextTarget}
       onRegistration={onRegistration}
       onStatusChange={onStatusChange}
       {...overrides}
     />,
   )
-  return { ...data, ...result, onContextRequest, onRegistration, onStatusChange }
+  return { ...data, ...result, onContextRequest, onExplicitContextTarget, onRegistration, onStatusChange }
 }
 
 describe('SceneCanvasV4', () => {
@@ -213,6 +218,16 @@ describe('SceneCanvasV4', () => {
     expect(fireEvent(document, nativeMenu)).toBe(false)
   })
 
+  it('notifies the explicit context target for ordinary selection and primary empty clears', () => {
+    const onExplicitContextTarget = vi.fn()
+    renderCanvas({ onExplicitContextTarget })
+    const select = capture.workcell?.interaction as { readonly onSelect: (selection: { readonly kind: 'robot'; readonly robotId: string }) => void }
+    act(() => select.onSelect({ kind: 'robot', robotId: 'robot-1' }))
+    expect(onExplicitContextTarget).toHaveBeenLastCalledWith({ kind: 'robot', robotId: 'robot-1' })
+    fireEvent.click(screen.getByRole('button', { name: 'Pointer miss' }), { button: 0 })
+    expect(onExplicitContextTarget).toHaveBeenLastCalledWith(null)
+  })
+
   it('keeps the Drei Cube in the existing Canvas runtime with zero safe-area insets by default', () => {
     const { container } = renderCanvas()
 
@@ -222,14 +237,11 @@ describe('SceneCanvasV4', () => {
     })
   })
 
-  it('exposes the right safe-area inset to keep the DOM camera rail beside the Cube', () => {
-    const { container } = renderCanvas({
-      safeAreaInsets: { top: 11, right: 13, bottom: 17, left: 19 },
-    })
-
-    expect(container.firstElementChild).toHaveStyle(
-      '--viewport-safe-area-right-v4: 13px',
-    )
+  it('forwards the exact safe-area inset object to both viewport presenters', () => {
+    const insets = { top: 11, right: 13, bottom: 17, left: 19 }
+    renderCanvas({ safeAreaInsets: insets })
+    expect(capture.runtime?.safeAreaInsets).toBe(insets)
+    expect(capture.overlay?.safeAreaInsets).toBe(insets)
   })
 
   it('clears selection and requests context for a stationary empty click', () => {
@@ -479,10 +491,12 @@ describe('SceneCanvasV4', () => {
     data.rerender(
       <SceneCanvasV4
         cameraRequest={matching}
+        commandBindings={data.commandBindings}
         coordinateDisplay={data.coordinateDisplay}
         geometryRepository={data.geometryRepository}
         interaction={data.interaction}
         onContextRequest={data.onContextRequest}
+        onExplicitContextTarget={data.onExplicitContextTarget}
         project={data.project}
         sceneRuntime={data.sceneRuntime}
         viewportPreferences={data.viewportPreferences}
@@ -493,10 +507,12 @@ describe('SceneCanvasV4', () => {
     data.rerender(
       <SceneCanvasV4
         cameraRequest={matching}
+        commandBindings={data.commandBindings}
         coordinateDisplay={data.coordinateDisplay}
         geometryRepository={data.geometryRepository}
         interaction={data.interaction}
         onContextRequest={data.onContextRequest}
+        onExplicitContextTarget={data.onExplicitContextTarget}
         project={data.project}
         sceneRuntime={data.sceneRuntime}
         viewportPreferences={data.viewportPreferences}
@@ -511,10 +527,12 @@ describe('SceneCanvasV4', () => {
           projectRevisionId: 'stale-revision',
           command: 'focus-selection',
         }}
+        commandBindings={data.commandBindings}
         coordinateDisplay={data.coordinateDisplay}
         geometryRepository={data.geometryRepository}
         interaction={data.interaction}
         onContextRequest={data.onContextRequest}
+        onExplicitContextTarget={data.onExplicitContextTarget}
         project={data.project}
         sceneRuntime={data.sceneRuntime}
         viewportPreferences={data.viewportPreferences}
@@ -529,16 +547,75 @@ describe('SceneCanvasV4', () => {
           projectRevisionId: data.project.revisionId,
           command: 'home',
         }}
+        commandBindings={data.commandBindings}
         coordinateDisplay={data.coordinateDisplay}
         geometryRepository={data.geometryRepository}
         interaction={data.interaction}
         onContextRequest={data.onContextRequest}
+        onExplicitContextTarget={data.onExplicitContextTarget}
         project={data.project}
         sceneRuntime={data.sceneRuntime}
         viewportPreferences={data.viewportPreferences}
       />,
     )
     expect(home).toHaveBeenCalledOnce()
+  })
+
+  it('persists exact standard views once and never replays an older A request after A-to-B-to-A', () => {
+    const data = renderCanvas()
+    const setStandardView = vi.fn()
+    const persistCamera = vi.spyOn(
+      data.viewportPreferences.getState(),
+      'setCameraState',
+    )
+    const onRegister = capture.runtime?.onRegister as (controller: Record<string, unknown>) => void
+    act(() => onRegister({
+      actions: {
+        home: vi.fn(),
+        fitAll: vi.fn(),
+        focusSelection: vi.fn(),
+        setStandardView,
+      },
+      canFocusSelection: true,
+      readCameraState: () => data.viewportPreferences.getState().cameraState,
+    }))
+    const rerenderWith = (cameraRequest: ComponentProps<typeof SceneCanvasV4>['cameraRequest']) => {
+      data.rerender(
+        <SceneCanvasV4
+          {...(cameraRequest === undefined ? {} : { cameraRequest })}
+          commandBindings={data.commandBindings}
+          coordinateDisplay={data.coordinateDisplay}
+          geometryRepository={data.geometryRepository}
+          interaction={data.interaction}
+          onContextRequest={data.onContextRequest}
+          onExplicitContextTarget={data.onExplicitContextTarget}
+          project={data.project}
+          sceneRuntime={data.sceneRuntime}
+          viewportPreferences={data.viewportPreferences}
+        />,
+      )
+    }
+    const requestA = {
+      id: 41,
+      projectRevisionId: data.project.revisionId,
+      command: 'standard-view' as const,
+      view: 'top' as const,
+    }
+    const requestB = {
+      id: 42,
+      projectRevisionId: data.project.revisionId,
+      command: 'standard-view' as const,
+      view: 'front' as const,
+    }
+
+    rerenderWith(requestA)
+    rerenderWith(requestB)
+    rerenderWith(requestA)
+
+    expect(setStandardView).toHaveBeenNthCalledWith(1, 'top')
+    expect(setStandardView).toHaveBeenNthCalledWith(2, 'front')
+    expect(setStandardView).toHaveBeenCalledTimes(2)
+    expect(persistCamera).toHaveBeenCalledTimes(2)
   })
 
   it('clears an error scope when a new Project revision becomes ready', () => {
@@ -559,10 +636,12 @@ describe('SceneCanvasV4', () => {
     data.coordinateDisplay.getState().replaceProject(nextProject)
     data.rerender(
       <SceneCanvasV4
+        commandBindings={data.commandBindings}
         coordinateDisplay={data.coordinateDisplay}
         geometryRepository={data.geometryRepository}
         interaction={data.interaction}
         onContextRequest={data.onContextRequest}
+        onExplicitContextTarget={data.onExplicitContextTarget}
         onRegistration={data.onRegistration}
         onStatusChange={data.onStatusChange}
         project={nextProject}

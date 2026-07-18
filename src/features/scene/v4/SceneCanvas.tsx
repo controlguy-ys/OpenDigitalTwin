@@ -6,7 +6,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
@@ -18,10 +17,13 @@ import type {
 } from '../../../core/project-v4/index.js'
 import type { CoordinateDisplayStoreStateV4 } from '../../frames/v4/coordinate-display-store.js'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
+import type { SceneSelectionTargetV4 } from '../../interaction/v4/scene-selection.js'
 import type { RobotDefinitionGeometryRepositoryV4 } from '../../robot/v4/robot-definition-geometry-repository.js'
 import { CoordinateFrameLayersV4 } from '../../viewport/v4/CoordinateFrameLayers.js'
 import { SelectedTcpFrameMarkerV4 } from '../../viewport/v4/SelectedTcpFrameMarker.js'
 import type { ViewportPreferenceStoreV4 } from '../../viewport/v4/viewport-preference-store.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
+import type { StandardWorldView } from '../../viewport/camera-actions.js'
 import { ViewportOverlayV4 } from '../../viewport/v4/ViewportOverlay.js'
 import {
   ViewportRuntimeV4,
@@ -49,10 +51,13 @@ const NOOP_VIEWPORT_ACTIONS_V4: ViewportRuntimeControllerV4['actions'] = {
 
 export type SceneRenderStatusV4 = 'loading' | 'ready' | 'error'
 
-export interface SceneCameraRequestV4 {
+export type SceneCameraCommandV4 =
+  | { readonly command: 'home' | 'fit-all' | 'focus-selection' }
+  | { readonly command: 'standard-view'; readonly view: StandardWorldView }
+
+export type SceneCameraRequestV4 = SceneCameraCommandV4 & {
   readonly id: number
   readonly projectRevisionId: RevisionIdV4
-  readonly command: 'home' | 'fit-all' | 'focus-selection'
 }
 
 export interface SceneCanvasPropsV4 {
@@ -62,9 +67,12 @@ export interface SceneCanvasPropsV4 {
   readonly interaction: StoreApi<InteractionStoreStateV4>
   readonly coordinateDisplay: StoreApi<CoordinateDisplayStoreStateV4>
   readonly viewportPreferences: ViewportPreferenceStoreV4
+  readonly commandBindings: AppCommandBindingsV4
   readonly safeAreaInsets?: ViewportSafeAreaInsetsV4
   readonly cameraRequest?: SceneCameraRequestV4
   readonly onContextRequest: (request: SceneContextRequestV4) => void
+  /** Keeps App's explicit scene context in lockstep with Canvas selection. */
+  readonly onExplicitContextTarget: (selection: SceneSelectionTargetV4 | null) => void
   readonly onStatusChange?: (status: SceneRenderStatusV4) => void
   readonly onRegistration?: (
     registration: WorkcellRegistrationV4 | null,
@@ -83,9 +91,11 @@ export function SceneCanvasV4({
   interaction,
   coordinateDisplay,
   viewportPreferences,
+  commandBindings,
   safeAreaInsets = ZERO_VIEWPORT_SAFE_AREA_INSETS_V4,
   cameraRequest,
   onContextRequest,
+  onExplicitContextTarget,
   onStatusChange,
   onRegistration,
 }: SceneCanvasPropsV4): ReactNode {
@@ -96,7 +106,8 @@ export function SceneCanvasV4({
   const gestureRef = useRef(createRightButtonGestureControllerV4())
   const currentRevisionId = useRef(project.revisionId)
   currentRevisionId.current = project.revisionId
-  const handledCameraRequestKey = useRef<string | null>(null)
+  const handledCameraRequests = useRef(new Set<string>())
+  const handledCameraWatermark = useRef<{ readonly revisionId: RevisionIdV4; readonly id: number } | null>(null)
   const onRegistrationRef = useRef(onRegistration)
   onRegistrationRef.current = onRegistration
   const [registrationState, setRegistrationState] = useState<RevisionRegistrationV4 | null>(null)
@@ -136,7 +147,8 @@ export function SceneCanvasV4({
 
   const handleSelect = useCallback((nextSelection: NonNullable<typeof selection>) => {
     interaction.getState().select(nextSelection)
-  }, [interaction])
+    onExplicitContextTarget(nextSelection)
+  }, [interaction, onExplicitContextTarget])
 
   const onScenePointerDownCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     gestureRef.current.begin({
@@ -223,8 +235,17 @@ export function SceneCanvasV4({
       || cameraRequest.projectRevisionId !== project.revisionId
     ) return
     const requestKey = `${cameraRequest.projectRevisionId}:${cameraRequest.id}`
-    if (handledCameraRequestKey.current === requestKey) return
-    handledCameraRequestKey.current = requestKey
+    const watermark = handledCameraWatermark.current
+    if (handledCameraRequests.current.has(requestKey) || (
+      watermark?.revisionId === cameraRequest.projectRevisionId
+      && cameraRequest.id <= watermark.id
+    )) return
+    handledCameraRequests.current.add(requestKey)
+    if (handledCameraRequests.current.size > 64) {
+      const oldest = handledCameraRequests.current.values().next().value
+      if (oldest !== undefined) handledCameraRequests.current.delete(oldest)
+    }
+    handledCameraWatermark.current = { revisionId: cameraRequest.projectRevisionId, id: cameraRequest.id }
     switch (cameraRequest.command) {
       case 'home':
         overlayActions.home()
@@ -234,6 +255,9 @@ export function SceneCanvasV4({
         break
       case 'focus-selection':
         overlayActions.focusSelection()
+        break
+      case 'standard-view':
+        overlayActions.setStandardView(cameraRequest.view)
         break
     }
   }, [cameraRequest, overlayActions, project.revisionId, viewportController])
@@ -257,9 +281,6 @@ export function SceneCanvasV4({
     <div
       className="scene-canvas scene-canvas-v4"
       data-scene-status={status}
-      style={{
-        '--viewport-safe-area-right-v4': `${safeAreaInsets.right}px`,
-      } as CSSProperties}
     >
       <div
         className="scene-canvas-surface-v4"
@@ -286,7 +307,10 @@ export function SceneCanvasV4({
               camera.updateProjectionMatrix()
             }}
             onPointerMissed={(event) => {
-              if (event.button === 0) interaction.getState().clearSelection()
+              if (event.button === 0) {
+                interaction.getState().clearSelection()
+                onExplicitContextTarget(null)
+              }
             }}
             shadows="percentage"
           >
@@ -325,6 +349,7 @@ export function SceneCanvasV4({
                 visible={layers.tcpFrame}
               />
               <ViewportRuntimeV4
+                commandBindings={commandBindings}
                 onRegister={setViewportController}
                 preferences={viewportPreferences}
                 project={project}
@@ -338,13 +363,13 @@ export function SceneCanvasV4({
         </SceneErrorBoundary>
       </div>
       <ViewportOverlayV4
-        actions={overlayActions}
-        canFocusSelection={viewportController?.canFocusSelection ?? false}
+        commandBindings={commandBindings}
         display={coordinateDisplay}
         preferences={viewportPreferences}
         project={project}
         runtime={sceneRuntime}
         selection={selection}
+        safeAreaInsets={safeAreaInsets}
       />
     </div>
   )

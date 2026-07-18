@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Play, Square, Trash2 } from 'lucide-react'
-import { useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type {
   RobotIdV4,
   RobotJobIdV4,
@@ -11,11 +11,8 @@ import type {
   JobRuntimeStoreV4,
   RobotJobRuntimeStateV4,
 } from '../../jobs/v4/job-runtime-store.js'
-import type { RobotJobPlaybackControllerV4 } from '../../jobs/v4/simulation-clock.js'
-import {
-  createJobOperatorServiceV4,
-  type JobOperatorServiceV4,
-} from '../../jobs/v4/job-operator-service.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
+import { useAppCommandV4 } from '../../commands/v4/use-app-command.js'
 
 export interface TimelinePropsV4 {
   readonly project: WorkcellProjectV4
@@ -23,9 +20,8 @@ export interface TimelinePropsV4 {
   readonly jobId: RobotJobIdV4 | null
   readonly jobs: StoreApi<JobRuntimeStoreV4>
   readonly commands: JobCommandServiceV4
-  readonly playback: RobotJobPlaybackControllerV4
+  readonly commandBindings: AppCommandBindingsV4
   readonly disabled?: boolean
-  readonly jobOperator?: JobOperatorServiceV4
 }
 
 function useRobotRuntimeV4(
@@ -67,16 +63,11 @@ export function TimelineV4({
   jobId,
   jobs,
   commands,
-  playback,
+  commandBindings,
   disabled = false,
-  jobOperator: suppliedJobOperator,
 }: TimelinePropsV4): ReactNode {
-  const defaultJobOperator = useMemo(() => createJobOperatorServiceV4({
-    readProject: () => project,
-    jobs,
-    playback,
-  }), [jobs, playback, project])
-  const jobOperator = suppliedJobOperator ?? defaultJobOperator
+  const startJob = useAppCommandV4(commandBindings, 'job.start')
+  const cancelJob = useAppCommandV4(commandBindings, 'job.cancel')
   const runtime = useRobotRuntimeV4(jobs, robotId)
   const job = project.jobs.find((candidate) => (
     candidate.id === jobId && candidate.robotId === robotId
@@ -84,9 +75,9 @@ export function TimelineV4({
   const [pendingCommand, setPendingCommand] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const pendingCommandTokenRef = useRef<symbol | null>(null)
-  const playbackCommandTokenRef = useRef<symbol | null>(null)
   const running = runtime?.state === 'RUNNING'
   const authoringDisabled = disabled || running || pendingCommand !== null
+  const startBlockedByAuthoring = authoringDisabled || pendingCommandTokenRef.current !== null
 
   const canAuthorCurrentJob = (): boolean => {
     if (disabled || robotId === null || job === null || job.id !== jobId) return false
@@ -115,30 +106,6 @@ export function TimelineV4({
     }
   }
 
-  const runPlaybackCommand = (key: string, operation: () => unknown): void => {
-    if (playbackCommandTokenRef.current !== null) return
-    const token = Symbol(key)
-    playbackCommandTokenRef.current = token
-    setError(null)
-    const release = (): void => {
-      if (playbackCommandTokenRef.current === token) {
-        playbackCommandTokenRef.current = null
-      }
-    }
-    try {
-      void Promise.resolve(operation())
-        .catch((caught: unknown) => {
-          if (playbackCommandTokenRef.current === token) {
-            setError(messageForError(caught))
-          }
-        })
-        .finally(release)
-    } catch (caught) {
-      if (playbackCommandTokenRef.current === token) setError(messageForError(caught))
-      release()
-    }
-  }
-
   const totalSteps = job?.steps.length ?? 0
   const runtimeStep = runtime !== null
     && runtime.jobId === job?.id
@@ -153,35 +120,42 @@ export function TimelineV4({
         <div className="timeline-controls">
           <button
             aria-label="Start Job"
-            disabled={authoringDisabled || robotId === null || !jobOperator.canStart(robotId, jobId)}
+            aria-describedby={startJob.error === null ? undefined : 'timeline-start-error'}
+            disabled={startBlockedByAuthoring
+              || startJob.command?.visible !== true
+              || startJob.command.enabled !== true
+              || startJob.pending}
             onClick={() => {
-              const currentJob = job
+              const currentStart = commandBindings.getRegistry().get('job.start')
               if (
-                currentJob === null
-                || robotId === null
-                || pendingCommandTokenRef.current !== null
-                || !jobOperator.canStart(robotId, jobId)
+                pendingCommandTokenRef.current !== null
+                || !canAuthorCurrentJob()
+                || currentStart?.visible !== true
+                || currentStart.enabled !== true
+                || commandBindings.runtime.getState().pendingCommandIds.has('job.start')
               ) return
-              runPlaybackCommand('start', () => jobOperator.start(robotId, currentJob.id))
+              void commandBindings.runtime.invoke('job.start')
             }}
             title="Start Job"
             type="button"
           >
             <Play aria-hidden="true" size={16} strokeWidth={1.75} />
           </button>
+          {startJob.error === null ? null : <p id="timeline-start-error" role="alert">{startJob.error}</p>}
           <button
             aria-label="Stop Job"
-            disabled={disabled || robotId === null || !jobOperator.canCancel(robotId)}
+            aria-describedby={cancelJob.error === null ? undefined : 'timeline-cancel-error'}
+            disabled={disabled || cancelJob.command?.visible !== true || cancelJob.command.enabled !== true || cancelJob.pending}
             onClick={() => {
-              if (disabled || robotId === null) return
-              if (!jobOperator.canCancel(robotId)) return
-              runPlaybackCommand('stop', () => jobOperator.cancel(robotId))
+              if (disabled || cancelJob.pending || cancelJob.command?.visible !== true || cancelJob.command.enabled !== true) return
+              void cancelJob.invoke()
             }}
             title="Stop Job"
             type="button"
           >
             <Square aria-hidden="true" size={16} strokeWidth={1.75} />
           </button>
+          {cancelJob.error === null ? null : <p id="timeline-cancel-error" role="alert">{cancelJob.error}</p>}
         </div>
       </div>
       {runtime === null ? null : (

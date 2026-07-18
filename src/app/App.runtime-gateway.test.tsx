@@ -32,8 +32,10 @@ import { createShellLayoutStoreV4 } from '../features/ui/v4/shell-layout-store.j
 import { App } from './App.js'
 
 vi.mock('./AppShell.js', () => ({
-  AppShellV4: ({ projectMenu }: { readonly projectMenu: ReactNode }) => (
-    <main>{projectMenu}</main>
+  AppShellV4: ({ header }: {
+    readonly header: ReactNode
+  }) => (
+    <main>{header}</main>
   ),
 }))
 
@@ -169,6 +171,11 @@ function resourcesForProject(projectV4: WorkcellProjectV4): BrowserProjectResour
     runtimeBundle,
     sceneCommands: {} as BrowserProjectResourcesV4['sceneCommands'],
     jobCommands: {} as BrowserProjectResourcesV4['jobCommands'],
+    projectFiles: {
+      pickProject: vi.fn(async () => null),
+      downloadProject: vi.fn(),
+    },
+    userPrompt: { requestText: vi.fn(async () => null) },
   }
 }
 
@@ -330,9 +337,8 @@ describe('App Runtime Gateway V4 integration', () => {
     render(<App gatewayPublisher={gateway.value} resources={resources} />)
 
     await waitFor(() => expect(
-      screen.getByRole('alert', { name: 'Runtime Gateway status' }),
-    ).toHaveAttribute('title', 'OPC UA mode client is not supported by this Runtime Gateway.'))
-    expect(screen.getByLabelText('OPC UA Server mode')).toHaveValue('client')
+      screen.getByRole('button', { name: /Gateway details: Unavailable.*OPC UA mode client/ }),
+    ).toBeInTheDocument())
     expect(deactivateProject).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: active.projectId,
@@ -367,8 +373,8 @@ describe('App Runtime Gateway V4 integration', () => {
 
     await waitFor(() => expect(gateway.activateProject).toHaveBeenCalledOnce())
     await waitFor(() => expect(
-      screen.getByRole('status', { name: 'Runtime Gateway status' }),
-    ).toHaveTextContent('Gateway ready'))
+      screen.getByRole('button', { name: /Gateway details: OPC UA Server.*Ready/ }),
+    ).toBeInTheDocument())
     expect(gateway.publishRobotState).not.toHaveBeenCalled()
   })
 
@@ -426,12 +432,12 @@ describe('App Runtime Gateway V4 integration', () => {
     act(() => replacePublishedProject(resources, second))
     await waitFor(() => expect(activateProject).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(
-      screen.getByLabelText('Runtime Gateway status'),
+      screen.getByRole('button', { name: /Gateway details:/ }),
     ).toHaveAttribute('title', 'opc.tcp://127.0.0.1:4840'))
 
     stale.resolve(status(first, 'opc.tcp://127.0.0.1:4999'))
     await Promise.resolve()
-    expect(screen.getByLabelText('Runtime Gateway status'))
+    expect(screen.getByRole('button', { name: /Gateway details:/ }))
       .toHaveAttribute('title', 'opc.tcp://127.0.0.1:4840')
     expect(gateway.publishRobotState.mock.calls.every(
       ([payload]) => payload.revisionId === second.revisionId,
@@ -450,12 +456,9 @@ describe('App Runtime Gateway V4 integration', () => {
     render(<App gatewayPublisher={gateway.value} resources={resources} />)
 
     await waitFor(() => expect(
-      screen.getByRole('alert', { name: 'Runtime Gateway status' }),
-    ).toHaveTextContent('Gateway unavailable'))
-    expect(screen.getByRole('alert', { name: 'Runtime Gateway status' }))
-      .toHaveAttribute('title', 'Gateway is offline.')
-    expect(screen.getByRole('button', { name: 'Save project' })).toBeEnabled()
-    expect(screen.getByLabelText('OPC UA Server mode')).toBeEnabled()
+      screen.getByRole('button', { name: /Gateway details: OPC UA Server.*Gateway is offline/ }),
+    ).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Save Project' })).toBeEnabled()
   })
 
   it('single-flights same-revision reactivation and retries only the latest Robot state', async () => {

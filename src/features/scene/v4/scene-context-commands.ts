@@ -322,10 +322,14 @@ export function composeSceneContextCommandsV4(
       get checked() { return persistedVisible(liveTarget(options)) ?? false },
       get label() { const target = liveTarget(options); const visible = persistedVisible(target); return target.kind === 'robot-link' ? (visible ? 'Hide Robot' : 'Show Robot') : visible ? 'Hide' : 'Show' },
       async execute() {
+        const invocationRevisionId = options.project.revisionId
         const target = liveTarget(options); const persisted = visibilityTarget(target); const visible = persistedVisible(target)
         if (persisted === null || visible === null) unavailable()
         await options.scene.setPersistedVisibility(persisted, !visible)
-        if (visible) options.interaction.getState().clearSelectionForHidden(persisted)
+        if (
+          visible
+          && options.interaction.getState().projectRevisionId === invocationRevisionId
+        ) options.interaction.getState().clearSelectionForHidden(persisted)
       },
     }),
     withCompatibility(definition('scene.isolate', 'Isolate', 'home', {

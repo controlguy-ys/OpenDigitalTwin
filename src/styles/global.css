@@ -40,211 +40,7 @@ button {
   overflow: hidden;
   background: var(--color-canvas);
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--top-bar-height) minmax(0, 1fr);
-}
-
-.top-bar {
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-  overflow: hidden;
-  padding: 0 16px;
-  background: var(--color-canvas);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.top-bar-controls {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.top-bar-disclosure {
-  display: none;
-}
-
-.top-bar-controls[hidden] {
-  display: none;
-}
-
-.app-shell.is-compact-topbar .top-bar {
-  justify-content: space-between;
-  gap: 8px;
-  overflow: visible;
-}
-
-.app-shell.is-compact-topbar .top-bar-disclosure {
-  display: block;
-  width: auto;
-  min-width: 88px;
-  margin-left: auto;
-}
-
-.app-shell.is-compact-topbar .top-bar-controls {
-  position: fixed;
-  top: 48px;
-  right: 8px;
-  z-index: 30;
-  width: min(320px, calc(100vw - 16px));
-  max-height: calc(100dvh - 64px);
-  padding: 10px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  background: var(--color-panel);
-  border: 1px solid var(--color-border);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
-}
-
-.app-shell.is-compact-topbar .top-bar-controls.is-open {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: stretch;
-}
-
-.app-shell.is-compact-topbar .top-bar-controls > *,
-.app-shell.is-compact-topbar .top-bar-controls .project-menu {
-  width: 100%;
-  min-width: 0;
-}
-
-.app-shell.is-compact-topbar .top-bar-controls .project-menu {
-  flex-wrap: wrap;
-}
-
-.app-shell.is-compact-topbar .top-bar-controls > .add-menu {
-  margin-left: 0;
-}
-
-.app-shell.is-compact-topbar .top-bar-controls .joint-source-select,
-.app-shell.is-compact-topbar .top-bar-controls .theme-select {
-  justify-content: space-between;
-}
-
-.app-shell.is-compact-topbar .top-bar-controls .add-menu > button,
-.app-shell.is-compact-topbar .top-bar-controls .joint-source-select select,
-.app-shell.is-compact-topbar .top-bar-controls .theme-select select {
-  width: 100%;
-}
-
-.app-shell.is-compact-topbar .top-bar-controls .add-menu > [role='menu'] {
-  position: static;
-  margin-top: 4px;
-}
-
-.project-menu {
-  align-items: center;
-  display: flex;
-  gap: 0.35rem;
-  flex: 0 0 auto;
-  min-width: max-content;
-}
-
-.top-bar .project-menu button {
-  width: auto;
-  min-width: 52px;
-  padding-inline: 9px;
-}
-
-.project-name {
-  color: var(--text-primary);
-  max-width: 8rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-save-state {
-  color: var(--text-secondary);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-}
-
-.top-bar strong {
-  flex: 0 0 auto;
-  margin-right: 20px;
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.01em;
-}
-
-.top-bar span {
-  flex: 0 0 auto;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.top-bar span:first-of-type {
-  color: var(--color-accent);
-}
-
-.top-bar .source-quality[data-quality='GOOD'] {
-  color: var(--color-running);
-}
-
-.top-bar .source-quality[data-quality='UNCERTAIN'] {
-  color: var(--color-warning);
-}
-
-.top-bar .source-quality[data-quality='BAD'],
-.top-bar .source-quality[data-quality='STALE'] {
-  color: var(--color-fault);
-}
-
-.top-bar button {
-  width: auto;
-  min-width: 92px;
-  height: 32px;
-  padding: 0 14px;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
-  background: transparent;
-  border: 1px solid var(--color-accent);
-  border-radius: var(--radius);
-}
-
-.top-bar-controls > .add-menu {
-  margin-left: auto;
-}
-
-.joint-source-select,
-.theme-select {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-}
-
-.joint-source-select span,
-.theme-select span {
-  color: var(--color-muted);
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.joint-source-select select,
-.theme-select select {
-  height: 30px;
-  padding: 0 7px;
-  color: var(--color-text);
-  font-size: 11px;
-  background: var(--color-panel);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-}
-
-.top-bar button:hover {
-  background: var(--color-hover);
-}
-
-.top-bar button:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  grid-template-rows: calc(var(--top-bar-height) + var(--ribbon-height, 0px)) minmax(0, 1fr);
 }
 
 .drawer-control {
@@ -492,30 +288,6 @@ button {
   font-size: 9px;
   background: var(--color-panel);
   border: 1px solid var(--color-fault);
-}
-
-.add-menu {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.add-menu > [role='menu'] {
-  position: fixed;
-  top: 42px;
-  z-index: 20;
-  display: grid;
-  min-width: 152px;
-  padding: 4px;
-  background: var(--color-panel);
-  border: 1px solid var(--color-border);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
-}
-
-.top-bar .add-menu [role='menuitem'] {
-  width: 100%;
-  min-width: 0;
-  text-align: left;
-  border-color: transparent;
 }
 
 .scene-explorer {
@@ -852,17 +624,40 @@ button {
 }
 
 .scene-context-menu {
-  position: fixed;
-  z-index: 1200;
+  position: static;
+  z-index: auto;
   display: grid;
-  min-width: 190px;
-  max-height: calc(100vh - 16px);
+  box-sizing: border-box;
+  min-width: min(190px, 100%);
+  max-width: 100%;
+  max-height: 100%;
   padding: 5px;
   overflow: auto;
   background: var(--color-panel);
   border: 1px solid var(--color-border);
   border-radius: 6px;
   box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+  overflow: auto;
+}
+
+.scene-context-menu-presentation-v4 {
+  position: fixed;
+  z-index: 1200;
+  display: grid;
+  min-width: 0;
+  max-width: 100%;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+}
+
+.scene-context-menu-error-v4 {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: 6px 0 0;
+  color: var(--color-fault);
+  font-size: 10px;
+  overflow-wrap: anywhere;
 }
 
 .scene-context-menu button {
@@ -1269,8 +1064,8 @@ button {
 }
 
 .viewport-camera-controls {
-  top: 12px;
-  right: calc(112px + var(--viewport-safe-area-right-v4, 0px));
+  top: calc(12px + var(--viewport-safe-top, 0px));
+  right: calc(112px + var(--viewport-safe-right, 0px));
   align-items: flex-start;
 }
 
@@ -1311,8 +1106,8 @@ button {
 }
 
 .viewport-layer-controls {
-  bottom: 42px;
-  left: 12px;
+  bottom: calc(42px + var(--viewport-safe-bottom, 0px));
+  left: calc(12px + var(--viewport-safe-left, 0px));
 }
 
 .viewport-layer-controls button {
@@ -1320,9 +1115,9 @@ button {
 }
 
 .coordinate-status-bar {
-  right: 12px;
-  bottom: 8px;
-  left: 12px;
+  right: calc(12px + var(--viewport-safe-right, 0px));
+  bottom: calc(8px + var(--viewport-safe-bottom, 0px));
+  left: calc(12px + var(--viewport-safe-left, 0px));
   align-items: center;
   min-height: 30px;
   padding: 4px 8px;
@@ -2232,24 +2027,6 @@ button {
 }
 
 @media (max-width: 520px) {
-  .top-bar {
-    padding-inline: 8px;
-  }
-
-  .top-bar strong {
-    font-size: 15px;
-  }
-
-  .top-bar span {
-    font-size: 9px;
-  }
-
-  .top-bar button {
-    height: 30px;
-    padding-inline: 8px;
-    font-size: 10px;
-  }
-
   .import-step-backdrop {
     padding: 8px;
     place-items: stretch;
@@ -2268,19 +2045,13 @@ button {
    above remain limited to compact controls and dialogs. */
 .app-shell {
   display: grid;
-  grid-template-rows: var(--top-bar-height) minmax(0, 1fr);
+  grid-template-rows: calc(var(--top-bar-height) + var(--ribbon-height, 0px)) minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
   background: var(--color-canvas);
-}
-
-.app-shell > .top-bar {
-  grid-area: auto;
-  grid-column: 1;
-  grid-row: 1;
 }
 
 .studio-workspace {
@@ -2567,8 +2338,8 @@ button {
   place-items: center;
 }
 
-.drawer-control-left { top: calc(var(--top-bar-height) + 8px); left: 8px; }
-.drawer-control-right { top: calc(var(--top-bar-height) + 8px); right: 8px; }
+.drawer-control-left { top: calc(var(--top-bar-height) + var(--ribbon-height, 0px) + 8px); left: 8px; }
+.drawer-control-right { top: calc(var(--top-bar-height) + var(--ribbon-height, 0px) + 8px); right: 8px; }
 .sheet-control { right: 8px; bottom: 8px; }
 
 /* Task 8: reusable application-menu presentation.  Shell placement remains Task 10 owned. */
@@ -2693,6 +2464,8 @@ button {
 
 /* Task 9: the header and local Help surface are composed into AppShell by Task 10. */
 .studio-header-v4 {
+  grid-column: 1;
+  grid-row: 1;
   position: relative;
   z-index: 24;
   display: grid;
@@ -2747,7 +2520,7 @@ button {
 }
 .studio-header-gateway-details-v4 {
   position: absolute;
-  top: calc(var(--top-bar-height) + 4px);
+  top: calc(var(--top-bar-height) + var(--ribbon-height, 0px) + 4px);
   right: 12px;
   z-index: 32;
   display: grid;
@@ -2839,7 +2612,7 @@ button {
 
 .local-help-panel-v4 {
   position: fixed;
-  top: calc(var(--top-bar-height) + 8px);
+  top: calc(var(--top-bar-height) + var(--ribbon-height, 0px) + 8px);
   right: 8px;
   z-index: 40;
   width: min(360px, calc(100vw - 16px));

@@ -1,60 +1,66 @@
 import { ChevronDown, PanelLeft, PanelRight } from 'lucide-react'
 import {
+  applyThemePreference,
+  DARK_THEME_QUERY,
+} from '../features/ui/theme-preference'
+import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
   type CSSProperties,
   type ReactNode,
 } from 'react'
 
-import {
-  applyThemePreference,
-  DARK_THEME_QUERY,
-  type ThemePreference,
-} from '../features/ui/theme-preference'
+import type { AppCommandBindingsV4 } from '../features/commands/v4/app-command-runtime.js'
+import { useAppCommandV4 } from '../features/commands/v4/use-app-command.js'
 import { DockResizeHandleV4 } from '../features/ui/v4/DockResizeHandleV4.js'
 import type { ShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
 import { isSceneJobResizeAvailableV4 } from '../features/ui/v4/shell-layout-geometry.js'
 import { useShellLayoutObserverV4 } from '../features/ui/v4/use-shell-layout-observer.js'
+import type { ViewportSafeAreaInsetsV4 } from '../features/viewport/v4/viewport-safe-area.js'
 
 export interface AppShellPropsV4 {
   readonly shellLayoutController: ShellLayoutControllerV4
-  readonly viewport: ReactNode
-  readonly projectMenu?: ReactNode
+  readonly commandBindings: AppCommandBindingsV4
+  readonly header: ReactNode
+  readonly renderViewport: (safeAreaInsets: ViewportSafeAreaInsetsV4) => ReactNode
   readonly assetTree?: ReactNode
   readonly jobTree?: ReactNode
   readonly inspector?: ReactNode
   readonly bottomRail?: ReactNode
-  readonly controlsDisabled?: boolean
   readonly viewportBusy?: boolean
-  readonly robotSourceLabel?: string | null
-  readonly onCreateBox?: () => void
-  readonly onCreateCylinder?: () => void
-  readonly onCreateGroup?: () => void
+}
+
+function DrawerToggleV4({ bindings, commandId, controls, label, icon: Icon }: { readonly bindings: AppCommandBindingsV4; readonly commandId: 'view.sidebar' | 'view.inspector' | 'view.bottom'; readonly controls: string; readonly label: string; readonly icon: typeof PanelLeft }) {
+  const { command, pending, error, invoke } = useAppCommandV4(bindings, commandId)
+  if (command === null || command.visible !== true) return null
+  const placementClass = commandId === 'view.sidebar'
+    ? 'drawer-control-left'
+    : commandId === 'view.inspector'
+      ? 'drawer-control-right'
+      : 'sheet-control'
+  return <>
+    <button aria-busy={pending || undefined} aria-controls={controls} aria-describedby={error === null ? undefined : `${commandId}-error`} aria-expanded={command.checked === true} aria-label={label} className={`drawer-control ${placementClass} ${command.checked === true ? 'is-open' : ''}`} disabled={command.enabled !== true || pending} onClick={() => { void invoke() }} type="button"><Icon aria-hidden="true" size={16} strokeWidth={1.75} /></button>
+    {error === null ? null : <span aria-live="polite" className="visually-hidden" id={`${commandId}-error`}>{error}</span>}
+  </>
 }
 
 export function AppShellV4({
   shellLayoutController,
-  viewport,
-  projectMenu,
+  commandBindings,
+  header,
+  renderViewport,
   assetTree,
   jobTree,
   inspector,
   bottomRail,
-  controlsDisabled = false,
-  viewportBusy = controlsDisabled,
-  robotSourceLabel = null,
-  onCreateBox,
-  onCreateCylinder,
-  onCreateGroup,
+  viewportBusy = false,
 }: AppShellPropsV4) {
   const { snapshot, workspaceRef } = useShellLayoutObserverV4(shellLayoutController)
-  const [isAddOpen, setIsAddOpen] = useState(false)
-  const [isCompactControlsOpen, setIsCompactControlsOpen] = useState(false)
   const [assetRail, setAssetRail] = useState<HTMLElement | null>(null)
   const [sidebarContentHeightPx, setSidebarContentHeightPx] = useState(0)
   const setAssetRailRef = useCallback((element: HTMLElement | null) => setAssetRail(element), [])
-  const isCompactTopBar = snapshot.mode !== 'wide'
   const isAssetRailOpen = snapshot.isDockVisible('sidebar')
   const isInspectorOpen = snapshot.isDockVisible('inspector')
   const isBottomRailOpen = snapshot.isDockVisible('bottom')
@@ -71,7 +77,7 @@ export function AppShellV4({
   const splitReferenceHeightPx = sidebarContentHeightPx > 0
     ? sidebarContentHeightPx
     : Math.max(1, snapshot.bounds.workspaceHeightPx)
-  const shellClassName = `app-shell${isCompactTopBar ? ' is-compact-topbar' : ''}${isAssetRailOpen ? ' is-asset-rail-open' : ''}${isInspectorOpen ? ' is-inspector-open' : ''}${isBottomRailOpen ? ' is-bottom-rail-open' : ''}`
+  const shellClassName = `app-shell${isAssetRailOpen ? ' is-asset-rail-open' : ''}${isInspectorOpen ? ' is-inspector-open' : ''}${isBottomRailOpen ? ' is-bottom-rail-open' : ''}`
   const shellVariables = {
     '--sidebar-width': `${snapshot.mode === 'narrow'
       ? snapshot.preferences.sidebar.widthPx
@@ -81,7 +87,7 @@ export function AppShellV4({
       : snapshot.preferences.inspector.widthPx}px`,
     '--bottom-height': `${snapshot.resolved.bottomHeightPx}px`,
     '--sidebar-split-percent': splitPercent,
-    '--ribbon-height': '0px',
+    '--ribbon-height': snapshot.isRibbonExpanded() ? '38px' : '0px',
     height: '100dvh',
     overflow: 'hidden',
   } as CSSProperties
@@ -107,10 +113,6 @@ export function AppShellV4({
   }, [snapshot.preferences.theme])
 
   useEffect(() => {
-    if (!isCompactTopBar) setIsCompactControlsOpen(false)
-  }, [isCompactTopBar])
-
-  useEffect(() => {
     if (assetRail === null || typeof ResizeObserver === 'undefined') return undefined
     const observer = new ResizeObserver((entries) => {
       const entry = entries.find((candidate) => candidate.target === assetRail) ?? entries[0]
@@ -122,112 +124,24 @@ export function AppShellV4({
     return () => observer.disconnect()
   }, [assetRail])
 
-  const setDrawer = (dock: 'sidebar' | 'inspector' | 'bottom', open: boolean) => {
-    shellLayoutController.setDockVisible(dock, open)
-  }
-  const runAddCommand = (command?: () => void) => {
-    setIsAddOpen(false)
-    if (controlsDisabled) return
-    command?.()
-  }
+  // Ref callbacks used by dock layout can rerender the shell without changing
+  // the controller-owned safe-area snapshot. Keep one viewport tree for that
+  // exact snapshot so Canvas ownership is not churned by layout bookkeeping.
+  const viewport = useMemo(
+    () => renderViewport(snapshot.safeAreaInsets),
+    [renderViewport, snapshot.safeAreaInsets],
+  )
 
   return (
     <div
       className={shellClassName}
-      data-controls-disabled={String(controlsDisabled)}
       data-layout-mode={snapshot.mode}
       style={shellVariables}
     >
-      <header className="top-bar">
-        <strong>RobotSim</strong>
-        {isCompactTopBar ? (
-          <button
-            aria-controls="top-bar-controls"
-            aria-expanded={isCompactControlsOpen}
-            aria-label="Top bar controls"
-            className="top-bar-disclosure"
-            onClick={() => setIsCompactControlsOpen((open) => !open)}
-            type="button"
-          >
-            Controls
-          </button>
-        ) : null}
-        <div
-          aria-label="Top bar controls"
-          className={`top-bar-controls${isCompactControlsOpen ? ' is-open' : ''}`}
-          hidden={isCompactTopBar && !isCompactControlsOpen}
-          id="top-bar-controls"
-          role="toolbar"
-        >
-          {projectMenu}
-          <span>SIMULATION</span>
-          {robotSourceLabel === null ? null : (
-            <span className="joint-source-label">Joint source: {robotSourceLabel}</span>
-          )}
-          <div className="add-menu">
-            <button
-              aria-expanded={isAddOpen}
-              aria-haspopup="menu"
-              disabled={controlsDisabled}
-              onClick={() => setIsAddOpen((open) => !open)}
-              type="button"
-            >
-              Add
-            </button>
-            {isAddOpen && !controlsDisabled ? (
-              <div aria-label="Add" role="menu">
-                <button onClick={() => runAddCommand(onCreateBox)} role="menuitem" type="button">Box</button>
-                <button onClick={() => runAddCommand(onCreateCylinder)} role="menuitem" type="button">Cylinder</button>
-                <button onClick={() => runAddCommand(onCreateGroup)} role="menuitem" type="button">Group</button>
-              </div>
-            ) : null}
-          </div>
-          <label className="theme-select">
-            <span>Theme</span>
-            <select
-              aria-label="Theme"
-              onChange={(event) => shellLayoutController.setTheme(
-                event.currentTarget.value as ThemePreference,
-              )}
-              value={snapshot.preferences.theme}
-            >
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
-        </div>
-      </header>
-      <button
-        aria-controls="scene-assets-panel"
-        aria-expanded={isAssetRailOpen}
-        aria-label="Scene Assets drawer"
-        className={`drawer-control drawer-control-left${isAssetRailOpen ? ' is-open' : ''}`}
-        onClick={() => setDrawer('sidebar', !isAssetRailOpen)}
-        type="button"
-      >
-        <PanelLeft aria-hidden="true" size={16} strokeWidth={1.75} />
-      </button>
-      <button
-        aria-controls="inspector-panel"
-        aria-expanded={isInspectorOpen}
-        aria-label="Inspector drawer"
-        className={`drawer-control drawer-control-right${isInspectorOpen ? ' is-open' : ''}`}
-        onClick={() => setDrawer('inspector', !isInspectorOpen)}
-        type="button"
-      >
-        <PanelRight aria-hidden="true" size={16} strokeWidth={1.75} />
-      </button>
-      <button
-        aria-controls="timeline-collision-panel"
-        aria-expanded={isBottomRailOpen}
-        aria-label="Bottom Workspace sheet"
-        className={`drawer-control sheet-control${isBottomRailOpen ? ' is-open' : ''}`}
-        onClick={() => setDrawer('bottom', !isBottomRailOpen)}
-        type="button"
-      >
-        <ChevronDown aria-hidden="true" size={16} strokeWidth={1.75} />
-      </button>
+      {header}
+      <DrawerToggleV4 bindings={commandBindings} commandId="view.sidebar" controls="scene-assets-panel" label="Scene Assets drawer" icon={PanelLeft} />
+      <DrawerToggleV4 bindings={commandBindings} commandId="view.inspector" controls="inspector-panel" label="Inspector drawer" icon={PanelRight} />
+      <DrawerToggleV4 bindings={commandBindings} commandId="view.bottom" controls="timeline-collision-panel" label="Bottom Workspace sheet" icon={ChevronDown} />
       <div className="studio-workspace" ref={workspaceRef}>
         <aside
           aria-label="Scene Assets"

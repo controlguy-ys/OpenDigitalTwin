@@ -29,12 +29,19 @@ vi.mock('@react-three/fiber', () => ({
 }))
 
 vi.mock('./AppShell.js', () => ({
-  AppShellV4: ({ viewport }: { readonly viewport: ReactNode }) => {
+  AppShellV4: ({ renderViewport }: {
+    readonly renderViewport: (safeAreaInsets: {
+      readonly top: number
+      readonly right: number
+      readonly bottom: number
+      readonly left: number
+    }) => ReactNode
+  }) => {
     capture.shellRenders += 1
     if (capture.shellRenders > 5) {
       throw new Error('Scene status callback caused a render loop.')
     }
-    return <main>{viewport}</main>
+    return <main>{renderViewport({ top: 0, right: 0, bottom: 0, left: 0 })}</main>
   },
 }))
 
@@ -116,6 +123,11 @@ function resourcesForSceneStatusTest(): BrowserProjectResourcesV4 {
     runtimeBundle,
     sceneCommands: {} as BrowserProjectResourcesV4['sceneCommands'],
     jobCommands: {} as BrowserProjectResourcesV4['jobCommands'],
+    projectFiles: {
+      pickProject: vi.fn(async () => null),
+      downloadProject: vi.fn(),
+    },
+    userPrompt: { requestText: vi.fn(async () => null) },
   }
 }
 

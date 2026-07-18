@@ -1,27 +1,21 @@
-import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import { useSyncExternalStore, type ReactNode } from 'react'
 import {
   decodeRuntimeIdentitySegmentV4,
   parseRobotLinkCollisionIdV4,
   type CollisionEntityIdV4,
 } from '../../../core/robot-runtime/collision-identity.js'
-import type { CollisionPolicyV4 } from '../../../domain/collision/collision.js'
 import type { SceneSelectionTargetV4 } from '../../interaction/v4/scene-selection.js'
-import type { CollisionGeometryProxyV4 } from './scene-entity-adapter-v4.js'
 import {
-  createCollisionValidationControllerV4,
-  queryVisibleGeometryCollisionsV4,
-  type CollisionQueryV4,
+  type CollisionValidationControllerV4,
 } from './collision-validation-controller.js'
-
-export type { CollisionQueryV4 } from './collision-validation-controller.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
+import { useAppCommandV4 } from '../../commands/v4/use-app-command.js'
 
 export interface CollisionPanelPropsV4 {
-  readonly projectRevisionId: string
-  readonly policy: CollisionPolicyV4
-  readonly proxies: readonly CollisionGeometryProxyV4[]
+  /** App owns input replacement and disposal for this controller. */
+  readonly controller: CollisionValidationControllerV4
+  readonly commandBindings: AppCommandBindingsV4
   readonly onFocus: (selection: SceneSelectionTargetV4) => void
-  readonly jobRunning?: boolean
-  readonly query?: CollisionQueryV4
 }
 
 function selectionForCollisionEntityV4(
@@ -53,33 +47,22 @@ function selectionForCollisionEntityV4(
 }
 
 export function CollisionPanelV4({
-  projectRevisionId,
-  policy,
-  proxies,
+  controller,
+  commandBindings,
   onFocus,
-  jobRunning = false,
-  query = queryVisibleGeometryCollisionsV4,
 }: CollisionPanelPropsV4): ReactNode {
-  const controllerRef = useRef<ReturnType<typeof createCollisionValidationControllerV4> | null>(null)
-  if (controllerRef.current === null) {
-    controllerRef.current = createCollisionValidationControllerV4({
-      initialInput: { projectRevisionId, policy, proxies, jobRunning, query },
-    })
-  }
-  const controller = controllerRef.current
   const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState)
-  const cleanupGenerationRef = useRef(0)
-
-  useEffect(() => {
-    cleanupGenerationRef.current += 1
-    controller.replaceInput({ projectRevisionId, policy, proxies, jobRunning, query })
-  }, [controller, jobRunning, policy, projectRevisionId, proxies, query])
-  useEffect(() => () => {
-    const cleanupGeneration = ++cleanupGenerationRef.current
-    queueMicrotask(() => {
-      if (cleanupGeneration === cleanupGenerationRef.current) controller.dispose()
-    })
-  }, [controller])
+  const validate = useAppCommandV4(commandBindings, 'collision.validate')
+  const commandVisible = validate.command?.visible === true
+  // The shared Command runtime is the sole owner of interactive command state.
+  // Controller state describes collision data/availability only; otherwise the
+  // panel could display an error one microtask before the menu sees the same
+  // rejected command.
+  const commandPending = validate.pending
+  const commandDisabled = !commandVisible
+    || validate.command?.enabled !== true
+    || commandPending
+  const commandError = validate.error
 
   const collisions = state.result?.findings.filter(({ kind }) => kind === 'collision').length ?? 0
   const nearMisses = state.result?.findings.filter(({ kind }) => kind === 'near-miss').length ?? 0
@@ -89,18 +72,17 @@ export function CollisionPanelV4({
       <header>
         <h2>Geometry Collision</h2>
         <button
-          disabled={!state.canValidate}
-          onClick={() => { void controller.validate().catch(() => undefined) }}
+          disabled={commandDisabled}
+          onClick={() => { if (!commandDisabled) void validate.invoke() }}
           type="button"
         >
-          {state.pending ? 'Validating...' : 'Validate Collision'}
+          {commandPending ? 'Validating...' : 'Validate Collision'}
         </button>
       </header>
-      {proxies.length === 0
-        ? <p role="status">No collision Geometry is registered.</p>
+      {!state.canValidate && !state.pending
+        ? <p role="status">Collision validation is unavailable for the current Scene.</p>
         : null}
-      {jobRunning ? <p role="status">Stop the running Job before validation.</p> : null}
-      {state.error === null ? null : <p role="alert">{state.error}</p>}
+      {commandError === null ? null : <p role="alert">{commandError}</p>}
       {state.result === null ? null : (
         <>
           <div className="collision-summary-v4" aria-label="Collision totals">

@@ -54,7 +54,7 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
     viewportPreferences: createViewportPreferenceStoreV4(null),
     projectFiles: { pickProject: vi.fn(async () => null), downloadProject: vi.fn() },
     robotOperator: { canHome: vi.fn(() => true), home: vi.fn(), setGripper: vi.fn(), canSavePose: vi.fn(() => true), savePose: vi.fn(async () => undefined) },
-    jobOperator: { canStart: vi.fn(() => true), start: vi.fn(async () => undefined), canCancel: vi.fn(() => true), cancel: vi.fn(async () => undefined) },
+    jobOperator: { canAuthor: vi.fn(() => true), canStart: vi.fn(() => true), start: vi.fn(async () => undefined), canCancel: vi.fn(() => true), cancel: vi.fn(async () => undefined) },
     collision: { getState: vi.fn(() => ({ projectRevisionId: project.revisionId, pending: false, canValidate: true, error: null, result: null })), subscribe: vi.fn(() => () => undefined), replaceInput: vi.fn(), validate: vi.fn(async () => undefined), dispose: vi.fn() },
     camera: { home: vi.fn(), fitAll: vi.fn(), canFocusSelection: vi.fn(() => true), focusSelection: vi.fn(), setStandardView: vi.fn() },
     prompt: { requestText: vi.fn(async () => 'Job') },
@@ -164,6 +164,25 @@ describe('composeAppCommandsV4', () => {
     expect(registry.get('job.start')).toMatchObject({ enabled: false, disabledReason: 'No active Job for the active Robot.' })
     composed.interaction.setState({ selectedJobIdsByRobotId: new Map([['robot-1', 'foreign-job']]) })
     expect(registry.get('job.rename')).toMatchObject({ enabled: false, disabledReason: 'No active Job for the active Robot.' })
+  })
+
+  it('publishes one RUNNING authoring gate to every Job command surface', async () => {
+    const composed = context()
+    vi.mocked(composed.jobOperator.canAuthor).mockReturnValue(false)
+    const registry = composeAppCommandsV4(composed)
+
+    for (const id of ['job.new', 'job.rename', 'job.duplicate', 'job.delete'] as const) {
+      expect(registry.get(id)).toMatchObject({ enabled: false })
+    }
+    await expect(registry.get('job.new')!.execute()).rejects.toThrow()
+    for (const id of ['job.rename', 'job.duplicate', 'job.delete'] as const) {
+      expect(() => registry.get(id)!.execute()).toThrow()
+    }
+    expect(composed.prompt.requestText).not.toHaveBeenCalled()
+    expect(composed.jobs.createJob).not.toHaveBeenCalled()
+    expect(composed.jobs.renameJob).not.toHaveBeenCalled()
+    expect(composed.jobs.duplicateJob).not.toHaveBeenCalled()
+    expect(composed.jobs.deleteJob).not.toHaveBeenCalled()
   })
 
   it('retargets every Robot and Job command to the live second pair and preserves it across Object selection', async () => {
@@ -328,14 +347,17 @@ describe('composeAppCommandsV4', () => {
     expect(composed.help.open).toHaveBeenCalledWith('about')
   })
 
-  it('disables collision validation and rejects stale focus without dispatching camera movement', async () => {
+  it('disables collision validation while the camera port rejects an unavailable focus execution', async () => {
     const composed = context()
     const registry = composeAppCommandsV4(composed)
     vi.mocked(composed.collision.getState).mockReturnValue({ projectRevisionId: composed.project.revisionId, pending: false, canValidate: false, error: null, result: null })
     expect(registry.get('collision.validate')).toMatchObject({ enabled: false, disabledReason: 'Collision validation is unavailable while a Job is running or no visible Geometry exists.' })
     vi.mocked(composed.camera.canFocusSelection).mockReturnValue(false)
+    vi.mocked(composed.camera.focusSelection).mockImplementation(() => {
+      throw new Error('Select a focusable Scene item.')
+    })
     expect(() => registry.get('view.focusSelection')!.execute()).toThrow('Select a focusable Scene item.')
-    expect(composed.camera.focusSelection).not.toHaveBeenCalled()
+    expect(composed.camera.focusSelection).toHaveBeenCalledOnce()
   })
 
   it('uses canonical command metadata and propagates focus and collision rejection', async () => {

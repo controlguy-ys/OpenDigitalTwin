@@ -1,5 +1,4 @@
-import type { ReactNode } from 'react'
-import { useStore } from 'zustand'
+import type { CSSProperties, ReactNode } from 'react'
 import type { StoreApi } from 'zustand/vanilla'
 import type { WorkcellProjectV4 } from '../../../core/project-v4/index.js'
 import type { CoordinateDisplayStoreStateV4 } from '../../frames/v4/coordinate-display-store.js'
@@ -11,11 +10,13 @@ import type {
   ViewportLayerV4,
   ViewportPreferenceStoreV4,
 } from './viewport-preference-store.js'
-import type { ViewportRuntimeControllerV4 } from './viewport-runtime.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
+import { useAppCommandV4 } from '../../commands/v4/use-app-command.js'
+import type { ViewportSafeAreaInsetsV4 } from './viewport-safe-area.js'
 
 export interface ViewportOverlayPropsV4 {
-  readonly actions: ViewportRuntimeControllerV4['actions']
-  readonly canFocusSelection: boolean
+  readonly commandBindings: AppCommandBindingsV4
+  readonly safeAreaInsets: ViewportSafeAreaInsetsV4
   readonly project: WorkcellProjectV4
   readonly runtime: SceneRuntimeProjectionV4
   readonly selection: SceneSelectionV4
@@ -34,54 +35,75 @@ const LAYER_CONTROLS_V4 = [
 )[]
 
 export function ViewportOverlayV4({
-  actions,
-  canFocusSelection,
+  commandBindings,
+  safeAreaInsets,
   project,
   runtime,
   selection,
   display,
   preferences,
 }: ViewportOverlayPropsV4): ReactNode {
-  const layers = useStore(preferences, (state) => state.layers)
+  const home = useAppCommandV4(commandBindings, 'view.home')
+  const fitAll = useAppCommandV4(commandBindings, 'view.fitAll')
+  const focus = useAppCommandV4(commandBindings, 'view.focusSelection')
+  const grid = useAppCommandV4(commandBindings, 'view.layer.grid')
+  const world = useAppCommandV4(commandBindings, 'view.layer.world')
+  const mcp = useAppCommandV4(commandBindings, 'view.layer.mcp')
+  const base = useAppCommandV4(commandBindings, 'view.layer.base')
+  const tcp = useAppCommandV4(commandBindings, 'view.layer.tcp')
+  const layerCommands = [grid, world, mcp, base, tcp]
+  const normalized = (value: number): number => Number.isFinite(value) && value >= 0 ? value : 0
+  const style = {
+    '--viewport-safe-top': `${normalized(safeAreaInsets.top)}px`,
+    '--viewport-safe-right': `${normalized(safeAreaInsets.right)}px`,
+    '--viewport-safe-bottom': `${normalized(safeAreaInsets.bottom)}px`,
+    '--viewport-safe-left': `${normalized(safeAreaInsets.left)}px`,
+  } as CSSProperties
 
   return (
-    <div className="viewport-overlay viewport-overlay-v4">
+    <div className="viewport-overlay viewport-overlay-v4" style={style}>
       <div aria-label="Camera controls" className="viewport-camera-controls">
         <div className="viewport-camera-actions">
           <button
             aria-label="Home View"
-            onClick={actions.home}
+            disabled={home.command === null || !home.command.visible || !home.command.enabled || home.pending}
+            onClick={() => void home.invoke()}
             title="Restore application Home View"
             type="button"
           >Home</button>
           <button
             aria-label="Fit All"
-            onClick={actions.fitAll}
+            disabled={fitAll.command === null || !fitAll.command.visible || !fitAll.command.enabled || fitAll.pending}
+            onClick={() => void fitAll.invoke()}
             title="Frame visible Project entities"
             type="button"
           >Fit</button>
           <button
             aria-label="Focus Selection"
-            disabled={!canFocusSelection}
-            onClick={actions.focusSelection}
+            disabled={focus.command === null || !focus.command.visible || !focus.command.enabled || focus.pending}
+            onClick={() => void focus.invoke()}
             title="Frame selected visible Project entity"
             type="button"
           >Focus</button>
-          <ViewOrientationControlV4 onSelect={actions.setStandardView} />
+          <ViewOrientationControlV4 commandBindings={commandBindings} />
         </div>
       </div>
       <div aria-label="Coordinate layers" className="viewport-layer-controls">
-        {LAYER_CONTROLS_V4.map(([layer, label, shortLabel]) => (
+        {LAYER_CONTROLS_V4.map(([layer, label, shortLabel], index) => {
+          const bound = layerCommands[index]!
+          return (
           <button
             aria-label={label}
-            aria-pressed={layers[layer]}
-            className={layers[layer] ? 'is-active' : undefined}
+            aria-pressed={bound.command?.checked === true}
+            className={bound.command?.checked === true ? 'is-active' : undefined}
+            disabled={bound.command === null || !bound.command.visible || !bound.command.enabled || bound.pending}
             key={layer}
-            onClick={() => preferences.getState().setLayer(layer, !layers[layer])}
+            onClick={() => void bound.invoke()}
             title={`Toggle ${label}`}
             type="button"
           >{shortLabel}</button>
-        ))}
+          )
+        })}
       </div>
       <CoordinateStatusBarV4
         display={display}
@@ -90,6 +112,9 @@ export function ViewportOverlayV4({
         runtime={runtime}
         selection={selection}
       />
+      {[home.error, fitAll.error, focus.error, ...layerCommands.map(({ error }) => error)].find((error) => error !== null) === null ? null : (
+        <p role="alert">{[home.error, fitAll.error, focus.error, ...layerCommands.map(({ error }) => error)].find((error) => error !== null)}</p>
+      )}
     </div>
   )
 }

@@ -2,6 +2,8 @@ import type {
   WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
+import { useAppCommandV4 } from '../../commands/v4/use-app-command.js'
 import { ChevronRight } from 'lucide-react'
 import {
   sameSceneSelectionV4,
@@ -11,7 +13,6 @@ import {
 } from '../../interaction/v4/scene-selection.js'
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -20,7 +21,6 @@ import {
 } from 'react'
 import { useStore } from 'zustand'
 import type { StoreApi } from 'zustand/vanilla'
-import type { SceneCommandServiceV4 } from './scene-command-service.js'
 import type { SceneContextRequestV4 } from './scene-context-request.js'
 import type { SceneRuntimeProjectionV4 } from './scene-runtime-selector.js'
 
@@ -28,9 +28,11 @@ export interface SceneExplorerPropsV4 {
   readonly project: WorkcellProjectV4
   readonly runtime: SceneRuntimeProjectionV4
   readonly interaction: StoreApi<InteractionStoreStateV4>
-  readonly commands: SceneCommandServiceV4
+  readonly commandBindings: AppCommandBindingsV4
   readonly onContextRequest: (request: SceneContextRequestV4) => void
   readonly onFocus: (selection: SceneSelectionTargetV4) => void
+  /** App records a user-originated Scene context without rewriting jobs. */
+  readonly onSceneSelection: (selection: SceneSelectionTargetV4) => void
 }
 
 interface SceneTreeNodeV4 {
@@ -253,10 +255,12 @@ export function SceneExplorerV4({
   project,
   runtime,
   interaction,
-  commands,
+  commandBindings,
   onContextRequest,
   onFocus,
+  onSceneSelection,
 }: SceneExplorerPropsV4): ReactNode {
+  const visibilityCommand = useAppCommandV4(commandBindings, 'scene.visibility.toggle')
   const selection = useStore(interaction, (state) => state.selection)
   const categories = useMemo(
     () => sceneTreeCategoriesV4(project, runtime),
@@ -278,16 +282,7 @@ export function SceneExplorerV4({
       : facts.rows[0]?.key ?? null
   ))
   const rowRefs = useRef(new Map<string, HTMLElement>())
-  const activeProjectRef = useRef(project)
-  const pendingVisibilityTokensRef = useRef(new Map<string, symbol>())
-  const [pendingVisibilityKeys, setPendingVisibilityKeys] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  )
   const [error, setError] = useState<string | null>(null)
-
-  useLayoutEffect(() => {
-    activeProjectRef.current = project
-  }, [project])
 
   useEffect(() => {
     setError(null)
@@ -333,6 +328,7 @@ export function SceneExplorerV4({
     setError(null)
     try {
       interaction.getState().select(node.selection)
+      onSceneSelection(node.selection)
       onContextRequest({ selection: node.selection, position })
     } catch (caught) {
       setError(errorMessageV4(caught))
@@ -340,50 +336,38 @@ export function SceneExplorerV4({
   }
 
   const toggleVisibility = (node: SceneTreeNodeV4): void => {
+    const currentState = interaction.getState()
+    const before = commandBindings.getRegistry().get('scene.visibility.toggle')
     if (
       node.visibilityTarget === null
       || node.persistedVisible === null
-      || pendingVisibilityTokensRef.current.has(node.key)
+      || currentState.projectRevisionId !== project.revisionId
+      || persistedVisibilityV4(project, node.visibilityTarget) !== node.persistedVisible
+      || before?.visible !== true
+      || commandBindings.runtime.getState().pendingCommandIds.has('scene.visibility.toggle')
     ) return
-    const target = node.visibilityTarget
-    const hiding = node.persistedVisible
-    const requestedVisible = !node.persistedVisible
-    const invocationRevisionId = project.revisionId
-    const token = Symbol(node.key)
-    pendingVisibilityTokensRef.current.set(node.key, token)
-    setPendingVisibilityKeys((current) => new Set(current).add(node.key))
     setError(null)
-    void Promise.resolve()
-      .then(() => commands.setPersistedVisibility(target, requestedVisible))
-      .then(() => {
-        if (pendingVisibilityTokensRef.current.get(node.key) !== token) return
-        const activeProject = activeProjectRef.current
-        const committedInActiveProject = (
-          activeProject.revisionId === invocationRevisionId
-          || persistedVisibilityV4(activeProject, target) === requestedVisible
-        )
-        if (hiding && committedInActiveProject) {
-          interaction.getState().clearSelectionForHidden(target)
-        }
-      })
-      .catch((caught: unknown) => {
-        if (
-          pendingVisibilityTokensRef.current.get(node.key) === token
-          && activeProjectRef.current.revisionId === invocationRevisionId
-        ) {
-          setError(errorMessageV4(caught))
-        }
-      })
-      .finally(() => {
-        if (pendingVisibilityTokensRef.current.get(node.key) !== token) return
-        pendingVisibilityTokensRef.current.delete(node.key)
-        setPendingVisibilityKeys((current) => {
-          const next = new Set(current)
-          next.delete(node.key)
-          return next
-        })
-      })
+    const previousSelection = currentState.selection
+    try {
+      currentState.select(node.selection)
+      const command = commandBindings.getRegistry().get('scene.visibility.toggle')
+      if (
+        command?.visible !== true
+        || command.enabled !== true
+        || commandBindings.runtime.getState().pendingCommandIds.has('scene.visibility.toggle')
+      ) {
+        if (previousSelection === null) interaction.getState().clearSelection()
+        else interaction.getState().select(previousSelection)
+        return
+      }
+      onSceneSelection(node.selection)
+      void visibilityCommand.invoke()
+    } catch (caught) {
+      setError(errorMessageV4(caught))
+    }
   }
+
+  const visibilityError = visibilityCommand.error
 
   const onRowKeyDown = (node: SceneTreeNodeV4, event: KeyboardEvent<HTMLLIElement>): void => {
     if (event.target !== event.currentTarget) return
@@ -413,6 +397,7 @@ export function SceneExplorerV4({
       setError(null)
       try {
         interaction.getState().select(node.selection)
+        onSceneSelection(node.selection)
       } catch (caught) {
         setError(errorMessageV4(caught))
       }
@@ -493,6 +478,7 @@ export function SceneExplorerV4({
               setError(null)
               try {
                 interaction.getState().select(node.selection)
+                onSceneSelection(node.selection)
               } catch (caught) {
                 setError(errorMessageV4(caught))
               }
@@ -507,7 +493,13 @@ export function SceneExplorerV4({
               aria-label={`${node.persistedVisible ? 'Hide' : 'Show'} ${node.label}`}
               className="scene-tree-visibility"
               data-visibility="true"
-              disabled={pendingVisibilityKeys.has(node.key)}
+              disabled={
+                visibilityCommand.command?.visible !== true
+                || visibilityCommand.pending
+                || commandBindings.runtime.getState().pendingCommandIds.has('scene.visibility.toggle')
+                || interaction.getState().projectRevisionId !== project.revisionId
+                || persistedVisibilityV4(project, node.visibilityTarget) !== node.persistedVisible
+              }
               onClick={(event) => {
                 event.stopPropagation()
                 toggleVisibility(node)
@@ -554,7 +546,9 @@ export function SceneExplorerV4({
             </section>
           ))}
         </div>
-        {error === null ? null : <p role="alert">{error}</p>}
+        {visibilityError === null && error === null ? null : (
+          <p role="alert">{visibilityError ?? error}</p>
+        )}
       </div>
     </section>
   )

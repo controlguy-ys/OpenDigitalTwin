@@ -359,6 +359,34 @@ describe('scene context commands', () => {
     expect(interaction.getState().selection).toBeNull()
   })
 
+  it('never clears a newer revision selection when an older Hide completes, while same-revision Hide still clears', async () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
+    const scene = sceneService()
+    let resolveOld!: () => void
+    vi.mocked(scene.setPersistedVisibility).mockImplementationOnce(() => new Promise<void>((resolve) => { resolveOld = resolve }))
+    const commands = composeSceneContextCommandsV4({ project, interaction, scene, prompt: { requestText: vi.fn(async () => 'unused') }, presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() } })
+
+    const oldHide = commandById(commands, 'scene.visibility.toggle').execute()
+    const nextProject = { ...project, revisionId: 'revision-after-hide' }
+    interaction.getState().replaceProject(nextProject)
+    interaction.getState().select({ kind: 'robot', robotId: 'robot-1' })
+    resolveOld()
+    await oldHide
+    expect(interaction.getState().selection).toEqual({ kind: 'robot', robotId: 'robot-1' })
+
+    interaction.getState().replaceProject(project)
+    interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
+    let resolveCurrent!: () => void
+    vi.mocked(scene.setPersistedVisibility).mockImplementationOnce(() => new Promise<void>((resolve) => { resolveCurrent = resolve }))
+    const currentHide = commandById(commands, 'scene.visibility.toggle').execute()
+    resolveCurrent()
+    await currentHide
+    expect(interaction.getState().selection).toBeNull()
+  })
+
   it('routes Isolate and Show All directly through live Interaction state and deletes the exact removable Object', async () => {
     const project = projectWithTargets()
     const interaction = createInteractionStoreV4()

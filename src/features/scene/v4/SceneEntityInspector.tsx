@@ -1,18 +1,18 @@
 import type {
   FrameIdV4,
   RobotIdV4,
-  RobotJobIdV4,
   SceneGroupIdV4,
   SpatialEntityIdV4,
   WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import type { StoreApi } from 'zustand/vanilla'
-import type { JobCommandServiceV4 } from '../../jobs/v4/job-command-service.js'
+import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
 import type { JobRuntimeStoreV4 } from '../../jobs/v4/job-runtime-store.js'
 import { JointInspectorV4 } from '../../joints/v4/JointInspector.js'
 import {
   sameSceneSelectionV4,
   sceneSelectionKeyV4,
+  type SceneSelectionTargetV4,
   type SceneSelectionV4,
 } from '../../interaction/v4/scene-selection.js'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
@@ -39,12 +39,24 @@ export interface SceneEntityInspectorPropsV4 {
   readonly project: WorkcellProjectV4
   readonly runtime: SceneRuntimeProjectionV4
   readonly selection: SceneSelectionV4
-  readonly selectedJobId: RobotJobIdV4 | null
   readonly robots: StoreApi<RobotRuntimeRegistryV4>
   readonly jobs: StoreApi<JobRuntimeStoreV4>
   readonly interaction: StoreApi<InteractionStoreStateV4>
   readonly sceneCommands: SceneCommandServiceV4
-  readonly jobCommands: JobCommandServiceV4
+  readonly commandBindings: AppCommandBindingsV4
+  readonly focusRequest?: SceneEntityInspectorFocusRequestV4 | null
+}
+
+/**
+ * A presentation-only request from App. It never changes the selected target
+ * and is keyed by revision plus a monotonic request id so an identical command
+ * can deliberately focus the same editor twice.
+ */
+export interface SceneEntityInspectorFocusRequestV4 {
+  readonly id: number
+  readonly projectRevisionId: WorkcellProjectV4['revisionId']
+  readonly selection: SceneSelectionTargetV4
+  readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'numericStatus'
 }
 
 interface RobotInspectorPropsV4 extends Omit<
@@ -62,11 +74,10 @@ function RobotSelectionInspectorV4({
   runtime,
   selection,
   robotId,
-  selectedJobId,
   robots,
   jobs,
   sceneCommands,
-  jobCommands,
+  commandBindings,
 }: RobotInspectorPropsV4): ReactNode {
   const robot = project.robots.find(({ id }) => id === robotId)
   const definition = robot === undefined
@@ -155,12 +166,12 @@ function RobotSelectionInspectorV4({
     const frame = definition.frames.find(({ id }) => id === selection.frameId)
     metadata = frame === undefined
       ? <p role="status">Robot Frame is unavailable.</p>
-      : <p>Robot Frame: {frame.name} ({frame.id}), role {frame.role}</p>
+      : <p data-inspector-section-v4="pose" tabIndex={-1}>Robot Frame: {frame.name} ({frame.id}), role {frame.role}</p>
   }
 
   return (
     <div aria-label="Robot inspector" className="scene-entity-inspector-v4">
-      <section className="scene-inspector-section-v4">
+      <section className="scene-inspector-section-v4" data-inspector-section-v4="numericStatus" tabIndex={-1}>
         <h2>{robot.name}</h2>
         <p>{definition.name}</p>
         <p>Joint source: {runtimeRobot.jointSource}</p>
@@ -223,21 +234,24 @@ function RobotSelectionInspectorV4({
         </button>
         {statusCommand.error === null ? null : <p role="alert">{statusCommand.error}</p>}
       </section>
-      <RobotBaseInspectorV4
-        commands={sceneCommands}
-        key={robotId}
-        project={project}
-        robotId={robotId}
-        runtime={runtime}
-      />
+      <div data-inspector-section-v4={selection.kind === 'robot' ? 'pose' : undefined} tabIndex={selection.kind === 'robot' ? -1 : undefined}>
+        <RobotBaseInspectorV4
+          commands={sceneCommands}
+          key={robotId}
+          project={project}
+          robotId={robotId}
+          runtime={runtime}
+        />
+      </div>
+      <div data-inspector-section-v4="joints" tabIndex={-1}>
       <JointInspectorV4
-        commands={jobCommands}
+        commandBindings={commandBindings}
         jobs={jobs}
         project={project}
         robotId={robotId}
         robots={robots}
-        selectedJobId={selectedJobId}
       />
+      </div>
     </div>
   )
 }
@@ -362,7 +376,7 @@ function SpatialEntityInspectorV4({
   }
 
   return (
-    <section aria-label={`${entity.name} inspector`} className="scene-entity-inspector-v4">
+    <section aria-label={`${entity.name} inspector`} className="scene-entity-inspector-v4" data-inspector-section-v4="pose" tabIndex={-1}>
       <h2>{entity.name}</h2>
       <p>Parent Frame: {globalFrameLabelV4(project, entity.parentFrameId)}</p>
       <p>Transform owner: {entity.transformOwner}</p>
@@ -377,6 +391,7 @@ function SpatialEntityInspectorV4({
         <span>Group</span>
         <select
           aria-label="Entity Group"
+          data-inspector-section-v4="group"
           disabled={command.pending}
           onChange={(event) => setGroupId(
             event.currentTarget.value.length === 0 ? null : event.currentTarget.value,
@@ -393,6 +408,7 @@ function SpatialEntityInspectorV4({
         <span>Numeric Status</span>
         <input
           aria-label="Numeric Status"
+          data-inspector-section-v4="numericStatus"
           disabled={!statusEditable || command.pending}
           onChange={(event) => setStatus(event.currentTarget.value)}
           step="any"
@@ -438,6 +454,9 @@ function SceneGroupInspectorV4({
   const runtimeGroup = runtime.groups.get(groupId)
   const [name, setName] = useState(group?.name ?? '')
   const [visible, setVisible] = useState(group?.visible ?? false)
+  const [parentGroupId, setParentGroupId] = useState<SceneGroupIdV4 | null>(
+    group?.parentGroupId ?? null,
+  )
   const target = { kind: 'scene-group' as const, groupId }
   const command = useInspectorCommandV4(sceneSelectionKeyV4(target))
   const activeProjectRef = useRef(project)
@@ -446,6 +465,7 @@ function SceneGroupInspectorV4({
   useEffect(() => {
     setName(group?.name ?? '')
     setVisible(group?.visible ?? false)
+    setParentGroupId(group?.parentGroupId ?? null)
   }, [group])
 
   if (group === undefined || runtimeGroup === undefined) {
@@ -462,11 +482,15 @@ function SceneGroupInspectorV4({
     }
     const nameAtSubmit = name
     const visibleAtSubmit = visible
+    const parentGroupIdAtSubmit = parentGroupId
     const invocationRevisionId = project.revisionId
     command.run(
       async () => {
         await commands.rename(target, nameAtSubmit)
         await commands.setPersistedVisibility(target, visibleAtSubmit)
+        if (parentGroupIdAtSubmit !== group.parentGroupId) {
+          await commands.reparentGroup(groupId, parentGroupIdAtSubmit)
+        }
       },
       () => {
         if (visibleAtSubmit) return
@@ -498,6 +522,25 @@ function SceneGroupInspectorV4({
           onChange={(event) => setName(event.currentTarget.value)}
           value={name}
         />
+      </label>
+      <label>
+        <span>Parent Group</span>
+        <select
+          aria-label="Parent Group"
+          data-inspector-section-v4="group"
+          disabled={command.pending}
+          onChange={(event) => setParentGroupId(
+            event.currentTarget.value.length === 0 ? null : event.currentTarget.value,
+          )}
+          value={parentGroupId ?? ''}
+        >
+          <option value="">None</option>
+          {project.sceneGroups
+            .filter((candidate) => candidate.id !== groupId)
+            .map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+            ))}
+        </select>
       </label>
       <label>
         <input
@@ -556,7 +599,7 @@ function SceneFrameInspectorV4({
   }
 
   return (
-    <section aria-label={`${frame.name} Scene Frame inspector`} className="scene-entity-inspector-v4">
+    <section aria-label={`${frame.name} Scene Frame inspector`} className="scene-entity-inspector-v4" data-inspector-section-v4="pose" tabIndex={-1}>
       <h2>{frame.name}</h2>
       <p>Role: {frame.role}</p>
       {editable ? null : <p role="status">World Frame is read-only.</p>}
@@ -598,13 +641,15 @@ function EntityFrameInspectorV4({
   const moving = entity?.movingFrames.find(({ frameId: candidate }) => candidate === frameId)
   if (moving !== undefined) {
     return (
-      <MovingFrameInspectorV4
-        commands={commands}
-        entityId={entityId}
-        frameId={frameId}
-        project={project}
-        runtime={runtime}
-      />
+      <div data-inspector-section-v4="parent" tabIndex={-1}>
+        <MovingFrameInspectorV4
+          commands={commands}
+          entityId={entityId}
+          frameId={frameId}
+          project={project}
+          runtime={runtime}
+        />
+      </div>
     )
   }
   const grasp = entity?.graspFrames.find(({ frameId: candidate }) => candidate === frameId)
@@ -613,7 +658,7 @@ function EntityFrameInspectorV4({
     return <p role="status">Entity Frame is unavailable.</p>
   }
   return (
-    <section aria-label={`${entity.name} ${grasp.name} inspector`} className="scene-entity-inspector-v4">
+    <section aria-label={`${entity.name} ${grasp.name} inspector`} className="scene-entity-inspector-v4" data-inspector-section-v4="parent" tabIndex={-1}>
       <h2>Grasp Frame</h2>
       <p>{entity.name} / {grasp.name} ({grasp.frameId})</p>
       <p role="status">Grasp Frame is read-only.</p>
@@ -635,22 +680,43 @@ export function SceneEntityInspectorV4({
   project,
   runtime,
   selection,
-  selectedJobId,
   robots,
   jobs,
   interaction,
   sceneCommands,
-  jobCommands,
+  commandBindings,
+  focusRequest = null,
 }: SceneEntityInspectorPropsV4): ReactNode {
-  if (selection === null) return <p>Select a Scene item to inspect.</p>
+  const rootRef = useRef<HTMLDivElement>(null)
+  const consumedFocusRequestKey = useRef<string | null>(null)
+  useEffect(() => {
+    if (
+      focusRequest === null
+      || focusRequest.projectRevisionId !== project.revisionId
+      || selection === null
+      || !sameSceneSelectionV4(selection, focusRequest.selection)
+    ) return
+    const requestKey = `${focusRequest.projectRevisionId}:${focusRequest.id}`
+    if (consumedFocusRequestKey.current === requestKey) return
+    const target = rootRef.current?.querySelector<HTMLElement>(
+      `[data-inspector-section-v4="${focusRequest.section}"]`,
+    )
+    if (target === undefined || target === null) return
+    target.scrollIntoView?.({ block: 'nearest' })
+    target.focus({ preventScroll: true })
+    consumedFocusRequestKey.current = requestKey
+  }, [focusRequest, project.revisionId, runtime, selection])
 
-  switch (selection.kind) {
+  let content: ReactNode = null
+  if (selection === null) {
+    content = <p>Select a Scene item to inspect.</p>
+  } else switch (selection.kind) {
     case 'robot':
     case 'robot-link':
     case 'robot-frame':
-      return (
+      content = (
         <RobotSelectionInspectorV4
-          jobCommands={jobCommands}
+          commandBindings={commandBindings}
           jobs={jobs}
           key={selection.robotId}
           project={project}
@@ -658,12 +724,12 @@ export function SceneEntityInspectorV4({
           robots={robots}
           runtime={runtime}
           sceneCommands={sceneCommands}
-          selectedJobId={selectedJobId}
           selection={selection}
         />
       )
+      break
     case 'spatial-entity':
-      return (
+      content = (
         <SpatialEntityInspectorV4
           commands={sceneCommands}
           entityId={selection.entityId}
@@ -672,8 +738,9 @@ export function SceneEntityInspectorV4({
           runtime={runtime}
         />
       )
+      break
     case 'entity-frame':
-      return (
+      content = (
         <EntityFrameInspectorV4
           commands={sceneCommands}
           entityId={selection.entityId}
@@ -683,8 +750,9 @@ export function SceneEntityInspectorV4({
           runtime={runtime}
         />
       )
+      break
     case 'scene-group':
-      return (
+      content = (
         <SceneGroupInspectorV4
           commands={sceneCommands}
           groupId={selection.groupId}
@@ -694,8 +762,9 @@ export function SceneEntityInspectorV4({
           runtime={runtime}
         />
       )
+      break
     case 'scene-frame':
-      return (
+      content = (
         <SceneFrameInspectorV4
           commands={sceneCommands}
           frameId={selection.frameId}
@@ -704,5 +773,7 @@ export function SceneEntityInspectorV4({
           runtime={runtime}
         />
       )
+      break
   }
+  return <div className="scene-entity-inspector-focus-root-v4" ref={rootRef}>{content}</div>
 }

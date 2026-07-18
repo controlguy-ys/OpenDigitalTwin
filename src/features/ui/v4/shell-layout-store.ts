@@ -7,15 +7,6 @@ export type { BottomWorkspaceTabV4 } from './bottom-workspace-tab.js'
 
 export const WORKSPACE_PREFERENCES_STORAGE_KEY_V1 = 'robotsim.workspace-preferences.v1'
 
-const LEGACY_STORAGE_KEYS = [
-  'robotsim.assetDrawerOpen',
-  'robotsim.inspectorDrawerOpen',
-  'robotsim.bottomDrawerOpen',
-  'robotsim.sidebarSplitPercent',
-  'robotsim.bottomWorkspaceTab',
-  'robotsim.theme',
-] as const
-
 export type ShellLayoutModeV4 = 'wide' | 'compact' | 'narrow'
 export type ShellDockV4 = 'sidebar' | 'inspector' | 'bottom'
 
@@ -140,41 +131,13 @@ function safeSet(storage: CreateShellLayoutStoreOptionsV4['storage'], preference
   }
 }
 
-function migrateLegacyPreferences(storage: CreateShellLayoutStoreOptionsV4['storage']): ShellWorkspacePreferencesV1 {
-  const legacy = Object.fromEntries(LEGACY_STORAGE_KEYS.map((key) => [key, safeGet(storage, key)])) as Record<(typeof LEGACY_STORAGE_KEYS)[number], string | null>
-  const defaults = defaultPreferences()
-  const split = Number(legacy['robotsim.sidebarSplitPercent'])
-  const preferences: ShellWorkspacePreferencesV1 = {
-    ...defaults,
-    modes: {
-      ...defaults.modes,
-      wide: {
-        ...defaults.modes.wide,
-        dockVisible: {
-          sidebar: legacy['robotsim.assetDrawerOpen'] === null ? defaults.modes.wide.dockVisible.sidebar : legacy['robotsim.assetDrawerOpen'] === 'true',
-          inspector: legacy['robotsim.inspectorDrawerOpen'] === null ? defaults.modes.wide.dockVisible.inspector : legacy['robotsim.inspectorDrawerOpen'] === 'true',
-          bottom: legacy['robotsim.bottomDrawerOpen'] === null ? defaults.modes.wide.dockVisible.bottom : legacy['robotsim.bottomDrawerOpen'] === 'true',
-        },
-      },
-    },
-    sidebar: { ...defaults.sidebar, sceneJobSplitPercent: numberOrDefault(split, defaults.sidebar.sceneJobSplitPercent, 35, 75) },
-    bottom: { ...defaults.bottom, activeTab: legacy['robotsim.bottomWorkspaceTab'] === 'collision' ? 'collision' : 'timeline' },
-    theme: isThemePreference(legacy['robotsim.theme']) ? legacy['robotsim.theme'] : defaults.theme,
-  }
-  safeSet(storage, preferences)
-  if (LEGACY_STORAGE_KEYS.some((key) => legacy[key] !== null)) {
-    for (const key of LEGACY_STORAGE_KEYS) {
-      try { storage?.removeItem(key) } catch {
-        // A failed legacy cleanup must not block the combined preference.
-      }
-    }
-  }
-  return preferences
-}
-
 function readPreferences(storage: CreateShellLayoutStoreOptionsV4['storage']): ShellWorkspacePreferencesV1 {
   const raw = safeGet(storage, WORKSPACE_PREFERENCES_STORAGE_KEY_V1)
-  if (raw === null) return migrateLegacyPreferences(storage)
+  if (raw === null) {
+    const defaults = defaultPreferences()
+    safeSet(storage, defaults)
+    return defaults
+  }
   try {
     const normalized = normalizePreferences(JSON.parse(raw)) ?? defaultPreferences()
     safeSet(storage, normalized)
