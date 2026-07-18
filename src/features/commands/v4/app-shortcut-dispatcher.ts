@@ -32,7 +32,7 @@ function isEditable(target: EventTarget | null): boolean {
     const value = current.getAttribute('contenteditable')
     if (value !== null) {
       const normalized = value.trim().toLowerCase()
-      if (normalized === '' || normalized === 'true') return true
+      if (normalized === '' || normalized === 'true' || normalized === 'plaintext-only') return true
       if (normalized === 'false') return false
     }
     current = current.parentElement

@@ -8,38 +8,320 @@ export interface CompactAppMenuPropsV4 extends AppMenuNavigationPropsV4 {
   readonly commandBindings: AppCommandBindingsV4
   readonly model: readonly AppMenuSectionModelV4[]
 }
-function direct(menu: HTMLElement): HTMLElement[] { return Array.from(menu.querySelectorAll<HTMLElement>('[data-menu-direct="true"]')).filter((item) => item.closest('[role="menu"]') === menu) }
-function focus(menu: HTMLElement, direction: 'first' | 'last' | 1 | -1): void { const items = direct(menu); if (!items.length) return; if (direction === 'first') return void items[0]?.focus(); if (direction === 'last') return void items.at(-1)?.focus(); const index = items.indexOf(document.activeElement as HTMLElement); items[(index + direction + items.length) % items.length]?.focus() }
 
-export function CompactAppMenuV4({ commandBindings, model, openSection, onOpenSectionChange, onPreviewSection }: CompactAppMenuPropsV4): ReactNode {
-  const root = useRef<HTMLDivElement>(null); const disclosure = useRef<HTMLButtonElement>(null); const callback = useRef(onPreviewSection); const lastPreview = useRef<undefined | AppMenuNavigationPropsV4['openSection']>(undefined); const categoryRefs = useRef(new Map<string, HTMLButtonElement>()); const returnCategoryId = useRef<string | null>(null)
-  const [expanded, setExpanded] = useState(false); const [submenu, setSubmenu] = useState<string | null>(null); const id = useId().replace(/:/g, '')
+function direct(menu: HTMLElement): HTMLElement[] {
+  return Array.from(menu.querySelectorAll<HTMLElement>('[data-menu-direct="true"]'))
+    .filter((item) => item.closest('[role="menu"]') === menu)
+}
+
+function focus(menu: HTMLElement, direction: 'first' | 'last' | 1 | -1): void {
+  const items = direct(menu)
+  if (items.length === 0) return
+  if (direction === 'first') return void items[0]?.focus()
+  if (direction === 'last') return void items.at(-1)?.focus()
+  const index = items.indexOf(document.activeElement as HTMLElement)
+  items[(index + direction + items.length) % items.length]?.focus()
+}
+
+export function CompactAppMenuV4({
+  commandBindings,
+  model,
+  openSection,
+  onOpenSectionChange,
+  onPreviewSection,
+}: CompactAppMenuPropsV4): ReactNode {
+  const root = useRef<HTMLDivElement>(null)
+  const disclosure = useRef<HTMLButtonElement>(null)
+  const callback = useRef(onPreviewSection)
+  const lastPreview = useRef<undefined | AppMenuNavigationPropsV4['openSection']>(undefined)
+  const categoryRefs = useRef(new Map<string, HTMLButtonElement>())
+  const submenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>())
+  const returnCategoryId = useRef<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const [submenu, setSubmenu] = useState<string | null>(null)
+  const [submenuOffset, setSubmenuOffset] = useState(0)
+  const id = useId().replace(/:/g, '')
   const section = openSection === null ? null : model.find((candidate) => candidate.id === openSection) ?? null
-  useEffect(() => { callback.current = onPreviewSection }, [onPreviewSection])
-  useEffect(() => { if (lastPreview.current !== openSection) { lastPreview.current = openSection; callback.current(openSection) } }, [openSection])
-  useEffect(() => { if (openSection !== null && section === null) onOpenSectionChange(null); if (section !== null) setExpanded(true); setSubmenu(null) }, [onOpenSectionChange, openSection, section])
-  useEffect(() => { if (!expanded) return; const dismiss = (event: PointerEvent): void => { if (root.current?.contains(event.target as Node) !== true) { setExpanded(false); setSubmenu(null); onOpenSectionChange(null) } }; document.addEventListener('pointerdown', dismiss, true); return () => document.removeEventListener('pointerdown', dismiss, true) }, [expanded, onOpenSectionChange])
-  useEffect(() => { if (section === null && returnCategoryId.current !== null) { const target = categoryRefs.current.get(returnCategoryId.current); returnCategoryId.current = null; target?.focus() } }, [section])
-  const close = (restore: boolean): void => { if (restore) disclosure.current?.focus(); setExpanded(false); setSubmenu(null); onOpenSectionChange(null) }
+  const sectionId = section?.id ?? null
+  const surfaceOpen = expanded || openSection !== null
   const rootId = `${id}-application-menu`
-  const backToCategories = (restore = true): void => { setSubmenu(null); if (restore && openSection !== null) returnCategoryId.current = openSection; onOpenSectionChange(null) }
-  const outcome = (_id: string, result: 'completed' | 'cancelled' | 'ignored' | 'failed'): void => { if (result === 'completed') close(true) }
+  const sectionMenuId = section === null ? null : `${id}-${section.id}-section`
+
+  useEffect(() => { callback.current = onPreviewSection }, [onPreviewSection])
+  useEffect(() => {
+    let cancelled = false
+    queueMicrotask(() => {
+      if (cancelled || lastPreview.current === openSection) return
+      lastPreview.current = openSection
+      callback.current(openSection)
+    })
+    return () => { cancelled = true }
+  }, [openSection])
+  useEffect(() => {
+    if (openSection === null) return
+    setExpanded(true)
+    setSubmenu(null)
+  }, [openSection])
+  useEffect(() => {
+    if (openSection === null || sectionId !== null) return
+    setExpanded(true)
+    setSubmenu(null)
+    onOpenSectionChange(null)
+  }, [onOpenSectionChange, openSection, sectionId])
+  useEffect(() => {
+    if (!surfaceOpen) return
+    const dismiss = (event: PointerEvent): void => {
+      if (root.current?.contains(event.target as Node) === true) return
+      setExpanded(false)
+      setSubmenu(null)
+      onOpenSectionChange(null)
+    }
+    document.addEventListener('pointerdown', dismiss, true)
+    return () => document.removeEventListener('pointerdown', dismiss, true)
+  }, [onOpenSectionChange, surfaceOpen])
+  useEffect(() => {
+    if (sectionId !== null || returnCategoryId.current === null) return
+    const categoryId = returnCategoryId.current
+    returnCategoryId.current = null
+    categoryRefs.current.get(categoryId)?.focus()
+  }, [sectionId])
+
+  const close = (restore: boolean): void => {
+    if (restore) disclosure.current?.focus()
+    setExpanded(false)
+    setSubmenu(null)
+    onOpenSectionChange(null)
+  }
+
+  const backToCategories = (restore = true): void => {
+    setSubmenu(null)
+    if (restore && openSection !== null) returnCategoryId.current = openSection
+    onOpenSectionChange(null)
+  }
+
+  const outcome = (_id: string, result: 'completed' | 'cancelled' | 'ignored' | 'failed'): void => {
+    if (result === 'completed') close(true)
+  }
+
   const navigate = (event: KeyboardEvent<HTMLDivElement>, onLeft: () => void): void => {
     const nested = (event.target as HTMLElement).closest('[role="menu"]') !== event.currentTarget
     if (nested) return
-    if (event.key === 'Escape') { event.preventDefault(); close(true) }
-    else if (event.key === 'Tab') close(false)
-    else if (event.key === 'ArrowDown') { event.preventDefault(); focus(event.currentTarget, 1) }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); focus(event.currentTarget, -1) }
-    else if (event.key === 'Home') { event.preventDefault(); focus(event.currentTarget, 'first') }
-    else if (event.key === 'End') { event.preventDefault(); focus(event.currentTarget, 'last') }
-    else if (event.key === 'ArrowLeft') { event.preventDefault(); onLeft() }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      close(true)
+    } else if (event.key === 'Tab') {
+      close(false)
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      focus(event.currentTarget, 1)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      focus(event.currentTarget, -1)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      focus(event.currentTarget, 'first')
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      focus(event.currentTarget, 'last')
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      onLeft()
+    }
   }
-  const renderNodes = (items: readonly AppMenuNodeV4[]): ReactNode => items.map((node) => {
+
+  const openCategory = (categoryId: string): void => {
+    returnCategoryId.current = categoryId
+    onOpenSectionChange(categoryId as AppMenuNavigationPropsV4['openSection'])
+    queueMicrotask(() => {
+      const popup = document.getElementById(`${id}-${categoryId}-section`)
+      if (popup !== null) focus(popup, 'first')
+    })
+  }
+
+  const openNested = (submenuId: string, menuId: string, ownerId: string): void => {
+    setSubmenu(submenuId)
+    queueMicrotask(() => {
+      const owner = document.getElementById(ownerId)
+      const trigger = submenuTriggerRefs.current.get(submenuId)
+      if (owner !== null && trigger !== undefined) {
+        setSubmenuOffset(Math.max(0, trigger.getBoundingClientRect().top - owner.getBoundingClientRect().top - 4))
+      }
+      const popup = document.getElementById(menuId)
+      if (popup !== null) focus(popup, 'first')
+    })
+  }
+
+  const closeNested = (submenuId: string): void => {
+    setSubmenu(null)
+    submenuTriggerRefs.current.get(submenuId)?.focus()
+  }
+
+  const renderCommandNodes = (items: readonly AppMenuNodeV4[]): ReactNode => items.map((node) => {
     if (node.kind === 'separator') return <div key={node.id} role="separator" className="app-menu-separator-v4" />
-    if (node.kind === 'command') return <AppCommandMenuItemV4 key={node.commandId} commandBindings={commandBindings} commandId={node.commandId} onOutcome={outcome} />
-    const submenuId = `${id}-${node.id}`; const triggerId = `${submenuId}-trigger`; const open = submenu === node.id
-    return <div key={node.id} className="app-menu-submenu-v4"><button id={triggerId} type="button" role="menuitem" data-menu-direct="true" aria-haspopup="menu" aria-expanded={open} aria-controls={submenuId} onClick={() => setSubmenu(open ? null : node.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowRight') { event.preventDefault(); event.stopPropagation(); setSubmenu(node.id); queueMicrotask(() => { const popup = document.getElementById(submenuId); if (popup) focus(popup, 'first') }) } }}><span>{node.label}</span><span className="app-menu-submenu-indicator-v4" aria-hidden="true" /></button>{open ? <div id={submenuId} role="menu" aria-labelledby={triggerId} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); event.stopPropagation(); setSubmenu(null); document.getElementById(triggerId)?.focus() } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true) } else if (event.key === 'Tab') { event.stopPropagation(); close(false) } else if (event.key === 'ArrowDown') { event.preventDefault(); event.stopPropagation(); focus(event.currentTarget, 1) } else if (event.key === 'ArrowUp') { event.preventDefault(); event.stopPropagation(); focus(event.currentTarget, -1) } else if (event.key === 'Home') { event.preventDefault(); event.stopPropagation(); focus(event.currentTarget, 'first') } else if (event.key === 'End') { event.preventDefault(); event.stopPropagation(); focus(event.currentTarget, 'last') } }}>{renderNodes(node.children)}</div> : null}</div>
+    if (node.kind === 'command') {
+      return <AppCommandMenuItemV4 key={node.commandId} commandBindings={commandBindings} commandId={node.commandId} onOutcome={outcome} />
+    }
+    return null
   })
-  return <div ref={root} className="compact-app-menu-v4"><button ref={disclosure} type="button" aria-haspopup="menu" aria-expanded={expanded} aria-controls={rootId} onClick={() => { const next = !expanded; setExpanded(next); if (!next) onOpenSectionChange(null); else queueMicrotask(() => { const popup = document.getElementById(rootId); if (popup) focus(popup, 'first') }) }}>Menu</button>{expanded ? <div id={rootId} role="menu" aria-label="Application menu" className="app-menu-popup-v4" onKeyDown={(event) => navigate(event, () => undefined)}>{section === null ? model.map((item) => { const categoryId = `${id}-${item.id}-category`; return <button key={item.id} ref={(node) => { if (node) categoryRefs.current.set(item.id, node); else categoryRefs.current.delete(item.id) }} id={categoryId} type="button" role="menuitem" data-menu-direct="true" aria-haspopup="menu" aria-expanded="false" aria-controls={`${id}-${item.id}-section`} onClick={() => { returnCategoryId.current = item.id; onOpenSectionChange(item.id); queueMicrotask(() => { const popup = document.getElementById(`${id}-${item.id}-section`); if (popup) focus(popup, 'first') }) }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowRight') { event.preventDefault(); returnCategoryId.current = item.id; onOpenSectionChange(item.id); queueMicrotask(() => { const popup = document.getElementById(`${id}-${item.id}-section`); if (popup) focus(popup, 'first') }) } }}><span>{item.label}</span><span className="app-menu-submenu-indicator-v4" aria-hidden="true" /></button> }) : <div id={`${id}-${section.id}-section`} role="menu" aria-label={section.label} onKeyDown={(event) => navigate(event, () => backToCategories(true))}>{renderNodes(section.children)}</div>}</div> : null}</div>
+
+  const renderRootNodes = (items: readonly AppMenuNodeV4[], ownerId: string): ReactNode => items.map((node) => {
+    if (node.kind !== 'submenu') {
+      if (node.kind === 'separator') return <div key={node.id} role="separator" className="app-menu-separator-v4" />
+      return <AppCommandMenuItemV4 key={node.commandId} commandBindings={commandBindings} commandId={node.commandId} onOutcome={outcome} />
+    }
+    const submenuId = `${id}-${node.id}`
+    const triggerId = `${submenuId}-trigger`
+    const open = submenu === node.id
+    return <div key={node.id} className="app-menu-submenu-v4">
+      <button
+        ref={(element) => {
+          if (element === null) submenuTriggerRefs.current.delete(node.id)
+          else submenuTriggerRefs.current.set(node.id, element)
+        }}
+        id={triggerId}
+        type="button"
+        role="menuitem"
+        data-menu-direct="true"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={submenuId}
+        onClick={() => {
+          if (open) setSubmenu(null)
+          else openNested(node.id, submenuId, ownerId)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowRight') {
+            event.preventDefault()
+            event.stopPropagation()
+            openNested(node.id, submenuId, ownerId)
+          }
+        }}
+      >
+        <span>{node.label}</span>
+        <span className="app-menu-submenu-indicator-v4" aria-hidden="true" />
+      </button>
+    </div>
+  })
+
+  const activeSubmenu = section?.children.find((node) => node.kind === 'submenu' && node.id === submenu)
+
+  const category = (item: AppMenuSectionModelV4, active: boolean): ReactNode => {
+    const categoryId = `${id}-${item.id}-category`
+    const controls = active ? `${id}-${item.id}-section` : undefined
+    return <button
+      key={item.id}
+      ref={(element) => {
+        if (element === null) categoryRefs.current.delete(item.id)
+        else categoryRefs.current.set(item.id, element)
+      }}
+      id={categoryId}
+      type="button"
+      role="menuitem"
+      className="app-menu-category-trigger-v4"
+      data-menu-direct="true"
+      aria-haspopup="menu"
+      aria-expanded={active}
+      aria-controls={controls}
+      onClick={() => {
+        if (active) backToCategories(true)
+        else openCategory(item.id)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'ArrowLeft' && active) {
+          event.preventDefault()
+          event.stopPropagation()
+          backToCategories(true)
+        } else if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowRight') {
+          event.preventDefault()
+          event.stopPropagation()
+          if (active) backToCategories(true)
+          else openCategory(item.id)
+        }
+      }}
+    >
+      <span>{item.label}</span>
+      <span className="app-menu-submenu-indicator-v4" aria-hidden="true" />
+    </button>
+  }
+
+  return <div ref={root} className="compact-app-menu-v4">
+    <button
+      ref={disclosure}
+      type="button"
+      aria-haspopup="menu"
+      aria-expanded={surfaceOpen}
+      aria-controls={rootId}
+      onClick={() => {
+        if (surfaceOpen) close(false)
+        else {
+          setExpanded(true)
+          queueMicrotask(() => {
+            const popup = document.getElementById(rootId)
+            if (popup !== null) focus(popup, 'first')
+          })
+        }
+      }}
+    >Menu</button>
+    {surfaceOpen ? <div
+      id={rootId}
+      role="menu"
+      aria-label="Application menu"
+      className="app-menu-popup-v4"
+      onKeyDown={(event) => navigate(event, () => undefined)}
+    >
+      {section === null ? <div className="app-menu-list-v4">{model.map((item) => category(item, false))}</div> : <>
+        {category(section, true)}
+        {sectionMenuId !== null ? <div
+          id={sectionMenuId}
+          role="menu"
+          aria-labelledby={`${id}-${section.id}-category`}
+          className="app-menu-section-root-v4"
+          onKeyDown={(event) => navigate(event, () => backToCategories(true))}
+        >
+          <div className="app-menu-list-v4">{renderRootNodes(section.children, sectionMenuId)}</div>
+          {activeSubmenu?.kind === 'submenu' ? <div className="app-menu-flyout-layer-v4">
+            <div
+              id={`${id}-${activeSubmenu.id}`}
+              role="menu"
+              aria-labelledby={`${id}-${activeSubmenu.id}-trigger`}
+              className="app-menu-submenu-popup-v4"
+              style={{ top: submenuOffset }}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  closeNested(activeSubmenu.id)
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  close(true)
+                } else if (event.key === 'Tab') {
+                  event.stopPropagation()
+                  close(false)
+                } else if (event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  focus(event.currentTarget, 1)
+                } else if (event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  focus(event.currentTarget, -1)
+                } else if (event.key === 'Home') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  focus(event.currentTarget, 'first')
+                } else if (event.key === 'End') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  focus(event.currentTarget, 'last')
+                }
+              }}
+            >
+              <div className="app-menu-list-v4">{renderCommandNodes(activeSubmenu.children)}</div>
+            </div>
+          </div> : null}
+        </div> : null}
+      </>}
+    </div> : null}
+  </div>
 }
