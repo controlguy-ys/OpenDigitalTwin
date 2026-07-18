@@ -69,19 +69,24 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
 
 describe('composeAppCommandsV4', () => {
   it('declares the complete ordered one-level placement table and immutable Context tuples', () => {
-    const ids = Object.fromEntries(Object.entries(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).map(([section, entries]) => [section, entries.map(({ commandId }) => commandId)]))
-    expect(ids).toEqual({
-      project: ['project.new', 'project.save', 'project.import', 'project.export', 'project.sample.dual'],
-      home: ['view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'scene.showAll', 'scene.delete', 'robot.home', 'robot.gripper.open', 'robot.gripper.close'],
-      model: ['model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'],
-      job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'],
-      simulation: ['job.start', 'job.cancel', 'view.timeline.open', 'collision.validate', 'view.collision.open'],
-      connectivity: ['connectivity.mode.off', 'connectivity.mode.server', 'connectivity.details.open'],
-      view: ['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset', 'view.theme.system', 'view.theme.light', 'view.theme.dark', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp', 'view.home', 'view.fitAll', 'view.focusSelection', 'view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom'],
-      help: ['help.controls', 'help.stepImport', 'help.opcUaMapping', 'help.about'],
+    const root = (commandId: string) => ({ commandId, submenu: null })
+    const submenu = (commandId: string, id: string, label: string) => ({ commandId, submenu: { id, label } })
+    expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).toEqual({
+      project: [root('project.new'), root('project.save'), root('project.import'), root('project.export'), submenu('project.sample.dual', 'project.samples', 'Samples')],
+      home: ['view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'scene.showAll', 'scene.delete', 'robot.home', 'robot.gripper.open', 'robot.gripper.close'].map(root),
+      model: ['model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'].map(root),
+      job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'].map(root),
+      simulation: ['job.start', 'job.cancel', 'view.timeline.open', 'collision.validate', 'view.collision.open'].map(root),
+      connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.details.open')],
+      view: [
+        ...['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset'].map((id) => submenu(id, 'view.panels', 'Panels')),
+        ...['view.theme.system', 'view.theme.light', 'view.theme.dark'].map((id) => submenu(id, 'view.theme', 'Theme')),
+        ...['view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp'].map((id) => submenu(id, 'view.layers', 'Layers')),
+        ...['view.home', 'view.fitAll', 'view.focusSelection'].map((id) => submenu(id, 'view.camera', 'Camera')),
+        ...['view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom'].map((id) => submenu(id, 'view.standard-views', 'Standard Views')),
+      ],
+      help: ['help.controls', 'help.stepImport', 'help.opcUaMapping', 'help.about'].map(root),
     })
-    expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.project.at(-1)).toMatchObject({ submenu: { id: 'project.samples', label: 'Samples' } })
-    expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.view.find(({ commandId }) => commandId === 'view.theme.system')).toMatchObject({ submenu: { id: 'view.theme', label: 'Theme' } })
     expect(() => (APP_COMMAND_PLACEMENTS_BY_SECTION_V4.project as unknown as object[]).push({})).toThrow()
     expect(() => (APP_CONTEXT_COMMAND_IDS_V4.robot as unknown as string[]).push('bad')).toThrow()
     expect(Object.isFrozen(APP_COMMAND_PLACEMENTS_BY_SECTION_V4)).toBe(true)
@@ -94,15 +99,13 @@ describe('composeAppCommandsV4', () => {
     }
     for (const ids of Object.values(APP_CONTEXT_COMMAND_IDS_V4)) expect(Object.isFrozen(ids)).toBe(true)
     expect(Object.isFrozen(APP_QUICK_ACTION_IDS_V4)).toBe(true)
-    expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.connectivity.slice(0, 2).map(({ submenu }) => submenu)).toEqual([
-      { id: 'connectivity.runtime-mode', label: 'Runtime Mode' }, { id: 'connectivity.runtime-mode', label: 'Runtime Mode' },
-    ])
-    for (const [section, submenu] of [
-      ['view.sidebar', { id: 'view.panels', label: 'Panels' }], ['view.theme.system', { id: 'view.theme', label: 'Theme' }], ['view.layer.grid', { id: 'view.layers', label: 'Layers' }], ['view.home', { id: 'view.camera', label: 'Camera' }], ['view.orientation.top', { id: 'view.standard-views', label: 'Standard Views' }],
-    ] as const) {
-      expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.view.find(({ commandId }) => commandId === section)?.submenu).toEqual(submenu)
-    }
-    expect(Object.values(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).flat().filter(({ submenu }) => submenu === null).every(({ submenu }) => submenu === null)).toBe(true)
+    expect(APP_QUICK_ACTION_IDS_V4).toEqual(['project.save', 'job.start', 'job.cancel'])
+    expect(APP_CONTEXT_COMMAND_IDS_V4).toEqual({
+      robot: ['robot.jog.open', 'robot.home', 'robot.base.edit', 'scene.visibility.toggle'],
+      object: ['scene.pose.edit', 'scene.parent.edit', 'scene.group.move', 'scene.status.edit', 'scene.visibility.toggle', 'scene.delete'],
+      job: ['job.pose.save', 'job.start', 'job.cancel', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'],
+      empty: ['model.add.box', 'model.add.cylinder', 'model.add.group', 'view.fitAll'],
+    })
   })
 
   it('exposes the approved placement and context tuples without duplicate definitions', () => {
@@ -349,6 +352,28 @@ describe('composeAppCommandsV4', () => {
     expect(registry.get('view.theme.system')).toMatchObject({ kind: 'radio', groupId: 'view.theme' })
     expect(registry.get('view.focusSelection')).toMatchObject({ enabled: false, disabledReason: 'Select a focusable Scene item.', shortcut: 'F' })
     await expect(registry.get('collision.validate')!.execute()).rejects.toBe(rejected)
+  })
+
+  it('uses the complete canonical toggle, radio, destructive, shortcut, section, and label metadata sets', () => {
+    const registry = composeAppCommandsV4(context())
+    const all = ['project', 'home', 'model', 'job', 'simulation', 'connectivity', 'view', 'help'].flatMap((section) => registry.list(section as Parameters<typeof registry.list>[0]))
+    expect(new Set(all.map(({ id }) => id)).size).toBe(all.length)
+    expect(all.filter(({ kind }) => kind === 'toggle').map(({ id }) => id)).toEqual([
+      'scene.visibility.toggle', 'view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp',
+    ])
+    expect(all.filter(({ kind }) => kind === 'radio').map(({ id, groupId }) => [id, groupId])).toEqual([
+      ['connectivity.mode.off', 'connectivity.runtime-mode'], ['connectivity.mode.server', 'connectivity.runtime-mode'], ['view.theme.system', 'view.theme'], ['view.theme.light', 'view.theme'], ['view.theme.dark', 'view.theme'],
+    ])
+    expect(all.filter(({ destructive }) => destructive === true).map(({ id }) => id)).toEqual(['scene.delete', 'job.delete'])
+    expect(all.filter(({ shortcut }) => shortcut !== undefined).map(({ id, shortcut }) => [id, shortcut])).toEqual([
+      ['project.save', 'Ctrl+S'], ['view.home', 'H'], ['view.focusSelection', 'F'],
+    ])
+    expect(all.filter(({ section }) => section === 'project').map(({ id, label }) => [id, label])).toEqual([
+      ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Sample'],
+    ])
+    expect(all.filter(({ section }) => section === 'connectivity').map(({ id, label }) => [id, label])).toEqual([
+      ['connectivity.mode.off', 'Off'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.details.open', 'Gateway Details'],
+    ])
   })
 
   it('disables snapshot-backed project commands while busy or recovery is required', () => {
