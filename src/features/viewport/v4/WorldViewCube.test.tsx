@@ -40,6 +40,14 @@ describe('WorldViewCubeV4', () => {
     expect(container.querySelector('group')).toHaveAttribute('scale', String(88 / 60))
   })
 
+  it('keeps the face-label array identity stable across rerenders', () => {
+    const { rerender } = render(<WorldViewCubeV4 onDirection={vi.fn()} />)
+    const initialFaces = capture.cube?.faces
+
+    rerender(<WorldViewCubeV4 onDirection={vi.fn()} />)
+    expect(capture.cube?.faces).toBe(initialFaces)
+  })
+
   it('returns null and sends World directions from faces, edges, and corners', () => {
     const onDirection = vi.fn()
     render(<WorldViewCubeV4 onDirection={onDirection} />)

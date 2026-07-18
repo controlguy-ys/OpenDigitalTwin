@@ -1317,7 +1317,7 @@ button {
 
 .viewport-camera-controls {
   top: 12px;
-  right: 12px;
+  right: calc(112px + var(--viewport-safe-area-right-v4, 0px));
   align-items: flex-start;
 }
 
@@ -1337,14 +1337,17 @@ button {
   backdrop-filter: blur(6px);
 }
 
-.viewport-overlay button {
+.viewport-overlay button,
+.viewport-overlay select {
   cursor: pointer;
   opacity: 0.72;
 }
 
 .viewport-overlay button:hover,
 .viewport-overlay button:focus-visible,
-.viewport-overlay button.is-active {
+.viewport-overlay button.is-active,
+.viewport-overlay select:hover,
+.viewport-overlay select:focus-visible {
   opacity: 1;
   border-color: var(--color-accent);
 }

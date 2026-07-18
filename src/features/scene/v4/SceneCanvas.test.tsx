@@ -222,6 +222,16 @@ describe('SceneCanvasV4', () => {
     })
   })
 
+  it('exposes the right safe-area inset to keep the DOM camera rail beside the Cube', () => {
+    const { container } = renderCanvas({
+      safeAreaInsets: { top: 11, right: 13, bottom: 17, left: 19 },
+    })
+
+    expect(container.firstElementChild).toHaveStyle(
+      '--viewport-safe-area-right-v4: 13px',
+    )
+  })
+
   it('clears selection and requests context for a stationary empty click', () => {
     const data = renderCanvas()
     const surface = screen.getByTestId('scene-canvas-surface')

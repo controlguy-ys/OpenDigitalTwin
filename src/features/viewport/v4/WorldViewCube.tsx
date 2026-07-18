@@ -16,6 +16,10 @@ export interface WorldViewCubePropsV4 {
 
 const VIEW_CUBE_TARGET_PX_V4 = 88
 const DREI_VIEW_CUBE_BASE_PX_V4 = 60
+const WORLD_VIEW_CUBE_FACES_V4: string[] = [
+  'Right', 'Left', 'Back', 'Front', 'Top', 'Bottom',
+]
+Object.freeze(WORLD_VIEW_CUBE_FACES_V4)
 
 export function WorldViewCubeV4({
   onDirection,
@@ -39,7 +43,7 @@ export function WorldViewCubeV4({
       <group scale={VIEW_CUBE_TARGET_PX_V4 / DREI_VIEW_CUBE_BASE_PX_V4}>
         <GizmoViewcube
           color="#d9e2e8"
-          faces={['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom']}
+          faces={WORLD_VIEW_CUBE_FACES_V4}
           hoverColor="#38bdf8"
           onClick={handleClick}
           strokeColor="#526674"

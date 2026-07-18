@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
@@ -256,6 +257,9 @@ export function SceneCanvasV4({
     <div
       className="scene-canvas scene-canvas-v4"
       data-scene-status={status}
+      style={{
+        '--viewport-safe-area-right-v4': `${safeAreaInsets.right}px`,
+      } as CSSProperties}
     >
       <div
         className="scene-canvas-surface-v4"
