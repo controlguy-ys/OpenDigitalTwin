@@ -95,8 +95,8 @@ const INACTIVE_SHELL_LAYOUT_SNAPSHOT_V4: ShellLayoutControllerSnapshotV4 = Objec
   overlays: Object.freeze({ sidebarOpen: false, inspectorOpen: false, bottomOpen: false }),
   resolved: Object.freeze({ sidebarWidthPx: 248, inspectorWidthPx: 320, bottomHeightPx: 160, viewportWidthPx: 620 }),
   safeAreaInsets: Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 }),
-  isDockVisible: () => false,
-  isRibbonExpanded: () => false,
+  isDockVisible: (dock) => dock === 'sidebar' || dock === 'inspector',
+  isRibbonExpanded: () => true,
 })
 
 const getInactiveShellLayoutSnapshotV4 = () => INACTIVE_SHELL_LAYOUT_SNAPSHOT_V4
