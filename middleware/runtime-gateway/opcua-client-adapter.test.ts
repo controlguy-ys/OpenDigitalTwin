@@ -9,6 +9,7 @@ import {
   Variant,
   type UAVariable,
 } from 'node-opcua'
+import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 
 import { validateStateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
@@ -144,6 +145,39 @@ function projectWithEntityStatusMapping() {
   }
 }
 
+function fakeOpcUaClientConnection() {
+  const group = new EventEmitter() as EventEmitter & {
+    terminate(): Promise<void>
+  }
+  group.terminate = async () => undefined
+  const subscription = {
+    monitorItems: async () => group,
+    terminate: async () => undefined,
+  }
+  const session = {
+    createSubscription2: async () => subscription,
+    close: async () => undefined,
+  }
+  const client = new EventEmitter() as EventEmitter & {
+    connect(endpointUrl: string): Promise<void>
+    createSession(): Promise<typeof session>
+    disconnect(): Promise<void>
+  }
+  client.connect = async (_endpointUrl: string) => undefined
+  client.createSession = async () => session
+  client.disconnect = async () => undefined
+  return { client, group }
+}
+
+function fakeDataValue(value: number) {
+  return {
+    value: { value },
+    statusCode: { toString: () => 'Good' },
+    sourceTimestamp: new Date(1000),
+    serverTimestamp: null,
+  }
+}
+
 describe('OPC UA client adapter V1', () => {
   it('compiles enabled read mappings and excludes disabled or write-only routes', () => {
     const project = projectWithEntityPoseMapping()
@@ -234,8 +268,130 @@ describe('OPC UA client adapter V1', () => {
     expect(validateStateBatchV1(batches.at(-1)).values[0]).toMatchObject({
       quality: 'BAD',
       statusCode: 'BadNoCommunication',
-      value: { positionM: [0, 0.5, 0.6] },
+      value: { positionM: [0, 0.5, 0] },
     })
+  })
+
+  it('retains the prior coherent pose when a required leaf arrives Bad', () => {
+    const project = projectWithEntityPoseMapping()
+    const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
+    const batches: unknown[] = []
+    const assembler = createOpcUaClientSnapshotAssemblerV1({
+      project, endpoint, gatewayId: 'gateway-local', originId: 'gateway-local:client',
+      nowMs: () => 2000, publish: (batch) => { batches.push(batch) },
+    })
+    ;[1000, 2000, 3000, 0, 0, 0].forEach((value, index) => {
+      assembler.accept(endpoint.nodeIds[index]!, value, 'Good', 1000 + index)
+    })
+
+    assembler.accept(endpoint.nodeIds[0]!, 9000, 'BadNoCommunication', 2000)
+
+    expect(validateStateBatchV1(batches.at(-1)).values[0]).toMatchObject({
+      quality: 'BAD',
+      statusCode: 'BadNoCommunication',
+      value: { positionM: [1, 2, 3] },
+    })
+  })
+
+  it('does not fabricate a pose when the first required leaf is non-finite', () => {
+    const project = projectWithEntityPoseMapping()
+    const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
+    const batches: unknown[] = []
+    const assembler = createOpcUaClientSnapshotAssemblerV1({
+      project, endpoint, gatewayId: 'gateway-local', originId: 'gateway-local:client',
+      nowMs: () => 2000, publish: (batch) => { batches.push(batch) },
+    })
+    assembler.accept(endpoint.nodeIds[0]!, Number.NaN, 'Good', 1000)
+    endpoint.nodeIds.slice(1).forEach((nodeId, index) => assembler.accept(nodeId, 0, 'Good', 1001 + index))
+
+    expect(batches).toHaveLength(0)
+  })
+
+  it('requires a fresh complete set after coherence cache reset', () => {
+    const project = projectWithEntityPoseMapping()
+    const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
+    const batches: unknown[] = []
+    const assembler = createOpcUaClientSnapshotAssemblerV1({
+      project, endpoint, gatewayId: 'gateway-local', originId: 'gateway-local:client',
+      nowMs: () => 2000, publish: (batch) => { batches.push(batch) },
+    })
+    endpoint.nodeIds.forEach((nodeId, index) => assembler.accept(nodeId, index, 'Good', 1000 + index))
+    expect(batches).toHaveLength(1)
+
+    assembler.reset()
+    assembler.accept(endpoint.nodeIds[0]!, 9000, 'Good', 2000)
+    expect(batches).toHaveLength(1)
+    endpoint.nodeIds.slice(1).forEach((nodeId, index) => assembler.accept(nodeId, 0, 'Good', 2001 + index))
+
+    expect(validateStateBatchV1(batches.at(-1)).values[0]!.value).toMatchObject({ positionM: [9, 0, 0] })
+  })
+
+  it('retains mapping and per-node effective sampling intervals in the compiled plan', () => {
+    const project = projectWithEntityStatusMapping()
+    const mapping = project.opcUa.mappings[1]!
+    const endpoint = compileOpcUaClientReadPlanV1({
+      ...project,
+      opcUa: {
+        ...project.opcUa,
+        mappings: [
+          { ...project.opcUa.mappings[0]!, publishingIntervalMs: 250 },
+          { ...mapping, publishingIntervalMs: 100 },
+        ],
+      },
+    })[0]!
+
+    expect(endpoint.mappings.map(({ id, publishingIntervalMs }) => ({ id, publishingIntervalMs })))
+      .toEqual([
+        { id: 'mapping-live-pose', publishingIntervalMs: 250 },
+        { id: 'mapping-live-status', publishingIntervalMs: 100 },
+      ])
+    expect(endpoint.nodeSamplingIntervalMs).toMatchObject({
+      'ns=2;s=Box/X': 250,
+      'ns=2;s=Box/Status': 100,
+    })
+    expect(endpoint.monitoringIntervalMs).toBe(100)
+  })
+
+  it('ignores a late changed callback from a terminated monitored group', async () => {
+    const project = projectWithEntityPoseMapping()
+    const first = fakeOpcUaClientConnection()
+    const second = fakeOpcUaClientConnection()
+    const connections = [first, second]
+    const batches: unknown[] = []
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      publish: (batch) => { batches.push(batch) },
+      createClient: () => connections.shift()!.client as never,
+    })
+    const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.connected === true)
+    endpoint.nodeIds.forEach((_, index) => {
+      first.group.emit('changed', {}, fakeDataValue(index), index)
+    })
+    await eventually(() => batches.length === 1)
+
+    first.group.emit('terminated')
+    await eventually(() => adapter.status()[0]?.connected === true && connections.length === 0)
+    const beforeLateCallback = batches.length
+    second.group.emit('changed', {}, fakeDataValue(9000), 0)
+    await new Promise<void>((resolve) => { setTimeout(resolve, 20) })
+    expect(batches).toHaveLength(beforeLateCallback)
+    endpoint.nodeIds.slice(1).forEach((_, index) => {
+      second.group.emit('changed', {}, fakeDataValue(0), index + 1)
+    })
+    await eventually(() => batches.length === beforeLateCallback + 1)
+    expect(validateStateBatchV1(batches.at(-1)).values[0]!.value).toMatchObject({
+      positionM: [9, 0, 0],
+    })
+    const afterReconnectSnapshot = batches.length
+
+    first.group.emit('changed', {}, fakeDataValue(9000), 0)
+    await new Promise<void>((resolve) => { setTimeout(resolve, 20) })
+
+    expect(batches).toHaveLength(afterReconnectSnapshot)
+    await adapter.stop()
   })
 
   it('emits a scalar value for an entity-status mapping with a root leaf path', () => {

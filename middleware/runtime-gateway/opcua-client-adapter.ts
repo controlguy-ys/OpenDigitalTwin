@@ -29,6 +29,7 @@ export interface CompiledOpcUaClientMappingV1 {
   readonly id: string
   readonly coherenceGroupId: string | null
   readonly coordinateConvention: OpcUaMappingV4['coordinateConvention']
+  readonly publishingIntervalMs: number
   readonly leaves: readonly OpcUaMappingLeafV4[]
 }
 
@@ -37,6 +38,8 @@ export interface CompiledOpcUaClientEndpointV1 {
   readonly endpointUrl: string
   readonly publishingIntervalMs: number
   readonly reconnectDelayMs: number
+  readonly monitoringIntervalMs: number
+  readonly nodeSamplingIntervalMs: Readonly<Record<string, number>>
   readonly nodeIds: readonly string[]
   readonly mappings: readonly CompiledOpcUaClientMappingV1[]
 }
@@ -52,6 +55,7 @@ export interface OpcUaClientSnapshotAssemblerOptionsV1 {
 
 export interface OpcUaClientSnapshotAssemblerV1 {
   accept(nodeId: string, value: unknown, statusCode: string, sourceTimestampMs: number): void
+  reset(): void
 }
 
 export interface OpcUaClientAdapterOptionsV1 {
@@ -59,6 +63,7 @@ export interface OpcUaClientAdapterOptionsV1 {
   readonly originId: string
   readonly publish: (batch: StateBatchV1) => void
   readonly nowMs?: () => number
+  readonly createClient?: (endpoint: OpcUaEndpointV4) => OPCUAClient
 }
 
 export interface OpcUaClientEndpointStatusV1 {
@@ -113,11 +118,15 @@ function uniqueNodeIds(mappings: readonly CompiledOpcUaClientMappingV1[]): reado
   )))])
 }
 
-function freezeMapping(mapping: OpcUaMappingV4): CompiledOpcUaClientMappingV1 {
+function freezeMapping(
+  mapping: OpcUaMappingV4,
+  endpoint: OpcUaEndpointV4,
+): CompiledOpcUaClientMappingV1 {
   return Object.freeze({
     id: mapping.id,
     coherenceGroupId: mapping.coherenceGroupId,
     coordinateConvention: mapping.coordinateConvention,
+    publishingIntervalMs: mapping.publishingIntervalMs ?? endpoint.publishingIntervalMs,
     leaves: Object.freeze([...mapping.leaves]),
   })
 }
@@ -131,8 +140,10 @@ export function compileOpcUaClientReadPlanV1(
   const mappingsByEndpoint = new Map<string, CompiledOpcUaClientMappingV1[]>()
   for (const mapping of project.opcUa.mappings) {
     if (!isReadDirection(mapping.direction)) continue
+    const endpoint = project.opcUa.endpoints.find(({ endpointId }) => endpointId === mapping.endpointId)
+    if (endpoint === undefined) continue
     const mappings = mappingsByEndpoint.get(mapping.endpointId) ?? []
-    mappings.push(freezeMapping(mapping))
+    mappings.push(freezeMapping(mapping, endpoint))
     mappingsByEndpoint.set(mapping.endpointId, mappings)
   }
 
@@ -141,11 +152,18 @@ export function compileOpcUaClientReadPlanV1(
     if (!endpoint.enabled) continue
     const mappings = mappingsByEndpoint.get(endpoint.endpointId)
     if (mappings === undefined || mappings.length === 0) continue
+    const nodeSamplingIntervalMs = Object.fromEntries([...new Set(
+      mappings.flatMap((mapping) => mapping.leaves.map((leaf) => leaf.nodeId)),
+    )].map((nodeId) => [nodeId, Math.min(...mappings.flatMap((mapping) => (
+      mapping.leaves.some((leaf) => leaf.nodeId === nodeId) ? [mapping.publishingIntervalMs] : []
+    )))])) as Record<string, number>
     endpoints.push(Object.freeze({
       endpointId: endpoint.endpointId,
       endpointUrl: endpoint.endpointUrl,
       publishingIntervalMs: endpoint.publishingIntervalMs,
       reconnectDelayMs: endpoint.reconnectDelayMs,
+      monitoringIntervalMs: Math.min(...Object.values(nodeSamplingIntervalMs)),
+      nodeSamplingIntervalMs: Object.freeze(nodeSamplingIntervalMs),
       mappings: Object.freeze(mappings),
       nodeIds: uniqueNodeIds(mappings),
     }))
@@ -269,21 +287,38 @@ export function createOpcUaClientSnapshotAssemblerV1(
     })
   }
 
+  const reset = (): void => {
+    for (const samples of samplesByMapping.values()) samples.fill(undefined)
+  }
+
   return Object.freeze({
+    reset,
     accept(nodeId: string, input: unknown, statusCode: string, sourceTimestampMs: number) {
       const references = referencesByNodeId.get(nodeId)
       if (references === undefined) return
       for (const reference of references) {
         const leaf = reference.mapping.leaves[reference.index]!
         const scalar = scalarFromLeaf(leaf, input)
-        const sample: LeafSampleV1 = Object.freeze({
-          value: scalar ?? 0,
-          quality: scalar === null ? 'BAD' : runtimeQuality(statusCode),
-          statusCode: scalar === null ? 'BadTypeMismatch' : statusCode,
+        const samples = samplesByMapping.get(reference.mapping.id)!
+        const previous = samples[reference.index]
+        const quality = scalar === null ? 'BAD' : runtimeQuality(statusCode)
+        if (quality === 'BAD') {
+          if (previous !== undefined) {
+            samples[reference.index] = Object.freeze({
+              value: previous.value,
+              quality: 'BAD',
+              statusCode: scalar === null ? 'BadTypeMismatch' : statusCode,
+              sourceTimestampMs,
+            })
+          }
+          continue
+        }
+        samples[reference.index] = Object.freeze({
+          value: scalar!,
+          quality,
+          statusCode,
           sourceTimestampMs,
         })
-        const samples = samplesByMapping.get(reference.mapping.id)!
-        samples[reference.index] = sample
       }
       const published: RuntimeMappedValueV1[] = []
       let latestSourceTimestampMs = sourceTimestampMs
@@ -376,6 +411,7 @@ export function createOpcUaClientAdapterV1(
   const project = validateWorkcellProjectV4(projectInput)
   const plans = compileOpcUaClientReadPlanV1(project)
   const nowMs = options.nowMs ?? Date.now
+  const createRuntimeClient = options.createClient ?? createClient
   const runtimes = new Map<string, EndpointRuntimeV1>()
   let lifecycleTail: Promise<void> = Promise.resolve()
 
@@ -444,7 +480,7 @@ export function createOpcUaClientAdapterV1(
     ) return
     runtime.connecting = true
     const generation = runtime.generation
-    const candidate = createClient({
+    const candidate = createRuntimeClient({
       endpointId: runtime.plan.endpointId,
       name: runtime.plan.endpointId,
       endpointUrl: runtime.plan.endpointUrl,
@@ -479,14 +515,15 @@ export function createOpcUaClientAdapterV1(
       runtime.subscription = subscription
       group = await subscription.monitorItems(
         runtime.plan.nodeIds.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value })),
-        { samplingInterval: runtime.plan.publishingIntervalMs, queueSize: 1, discardOldest: true },
+        { samplingInterval: runtime.plan.monitoringIntervalMs, queueSize: 1, discardOldest: true },
         TimestampsToReturn.Both,
       )
       if (!active()) return
       runtime.group = group
+      runtime.assembler.reset()
       group.on('changed', (_item, dataValue, index) => {
         const nodeId = runtime.plan.nodeIds[index]
-        if (nodeId === undefined || runtime.stopped) return
+        if (nodeId === undefined || !active() || runtime.group !== group) return
         const timestamp = dataValue.sourceTimestamp?.getTime()
           ?? dataValue.serverTimestamp?.getTime()
           ?? nowMs()
