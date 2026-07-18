@@ -24,7 +24,10 @@ import type {
   OpcUaClientAdapterOptionsV1,
   OpcUaClientAdapterV1,
 } from './opcua-client-adapter.js'
-import type { StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
+import {
+  MAX_RUNTIME_BATCH_BYTES_V1,
+  type StateBatchV1,
+} from '../../src/core/runtime-protocol/v1.js'
 
 async function importMain() {
   return import('./main.js')
@@ -191,6 +194,22 @@ function fakeClientAdapter(): {
     },
     start,
     stop,
+  }
+}
+
+function singleMappingBatchAtExactEncodedSize(
+  source: StateBatchV1,
+  byteLength: number,
+): StateBatchV1 {
+  const emptyValueSource = {
+    ...source,
+    values: [{ ...source.values[0]!, value: '' }],
+  }
+  const padding = byteLength - new TextEncoder().encode(JSON.stringify(emptyValueSource)).byteLength
+  if (padding < 0) throw new Error('Requested batch size is below its fixed envelope.')
+  return {
+    ...emptyValueSource,
+    values: [{ ...emptyValueSource.values[0]!, value: 'x'.repeat(padding) }],
   }
 }
 
@@ -554,6 +573,234 @@ describe('runtime Gateway entrypoint', () => {
       expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(2)
     } finally {
       replaySocket?.close()
+      socket?.close()
+      await service.stop()
+    }
+  })
+
+  it('keeps every channel from one synchronous Client source batch through activation', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV4, options) => {
+      const adapter: OpcUaClientAdapterV1 = {
+        start: async () => {
+          options.publish({
+            type: 'state-batch-v1',
+            protocolVersion: 1,
+            gatewayId: 'test-gateway',
+            projectId: _project.projectId,
+            configRevision: options.configRevision,
+            endpointId: 'endpoint-sample-server',
+            sequence: 1,
+            sourceTimestampMs: 1,
+            publishedTimestampMs: 1,
+            originId: 'test-gateway:opcua-client',
+            values: [
+              {
+                mappingId: 'mapping-object-box-x',
+                coherenceGroupId: null,
+                value: 1.5,
+                unit: 'meter',
+                quality: 'GOOD',
+                statusCode: 'Good',
+              },
+              {
+                mappingId: 'mapping-object-box-status',
+                coherenceGroupId: null,
+                value: 92,
+                unit: 'status-code',
+                quality: 'GOOD',
+                statusCode: 'Good',
+              },
+            ],
+          })
+        },
+        stop: async () => undefined,
+        status: () => [],
+      }
+      return adapter
+    })
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      { createOpcUaClientAdapter },
+    )
+    const project = sampleProject('client', 'revision-synchronous-multi-channel')
+
+    await service.start()
+    let socket: WebSocket | null = null
+    try {
+      socket = await openWebSocket(port)
+      const received: StateBatchV1[] = []
+      socket.on('message', (data) => {
+        received.push(JSON.parse(data.toString()) as StateBatchV1)
+      })
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      await expect.poll(
+        () => received.flatMap(({ values }) => values.map(({ mappingId, value }) => ({ mappingId, value })))
+          .sort((left, right) => left.mappingId.localeCompare(right.mappingId)),
+      ).toEqual([
+        { mappingId: 'mapping-object-box-status', value: 92 },
+        { mappingId: 'mapping-object-box-x', value: 1.5 },
+      ])
+      expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(1)
+    } finally {
+      socket?.close()
+      await service.stop()
+    }
+  })
+
+  it('keeps an older independent Status snapshot while newer Pose snapshots arrive during activation', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV4, options) => {
+      const publish = (
+        sequence: number,
+        mappingId: string,
+        value: number,
+        unit: string,
+      ) => options.publish({
+        type: 'state-batch-v1',
+        protocolVersion: 1,
+        gatewayId: 'test-gateway',
+        projectId: _project.projectId,
+        configRevision: options.configRevision,
+        endpointId: 'endpoint-sample-server',
+        sequence,
+        sourceTimestampMs: sequence,
+        publishedTimestampMs: sequence,
+        originId: 'test-gateway:opcua-client',
+        values: [{
+          mappingId,
+          coherenceGroupId: null,
+          value,
+          unit,
+          quality: 'GOOD',
+          statusCode: 'Good',
+        }],
+      })
+      const adapter: OpcUaClientAdapterV1 = {
+        start: async () => {
+          publish(1, 'mapping-object-box-status', 91, 'status-code')
+          for (let sequence = 2; sequence <= 130; sequence += 1) {
+            publish(sequence, 'mapping-object-box-x', sequence, 'meter')
+          }
+        },
+        stop: async () => undefined,
+        status: () => [],
+      }
+      return adapter
+    })
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      { createOpcUaClientAdapter },
+    )
+    const project = sampleProject('client', 'revision-synchronous-channel-retention')
+
+    await service.start()
+    let socket: WebSocket | null = null
+    try {
+      socket = await openWebSocket(port)
+      const received: StateBatchV1[] = []
+      socket.on('message', (data) => {
+        received.push(JSON.parse(data.toString()) as StateBatchV1)
+      })
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      await expect.poll(
+        () => received.flatMap(({ values }) => values.map(({ mappingId, value }) => ({ mappingId, value })))
+          .sort((left, right) => left.mappingId.localeCompare(right.mappingId)),
+      ).toEqual([
+        { mappingId: 'mapping-object-box-status', value: 91 },
+        { mappingId: 'mapping-object-box-x', value: 130 },
+      ])
+      expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(1)
+    } finally {
+      socket?.close()
+      await service.stop()
+    }
+  })
+
+  it('keeps the last streamable staged channel when a newer activation sample cannot be streamed', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    let publishLive: ((batch: StateBatchV1) => void) | null = null
+    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV4, options) => {
+      const batch = (sequence: number, value: number | string): StateBatchV1 => ({
+        type: 'state-batch-v1',
+        protocolVersion: 1,
+        gatewayId: 'test-gateway',
+        projectId: _project.projectId,
+        configRevision: options.configRevision,
+        endpointId: 'endpoint-sample-server',
+        sequence,
+        sourceTimestampMs: sequence,
+        publishedTimestampMs: sequence,
+        originId: 'test-gateway:opcua-client',
+        values: [{
+          mappingId: 'mapping-object-box-x',
+          coherenceGroupId: null,
+          value,
+          unit: 'meter',
+          quality: 'GOOD',
+          statusCode: 'Good',
+        }],
+      })
+      publishLive = options.publish
+      const adapter: OpcUaClientAdapterV1 = {
+        start: async () => {
+          options.publish(batch(1, 1.5))
+          options.publish(singleMappingBatchAtExactEncodedSize(
+            batch(2, ''),
+            MAX_RUNTIME_BATCH_BYTES_V1,
+          ))
+        },
+        stop: async () => undefined,
+        status: () => [],
+      }
+      return adapter
+    })
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      { createOpcUaClientAdapter },
+    )
+    const project = sampleProject('client', 'revision-synchronous-last-streamable')
+
+    await service.start()
+    let socket: WebSocket | null = null
+    try {
+      socket = await openWebSocket(port)
+      const received: StateBatchV1[] = []
+      socket.on('message', (data) => {
+        received.push(JSON.parse(data.toString()) as StateBatchV1)
+      })
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      await expect.poll(
+        () => received.flatMap(({ values }) => values.map(({ value }) => value)),
+      ).toEqual([1.5])
+
+      publishLive!({
+        type: 'state-batch-v1',
+        protocolVersion: 1,
+        gatewayId: 'test-gateway',
+        projectId: project.projectId,
+        configRevision: await configRevisionForProjectV4(project),
+        endpointId: 'endpoint-sample-server',
+        sequence: 3,
+        sourceTimestampMs: 3,
+        publishedTimestampMs: 3,
+        originId: 'test-gateway:opcua-client',
+        values: [{
+          mappingId: 'mapping-object-box-x',
+          coherenceGroupId: null,
+          value: 3.5,
+          unit: 'meter',
+          quality: 'GOOD',
+          statusCode: 'Good',
+        }],
+      })
+      await expect.poll(
+        () => received.flatMap(({ values }) => values.map(({ value }) => value)),
+      ).toEqual([1.5, 3.5])
+    } finally {
       socket?.close()
       await service.stop()
     }

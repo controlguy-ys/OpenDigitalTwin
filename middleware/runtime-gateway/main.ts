@@ -34,6 +34,7 @@ import {
 } from './opcua-client-adapter.js'
 import {
   createStateBatchHubV1,
+  isStreamableStateSnapshotV1,
   type StateBatchHubV1,
 } from './state-batch-hub.js'
 import type { RuntimeMappedValueV1, StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
@@ -181,10 +182,12 @@ function createStagedClientBatchesV1(): StagedClientBatchesV1 {
     snapshotsByEndpoint.set(batch.endpointId, endpoint)
     for (const values of stagedChannelGroupsV1(batch.values)) {
       const channelKey = stagedChannelKeyV1(values)
+      const snapshot = { ...batch, values }
+      if (!isStreamableStateSnapshotV1(snapshot)) continue
       const existing = endpoint.get(channelKey)
       if (existing !== undefined && existing.sequence > batch.sequence) continue
       endpoint.delete(channelKey)
-      endpoint.set(channelKey, { ...batch, values })
+      endpoint.set(channelKey, snapshot)
     }
     while (endpoint.size > MAX_STAGED_CLIENT_CHANNELS_PER_ENDPOINT_V1) {
       const oldest = endpoint.keys().next().value as string | undefined
@@ -203,11 +206,20 @@ function createStagedClientBatchesV1(): StagedClientBatchesV1 {
     flushTo(hub: StateBatchHubV1) {
       const batches = [...snapshotsByEndpoint.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
-        .flatMap(([, channels]) => [...channels.entries()]
-          .sort(([leftKey, leftBatch], [rightKey, rightBatch]) => (
-            leftBatch.sequence - rightBatch.sequence || leftKey.localeCompare(rightKey)
-          ))
-          .map(([, batch]) => batch))
+        .flatMap(([, channels]) => {
+          const sourceBatches = new Map<number, StateBatchV1[]>()
+          for (const batch of channels.values()) {
+            const siblings = sourceBatches.get(batch.sequence) ?? []
+            siblings.push(batch)
+            sourceBatches.set(batch.sequence, siblings)
+          }
+          return [...sourceBatches.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([, siblings]) => ({
+              ...siblings[0]!,
+              values: siblings.flatMap(({ values }) => values),
+            }))
+        })
       snapshotsByEndpoint.clear()
       for (const batch of batches) hub.publish(batch)
     },

@@ -143,6 +143,35 @@ function channelKeyV1(values: readonly RuntimeMappedValueV1[]): string {
     : `snapshot:${values.map(({ mappingId }) => mappingId).sort().join(',')}`
 }
 
+interface SnapshotSourceV1 {
+  readonly channelKey: string
+  readonly batch: StateBatchV1
+}
+
+function snapshotSourcesV1(source: StateBatchV1): readonly SnapshotSourceV1[] {
+  return Object.freeze(groupedValuesV1(source.values).map((values) => Object.freeze({
+    channelKey: channelKeyV1(values),
+    batch: batchWithValuesV1(source, values),
+  })))
+}
+
+export function isStreamableStateSnapshotV1(snapshot: StateBatchV1): boolean {
+  try {
+    // A cached or deferred snapshot can be assigned any later positive wire
+    // sequence. Reject groups that cannot fit the widest valid envelope.
+    splitStateBatchesV1(snapshot, Number.MAX_SAFE_INTEGER)
+    return true
+  } catch (error) {
+    if (
+      error instanceof StateBatchHubErrorV1
+      && error.code === 'RUNTIME_STATE_BATCH_SIZE_EXCEEDED'
+    ) {
+      return false
+    }
+    throw error
+  }
+}
+
 function assertUniqueSourceMappingIdsV1(
   values: readonly RuntimeMappedValueV1[],
 ): void {
@@ -273,6 +302,15 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     state.socket.off('error', state.onError)
   }
 
+  const detachAndCloseState = (state: SocketStateV1): void => {
+    detachState(state)
+    try {
+      state.socket.close()
+    } catch {
+      // A peer can disappear while the hub is isolating its failed stream.
+    }
+  }
+
   const sendNext = (
     state: SocketStateV1,
     transmission: EncodedLogicalTransmissionV1,
@@ -284,38 +322,44 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     state.transmitting = true
     try {
       state.socket.send(encoded.payload, (error?: Error) => {
-        if (state.detached) return
-        if (error != null) {
-          detachState(state)
-          return
-        }
-        state.transmitting = false
-        if (!sameRevisionV1(transmission, activeRevision)) {
-          state.replay = []
+        try {
+          if (state.detached) return
+          if (error != null) {
+            detachAndCloseState(state)
+            return
+          }
+          state.transmitting = false
+          if (!sameRevisionV1(transmission, activeRevision)) {
+            state.replay = []
+            const pending = nextPending(state)
+            if (pending !== undefined && sameRevisionV1(pending, activeRevision)) {
+              sendNext(state, pending)
+            }
+            return
+          }
+          if (
+            chunkIndex + 1 < transmission.chunks.length
+          ) {
+            sendNext(state, transmission, chunkIndex + 1)
+            return
+          }
+          const replay = state.replay.shift()
+          if (replay !== undefined) {
+            sendNext(state, replay)
+            return
+          }
           const pending = nextPending(state)
           if (pending !== undefined && sameRevisionV1(pending, activeRevision)) {
             sendNext(state, pending)
           }
-          return
-        }
-        if (
-          chunkIndex + 1 < transmission.chunks.length
-        ) {
-          sendNext(state, transmission, chunkIndex + 1)
-          return
-        }
-        const replay = state.replay.shift()
-        if (replay !== undefined) {
-          sendNext(state, replay)
-          return
-        }
-        const pending = nextPending(state)
-        if (pending !== undefined && sameRevisionV1(pending, activeRevision)) {
-          sendNext(state, pending)
+        } catch {
+          // A newly assigned wire sequence may make an otherwise valid source
+          // batch too large. The affected peer must not terminate the gateway.
+          detachAndCloseState(state)
         }
       })
     } catch {
-      detachState(state)
+      detachAndCloseState(state)
     }
   }
 
@@ -343,14 +387,29 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     socket.on('close', onClose)
     socket.on('error', onError)
     if (activeRevision !== null) {
-      const replay = [...latestSnapshotsByEndpoint.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .flatMap(([endpointId, snapshots]) => [...snapshots.entries()]
+      try {
+        const stagedWireSequences = new Map(wireSequenceByEndpoint)
+        const replay = [...latestSnapshotsByEndpoint.entries()]
           .sort(([left], [right]) => left.localeCompare(right))
-          .map(([channelKey, snapshot]) => encodeTransmission(endpointId, channelKey, snapshot)))
-      const first = replay.shift()
-      state.replay = replay
-      if (first !== undefined) sendNext(state, first)
+          .flatMap(([endpointId, snapshots]) => [...snapshots.entries()]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([channelKey, snapshot]) => encodeTransmissionWithStagedWireSequences(
+              stagedWireSequences,
+              endpointId,
+              channelKey,
+              snapshot,
+            )))
+        wireSequenceByEndpoint.clear()
+        for (const [stagedEndpointId, sequence] of stagedWireSequences) {
+          wireSequenceByEndpoint.set(stagedEndpointId, sequence)
+        }
+        const first = replay.shift()
+        state.replay = replay
+        if (first !== undefined) sendNext(state, first)
+      } catch {
+        // Replay is client-specific: retain the hub and isolate this peer.
+        detachAndCloseState(state)
+      }
     }
     return () => detachState(state)
   }
@@ -380,9 +439,29 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     channelKey: string,
     source: StateBatchV1,
   ): EncodedLogicalTransmissionV1 {
-    const firstWireSequence = (wireSequenceByEndpoint.get(endpointId) ?? 0) + 1
+    const stagedWireSequences = new Map(wireSequenceByEndpoint)
+    const transmission = encodeTransmissionWithStagedWireSequences(
+      stagedWireSequences,
+      endpointId,
+      channelKey,
+      source,
+    )
+    wireSequenceByEndpoint.clear()
+    for (const [stagedEndpointId, sequence] of stagedWireSequences) {
+      wireSequenceByEndpoint.set(stagedEndpointId, sequence)
+    }
+    return transmission
+  }
+
+  function encodeTransmissionWithStagedWireSequences(
+    stagedWireSequences: Map<string, number>,
+    endpointId: string,
+    channelKey: string,
+    source: StateBatchV1,
+  ): EncodedLogicalTransmissionV1 {
+    const firstWireSequence = (stagedWireSequences.get(endpointId) ?? 0) + 1
     const chunks = splitStateBatchesV1(source, firstWireSequence)
-    chunks.forEach((chunk) => wireSequenceByEndpoint.set(chunk.endpointId, chunk.sequence))
+    chunks.forEach((chunk) => stagedWireSequences.set(chunk.endpointId, chunk.sequence))
     return Object.freeze({
       projectId: source.projectId,
       configRevision: source.configRevision,
@@ -393,15 +472,25 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
   }
 
   function encodePendingSnapshots(pending: PendingSnapshotsV1): EncodedLogicalTransmissionV1 | undefined {
+    const stagedWireSequences = new Map(wireSequenceByEndpoint)
     const chunks: EncodedBatchV1[] = []
     for (const [endpointId, snapshots] of [...pending.snapshotsByEndpoint.entries()]
       .sort(([left], [right]) => left.localeCompare(right))) {
       for (const [channelKey, snapshot] of [...snapshots.entries()]
         .sort(([left], [right]) => left.localeCompare(right))) {
-        chunks.push(...encodeTransmission(endpointId, channelKey, snapshot).chunks)
+        chunks.push(...encodeTransmissionWithStagedWireSequences(
+          stagedWireSequences,
+          endpointId,
+          channelKey,
+          snapshot,
+        ).chunks)
       }
     }
     if (chunks.length === 0) return undefined
+    wireSequenceByEndpoint.clear()
+    for (const [endpointId, sequence] of stagedWireSequences) {
+      wireSequenceByEndpoint.set(endpointId, sequence)
+    }
     return Object.freeze({
       projectId: pending.projectId,
       configRevision: pending.configRevision,
@@ -421,10 +510,11 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     state: SocketStateV1,
     transmission: EncodedLogicalTransmissionV1 | null,
     endpointId: string,
-    channelKey: string,
-    source: StateBatchV1,
+    snapshots: readonly SnapshotSourceV1[],
   ): void {
     if (state.transmitting) {
+      const source = snapshots[0]?.batch
+      if (source === undefined) return
       if (
         state.pending === null
         || state.pending.projectId !== source.projectId
@@ -438,7 +528,9 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
       }
       const endpointSnapshots = state.pending.snapshotsByEndpoint.get(endpointId) ?? new Map()
       state.pending.snapshotsByEndpoint.set(endpointId, endpointSnapshots)
-      endpointSnapshots.set(channelKey, source)
+      for (const snapshot of snapshots) {
+        endpointSnapshots.set(snapshot.channelKey, snapshot.batch)
+      }
       return
     }
     if (transmission !== null) sendNext(state, transmission)
@@ -450,14 +542,18 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     const previousSourceSequence = lastSourceSequenceByEndpoint.get(untrustedBatch.endpointId)
     if (previousSourceSequence !== undefined && untrustedBatch.sequence <= previousSourceSequence) return
     assertUniqueSourceMappingIdsV1(untrustedBatch.values)
-    const sources = transmissionGroupsV1(untrustedBatch.values).map((values) => Object.freeze({
+    const streamableSnapshots = snapshotSourcesV1(untrustedBatch)
+      .filter(({ batch: snapshot }) => isStreamableStateSnapshotV1(snapshot))
+    const streamableValues = streamableSnapshots.flatMap(({ batch: snapshot }) => snapshot.values)
+    const sources = transmissionGroupsV1(streamableValues).map((values) => Object.freeze({
       channelKey: channelKeyV1(values),
       batch: batchWithValuesV1(untrustedBatch, values),
     }))
     lastSourceSequenceByEndpoint.set(untrustedBatch.endpointId, untrustedBatch.sequence)
+    if (streamableSnapshots.length === 0) return
     const endpointSnapshots = latestSnapshotsByEndpoint.get(untrustedBatch.endpointId) ?? new Map()
     latestSnapshotsByEndpoint.set(untrustedBatch.endpointId, endpointSnapshots)
-    for (const source of sources) {
+    for (const source of streamableSnapshots) {
       endpointSnapshots.delete(source.channelKey)
       endpointSnapshots.set(source.channelKey, source.batch)
     }
@@ -472,16 +568,25 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     }
     if (sockets.size === 0) return
     for (const source of sources) {
-      const transmission = [...sockets.values()].some((state) => !state.transmitting)
-        ? encodeTransmission(untrustedBatch.endpointId, source.channelKey, source.batch)
-        : null
-      for (const state of sockets.values()) {
+      const snapshots = snapshotSourcesV1(source.batch)
+      const states = [...sockets.values()]
+      const idleStates = states.filter((state) => !state.transmitting)
+      let transmission: EncodedLogicalTransmissionV1 | null = null
+      if (idleStates.length > 0) {
+        try {
+          transmission = encodeTransmission(untrustedBatch.endpointId, source.channelKey, source.batch)
+        } catch {
+          // This source cannot be represented at the endpoint's current wire
+          // sequence. Isolate only peers about to receive it synchronously.
+          for (const state of idleStates) detachAndCloseState(state)
+        }
+      }
+      for (const state of states) {
         enqueue(
           state,
           transmission,
           untrustedBatch.endpointId,
-          source.channelKey,
-          source.batch,
+          snapshots,
         )
       }
     }

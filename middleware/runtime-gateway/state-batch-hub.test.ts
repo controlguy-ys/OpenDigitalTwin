@@ -53,6 +53,18 @@ function batchAtExactEncodedSize(sequence: number, byteLength: number): StateBat
   }
 }
 
+function singleMappingBatchAtExactEncodedSize(sequence: number, byteLength: number): StateBatchV1 {
+  const source = batch(sequence, {
+    values: [{ ...mappedValue(1), value: '' }],
+  })
+  const padding = byteLength - new TextEncoder().encode(JSON.stringify(source)).byteLength
+  if (padding < 0) throw new Error('Requested batch size is below its fixed envelope.')
+  return {
+    ...source,
+    values: [{ ...source.values[0]!, value: 'x'.repeat(padding) }],
+  }
+}
+
 class ControlledSocket implements GatewayWebSocketV1 {
   readonly sent: string[] = []
   readonly close = vi.fn()
@@ -226,6 +238,57 @@ describe('StateBatchHubV1', () => {
     expect(new Set(socket.sentSequences()).size).toBe(socket.sent.length)
   })
 
+  it('drops a non-streamable deferred snapshot without poisoning its peer or replay cache', () => {
+    const hub = createStateBatchHubV1()
+    const exactSource = singleMappingBatchAtExactEncodedSize(2, MAX_RUNTIME_BATCH_BYTES_V1)
+    hub.activateRevision('project-test', 'a'.repeat(64))
+
+    expect(() => splitStateBatchesV1(exactSource, 2)).not.toThrow()
+    expect(() => splitStateBatchesV1(exactSource, 11))
+      .toThrow(/RUNTIME_STATE_BATCH_SIZE_EXCEEDED/)
+
+    // Replay a valid cached snapshot nine times, then leave its tenth replay
+    // in flight. Source sequence 2 is therefore reduced to a deferred
+    // snapshot whose first assigned wire sequence is 11.
+    hub.publish(batch(1))
+    for (let index = 0; index < 9; index += 1) {
+      const replay = new ControlledSocket()
+      hub.attach(replay)
+      replay.complete()
+      replay.emit('close')
+    }
+    const socket = new ControlledSocket()
+    hub.attach(socket)
+    expect(socket.sentSequences()).toEqual([10])
+    hub.publish(exactSource)
+    expect(() => socket.complete()).not.toThrow()
+
+    expect(socket.close).not.toHaveBeenCalled()
+    expect(hub.queueDepth(socket)).toBe(0)
+
+    // The last good snapshot remains replayable in the same revision.
+    socket.emit('close')
+    const reconnected = new ControlledSocket()
+    hub.attach(reconnected)
+    expect(reconnected.sentSequences()).toEqual([11])
+    expect(reconnected.sentBatches()[0]?.values).toEqual([
+      expect.objectContaining({ mappingId: 'mapping-1', value: 1 }),
+    ])
+    reconnected.complete()
+
+    // The dropped source sequence is still accepted for ordering, and a later
+    // smaller same-revision update continues on the existing stream.
+    hub.publish(batch(2, {
+      values: [{ ...mappedValue(1), value: 'same-sequence-must-be-rejected' }],
+    }))
+    expect(reconnected.sentSequences()).toEqual([11])
+    hub.publish(batch(3, {
+      values: [{ ...mappedValue(1), value: 'small-later-update' }],
+    }))
+    expect(reconnected.sentSequences()).toEqual([11, 12])
+    expect(reconnected.sentBatches()[1]?.values[0]?.value).toBe('small-later-update')
+  })
+
   it('bounds split serialization work to one value encoding per source mapping', () => {
     const stringify = vi.spyOn(JSON, 'stringify')
     try {
@@ -362,6 +425,36 @@ describe('StateBatchHubV1', () => {
         { mappingId: 'box-pose', value: 'pose-1' },
         { mappingId: 'box-status', value: 'status-2' },
       ]))
+  })
+
+  it('replays a reduced scalar mapping set without regressing the retained mapping', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(1, {
+      values: [
+        { ...mappedValue(1), mappingId: 'mapping-a', value: 1 },
+        { ...mappedValue(2), mappingId: 'mapping-b', value: 1 },
+      ],
+    }))
+    hub.publish(batch(2, {
+      values: [{ ...mappedValue(3), mappingId: 'mapping-a', value: 2 }],
+    }))
+
+    hub.attach(socket)
+    socket.complete()
+
+    const replayedValuesByMapping = socket.sentBatches()
+      .flatMap(({ values }) => values)
+      .reduce<Record<string, unknown[]>>((valuesByMapping, { mappingId, value }) => {
+        valuesByMapping[mappingId] = [...(valuesByMapping[mappingId] ?? []), value]
+        return valuesByMapping
+      }, {})
+
+    expect(replayedValuesByMapping).toEqual({
+      'mapping-a': [2],
+      'mapping-b': [1],
+    })
   })
 
   it('keeps independent latest Pose and Status channels under socket backpressure', () => {
