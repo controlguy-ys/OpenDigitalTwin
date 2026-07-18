@@ -5,6 +5,21 @@ import { createDualRobotSampleV4 } from '../src/features/project/v4/dual-robot-s
 const CRB_NAME = 'ABB CRB15000'
 const SLIDE_NAME = 'Logical Linear Slide'
 
+async function importProject(
+  page: Page,
+  project: object,
+  fileName: string,
+): Promise<void> {
+  await page.getByRole('menuitem', { name: 'Project', exact: true }).click()
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('menuitem', { name: 'Import Project', exact: true }).click()
+  await (await chooser).setFiles({
+    name: fileName,
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(project), 'utf8'),
+  })
+}
+
 async function ensurePanelVisible(
   page: Page,
   panelLabel: string,
@@ -51,7 +66,9 @@ async function startSelectedRobotJob(
   await job.click()
   await expect(job).toHaveAttribute('aria-selected', 'true')
 
-  const start = page.getByRole('button', { name: 'Start Job' })
+  const start = page
+    .getByRole('region', { name: 'Robot Jobs' })
+    .getByRole('button', { name: 'Start Job' })
   const status = page.getByRole('status', { name: 'Robot Job state' })
   await expect(start).toBeEnabled()
   await start.click()
@@ -69,11 +86,7 @@ test('imports and operates the two-Robot V4 sample independently', async ({ page
   await page.goto('/')
   await expect(page.getByRole('main', { name: '3D viewport' }))
     .toHaveAttribute('aria-busy', 'false')
-  await page.getByLabel('Import project').setInputFiles({
-    name: 'dual-robot-sample-v4.json',
-    mimeType: 'application/json',
-    buffer: Buffer.from(JSON.stringify(project), 'utf8'),
-  })
+  await importProject(page, project, 'dual-robot-sample-v4.json')
 
   await expect(page.getByText('Dual Robot Simulation Sample', { exact: true })).toBeVisible()
   await expect(page.getByRole('main', { name: '3D viewport' }))
@@ -108,13 +121,13 @@ test('imports and operates the two-Robot V4 sample independently', async ({ page
   await expectNumericValue(jointInput(page, SLIDE_NAME, 'SLIDE_X'), 1)
 })
 
-test('keeps compact edge rails when the desktop Inspector is initially closed', async ({ page }) => {
+test('keeps a full-width viewport when narrow overlays are initially closed', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 700 })
   await page.goto('/')
 
   const viewport = page.getByRole('main', { name: '3D viewport' })
   await expect(viewport).toHaveAttribute('aria-busy', 'false')
   await expect(page.getByRole('button', { name: 'Inspector drawer' })).toBeVisible()
-  await expect.poll(async () => (await viewport.boundingBox())?.x).toBeCloseTo(48, 0)
-  await expect.poll(async () => (await viewport.boundingBox())?.width).toBeCloseTo(704, 0)
+  await expect.poll(async () => (await viewport.boundingBox())?.x).toBeCloseTo(0, 0)
+  await expect.poll(async () => (await viewport.boundingBox())?.width).toBeCloseTo(800, 0)
 })

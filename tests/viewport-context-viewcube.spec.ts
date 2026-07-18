@@ -4,6 +4,21 @@ import { createDualRobotSampleV4 } from '../src/features/project/v4/dual-robot-s
 
 const ROBOT_LINK_LABEL = 'ABB CRB15000 / LINK00'
 
+async function importProject(
+  page: Page,
+  project: object,
+  fileName: string,
+): Promise<void> {
+  await page.getByRole('menuitem', { name: 'Project', exact: true }).click()
+  const chooser = page.waitForEvent('filechooser')
+  await page.getByRole('menuitem', { name: 'Import Project', exact: true }).click()
+  await (await chooser).setFiles({
+    name: fileName,
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(project), 'utf8'),
+  })
+}
+
 async function ensureSceneAssetsVisible(page: Page): Promise<void> {
   const panel = page.getByRole('complementary', { name: 'Scene Assets' })
   if (await panel.isVisible()) return
@@ -47,11 +62,7 @@ test('keeps stationary context, Pan selection, orientation fallback, and one can
   await page.goto('/')
   const viewport = page.getByRole('main', { name: '3D viewport' })
   await expect(viewport).toHaveAttribute('aria-busy', 'false')
-  await page.getByLabel('Import project').setInputFiles({
-    name: 'viewport-context-sample-v4.json',
-    mimeType: 'application/json',
-    buffer: Buffer.from(JSON.stringify(project), 'utf8'),
-  })
+  await importProject(page, project, 'viewport-context-sample-v4.json')
   await expect(page.getByText(project.metadata.name, { exact: true })).toBeVisible()
   await expect(viewport).toHaveAttribute('aria-busy', 'false')
 
