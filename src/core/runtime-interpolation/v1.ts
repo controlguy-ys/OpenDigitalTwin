@@ -13,6 +13,7 @@ export type RuntimePoseQualityV1 = 'GOOD' | 'STALE'
 export interface RuntimePoseSampleV1 {
   readonly sequence: number
   readonly sourceTimestampMs: number
+  readonly receivedTimestampMs: number
   readonly pose: RigidTransformV4
 }
 
@@ -40,6 +41,27 @@ function requirePositiveSafeInteger(value: number, label: string): number {
     throw new TypeError(`${label} must be a positive safe integer.`)
   }
   return value
+}
+
+function requireNonNegativeSafeInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a non-negative safe integer.`)
+  }
+  return value
+}
+
+function frozenPose(value: RigidTransformV4, path: string): RigidTransformV4 {
+  value.positionM.forEach((component, index) => {
+    requireFinite(component, `Position component ${index}`)
+  })
+  value.quaternion.forEach((component, index) => {
+    requireFinite(component, `Quaternion component ${index}`)
+  })
+  const normalized = normalizeRigidTransformV4(value, path)
+  return Object.freeze({
+    positionM: Object.freeze([...normalized.positionM]) as Vector3V4,
+    quaternion: Object.freeze([...normalized.quaternion]) as QuaternionV4,
+  })
 }
 
 function clampUnitInterval(value: number): number {
@@ -131,8 +153,14 @@ class BoundedRuntimePoseBufferV1 implements RuntimePoseBufferV1 {
 
   push(sample: RuntimePoseSampleV1): boolean {
     requirePositiveSafeInteger(sample.sequence, 'Sample sequence')
-    requireFinite(sample.sourceTimestampMs, 'Source timestamp')
-    const pose = normalizeRigidTransformV4(sample.pose, '$.sample.pose')
+    requireNonNegativeSafeInteger(sample.sourceTimestampMs, 'Source timestamp')
+    requireNonNegativeSafeInteger(sample.receivedTimestampMs, 'Receipt timestamp')
+    const storedSample: RuntimePoseSampleV1 = Object.freeze({
+      sequence: sample.sequence,
+      sourceTimestampMs: sample.sourceTimestampMs,
+      receivedTimestampMs: sample.receivedTimestampMs,
+      pose: frozenPose(sample.pose, '$.sample.pose'),
+    })
     const latest = this.#samples.at(-1)
     if (
       latest !== undefined
@@ -141,29 +169,48 @@ class BoundedRuntimePoseBufferV1 implements RuntimePoseBufferV1 {
       return false
     }
 
-    this.#samples.push({
-      sequence: sample.sequence,
-      sourceTimestampMs: sample.sourceTimestampMs,
-      pose,
-    })
+    if (latest !== undefined && sample.sourceTimestampMs === latest.sourceTimestampMs) {
+      this.#samples[this.#samples.length - 1] = storedSample
+      return true
+    }
+
+    this.#samples.push(storedSample)
     if (this.#samples.length > MAX_RUNTIME_POSE_SAMPLES_V1) this.#samples.shift()
     return true
   }
 
   sample(nowMs: number): RuntimePoseResultV1 | null {
-    requireFinite(nowMs, 'Current time')
+    requireNonNegativeSafeInteger(nowMs, 'Current time')
     const latest = this.#samples.at(-1)
     if (latest === undefined) return null
 
-    const targetTimestampMs = latest.sourceTimestampMs - 2 * this.#publishingIntervalMs
-    const pose = this.#poseAt(targetTimestampMs)
     const staleAfterMs = Math.max(500, 5 * this.#publishingIntervalMs)
-    return {
+    if (nowMs - latest.receivedTimestampMs > staleAfterMs) {
+      return Object.freeze({
+        targetId: this.targetId,
+        sourceTimestampMs: latest.sourceTimestampMs,
+        pose: latest.pose,
+        quality: 'STALE',
+      })
+    }
+
+    const first = this.#samples[0]!
+    const targetTimestampMs = Math.max(
+      first.sourceTimestampMs,
+      Math.min(
+        latest.sourceTimestampMs,
+        latest.sourceTimestampMs
+          + (nowMs - latest.receivedTimestampMs)
+          - 2 * this.#publishingIntervalMs,
+      ),
+    )
+    const pose = this.#poseAt(targetTimestampMs)
+    return Object.freeze({
       targetId: this.targetId,
       sourceTimestampMs: targetTimestampMs,
       pose,
-      quality: nowMs - latest.sourceTimestampMs > staleAfterMs ? 'STALE' : 'GOOD',
-    }
+      quality: 'GOOD',
+    })
   }
 
   #poseAt(targetTimestampMs: number): RigidTransformV4 {
@@ -176,7 +223,10 @@ class BoundedRuntimePoseBufferV1 implements RuntimePoseBufferV1 {
       const previous = this.#samples[index - 1]!
       const fraction = (targetTimestampMs - previous.sourceTimestampMs)
         / (next.sourceTimestampMs - previous.sourceTimestampMs)
-      return interpolateRigidTransformV4(previous.pose, next.pose, fraction)
+      return frozenPose(
+        interpolateRigidTransformV4(previous.pose, next.pose, fraction),
+        '$.interpolatedPose',
+      )
     }
     return this.#samples.at(-1)!.pose
   }

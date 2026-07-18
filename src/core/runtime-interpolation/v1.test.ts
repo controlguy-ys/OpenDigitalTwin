@@ -22,6 +22,15 @@ function poseAt(x: number, quaternion: readonly [number, number, number, number]
   return { positionM: [x, x + 1, x + 2] as const, quaternion }
 }
 
+function runtimeSample(
+  sequence: number,
+  sourceTimestampMs: number,
+  x: number,
+  receivedTimestampMs = sourceTimestampMs,
+) {
+  return { sequence, sourceTimestampMs, receivedTimestampMs, pose: poseAt(x) }
+}
+
 describe('runtime interpolation v1', () => {
   it('converts degrees with intrinsic Z-Y-X Roll/Pitch/Yaw composition', () => {
     const quaternion = rpyDegreesToRuntimeQuaternionV1([90, 0, 90])
@@ -64,9 +73,9 @@ describe('runtime interpolation v1', () => {
 
   it('renders two publishing cycles behind the latest accepted source timestamp', () => {
     const buffer = createRuntimePoseBufferV1('box-1', 100)
-    expect(buffer.push({ sequence: 1, sourceTimestampMs: 1_000, pose: poseAt(0) })).toBe(true)
-    expect(buffer.push({ sequence: 2, sourceTimestampMs: 1_100, pose: poseAt(10) })).toBe(true)
-    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_200, pose: poseAt(20) })).toBe(true)
+    expect(buffer.push(runtimeSample(1, 1_000, 0))).toBe(true)
+    expect(buffer.push(runtimeSample(2, 1_100, 10))).toBe(true)
+    expect(buffer.push(runtimeSample(3, 1_200, 20))).toBe(true)
 
     const result = buffer.sample(1_200)
 
@@ -74,14 +83,26 @@ describe('runtime interpolation v1', () => {
     expectNumbersClose(result!.pose.positionM, [0, 1, 2])
   })
 
+  it('advances the delayed render target smoothly between pushes using receipt-clock elapsed time', () => {
+    const buffer = createRuntimePoseBufferV1('box-1', 100)
+    expect(buffer.push(runtimeSample(1, 1_000, 0, 5_000))).toBe(true)
+    expect(buffer.push(runtimeSample(2, 1_100, 10, 5_100))).toBe(true)
+    expect(buffer.push(runtimeSample(3, 1_200, 20, 5_200))).toBe(true)
+
+    expectNumbersClose(buffer.sample(5_200)!.pose.positionM, [0, 1, 2])
+    expectNumbersClose(buffer.sample(5_250)!.pose.positionM, [5, 6, 7])
+    expectNumbersClose(buffer.sample(5_400)!.pose.positionM, [20, 21, 22])
+  })
+
   it('accepts increasing sequences at an equal source timestamp and rejects older timestamps', () => {
     const buffer = createRuntimePoseBufferV1('box-1', 100)
-    expect(buffer.push({ sequence: 2, sourceTimestampMs: 1_000, pose: poseAt(0) })).toBe(true)
-    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_000, pose: poseAt(10) })).toBe(true)
-    expect(buffer.push({ sequence: 4, sourceTimestampMs: 999, pose: poseAt(20) })).toBe(false)
-    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_100, pose: poseAt(30) })).toBe(false)
+    expect(buffer.push(runtimeSample(2, 1_000, 0))).toBe(true)
+    expect(buffer.push(runtimeSample(3, 1_000, 10, 1_001))).toBe(true)
+    expect(buffer.push(runtimeSample(4, 999, 20, 1_002))).toBe(false)
+    expect(buffer.push(runtimeSample(3, 1_100, 30, 1_003))).toBe(false)
 
-    expect(buffer.size).toBe(2)
+    expect(buffer.size).toBe(1)
+    expectNumbersClose(buffer.sample(1_001)!.pose.positionM, [10, 11, 12])
   })
 
   it('retains only the most recent bounded sample history', () => {
@@ -90,6 +111,7 @@ describe('runtime interpolation v1', () => {
       expect(buffer.push({
         sequence: index + 1,
         sourceTimestampMs: 1_000 + index * 100,
+        receivedTimestampMs: 1_000 + index * 100,
         pose: poseAt(index),
       })).toBe(true)
     }
@@ -101,23 +123,65 @@ describe('runtime interpolation v1', () => {
 
   it('freezes the most recent pose as STALE after the freshness window elapses', () => {
     const buffer = createRuntimePoseBufferV1('box-1', 100)
-    expect(buffer.push({ sequence: 1, sourceTimestampMs: 1_000, pose: poseAt(0) })).toBe(true)
-    expect(buffer.push({ sequence: 2, sourceTimestampMs: 1_100, pose: poseAt(10) })).toBe(true)
-    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_200, pose: poseAt(20) })).toBe(true)
+    expect(buffer.push(runtimeSample(1, 1_000, 0, 5_000))).toBe(true)
+    expect(buffer.push(runtimeSample(2, 1_100, 10, 5_100))).toBe(true)
+    expect(buffer.push(runtimeSample(3, 1_200, 20, 5_200))).toBe(true)
 
-    const result = buffer.sample(1_701)
+    const result = buffer.sample(5_701)
 
-    expect(result).toMatchObject({ quality: 'STALE', sourceTimestampMs: 1_000 })
-    expectNumbersClose(result!.pose.positionM, [0, 1, 2])
+    expect(result).toMatchObject({ quality: 'STALE', sourceTimestampMs: 1_200 })
+    expectNumbersClose(result!.pose.positionM, [20, 21, 22])
   })
 
   it('uses five publishing cycles when that exceeds the 500ms freshness minimum', () => {
     const buffer = createRuntimePoseBufferV1('box-1', 200)
-    expect(buffer.push({ sequence: 1, sourceTimestampMs: 1_000, pose: poseAt(0) })).toBe(true)
-    expect(buffer.push({ sequence: 2, sourceTimestampMs: 1_200, pose: poseAt(10) })).toBe(true)
-    expect(buffer.push({ sequence: 3, sourceTimestampMs: 1_400, pose: poseAt(20) })).toBe(true)
+    expect(buffer.push(runtimeSample(1, 1_000, 0, 5_000))).toBe(true)
+    expect(buffer.push(runtimeSample(2, 1_200, 10, 5_200))).toBe(true)
+    expect(buffer.push(runtimeSample(3, 1_400, 20, 5_400))).toBe(true)
 
-    expect(buffer.sample(2_400)).toMatchObject({ quality: 'GOOD' })
-    expect(buffer.sample(2_401)).toMatchObject({ quality: 'STALE', sourceTimestampMs: 1_000 })
+    expect(buffer.sample(6_400)).toMatchObject({ quality: 'GOOD' })
+    expect(buffer.sample(6_401)).toMatchObject({ quality: 'STALE', sourceTimestampMs: 1_400 })
+  })
+
+  it('isolates stored poses from callers and exposes deeply frozen results', () => {
+    const positionM: [number, number, number] = [1, 2, 3]
+    const quaternion: [number, number, number, number] = [0, 0, 0, 1]
+    const buffer = createRuntimePoseBufferV1('box-1', 100)
+    expect(buffer.push({
+      sequence: 1,
+      sourceTimestampMs: 1_000,
+      receivedTimestampMs: 5_000,
+      pose: { positionM, quaternion },
+    })).toBe(true)
+    positionM[0] = 99
+    quaternion[3] = -1
+
+    const result = buffer.sample(5_000)!
+
+    expect(result.pose).toEqual({ positionM: [1, 2, 3], quaternion: [0, 0, 0, 1] })
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(Object.isFrozen(result.pose)).toBe(true)
+    expect(Object.isFrozen(result.pose.positionM)).toBe(true)
+    expect(Object.isFrozen(result.pose.quaternion)).toBe(true)
+    expect(() => ((result.pose.positionM as unknown as number[])[0] = 77)).toThrow()
+    expect(buffer.sample(5_000)!.pose.positionM[0]).toBe(1)
+  })
+
+  it('rejects invalid protocol sequence, timestamps, and pose components before storing', () => {
+    const buffer = createRuntimePoseBufferV1('box-1', 100)
+
+    expect(() => buffer.push(runtimeSample(0, 1_000, 0))).toThrow(/sequence/i)
+    expect(() => buffer.push(runtimeSample(1, -1, 0))).toThrow(/source timestamp/i)
+    expect(() => buffer.push(runtimeSample(1, Number.MAX_SAFE_INTEGER + 1, 0))).toThrow(/source timestamp/i)
+    expect(() => buffer.push(runtimeSample(1, 1_000, 0, Number.NaN))).toThrow(/receipt timestamp/i)
+    expect(() => buffer.push({
+      ...runtimeSample(1, 1_000, 0),
+      pose: { positionM: [0, Number.POSITIVE_INFINITY, 0], quaternion: [0, 0, 0, 1] },
+    })).toThrow(/position/i)
+    expect(() => buffer.push({
+      ...runtimeSample(1, 1_000, 0),
+      pose: { positionM: [0, 0, 0], quaternion: [0, Number.NaN, 0, 1] },
+    })).toThrow(/quaternion/i)
+    expect(buffer.size).toBe(0)
   })
 })
