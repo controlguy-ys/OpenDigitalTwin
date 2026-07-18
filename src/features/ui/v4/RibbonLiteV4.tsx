@@ -12,7 +12,7 @@ import {
   Square,
   type LucideIcon,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import type { AppCommandOutcomeV4 } from '../../commands/v4/app-command.js'
 import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
@@ -82,6 +82,7 @@ function focusMenuItemV4(menu: HTMLElement | null, intent: 'first' | 'last' | 1 
   if (intent === 'first') return void items[0]?.focus()
   if (intent === 'last') return void items.at(-1)?.focus()
   const current = items.indexOf(document.activeElement as HTMLButtonElement)
+  if (current === -1) return void (intent === 1 ? items[0] : items.at(-1))?.focus()
   items[(current + intent + items.length) % items.length]?.focus()
 }
 
@@ -140,26 +141,37 @@ export function RibbonLiteV4({
     ...(moreWidthPx === undefined ? {} : { moreWidthPx }),
   })
   const [moreOpen, setMoreOpen] = useState(false)
+  const ribbonRef = useRef<HTMLElement>(null)
   const moreRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
   const moreTriggerRef = useRef<HTMLButtonElement>(null)
+  const moreFocusOwnedRef = useRef(false)
   const ribbonExpanded = snapshot.isRibbonExpanded()
   const selectionKey = context.selection === null ? 'none' : sceneSelectionKeyV4(context.selection)
   const itemsKey = resolved.items.map((item) => item.commandId).join('|')
+  const overflowKey = layout.overflowItems.map((item) => item.commandId).join('|')
   const contextKey = `${selectionKey}:${context.activeRobotId ?? ''}:${context.activeJobId ?? ''}:${context.previewSection ?? ''}`
   const closeMore = useCallback(() => {
-    const focusWasInsideMenu = moreMenuRef.current?.contains(document.activeElement) === true
+    const focusWasInsideMenu = moreFocusOwnedRef.current || moreMenuRef.current?.contains(document.activeElement) === true
+    moreFocusOwnedRef.current = false
     setMoreOpen(false)
-    if (focusWasInsideMenu) moreTriggerRef.current?.focus()
-  }, [])
+    if (!focusWasInsideMenu) return
+    const trigger = moreTriggerRef.current
+    if (layout.hasOverflow && ribbonExpanded && trigger?.isConnected === true) {
+      trigger.focus()
+      return
+    }
+    if (ribbonExpanded && ribbonRef.current?.isConnected === true) ribbonRef.current.focus()
+  }, [layout.hasOverflow, ribbonExpanded])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     closeMore()
-  }, [closeMore, contextKey, itemsKey, ribbonExpanded])
+  }, [closeMore, contextKey, itemsKey, overflowKey, ribbonExpanded])
 
   useEffect(() => {
     if (!moreOpen) return
     focusMenuItemV4(moreMenuRef.current, 'first')
+    moreFocusOwnedRef.current = moreMenuRef.current?.contains(document.activeElement) === true
     const dismiss = (event: PointerEvent): void => {
       if (moreRef.current?.contains(event.target as Node) !== true) closeMore()
     }
@@ -168,11 +180,16 @@ export function RibbonLiteV4({
       event.preventDefault()
       closeMore()
     }
+    const trackFocus = (event: FocusEvent): void => {
+      moreFocusOwnedRef.current = moreMenuRef.current?.contains(event.target as Node) === true
+    }
     document.addEventListener('pointerdown', dismiss, true)
     document.addEventListener('keydown', closeOnEscape)
+    document.addEventListener('focusin', trackFocus)
     return () => {
       document.removeEventListener('pointerdown', dismiss, true)
       document.removeEventListener('keydown', closeOnEscape)
+      document.removeEventListener('focusin', trackFocus)
     }
   }, [closeMore, moreOpen])
 
@@ -183,12 +200,14 @@ export function RibbonLiteV4({
     data-section={resolved.section ?? undefined}
     hidden={!ribbonExpanded}
     id="ribbon-lite-v4"
+    ref={ribbonRef}
     role="toolbar"
+    tabIndex={-1}
   >
     <div className="ribbon-command-list-v4">
       {layout.visibleItems.map((item) => <RibbonCommandButtonV4 bindings={commandBindings} item={item} key={item.commandId} />)}
     </div>
-    {layout.hasOverflow ? <div className="ribbon-more-v4" ref={moreRef}>
+    {layout.hasOverflow || moreOpen ? <div className="ribbon-more-v4" ref={moreRef}>
       <button
         aria-controls="ribbon-more-menu-v4"
         aria-expanded={moreOpen}

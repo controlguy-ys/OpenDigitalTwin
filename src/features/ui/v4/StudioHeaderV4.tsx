@@ -118,10 +118,12 @@ export function StudioHeaderV4({
   const snapshot = useShellSnapshotV4(shellLayoutController)
   const [openSection, setOpenSection] = useState<AppCommandSectionV4 | null>(null)
   const [previewSection, setPreviewSection] = useState<AppCommandSectionV4 | null>(null)
-  const gatewayTriggerRef = useRef<HTMLButtonElement>(null)
+  const gatewayStatusTriggerRef = useRef<HTMLButtonElement>(null)
+  const gatewayNarrowTriggerRef = useRef<HTMLButtonElement>(null)
   const gatewayDetailsRef = useRef<HTMLDivElement>(null)
   const gatewayWasOpenRef = useRef(false)
   const compact = snapshot.mode !== 'wide'
+  const narrow = snapshot.mode === 'narrow'
   const labels = statusLabelsV4(status, compact)
   const Menu = compact ? CompactAppMenuV4 : AppMenuBarV4
   const context: RibbonContextV4 = { ...ribbonContext, previewSection }
@@ -131,15 +133,17 @@ export function StudioHeaderV4({
     if (gatewayDetailsOpen && !gatewayWasOpenRef.current) {
       gatewayDetailsRef.current?.focus()
     } else if (!gatewayDetailsOpen && gatewayWasOpenRef.current) {
-      gatewayTriggerRef.current?.focus()
+      const restoreTarget = narrow ? gatewayNarrowTriggerRef.current : gatewayStatusTriggerRef.current
+      if (restoreTarget?.isConnected === true) restoreTarget.focus()
     }
     gatewayWasOpenRef.current = gatewayDetailsOpen
-  }, [gatewayDetailsOpen])
+  }, [gatewayDetailsOpen, narrow])
 
   useEffect(() => {
     if (!gatewayDetailsOpen) return
     const dismiss = (event: PointerEvent): void => {
-      if (gatewayTriggerRef.current?.contains(event.target as Node) === true) return
+      if (gatewayStatusTriggerRef.current?.contains(event.target as Node) === true) return
+      if (gatewayNarrowTriggerRef.current?.contains(event.target as Node) === true) return
       if (gatewayDetailsRef.current?.contains(event.target as Node) === true) return
       onGatewayDetailsOpenChange(false)
     }
@@ -179,12 +183,24 @@ export function StudioHeaderV4({
           aria-expanded={gatewayDetailsOpen}
           aria-label={`Gateway details: ${labels.gateway}`}
           className="studio-header-gateway-disclosure-v4"
+          hidden={narrow}
           onClick={() => onGatewayDetailsOpenChange(!gatewayDetailsOpen)}
-          ref={gatewayTriggerRef}
+          ref={gatewayStatusTriggerRef}
           title={gatewayEndpoint}
           type="button"
         >{labels.gateway}</button>
       </div>
+      <button
+        aria-controls="gateway-details-v4"
+        aria-expanded={gatewayDetailsOpen}
+        aria-label={`Gateway details: ${labels.gateway}`}
+        className="studio-header-gateway-disclosure-v4"
+        hidden={!narrow}
+        onClick={() => onGatewayDetailsOpenChange(!gatewayDetailsOpen)}
+        ref={gatewayNarrowTriggerRef}
+        title={gatewayEndpoint}
+        type="button"
+      >Gateway</button>
       <RibbonToggleV4 commandBindings={commandBindings} />
     </div>
     {gatewayDetailsOpen ? <div

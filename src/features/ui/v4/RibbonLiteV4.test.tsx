@@ -60,7 +60,7 @@ describe('RibbonLiteV4', () => {
   })
 
   it('focuses the first enabled More command and supports logical keyboard navigation that skips disabled menuitems', async () => {
-    const { bindings: commandBindings } = runtimeBindings([
+    const { bindings: commandBindings, runtime } = runtimeBindings([
       { id: 'model.add.box', label: 'Add Box', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
       { id: 'model.add.cylinder', label: 'Add Cylinder', section: 'model', kind: 'action', visible: true, enabled: false, disabledReason: 'Unavailable.', execute: vi.fn() },
       { id: 'model.add.group', label: 'Add Group', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
@@ -81,6 +81,22 @@ describe('RibbonLiteV4', () => {
     expect(group).toHaveFocus()
     fireEvent.keyDown(menu, { key: 'Home' })
     expect(box).toHaveFocus()
+    act(() => runtime.replaceRegistry(createAppCommandRegistryV4([
+      { id: 'model.add.box', label: 'Add Box', section: 'model', kind: 'action', visible: true, enabled: false, disabledReason: 'Busy.', execute: vi.fn() },
+      { id: 'model.add.cylinder', label: 'Add Cylinder', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'model.add.group', label: 'Add Group', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+    ])))
+    expect(box).toBeDisabled()
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(screen.getByRole('menuitem', { name: 'Add Cylinder' })).toHaveFocus()
+    act(() => runtime.replaceRegistry(createAppCommandRegistryV4([
+      { id: 'model.add.box', label: 'Add Box', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'model.add.cylinder', label: 'Add Cylinder', section: 'model', kind: 'action', visible: true, enabled: false, disabledReason: 'Busy.', execute: vi.fn() },
+      { id: 'model.add.group', label: 'Add Group', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+    ])))
+    expect(screen.getByRole('menuitem', { name: 'Add Cylinder' })).toBeDisabled()
+    fireEvent.keyDown(menu, { key: 'ArrowUp' })
+    expect(group).toHaveFocus()
     fireEvent.keyDown(menu, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('menu', { name: 'More commands' })).toBeNull())
     expect(more).toHaveFocus()
@@ -107,6 +123,39 @@ describe('RibbonLiteV4', () => {
     await waitFor(() => expect(screen.queryByRole('menu', { name: 'More commands' })).toBeNull())
     expect(outside).toHaveFocus()
     outside.remove()
+  })
+
+  it('restores deterministic focus while More overflow contents change or disappear under its active menuitem', async () => {
+    const { bindings: commandBindings, runtime } = runtimeBindings([
+      { id: 'model.add.box', label: 'Add Box', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'model.add.cylinder', label: 'Add Cylinder', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'model.add.group', label: 'Add Group', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'view.fitAll', label: 'Fit All', section: 'view', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+    ])
+    render(<RibbonLiteV4 commandBindings={commandBindings} context={emptyContext} shellLayoutController={controller()} availableWidthPx={116} measuredWidthPxByCommandId={{ 'model.add.box': 40, 'model.add.cylinder': 40, 'model.add.group': 40, 'view.fitAll': 40 }} moreWidthPx={36} />)
+    const more = screen.getByRole('button', { name: 'More commands' })
+
+    fireEvent.click(more)
+    expect(await screen.findByRole('menuitem', { name: 'Fit All' })).toHaveFocus()
+    act(() => runtime.replaceRegistry(createAppCommandRegistryV4([
+      { id: 'model.add.box', label: 'Add Box', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'model.add.cylinder', label: 'Add Cylinder', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'model.add.group', label: 'Add Group', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'view.fitAll', label: 'Fit All', section: 'view', kind: 'action', visible: false, enabled: true, execute: vi.fn() },
+    ])))
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'More commands' })).toBeNull())
+    expect(more).toHaveFocus()
+
+    fireEvent.click(more)
+    expect(await screen.findByRole('menuitem', { name: 'Add Group' })).toHaveFocus()
+    act(() => runtime.replaceRegistry(createAppCommandRegistryV4([
+      { id: 'model.add.box', label: 'Add Box', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'model.add.cylinder', label: 'Add Cylinder', section: 'model', kind: 'action', visible: true, enabled: true, execute: vi.fn() },
+      { id: 'model.add.group', label: 'Add Group', section: 'model', kind: 'action', visible: false, enabled: true, execute: vi.fn() },
+      { id: 'view.fitAll', label: 'Fit All', section: 'view', kind: 'action', visible: false, enabled: true, execute: vi.fn() },
+    ])))
+    await waitFor(() => expect(screen.queryByRole('menu', { name: 'More commands' })).toBeNull())
+    expect(screen.getByRole('toolbar', { name: 'Context commands' })).toHaveFocus()
   })
 
   it('subscribes at the ribbon boundary so a runtime registry replacement reveals a newly visible command', () => {

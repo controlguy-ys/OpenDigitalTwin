@@ -42,8 +42,9 @@ function controller(width = 1440) {
   return createShellLayoutControllerV4({ preferencesStore: createShellLayoutStoreV4({ storage: null }), initialBounds: initialShellLayoutBoundsV4(width, 900) })
 }
 
-function GatewayHeaderHarnessV4({ commandStyleOpen = false }: { readonly commandStyleOpen?: boolean }) {
+function GatewayHeaderHarnessV4({ commandStyleOpen = false, width = 1440 }: { readonly commandStyleOpen?: boolean; readonly width?: number }) {
   const [gatewayDetailsOpen, setGatewayDetailsOpen] = useState(false)
+  const [shellLayoutController] = useState(() => controller(width))
   return <>
     {commandStyleOpen ? <button onClick={() => setGatewayDetailsOpen(true)} type="button">Open Gateway command</button> : null}
     <StudioHeaderV4
@@ -52,7 +53,7 @@ function GatewayHeaderHarnessV4({ commandStyleOpen = false }: { readonly command
       commandBindings={bindings()}
       quickActionIds={['project.save', 'job.start', 'job.cancel']}
       ribbonContext={{ selection: null, activeRobotId: null, activeJobId: null }}
-      shellLayoutController={controller()}
+      shellLayoutController={shellLayoutController}
       gatewayDetailsOpen={gatewayDetailsOpen}
       onGatewayDetailsOpenChange={setGatewayDetailsOpen}
     />
@@ -230,5 +231,16 @@ describe('StudioHeaderV4', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     fireEvent.pointerDown(document.body)
     expect(onGatewayDetailsOpenChange).not.toHaveBeenCalled()
+  })
+
+  it('restores the visible narrow Gateway fallback after a command-style open closes', async () => {
+    render(<GatewayHeaderHarnessV4 commandStyleOpen width={959} />)
+    const fallback = screen.getByRole('button', { name: 'Gateway details: Gateway: Ready' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Gateway command' }))
+    expect(await screen.findByRole('dialog', { name: 'Gateway details' })).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Close Gateway details' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Gateway details' })).toBeNull())
+    expect(fallback).toHaveFocus()
   })
 })
