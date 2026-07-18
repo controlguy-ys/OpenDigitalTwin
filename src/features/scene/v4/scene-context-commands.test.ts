@@ -73,6 +73,12 @@ describe('scene context commands', () => {
     expect(resolveSceneContextTargetV4(project, project.revisionId, { kind: 'entity-frame', entityId: 'entity-a', frameId: 'moving-a' })).toMatchObject({ kind: 'entity-frame', frameKind: 'moving', movingOwnership: 'manual' })
     expect(resolveSceneContextTargetV4(project, null, { kind: 'robot', robotId: 'robot-1' })).toMatchObject({ kind: 'stale' })
     expect(resolveSceneContextTargetV4(project, project.revisionId, { kind: 'robot-link', robotId: 'robot-1', linkId: 'missing' })).toMatchObject({ kind: 'stale' })
+    expect(resolveSceneContextTargetV4({ ...project, robots: [{ ...project.robots[0]!, definitionId: 'missing-definition' }] }, project.revisionId, { kind: 'robot-link', robotId: 'robot-1', linkId: 'L0' })).toMatchObject({ kind: 'stale' })
+    expect(resolveSceneContextTargetV4({ ...project, robots: [{ ...project.robots[0]!, definitionId: 'missing-definition' }] }, project.revisionId, { kind: 'robot-frame', robotId: 'robot-1', frameId: 'TCP' })).toMatchObject({ kind: 'stale' })
+    const secondDefinition = { ...project.robotDefinitions[0]!, id: 'definition-2', links: [{ ...project.robotDefinitions[0]!.links[0]!, id: 'other-link' }], frames: [{ ...project.robotDefinitions[0]!.frames[0]!, id: 'other-frame' }] }
+    const twoDefinitions = { ...project, robotDefinitions: [...project.robotDefinitions, secondDefinition] }
+    expect(resolveSceneContextTargetV4(twoDefinitions, twoDefinitions.revisionId, { kind: 'robot-link', robotId: 'robot-1', linkId: 'other-link' })).toMatchObject({ kind: 'stale' })
+    expect(resolveSceneContextTargetV4(twoDefinitions, twoDefinitions.revisionId, { kind: 'robot-frame', robotId: 'robot-1', frameId: 'other-frame' })).toMatchObject({ kind: 'stale' })
   })
 
   it('returns the approved ordered context IDs without mutable array leakage', () => {
@@ -85,6 +91,22 @@ describe('scene context commands', () => {
     expect(() => (ids as string[]).push('bad')).toThrow()
     expect(sceneContextCommandIdsV4(project, project.revisionId, { kind: 'entity-frame', entityId: 'entity-a', frameId: 'grasp-a' })).toEqual(['view.focusSelection'])
     expect(sceneContextCommandIdsV4(project, 'other', { kind: 'robot', robotId: 'robot-1' })).toEqual([])
+  })
+
+  it.each([
+    [null, ['model.add.group', 'model.add.box', 'model.add.cylinder', 'view.fitAll', 'scene.showAll']],
+    [{ kind: 'robot', robotId: 'robot-1' }, ['view.focusSelection', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'robot.base.edit', 'view.collision.open']],
+    [{ kind: 'robot-link', robotId: 'robot-1', linkId: 'L0' }, ['view.focusSelection', 'scene.visibility.toggle', 'scene.isolate', 'view.collision.open']],
+    [{ kind: 'spatial-entity', entityId: 'entity-b' }, ['view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.group.move', 'scene.visibility.toggle', 'scene.isolate', 'view.collision.open']],
+    [{ kind: 'scene-group', groupId: 'group-a' }, ['view.focusSelection', 'scene.rename', 'scene.group.move', 'scene.group.remove', 'scene.visibility.toggle', 'scene.isolate', 'scene.delete']],
+    [{ kind: 'scene-frame', frameId: 'world' }, ['view.focusSelection', 'scene.rename']],
+    [{ kind: 'scene-frame', frameId: 'fixture' }, ['view.focusSelection', 'scene.rename', 'scene.pose.edit']],
+    [{ kind: 'robot-frame', robotId: 'robot-1', frameId: 'TCP' }, ['view.focusSelection', 'scene.pose.edit']],
+    [{ kind: 'entity-frame', entityId: 'entity-a', frameId: 'moving-a' }, ['view.focusSelection', 'scene.parent.edit']],
+    [{ kind: 'entity-frame', entityId: 'entity-a', frameId: 'grasp-a' }, ['view.focusSelection']],
+  ] as const)('returns exact context IDs for %j', (selection, expected) => {
+    const project = projectWithTargets()
+    expect(sceneContextCommandIdsV4(project, project.revisionId, selection)).toEqual(expected)
   })
 
   it('resolves a live retargeted object and never falls back after staleness', async () => {
@@ -130,6 +152,51 @@ describe('scene context commands', () => {
     })
   })
 
+  it('disables all model creation on a stale selection and rechecks before each service call', async () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    interaction.getState().select({ kind: 'scene-group', groupId: 'group-a' })
+    const scene = sceneService()
+    const commands = composeSceneContextCommandsV4({
+      project, interaction, scene, prompt: { requestText: vi.fn(async () => 'unused') },
+      presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() },
+    })
+    for (const id of ['model.add.box', 'model.add.cylinder', 'model.add.group']) {
+      expect(commandById(commands, id).enabled).toBe(true)
+    }
+    interaction.setState({ projectRevisionId: 'stale' })
+    for (const id of ['model.add.box', 'model.add.cylinder', 'model.add.group']) {
+      const entry = commandById(commands, id)
+      expect(entry).toMatchObject({ enabled: false, disabledReason: 'Select a compatible Scene item.' })
+      await expect(entry.execute()).rejects.toThrow('compatible Scene item')
+    }
+    expect(scene.createBox).not.toHaveBeenCalled()
+    expect(scene.createCylinder).not.toHaveBeenCalled()
+    expect(scene.createGroup).not.toHaveBeenCalled()
+  })
+
+  it('uses MCP then World placement fallback and exposes no-frame failure without writes', async () => {
+    const project = projectWithTargets()
+    const onlyWorld = { ...project, scene: { frames: project.scene.frames.filter((frame) => frame.role !== 'mcp') } }
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    const scene = sceneService()
+    const commands = composeSceneContextCommandsV4({
+      project: onlyWorld, interaction, scene, prompt: { requestText: vi.fn(async () => 'unused') },
+      presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() },
+    })
+    await commandById(commands, 'model.add.cylinder').execute()
+    expect(scene.createCylinder).toHaveBeenCalledWith(expect.objectContaining({ parentFrameId: 'world' }))
+    const noFrame = { ...onlyWorld, scene: { frames: [] } }
+    const none = composeSceneContextCommandsV4({
+      project: noFrame, interaction, scene: sceneService(), prompt: { requestText: vi.fn(async () => 'unused') },
+      presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() },
+    })
+    expect(commandById(none, 'model.add.box')).toMatchObject({ enabled: false, disabledReason: 'No MCP or World placement Frame is available.' })
+    await expect(commandById(none, 'model.add.box').execute()).rejects.toThrow('No MCP or World placement Frame is available.')
+  })
+
   it('returns cancellation without mutating and keeps unsupported editors absent', async () => {
     const project = projectWithTargets()
     const interaction = createInteractionStoreV4()
@@ -165,5 +232,52 @@ describe('scene context commands', () => {
     interaction.getState().select({ kind: 'scene-group', groupId: 'group-a' })
     await commandById(commands, 'scene.delete').execute()
     expect(scene.deleteGroupAndContents).toHaveBeenCalledWith('group-a')
+  })
+
+  it('clones copied poses and blocks non-manual Object pose writes before dispatch', async () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
+    const copied = { positionM: [3, 2, 1] as [number, number, number], quaternion: [0, 0, 0, 1] as [number, number, number, number] }
+    interaction.getState().copyTransform(copied)
+    copied.positionM[0] = 99
+    expect(interaction.getState().transformClipboard?.positionM).toEqual([3, 2, 1])
+    const ownedBySimulation = {
+      ...project,
+      spatialEntities: project.spatialEntities.map((entity) => entity.id === 'entity-a' ? { ...entity, transformOwner: 'simulation' as const } : entity),
+    }
+    const scene = sceneService()
+    const commands = composeSceneContextCommandsV4({ project: ownedBySimulation, interaction, scene, prompt: { requestText: vi.fn(async () => 'unused') }, presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() } })
+    expect(commandById(commands, 'scene.pose.paste')).toMatchObject({ enabled: false, disabledReason: 'The selected Object Pose is not manually owned.' })
+    expect(commandById(commands, 'scene.pose.reset')).toMatchObject({ enabled: false, disabledReason: 'The selected Object Pose is not manually owned.' })
+    await expect(commandById(commands, 'scene.pose.paste').execute()).rejects.toThrow('compatible Scene item')
+    await expect(commandById(commands, 'scene.pose.reset').execute()).rejects.toThrow('compatible Scene item')
+    expect(scene.setSpatialEntityLocalPose).not.toHaveBeenCalled()
+  })
+
+  it('preserves selection when a hide rejects and routes every inspector/base entry to its exact owner', async () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    const rejected = sceneService()
+    vi.mocked(rejected.setPersistedVisibility).mockRejectedValueOnce(new Error('reject'))
+    const openRobotBase = vi.fn()
+    const openInspector = vi.fn()
+    const commands = composeSceneContextCommandsV4({ project, interaction, scene: rejected, prompt: { requestText: vi.fn(async () => 'unused') }, presentation: { openRobotBase, openInspector } })
+    interaction.getState().select({ kind: 'robot', robotId: 'robot-1' })
+    await expect(commandById(commands, 'scene.visibility.toggle').execute()).rejects.toThrow('reject')
+    expect(interaction.getState().selection).toEqual({ kind: 'robot', robotId: 'robot-1' })
+    await commandById(commands, 'robot.base.edit').execute()
+    await commandById(commands, 'robot.mount.edit').execute()
+    await commandById(commands, 'robot.jog.open').execute()
+    interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
+    await commandById(commands, 'scene.pose.edit').execute()
+    await commandById(commands, 'scene.status.edit').execute()
+    expect(openRobotBase).toHaveBeenNthCalledWith(1, 'robot-1')
+    expect(openRobotBase).toHaveBeenNthCalledWith(2, 'robot-1')
+    expect(openInspector.mock.calls.map(([request]) => request)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ section: 'joints' }), expect.objectContaining({ section: 'pose' }), expect.objectContaining({ section: 'numericStatus' }),
+    ]))
   })
 })

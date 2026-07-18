@@ -74,7 +74,7 @@ export function resolveSceneContextTargetV4(
     case 'robot-link': {
       const robot = project.robots.find(({ id }) => id === selection.robotId)
       const definition = robot === undefined ? undefined : project.robotDefinitions.find(({ id }) => id === robot.definitionId)
-      return robot === undefined || definition?.links.every(({ id }) => id !== selection.linkId)
+      return robot === undefined || definition === undefined || !definition.links.some(({ id }) => id === selection.linkId)
         ? stale(selection) : { kind: 'robot-link', selection, robot }
     }
     case 'spatial-entity': {
@@ -92,7 +92,7 @@ export function resolveSceneContextTargetV4(
     case 'robot-frame': {
       const robot = project.robots.find(({ id }) => id === selection.robotId)
       const definition = robot === undefined ? undefined : project.robotDefinitions.find(({ id }) => id === robot.definitionId)
-      return robot === undefined || definition?.frames.every(({ id }) => id !== selection.frameId)
+      return robot === undefined || definition === undefined || !definition.frames.some(({ id }) => id === selection.frameId)
         ? stale(selection) : { kind: 'robot-frame', selection, robot }
     }
     case 'entity-frame': {
@@ -191,6 +191,21 @@ function placementFrame(project: WorkcellProjectV4): FrameIdV4 | null {
     ?? null
 }
 
+function canCreateModelV4(target: SceneContextTargetV4): boolean {
+  return target.kind !== 'stale'
+}
+
+function creationDisabledReasonV4(
+  target: SceneContextTargetV4,
+  requiresPlacementFrame: boolean,
+  project: WorkcellProjectV4,
+): string | undefined {
+  if (!canCreateModelV4(target)) return 'Select a compatible Scene item.'
+  return requiresPlacementFrame && placementFrame(project) === null
+    ? 'No MCP or World placement Frame is available.'
+    : undefined
+}
+
 function definition(
   id: typeof SCENE_CONTEXT_COMMAND_IDS_V4[number],
   label: string,
@@ -220,29 +235,33 @@ export function composeSceneContextCommandsV4(
   const commands: AppCommandV4[] = [
     definition('model.add.box', 'Add Box', 'model', {
       kind: 'action', visible: true,
-      get enabled() { return placementFrame(options.project) !== null },
-      get disabledReason() { return placementFrame(options.project) === null ? 'No MCP or World placement Frame is available.' : undefined },
+      get enabled() { return creationDisabledReasonV4(liveTarget(options), true, options.project) === undefined },
+      get disabledReason() { return creationDisabledReasonV4(liveTarget(options), true, options.project) },
       async execute() {
+        if (!canCreateModelV4(liveTarget(options))) unavailable()
         const parentFrameId = placementFrame(options.project)
-        if (parentFrameId === null) unavailable()
+        if (parentFrameId === null) throw new Error('No MCP or World placement Frame is available.')
         const target = liveTarget(options)
         await options.scene.createBox({ name: 'Box', parentFrameId, localPose: IDENTITY_POSE_V4, dimensionsM: [0.1, 0.1, 0.1], color: '#38BDF8', groupId: target.kind === 'scene-group' ? target.group.id : null })
       },
     }),
     definition('model.add.cylinder', 'Add Cylinder', 'model', {
       kind: 'action', visible: true,
-      get enabled() { return placementFrame(options.project) !== null },
-      get disabledReason() { return placementFrame(options.project) === null ? 'No MCP or World placement Frame is available.' : undefined },
+      get enabled() { return creationDisabledReasonV4(liveTarget(options), true, options.project) === undefined },
+      get disabledReason() { return creationDisabledReasonV4(liveTarget(options), true, options.project) },
       async execute() {
+        if (!canCreateModelV4(liveTarget(options))) unavailable()
         const parentFrameId = placementFrame(options.project)
-        if (parentFrameId === null) unavailable()
+        if (parentFrameId === null) throw new Error('No MCP or World placement Frame is available.')
         const target = liveTarget(options)
         await options.scene.createCylinder({ name: 'Cylinder', parentFrameId, localPose: IDENTITY_POSE_V4, radiusM: 0.05, heightM: 0.1, color: '#38BDF8', groupId: target.kind === 'scene-group' ? target.group.id : null })
       },
     }),
     definition('model.add.group', 'Add Group', 'model', {
-      kind: 'action', visible: true, enabled: true,
-      async execute() { const target = liveTarget(options); await options.scene.createGroup('Group', target.kind === 'scene-group' ? target.group.id : null) },
+      kind: 'action', visible: true,
+      get enabled() { return creationDisabledReasonV4(liveTarget(options), false, options.project) === undefined },
+      get disabledReason() { return creationDisabledReasonV4(liveTarget(options), false, options.project) },
+      async execute() { const target = liveTarget(options); if (!canCreateModelV4(target)) unavailable(); await options.scene.createGroup('Group', target.kind === 'scene-group' ? target.group.id : null) },
     }),
     withCompatibility(definition('scene.rename', 'Rename', 'home', {
       kind: 'action', visible: true, enabled: false,

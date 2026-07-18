@@ -46,7 +46,7 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
     scene: {
       createBox: vi.fn(async () => 'box'), createCylinder: vi.fn(async () => 'cylinder'), createGroup: vi.fn(async () => 'group'), rename: vi.fn(async () => undefined), setPersistedVisibility: vi.fn(async () => undefined), setSpatialEntityLocalPose: vi.fn(async () => undefined), setSpatialEntityGroup: vi.fn(async () => undefined), setRobotBase: vi.fn(async () => undefined), setSelectedToolFrames: vi.fn(async () => undefined), setSceneFrameLocalPose: vi.fn(async () => undefined), setMovingFrame: vi.fn(async () => undefined), setNumericStatus: vi.fn(async () => undefined), setStatusOverlayVisible: vi.fn(async () => undefined), reparentGroup: vi.fn(async () => undefined), ungroup: vi.fn(async () => undefined), deleteSpatialEntity: vi.fn(async () => undefined), deleteGroupAndContents: vi.fn(async () => undefined),
     },
-    jobs: { createJob: vi.fn(async () => 'job-new'), renameJob: vi.fn(async () => undefined), duplicateJob: vi.fn(async () => 'job-copy'), deleteJob: vi.fn(async () => undefined), saveJointPose: vi.fn(async () => undefined), addActionReference: vi.fn(async () => undefined), moveStep: vi.fn(async () => undefined), deleteStep: vi.fn(async () => undefined), setJointPoseSpeed: vi.fn(async () => undefined) },
+    jobs: { createJob: vi.fn(async () => 'job-new'), renameJob: vi.fn(async () => undefined), duplicateJob: vi.fn(async () => 'job-1'), deleteJob: vi.fn(async () => undefined), saveJointPose: vi.fn(async () => undefined), addActionReference: vi.fn(async () => undefined), moveStep: vi.fn(async () => undefined), deleteStep: vi.fn(async () => undefined), setJointPoseSpeed: vi.fn(async () => undefined) },
     viewportPreferences: createViewportPreferenceStoreV4(null),
     projectFiles: { pickProject: vi.fn(async () => null), downloadProject: vi.fn() },
     robotOperator: { canHome: vi.fn(() => true), home: vi.fn(), setGripper: vi.fn(), canSavePose: vi.fn(() => true), savePose: vi.fn(async () => undefined) },
@@ -64,6 +64,24 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
 }
 
 describe('composeAppCommandsV4', () => {
+  it('declares the complete ordered one-level placement table and immutable Context tuples', () => {
+    const ids = Object.fromEntries(Object.entries(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).map(([section, entries]) => [section, entries.map(({ commandId }) => commandId)]))
+    expect(ids).toEqual({
+      project: ['project.new', 'project.save', 'project.import', 'project.export', 'project.sample.dual'],
+      home: ['view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'scene.showAll', 'scene.delete', 'robot.home', 'robot.gripper.open', 'robot.gripper.close'],
+      model: ['model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'],
+      job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'],
+      simulation: ['job.start', 'job.cancel', 'view.timeline.open', 'collision.validate', 'view.collision.open'],
+      connectivity: ['connectivity.mode.off', 'connectivity.mode.server', 'connectivity.details.open'],
+      view: ['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset', 'view.theme.system', 'view.theme.light', 'view.theme.dark', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp', 'view.home', 'view.fitAll', 'view.focusSelection', 'view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom'],
+      help: ['help.controls', 'help.stepImport', 'help.opcUaMapping', 'help.about'],
+    })
+    expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.project.at(-1)).toMatchObject({ submenu: { id: 'project.samples', label: 'Samples' } })
+    expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.view.find(({ commandId }) => commandId === 'view.theme.system')).toMatchObject({ submenu: { id: 'view.theme', label: 'Theme' } })
+    expect(() => (APP_COMMAND_PLACEMENTS_BY_SECTION_V4.project as unknown as object[]).push({})).toThrow()
+    expect(() => (APP_CONTEXT_COMMAND_IDS_V4.robot as unknown as string[]).push('bad')).toThrow()
+  })
+
   it('exposes the approved placement and context tuples without duplicate definitions', () => {
     const composed = context()
     const registry = composeAppCommandsV4(composed)
@@ -88,6 +106,27 @@ describe('composeAppCommandsV4', () => {
     expect(composed.robotOperator.home).toHaveBeenCalledWith('robot-1')
     expect(composed.jobOperator.start).toHaveBeenCalledWith('robot-1', 'job-1')
     expect(composed.jobOperator.cancel).toHaveBeenCalledWith('robot-1')
+  })
+
+  it('uses exact live gripper, Job authoring, and missing-or-foreign Job gates', async () => {
+    const composed = context()
+    const registry = composeAppCommandsV4(composed)
+    await registry.get('robot.gripper.open')!.execute()
+    await registry.get('robot.gripper.close')!.execute()
+    await registry.get('job.pose.save')!.execute()
+    await registry.get('job.rename')!.execute()
+    await registry.get('job.duplicate')!.execute()
+    await registry.get('job.delete')!.execute()
+    expect(composed.robotOperator.setGripper).toHaveBeenNthCalledWith(1, 'robot-1', 'OPEN')
+    expect(composed.robotOperator.setGripper).toHaveBeenNthCalledWith(2, 'robot-1', 'CLOSED')
+    expect(composed.robotOperator.savePose).toHaveBeenCalledWith('robot-1', 'job-1')
+    expect(composed.jobs.renameJob).toHaveBeenCalledWith('job-1', 'Job')
+    expect(composed.jobs.duplicateJob).toHaveBeenCalledWith('job-1')
+    expect(composed.jobs.deleteJob).toHaveBeenCalledWith('job-1')
+    composed.interaction.getState().selectJob('robot-1', null)
+    expect(registry.get('job.start')).toMatchObject({ enabled: false, disabledReason: 'No active Job for the active Robot.' })
+    composed.interaction.setState({ selectedJobIdsByRobotId: new Map([['robot-1', 'foreign-job']]) })
+    expect(registry.get('job.rename')).toMatchObject({ enabled: false, disabledReason: 'No active Job for the active Robot.' })
   })
 
   it('routes checked state and project cancellation to one exact port call', async () => {
@@ -118,6 +157,22 @@ describe('composeAppCommandsV4', () => {
     expect(registry.get('model.importRobotStep')).toBeNull()
   })
 
+  it('uses canonical command metadata and propagates focus and collision rejection', async () => {
+    const composed = context()
+    const rejected = new Error('collision rejected')
+    vi.mocked(composed.collision.validate).mockRejectedValueOnce(rejected)
+    vi.mocked(composed.camera.canFocusSelection).mockReturnValue(false)
+    const registry = composeAppCommandsV4(composed)
+    expect(registry.get('project.save')).toMatchObject({ section: 'project', kind: 'action', shortcut: 'Ctrl+S' })
+    expect(registry.get('scene.visibility.toggle')).toMatchObject({ section: 'home', kind: 'toggle' })
+    expect(registry.get('scene.delete')).toMatchObject({ section: 'home', destructive: true })
+    expect(registry.get('job.delete')).toMatchObject({ section: 'job', destructive: true })
+    expect(registry.get('connectivity.mode.off')).toMatchObject({ kind: 'radio', groupId: 'connectivity.runtime-mode', checked: true })
+    expect(registry.get('view.theme.system')).toMatchObject({ kind: 'radio', groupId: 'view.theme' })
+    expect(registry.get('view.focusSelection')).toMatchObject({ enabled: false, disabledReason: 'Select a focusable Scene item.', shortcut: 'F' })
+    await expect(registry.get('collision.validate')!.execute()).rejects.toBe(rejected)
+  })
+
   it('disables snapshot-backed project commands while busy or recovery is required', () => {
     const initialBusy = context()
     const busy = { ...initialBusy, projectState: { ...initialBusy.projectState, status: 'saving' as const } }
@@ -126,5 +181,15 @@ describe('composeAppCommandsV4', () => {
     const initialRecovery = context()
     const recovery = { ...initialRecovery, projectState: { ...initialRecovery.projectState, status: 'recovery-required' as const } }
     expect(composeAppCommandsV4(recovery).get('project.import')).toMatchObject({ enabled: false, disabledReason: 'Reload is required before Project commands can run.' })
+  })
+
+  it('keeps an existing registry on its snapshot until a replacement context is composed', () => {
+    const original = context()
+    const firstRegistry = composeAppCommandsV4(original)
+    const replacementProject = { ...original.project, opcUa: { ...original.project.opcUa, mode: 'server' as const } }
+    const replacement = { ...original, project: replacementProject, projectState: { ...original.projectState, activeProject: replacementProject } }
+    const replacementRegistry = composeAppCommandsV4(replacement)
+    expect(firstRegistry.get('connectivity.mode.server')).toMatchObject({ checked: false })
+    expect(replacementRegistry.get('connectivity.mode.server')).toMatchObject({ checked: true })
   })
 })
