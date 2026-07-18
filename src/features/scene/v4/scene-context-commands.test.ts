@@ -79,6 +79,10 @@ describe('scene context commands', () => {
     const twoDefinitions = { ...project, robotDefinitions: [...project.robotDefinitions, secondDefinition] }
     expect(resolveSceneContextTargetV4(twoDefinitions, twoDefinitions.revisionId, { kind: 'robot-link', robotId: 'robot-1', linkId: 'other-link' })).toMatchObject({ kind: 'stale' })
     expect(resolveSceneContextTargetV4(twoDefinitions, twoDefinitions.revisionId, { kind: 'robot-frame', robotId: 'robot-1', frameId: 'other-frame' })).toMatchObject({ kind: 'stale' })
+    expect(resolveSceneContextTargetV4(project, project.revisionId, { kind: 'spatial-entity', entityId: 'removed-object' })).toMatchObject({ kind: 'stale' })
+    expect(resolveSceneContextTargetV4(project, project.revisionId, { kind: 'scene-group', groupId: 'removed-group' })).toMatchObject({ kind: 'stale' })
+    expect(resolveSceneContextTargetV4(project, project.revisionId, { kind: 'scene-frame', frameId: 'removed-frame' })).toMatchObject({ kind: 'stale' })
+    expect(resolveSceneContextTargetV4(project, project.revisionId, { kind: 'entity-frame', entityId: 'entity-b', frameId: 'moving-a' })).toMatchObject({ kind: 'stale' })
   })
 
   it('returns the approved ordered context IDs without mutable array leakage', () => {
@@ -214,6 +218,20 @@ describe('scene context commands', () => {
     expect(commandById(commands, 'scene.pose.edit').visible).toBe(false)
   })
 
+  it('rejects a required blank prompt before rename service dispatch', async () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
+    const scene = sceneService()
+    const commands = composeSceneContextCommandsV4({
+      project, interaction, scene, prompt: { requestText: vi.fn(async () => { throw new Error('Name is required.') }) },
+      presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() },
+    })
+    await expect(commandById(commands, 'scene.rename').execute()).rejects.toThrow('Name is required.')
+    expect(scene.rename).not.toHaveBeenCalled()
+  })
+
   it('uses exact live clipboard, persisted visibility, and group deletion targets', async () => {
     const project = projectWithTargets()
     const interaction = createInteractionStoreV4()
@@ -239,10 +257,11 @@ describe('scene context commands', () => {
     const interaction = createInteractionStoreV4()
     interaction.getState().replaceProject(project)
     interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
-    const copied = { positionM: [3, 2, 1] as [number, number, number], quaternion: [0, 0, 0, 1] as [number, number, number, number] }
-    interaction.getState().copyTransform(copied)
-    copied.positionM[0] = 99
-    expect(interaction.getState().transformClipboard?.positionM).toEqual([3, 2, 1])
+    const source = project.spatialEntities.find((entity) => entity.id === 'entity-a')!
+    const copyCommands = composeSceneContextCommandsV4({ project, interaction, scene: sceneService(), prompt: { requestText: vi.fn(async () => 'unused') }, presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() } })
+    await commandById(copyCommands, 'scene.pose.copy').execute()
+    ;(source.localPose.positionM as unknown as number[])[0] = 99
+    expect(interaction.getState().transformClipboard?.positionM).toEqual([1, 0, 0])
     const ownedBySimulation = {
       ...project,
       spatialEntities: project.spatialEntities.map((entity) => entity.id === 'entity-a' ? { ...entity, transformOwner: 'simulation' as const } : entity),
@@ -254,6 +273,25 @@ describe('scene context commands', () => {
     await expect(commandById(commands, 'scene.pose.paste').execute()).rejects.toThrow('compatible Scene item')
     await expect(commandById(commands, 'scene.pose.reset').execute()).rejects.toThrow('compatible Scene item')
     expect(scene.setSpatialEntityLocalPose).not.toHaveBeenCalled()
+  })
+
+  it('dispatches exact manual Object paste/reset and distinguishes ungroup from grouped Object removal', async () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    const scene = sceneService()
+    interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
+    interaction.getState().copyTransform({ positionM: [4, 5, 6], quaternion: [0, 0, 0, 1] })
+    const commands = composeSceneContextCommandsV4({ project, interaction, scene, prompt: { requestText: vi.fn(async () => 'unused') }, presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() } })
+    await commandById(commands, 'scene.pose.paste').execute()
+    await commandById(commands, 'scene.pose.reset').execute()
+    await commandById(commands, 'scene.group.remove').execute()
+    expect(scene.setSpatialEntityLocalPose).toHaveBeenNthCalledWith(1, 'entity-a', expect.objectContaining({ positionM: [4, 5, 6] }))
+    expect(scene.setSpatialEntityLocalPose).toHaveBeenNthCalledWith(2, 'entity-a', expect.objectContaining({ positionM: [0, 0, 0] }))
+    expect(scene.setSpatialEntityGroup).toHaveBeenCalledWith('entity-a', null)
+    interaction.getState().select({ kind: 'scene-group', groupId: 'group-a' })
+    await commandById(commands, 'scene.group.remove').execute()
+    expect(scene.ungroup).toHaveBeenCalledWith('group-a')
   })
 
   it('preserves selection when a hide rejects and routes every inspector/base entry to its exact owner', async () => {
@@ -279,5 +317,17 @@ describe('scene context commands', () => {
     expect(openInspector.mock.calls.map(([request]) => request)).toEqual(expect.arrayContaining([
       expect.objectContaining({ section: 'joints' }), expect.objectContaining({ section: 'pose' }), expect.objectContaining({ section: 'numericStatus' }),
     ]))
+  })
+
+  it('clears exactly the hidden selection only after successful persisted visibility write', async () => {
+    const project = projectWithTargets()
+    const interaction = createInteractionStoreV4()
+    interaction.getState().replaceProject(project)
+    interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
+    const scene = sceneService()
+    const commands = composeSceneContextCommandsV4({ project, interaction, scene, prompt: { requestText: vi.fn(async () => 'unused') }, presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() } })
+    await commandById(commands, 'scene.visibility.toggle').execute()
+    expect(scene.setPersistedVisibility).toHaveBeenCalledWith({ kind: 'spatial-entity', entityId: 'entity-a' }, false)
+    expect(interaction.getState().selection).toBeNull()
   })
 })

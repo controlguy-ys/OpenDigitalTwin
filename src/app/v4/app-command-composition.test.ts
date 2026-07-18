@@ -19,7 +19,11 @@ function projectWithJob(): WorkcellProjectV4 {
   const project = makeMinimalWorkcellProjectV4()
   return {
     ...project,
-    jobs: [{ id: 'job-1', name: 'Job 1', robotId: 'robot-1', steps: [] }],
+    robots: [...project.robots, { ...project.robots[0]!, id: 'robot-2', name: 'Robot 2' }],
+    jobs: [
+      { id: 'job-1', name: 'Job 1', robotId: 'robot-1', steps: [] },
+      { id: 'job-2', name: 'Job 2', robotId: 'robot-2', steps: [] },
+    ],
   }
 }
 
@@ -92,7 +96,18 @@ describe('composeAppCommandsV4', () => {
     expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.project.map(({ commandId }) => commandId)).toEqual([
       'project.new', 'project.save', 'project.import', 'project.export', 'project.sample.dual',
     ])
-    expect(registry.get('job.start')).toBe(registry.get('job.start'))
+    const allReferencedIds = [
+      ...Object.values(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).flatMap((entries) => entries.map(({ commandId }) => commandId)),
+      ...APP_QUICK_ACTION_IDS_V4,
+      ...Object.values(APP_CONTEXT_COMMAND_IDS_V4).flatMap((ids) => ids),
+    ]
+    const uniqueIds = [...new Set(allReferencedIds.filter((id) => id !== 'help.opcUaMapping'))]
+    const resolved = uniqueIds.map((id) => [id, registry.get(id)] as const)
+    expect(resolved.every(([, entry]) => entry !== null)).toBe(true)
+    expect(new Set(resolved.map(([, entry]) => entry)).size).toBe(uniqueIds.length)
+    for (const [id, entry] of resolved) {
+      if (entry!.visible) expect(registry.list(entry!.section).find((candidate) => candidate.id === id)).toBe(entry)
+    }
     expect(registry.get('job.pause')).toBeNull()
     expect(registry.get('help.opcUaMapping')).toBeNull()
   })
@@ -129,6 +144,62 @@ describe('composeAppCommandsV4', () => {
     expect(registry.get('job.rename')).toMatchObject({ enabled: false, disabledReason: 'No active Job for the active Robot.' })
   })
 
+  it('retargets every Robot and Job command to the live second pair and preserves it across Object selection', async () => {
+    const project = projectWithJob()
+    const objectProject = {
+      ...project,
+      spatialEntities: [{
+        id: 'object-1', name: 'Object', geometry: { kind: 'box' as const, dimensionsM: [1, 1, 1] as [number, number, number], color: '#123456' as const },
+        parentFrameId: 'world', localPose: { positionM: [0, 0, 0] as [number, number, number], quaternion: [0, 0, 0, 1] as [number, number, number, number] }, visible: true, groupId: null, removable: true, transformOwner: 'manual' as const,
+        numericStatus: { value: 0, sourceOwnership: 'manual' as const, overlay: { visible: true, frameId: null } }, graspable: false, graspFrames: [], movingFrames: [],
+      }],
+    }
+    const composed = context(objectProject)
+    const registry = composeAppCommandsV4(composed)
+    composed.interaction.getState().activateRobot('robot-2')
+    composed.interaction.getState().selectJob('robot-2', 'job-2')
+    composed.interaction.getState().select({ kind: 'spatial-entity', entityId: 'object-1' })
+    await registry.get('robot.home')!.execute()
+    await registry.get('robot.gripper.open')!.execute()
+    await registry.get('job.pose.save')!.execute()
+    await registry.get('job.start')!.execute()
+    await registry.get('job.cancel')!.execute()
+    await registry.get('job.rename')!.execute()
+    expect(composed.robotOperator.home).toHaveBeenCalledWith('robot-2')
+    expect(composed.robotOperator.setGripper).toHaveBeenCalledWith('robot-2', 'OPEN')
+    expect(composed.robotOperator.savePose).toHaveBeenCalledWith('robot-2', 'job-2')
+    expect(composed.jobOperator.start).toHaveBeenCalledWith('robot-2', 'job-2')
+    expect(composed.jobOperator.cancel).toHaveBeenCalledWith('robot-2')
+    expect(composed.jobs.renameJob).toHaveBeenCalledWith('job-2', 'Job')
+    expect(composed.interaction.getState()).toMatchObject({ activeRobotId: 'robot-2', selection: { kind: 'spatial-entity', entityId: 'object-1' } })
+    expect(composed.interaction.getState().selectedJobIdsByRobotId.get('robot-2')).toBe('job-2')
+  })
+
+  it('selects returned duplicate/new jobs and does not mutate services for cancellation or required prompt failure', async () => {
+    const composed = context()
+    const registry = composeAppCommandsV4(composed)
+    const withDuplicate = { ...composed.project, jobs: [...composed.project.jobs, { id: 'job-copy', name: 'Copy', robotId: 'robot-1', steps: [] }] }
+    vi.mocked(composed.jobs.duplicateJob).mockImplementation(async () => {
+      composed.interaction.getState().replaceProject(withDuplicate)
+      return 'job-copy'
+    })
+    await registry.get('job.duplicate')!.execute()
+    expect(composed.interaction.getState().selectedJobIdsByRobotId.get('robot-1')).toBe('job-copy')
+    const withNew = { ...withDuplicate, jobs: [...withDuplicate.jobs, { id: 'job-new', name: 'Job', robotId: 'robot-1', steps: [] }] }
+    vi.mocked(composed.jobs.createJob).mockImplementation(async () => {
+      composed.interaction.getState().replaceProject(withNew)
+      return 'job-new'
+    })
+    await registry.get('job.new')!.execute()
+    expect(composed.interaction.getState().selectedJobIdsByRobotId.get('robot-1')).toBe('job-new')
+    vi.mocked(composed.prompt.requestText).mockResolvedValueOnce(null)
+    await expect(registry.get('job.new')!.execute()).resolves.toBe('cancelled')
+    expect(composed.jobs.createJob).toHaveBeenCalledTimes(1)
+    vi.mocked(composed.prompt.requestText).mockRejectedValueOnce(new Error('Job name is required.'))
+    await expect(registry.get('job.new')!.execute()).rejects.toThrow('Job name is required.')
+    expect(composed.jobs.createJob).toHaveBeenCalledTimes(1)
+  })
+
   it('routes checked state and project cancellation to one exact port call', async () => {
     const composed = context()
     const registry = composeAppCommandsV4(composed)
@@ -138,6 +209,26 @@ describe('composeAppCommandsV4', () => {
     expect(composed.actions.project.importProject).toHaveBeenCalledTimes(1)
     expect(composed.viewportPreferences.getState().layers.grid).toBe(false)
     expect(composed.actions.connectivity.setMode).toHaveBeenCalledWith('server')
+  })
+
+  it('routes every Project action once, leaves projectFiles untouched, and preserves action rejection', async () => {
+    const composed = context()
+    const registry = composeAppCommandsV4(composed)
+    await registry.get('project.new')!.execute()
+    await registry.get('project.save')!.execute()
+    await registry.get('project.import')!.execute()
+    await registry.get('project.export')!.execute()
+    await registry.get('project.sample.dual')!.execute()
+    expect(composed.actions.project.newProject).toHaveBeenCalledTimes(1)
+    expect(composed.actions.project.saveProject).toHaveBeenCalledTimes(1)
+    expect(composed.actions.project.importProject).toHaveBeenCalledTimes(1)
+    expect(composed.actions.project.exportProject).toHaveBeenCalledTimes(1)
+    expect(composed.actions.project.loadDualRobotSample).toHaveBeenCalledTimes(1)
+    expect(composed.projectFiles.pickProject).not.toHaveBeenCalled()
+    expect(composed.projectFiles.downloadProject).not.toHaveBeenCalled()
+    const failure = new Error('export failed')
+    vi.mocked(composed.actions.project.exportProject).mockRejectedValueOnce(failure)
+    await expect(registry.get('project.export')!.execute()).rejects.toBe(failure)
   })
 
   it('uses live shell, camera, collision, and Help ports without capability placeholders', async () => {
@@ -155,6 +246,40 @@ describe('composeAppCommandsV4', () => {
     expect(composed.help.open).toHaveBeenCalledWith('controls')
     expect(registry.get('connectivity.mode.client')).toBeNull()
     expect(registry.get('model.importRobotStep')).toBeNull()
+  })
+
+  it('routes all remaining shell, view, connectivity, presentation, and available Help actions exactly once', async () => {
+    const composed = context()
+    const registry = composeAppCommandsV4(composed)
+    for (const id of ['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset', 'view.theme.system', 'view.theme.light', 'view.theme.dark', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp', 'view.home', 'view.fitAll', 'view.focusSelection', 'view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom', 'view.timeline.open', 'connectivity.mode.off', 'connectivity.mode.server', 'connectivity.details.open', 'help.controls', 'help.stepImport', 'help.about'] as const) {
+      await registry.get(id)!.execute()
+    }
+    composed.interaction.getState().select({ kind: 'scene-frame', frameId: 'mcp' })
+    await registry.get('view.collision.open')!.execute()
+    expect(composed.shellLayoutController.getState().preferences.theme).toBe('dark')
+    expect(Object.values(composed.viewportPreferences.getState().layers).every((visible) => visible === false)).toBe(true)
+    expect(composed.camera.home).toHaveBeenCalledTimes(1)
+    expect(composed.camera.fitAll).toHaveBeenCalledTimes(1)
+    expect(composed.camera.focusSelection).toHaveBeenCalledTimes(1)
+    expect(composed.camera.setStandardView).toHaveBeenCalledTimes(7)
+    expect(composed.actions.presentation.openTimeline).toHaveBeenCalledTimes(1)
+    expect(composed.actions.presentation.openCollision).toHaveBeenCalledWith({ kind: 'scene-frame', frameId: 'mcp' })
+    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(1, 'off')
+    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(2, 'server')
+    expect(composed.actions.presentation.openGatewayDetails).toHaveBeenCalledTimes(1)
+    expect(composed.help.open).toHaveBeenCalledWith('controls')
+    expect(composed.help.open).toHaveBeenCalledWith('stepImport')
+    expect(composed.help.open).toHaveBeenCalledWith('about')
+  })
+
+  it('disables collision validation and rejects stale focus without dispatching camera movement', async () => {
+    const composed = context()
+    const registry = composeAppCommandsV4(composed)
+    vi.mocked(composed.collision.getState).mockReturnValue({ projectRevisionId: composed.project.revisionId, pending: false, canValidate: false, error: null, result: null })
+    expect(registry.get('collision.validate')).toMatchObject({ enabled: false, disabledReason: 'Collision validation is unavailable while a Job is running or no visible Geometry exists.' })
+    vi.mocked(composed.camera.canFocusSelection).mockReturnValue(false)
+    expect(() => registry.get('view.focusSelection')!.execute()).toThrow('Select a focusable Scene item.')
+    expect(composed.camera.focusSelection).not.toHaveBeenCalled()
   })
 
   it('uses canonical command metadata and propagates focus and collision rejection', async () => {
@@ -181,6 +306,12 @@ describe('composeAppCommandsV4', () => {
     const initialRecovery = context()
     const recovery = { ...initialRecovery, projectState: { ...initialRecovery.projectState, status: 'recovery-required' as const } }
     expect(composeAppCommandsV4(recovery).get('project.import')).toMatchObject({ enabled: false, disabledReason: 'Reload is required before Project commands can run.' })
+    const initialEmpty = context()
+    const noActive = { ...initialEmpty, projectState: { ...initialEmpty.projectState, activeProject: null } }
+    const noActiveRegistry = composeAppCommandsV4(noActive)
+    expect(noActiveRegistry.get('project.save')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
+    expect(noActiveRegistry.get('project.export')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
+    expect(noActiveRegistry.get('project.sample.dual')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
   })
 
   it('keeps an existing registry on its snapshot until a replacement context is composed', () => {
