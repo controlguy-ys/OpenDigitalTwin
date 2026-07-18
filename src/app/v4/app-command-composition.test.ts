@@ -376,6 +376,83 @@ describe('composeAppCommandsV4', () => {
     ])
   })
 
+  it('projects every registered fixture command to its literal id, label, and canonical section', () => {
+    const registry = composeAppCommandsV4(context())
+    const expected = [
+      { id: 'project.new', label: 'New Project', section: 'project' },
+      { id: 'project.save', label: 'Save Project', section: 'project' },
+      { id: 'project.import', label: 'Import Project', section: 'project' },
+      { id: 'project.export', label: 'Export Project', section: 'project' },
+      { id: 'project.sample.dual', label: 'Dual-Robot Sample', section: 'project' },
+      { id: 'scene.rename', label: 'Rename', section: 'home' },
+      { id: 'scene.pose.copy', label: 'Copy Pose', section: 'home' },
+      { id: 'scene.pose.paste', label: 'Paste Pose', section: 'home' },
+      { id: 'scene.pose.reset', label: 'Reset Pose', section: 'home' },
+      { id: 'scene.visibility.toggle', label: 'Hide', section: 'home' },
+      { id: 'scene.isolate', label: 'Isolate', section: 'home' },
+      { id: 'scene.showAll', label: 'Show All', section: 'home' },
+      { id: 'scene.delete', label: 'Delete', section: 'home' },
+      { id: 'robot.jog.open', label: 'Joint Jog', section: 'home' },
+      { id: 'robot.home', label: 'Robot Home', section: 'home' },
+      { id: 'robot.gripper.open', label: 'Open Gripper', section: 'home' },
+      { id: 'robot.gripper.close', label: 'Close Gripper', section: 'home' },
+      { id: 'model.add.box', label: 'Add Box', section: 'model' },
+      { id: 'model.add.cylinder', label: 'Add Cylinder', section: 'model' },
+      { id: 'model.add.group', label: 'Add Group', section: 'model' },
+      { id: 'scene.group.move', label: 'Move to Group', section: 'model' },
+      { id: 'scene.group.remove', label: 'Remove from Group', section: 'model' },
+      { id: 'robot.base.edit', label: 'Edit Robot Base', section: 'model' },
+      { id: 'robot.mount.edit', label: 'Edit Robot Mount', section: 'model' },
+      { id: 'scene.pose.edit', label: 'XYZRPY', section: 'model' },
+      { id: 'scene.parent.edit', label: 'Parent', section: 'model' },
+      { id: 'scene.status.edit', label: 'Numeric Status', section: 'model' },
+      { id: 'job.new', label: 'New Job', section: 'job' },
+      { id: 'job.pose.save', label: 'Save Current Pose', section: 'job' },
+      { id: 'job.start', label: 'Start Job', section: 'job' },
+      { id: 'job.cancel', label: 'Cancel Active Robot Job', section: 'job' },
+      { id: 'job.rename', label: 'Rename Job', section: 'job' },
+      { id: 'job.duplicate', label: 'Duplicate Job', section: 'job' },
+      { id: 'job.delete', label: 'Delete Job', section: 'job' },
+      { id: 'view.timeline.open', label: 'Open Timeline', section: 'job' },
+      { id: 'collision.validate', label: 'Validate Geometry Collision', section: 'simulation' },
+      { id: 'view.collision.open', label: 'Open Collision Findings', section: 'simulation' },
+      { id: 'connectivity.mode.off', label: 'Off', section: 'connectivity' },
+      { id: 'connectivity.mode.server', label: 'OPC UA Server', section: 'connectivity' },
+      { id: 'connectivity.details.open', label: 'Gateway Details', section: 'connectivity' },
+      { id: 'view.sidebar', label: 'Scene and Job Sidebar', section: 'view' },
+      { id: 'view.inspector', label: 'Inspector', section: 'view' },
+      { id: 'view.bottom', label: 'Bottom Workspace', section: 'view' },
+      { id: 'view.ribbon', label: 'Ribbon Lite', section: 'view' },
+      { id: 'view.layout.reset', label: 'Reset Layout', section: 'view' },
+      { id: 'view.theme.system', label: 'System', section: 'view' },
+      { id: 'view.theme.light', label: 'Light', section: 'view' },
+      { id: 'view.theme.dark', label: 'Dark', section: 'view' },
+      { id: 'view.layer.grid', label: 'Grid', section: 'view' },
+      { id: 'view.layer.world', label: 'World Frame', section: 'view' },
+      { id: 'view.layer.mcp', label: 'MCP Frame', section: 'view' },
+      { id: 'view.layer.base', label: 'Robot Base Frame', section: 'view' },
+      { id: 'view.layer.tcp', label: 'TCP Frame', section: 'view' },
+      { id: 'view.home', label: 'Home View', section: 'view' },
+      { id: 'view.fitAll', label: 'Fit All', section: 'view' },
+      { id: 'view.focusSelection', label: 'Focus Selection', section: 'view' },
+      { id: 'view.orientation.isometric', label: 'Isometric', section: 'view' },
+      { id: 'view.orientation.top', label: 'Top', section: 'view' },
+      { id: 'view.orientation.front', label: 'Front', section: 'view' },
+      { id: 'view.orientation.right', label: 'Right', section: 'view' },
+      { id: 'view.orientation.back', label: 'Back', section: 'view' },
+      { id: 'view.orientation.left', label: 'Left', section: 'view' },
+      { id: 'view.orientation.bottom', label: 'Bottom', section: 'view' },
+      { id: 'help.controls', label: 'Keyboard and Mouse Controls', section: 'help' },
+      { id: 'help.stepImport', label: 'STEP Import Guide', section: 'help' },
+      { id: 'help.about', label: 'About', section: 'help' },
+    ] as const
+    expect(expected.map(({ id }) => registry.get(id)).every((command) => command !== null)).toBe(true)
+    expect(expected.map(({ id }) => {
+      const command = registry.get(id)!
+      return { id: command.id, label: command.label, section: command.section }
+    })).toEqual(expected)
+  })
+
   it('disables snapshot-backed project commands while busy or recovery is required', () => {
     const initialBusy = context()
     const busy = { ...initialBusy, projectState: { ...initialBusy.projectState, status: 'saving' as const } }
