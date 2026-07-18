@@ -27,6 +27,9 @@ import { App } from './App.js'
 const observed = vi.hoisted(() => ({
   canvas: null as null | Record<string, unknown>,
   collision: null as null | Record<string, unknown>,
+  inspector: null as null | Record<string, unknown>,
+  jobList: null as null | Record<string, unknown>,
+  timeline: null as null | Record<string, unknown>,
   contextMenuProjectRevisions: [] as string[],
   shellControlsDisabled: [] as boolean[],
 }))
@@ -103,19 +106,24 @@ vi.mock('../features/scene/v4/SceneExplorer.js', () => ({
 }))
 
 vi.mock('../features/scene/v4/SceneEntityInspector.js', () => ({
-  SceneEntityInspectorV4: () => (
-    <section data-testid="scene-inspector-v4">Inspector V4</section>
-  ),
+  SceneEntityInspectorV4: (props: Record<string, unknown>) => {
+    observed.inspector = props
+    return <section data-testid="scene-inspector-v4">Inspector V4</section>
+  },
 }))
 
 vi.mock('../features/jobs/v4/RobotJobList.js', () => ({
-  RobotJobListV4: () => (
-    <section data-testid="robot-jobs-v4">Robot Jobs V4</section>
-  ),
+  RobotJobListV4: (props: Record<string, unknown>) => {
+    observed.jobList = props
+    return <section data-testid="robot-jobs-v4">Robot Jobs V4</section>
+  },
 }))
 
 vi.mock('../features/ui/v4/Timeline.js', () => ({
-  TimelineV4: () => <section data-testid="timeline-v4">Timeline V4</section>,
+  TimelineV4: (props: Record<string, unknown>) => {
+    observed.timeline = props
+    return <section data-testid="timeline-v4">Timeline V4</section>
+  },
 }))
 
 vi.mock('../features/scene/v4/SceneContextMenu.js', () => ({
@@ -247,6 +255,9 @@ describe('App Project V4 production composition', () => {
   beforeEach(() => {
     observed.canvas = null
     observed.collision = null
+    observed.inspector = null
+    observed.jobList = null
+    observed.timeline = null
     observed.contextMenuProjectRevisions.length = 0
     observed.shellControlsDisabled.length = 0
     localStorage.clear()
@@ -325,6 +336,23 @@ describe('App Project V4 production composition', () => {
     expect(screen.queryByText('Import STEP')).not.toBeInTheDocument()
     expect(screen.queryByText('Import Robot')).not.toBeInTheDocument()
     expect(screen.queryByText('Linear Axis')).not.toBeInTheDocument()
+  })
+
+  it('keeps Job surfaces on the Active Robot when Scene selection is non-Robot', async () => {
+    const resources = resourcesForTest()
+    render(<App gatewayPublisher={null} resources={resources} />)
+
+    act(() => {
+      resources.interaction.getState().select({ kind: 'scene-frame', frameId: 'world' })
+    })
+
+    await waitFor(() => {
+      expect(observed.jobList?.selectedRobotId).toBe('robot-default')
+      expect(observed.timeline?.robotId).toBe('robot-default')
+      expect(observed.inspector?.selectedJobId).toBe(
+        resources.interaction.getState().selectedJobIdsByRobotId.get('robot-default') ?? null,
+      )
+    })
   })
 
   it('projects live Joint writes into the Scene Canvas runtime', async () => {

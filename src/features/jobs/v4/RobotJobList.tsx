@@ -15,7 +15,6 @@ import {
 } from '../../../core/project-v4/index.js'
 import type { StoreApi } from 'zustand/vanilla'
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
-import { robotIdFromSceneSelectionV4 } from '../../interaction/v4/scene-selection.js'
 import type { JobCommandServiceV4 } from './job-command-service.js'
 import type {
   JobRuntimeStoreV4,
@@ -163,15 +162,15 @@ export function RobotJobListV4({
     }
   }
 
-  const isCurrentRobotSelection = (robotId: RobotIdV4): boolean => {
+  const isCurrentActiveRobot = (robotId: RobotIdV4): boolean => {
     const state = interaction.getState()
     return state.projectRevisionId === project.revisionId
-      && robotIdFromSceneSelectionV4(state.selection) === robotId
+      && state.activeRobotId === robotId
   }
 
   const canAuthorRobot = (robotId: RobotIdV4, jobId?: RobotJobIdV4): boolean => {
     const currentRuntime = currentRobotRuntimeV4(jobs, project.revisionId, robotId)
-    return isCurrentRobotSelection(robotId)
+    return isCurrentActiveRobot(robotId)
       && currentRuntime !== null
       && currentRuntime.state !== 'RUNNING'
       && (jobId === undefined || project.jobs.some((job) => (
@@ -233,6 +232,11 @@ export function RobotJobListV4({
   }, [focusedJobId, project.revisionId, reconciledFocusedJobId, robotJobs])
 
   const openContextMenu = (jobId: RobotJobIdV4, returnFocus: HTMLElement): void => {
+    const job = robotJobs.find((candidate) => candidate.id === jobId)
+    if (job === undefined) return
+    reportSyncFailure(() => {
+      interaction.getState().selectJob(job.robotId, job.id)
+    })
     contextReturnFocusRef.current = returnFocus
     setContextJobId(jobId)
   }
@@ -317,7 +321,7 @@ export function RobotJobListV4({
             if (
               selectedRobotId === null
               || pendingCommandTokenRef.current !== null
-              || !isCurrentRobotSelection(selectedRobotId)
+              || !isCurrentActiveRobot(selectedRobotId)
             ) return
             const currentRuntime = currentRobotRuntimeV4(
               jobs,
@@ -342,7 +346,7 @@ export function RobotJobListV4({
           aria-label="Cancel Job"
           disabled={selectedRobotId === null || !running}
           onClick={() => {
-            if (selectedRobotId === null || !isCurrentRobotSelection(selectedRobotId)) return
+            if (selectedRobotId === null || !isCurrentActiveRobot(selectedRobotId)) return
             const currentRuntime = currentRobotRuntimeV4(
               jobs,
               project.revisionId,
@@ -367,7 +371,7 @@ export function RobotJobListV4({
               <button
                 key={robot.id}
                 onClick={() => reportSyncFailure(() => {
-                  interaction.getState().select({ kind: 'robot', robotId: robot.id })
+                  interaction.getState().activateRobot(robot.id)
                 })}
                 type="button"
               >

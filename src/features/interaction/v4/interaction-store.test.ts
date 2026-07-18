@@ -14,6 +14,7 @@ import type {
   SceneSelectionTargetV4,
 } from './scene-selection'
 import {
+  activeJobIdV4,
   createInteractionStoreV4,
   type InteractionCheckpointV4,
 } from './interaction-store'
@@ -163,6 +164,8 @@ describe('interaction store V4 publication', () => {
 
     expect(store.getState().projectRevisionId).toBe('one')
     expect(store.getState().selection).toEqual({ kind: 'robot', robotId: 'robot-b' })
+    expect(store.getState().activeRobotId).toBe('robot-b')
+    expect(activeJobIdV4(store.getState())).toBe('job-b-2')
     expect([...store.getState().selectedJobIdsByRobotId]).toEqual([
       ['robot-b', 'job-b-2'],
       ['robot-a', 'job-a-1'],
@@ -174,6 +177,8 @@ describe('interaction store V4 publication', () => {
     store.getState().replaceProject(projectWithRobots({ revisionId: 'zero', robotIds: [] }))
 
     expect(store.getState().selection).toBeNull()
+    expect(store.getState().activeRobotId).toBeNull()
+    expect(activeJobIdV4(store.getState())).toBeNull()
     expect(store.getState().selectedJobIdsByRobotId.size).toBe(0)
   })
 
@@ -187,9 +192,73 @@ describe('interaction store V4 publication', () => {
     store.getState().replaceProject(projectWithRobots({ revisionId: 'eight', robotIds, jobs }))
 
     expect(store.getState().selection).toEqual({ kind: 'robot', robotId: 'robot-1' })
+    expect(store.getState().activeRobotId).toBe('robot-1')
     expect([...store.getState().selectedJobIdsByRobotId]).toEqual(robotIds.map(
       (robotId, index) => [robotId, `job-${index + 1}-first`],
     ))
+  })
+
+  it('keeps the Active Robot independent from spatial selection and follows Robot owners', () => {
+    const project = validateWorkcellProjectV4({
+      ...projectWithVisibilityGraph('active-selection'),
+      jobs: [
+        job('job-free', 'robot-free'),
+        job('job-mounted', 'robot-mounted'),
+      ],
+    })
+    const store = createInteractionStoreV4()
+    store.getState().replaceProject(project)
+
+    expect(store.getState().activeRobotId).toBe('robot-free')
+    store.getState().select({ kind: 'spatial-entity', entityId: 'track-entity' })
+    expect(store.getState().activeRobotId).toBe('robot-free')
+
+    store.getState().select({ kind: 'robot-link', robotId: 'robot-mounted', linkId: 'L0' })
+    expect(store.getState().activeRobotId).toBe('robot-mounted')
+    store.getState().select({ kind: 'robot-frame', robotId: 'robot-free', frameId: 'TCP' })
+    expect(store.getState().activeRobotId).toBe('robot-free')
+
+    store.getState().selectJob('robot-mounted', 'job-mounted')
+    expect(store.getState().activeRobotId).toBe('robot-mounted')
+    expect(activeJobIdV4(store.getState())).toBe('job-mounted')
+    expectProjectError(
+      () => store.getState().activateRobot('missing'),
+      'ROBOT_ACTIVE_SELECTION_INVALID',
+    )
+  })
+
+  it('reconciles Active Robot and Job identities across Project replacement', () => {
+    const first = projectWithRobots({
+      revisionId: 'active-reconcile-a',
+      robotIds: ['robot-a', 'robot-b', 'robot-c'],
+      jobs: [job('job-b', 'robot-b'), job('job-c', 'robot-c')],
+    })
+    const store = createInteractionStoreV4()
+    store.getState().replaceProject(first)
+    store.getState().selectJob('robot-b', 'job-b')
+
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-reconcile-b',
+      robotIds: ['robot-a', 'robot-c'],
+      jobs: [job('job-c', 'robot-c')],
+    }))
+    expect(store.getState().activeRobotId).toBe('robot-c')
+    expect(activeJobIdV4(store.getState())).toBe('job-c')
+
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-reconcile-c',
+      robotIds: ['robot-a'],
+      jobs: [],
+    }))
+    expect(store.getState().activeRobotId).toBe('robot-a')
+    expect(activeJobIdV4(store.getState())).toBeNull()
+
+    store.getState().replaceProject(projectWithRobots({
+      revisionId: 'active-reconcile-d',
+      robotIds: [],
+    }))
+    expect(store.getState().activeRobotId).toBeNull()
+    expect(activeJobIdV4(store.getState())).toBeNull()
   })
 
   it('publishes runtime-readonly Job selection maps', () => {
@@ -498,8 +567,8 @@ describe('interaction store V4 checkpoint ownership', () => {
   it('restores visible state and closure identity indexes atomically', () => {
     const projectA = projectWithRobots({
       revisionId: 'checkpoint-a',
-      robotIds: ['robot-a'],
-      jobs: [job('job-a', 'robot-a')],
+      robotIds: ['robot-a', 'robot-b'],
+      jobs: [job('job-a', 'robot-a'), job('job-b', 'robot-b')],
     })
     const projectB = projectWithRobots({
       revisionId: 'checkpoint-b',
@@ -508,7 +577,7 @@ describe('interaction store V4 checkpoint ownership', () => {
     })
     const store = createInteractionStoreV4()
     store.getState().replaceProject(projectA)
-    store.getState().selectJob('robot-a', null)
+    store.getState().selectJob('robot-b', null)
     const checkpoint = store.getState().captureCheckpoint()
     store.getState().replaceProject(projectB)
     store.getState().selectJob('robot-b', null)
@@ -516,15 +585,16 @@ describe('interaction store V4 checkpoint ownership', () => {
     store.getState().restoreCheckpoint(checkpoint)
 
     expect(store.getState().projectRevisionId).toBe('checkpoint-a')
-    expect(store.getState().selectedJobIdsByRobotId.get('robot-a')).toBeNull()
+    expect(store.getState().activeRobotId).toBe('robot-b')
+    expect(store.getState().selectedJobIdsByRobotId.get('robot-b')).toBeNull()
     expect(() => store.getState().select({ kind: 'robot', robotId: 'robot-a' })).not.toThrow()
     expect(() => store.getState().selectJob('robot-a', 'job-a')).not.toThrow()
     expectProjectError(
-      () => store.getState().select({ kind: 'robot', robotId: 'robot-b' }),
+      () => store.getState().select({ kind: 'robot', robotId: 'robot-c' }),
       'SCENE_SELECTION_TARGET_INVALID',
     )
     expectProjectError(
-      () => store.getState().selectJob('robot-b', 'job-b'),
+      () => store.getState().selectJob('robot-c', 'job-b'),
       'ROBOT_JOB_SELECTION_INVALID',
     )
   })

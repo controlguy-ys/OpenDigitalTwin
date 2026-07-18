@@ -26,6 +26,7 @@ export interface InteractionCheckpointV4 {
 export interface InteractionStoreStateV4 {
   readonly projectRevisionId: RevisionIdV4 | null
   readonly selection: SceneSelectionV4
+  readonly activeRobotId: RobotIdV4 | null
   readonly isolation: SceneIsolationTargetV4 | null
   readonly transformClipboard: RigidTransformV4 | null
   readonly selectedJobIdsByRobotId: ReadonlyMap<RobotIdV4, RobotJobIdV4 | null>
@@ -38,6 +39,7 @@ export interface InteractionStoreStateV4 {
   showAll(): void
   copyTransform(pose: RigidTransformV4): void
   clearTransformClipboard(): void
+  activateRobot(robotId: RobotIdV4): void
   selectJob(robotId: RobotIdV4, jobId: RobotJobIdV4 | null): void
   captureCheckpoint(): InteractionCheckpointV4
   restoreCheckpoint(checkpoint: InteractionCheckpointV4): void
@@ -52,6 +54,7 @@ interface RobotSelectionFactsV4 {
 
 interface InteractionProjectContextV4 {
   readonly robotFactsById: ReadonlyMap<RobotIdV4, RobotSelectionFactsV4>
+  readonly robotIdsInProjectOrder: readonly RobotIdV4[]
   readonly spatialEntityIds: ReadonlySet<SpatialEntityIdV4>
   readonly sceneFrameIds: ReadonlySet<FrameIdV4>
   readonly sceneGroupIds: ReadonlySet<SceneGroupIdV4>
@@ -63,6 +66,17 @@ interface InteractionProjectContextV4 {
   >
   readonly jobOwnerById: ReadonlyMap<RobotJobIdV4, RobotIdV4>
   readonly jobIdsByRobotId: ReadonlyMap<RobotIdV4, readonly RobotJobIdV4[]>
+}
+
+export function activeJobIdV4(
+  state: Pick<
+    InteractionStoreStateV4,
+    'activeRobotId' | 'selectedJobIdsByRobotId'
+  >,
+): RobotJobIdV4 | null {
+  return state.activeRobotId === null
+    ? null
+    : state.selectedJobIdsByRobotId.get(state.activeRobotId) ?? null
 }
 
 interface CapturedInteractionV4 {
@@ -163,6 +177,7 @@ function buildInteractionContextV4(
 
   return {
     robotFactsById,
+    robotIdsInProjectOrder: Object.freeze(project.robots.map(({ id }) => id)),
     spatialEntityIds: new Set(project.spatialEntities.map(({ id }) => id)),
     sceneFrameIds: new Set(project.scene.frames.map(({ id }) => id)),
     sceneGroupIds,
@@ -174,6 +189,35 @@ function buildInteractionContextV4(
       ([robotId, ids]) => [robotId, Object.freeze([...ids])] as const,
     )),
   }
+}
+
+function activeRobotIdForSelectionV4(selection: SceneSelectionV4): RobotIdV4 | null {
+  switch (selection?.kind) {
+    case 'robot':
+    case 'robot-link':
+    case 'robot-frame':
+      return selection.robotId
+    default:
+      return null
+  }
+}
+
+function nextActiveRobotIdV4(
+  currentActiveRobotId: RobotIdV4 | null,
+  priorContext: InteractionProjectContextV4 | null,
+  candidateContext: InteractionProjectContextV4,
+  firstRobotId: RobotIdV4 | null,
+): RobotIdV4 | null {
+  if (currentActiveRobotId !== null && candidateContext.robotFactsById.has(currentActiveRobotId)) {
+    return currentActiveRobotId
+  }
+  if (currentActiveRobotId !== null && priorContext !== null) {
+    const activeIndex = priorContext.robotIdsInProjectOrder.indexOf(currentActiveRobotId)
+    for (const robotId of priorContext.robotIdsInProjectOrder.slice(activeIndex + 1)) {
+      if (candidateContext.robotFactsById.has(robotId)) return robotId
+    }
+  }
+  return firstRobotId
 }
 
 function selectionExistsV4(
@@ -309,6 +353,7 @@ export function createInteractionStoreV4(): StoreApi<InteractionStoreStateV4> {
   return createStore<InteractionStoreStateV4>()((set, get) => ({
     projectRevisionId: null,
     selection: null,
+    activeRobotId: null,
     isolation: null,
     transformClipboard: null,
     selectedJobIdsByRobotId: EMPTY_JOB_SELECTIONS_V4,
@@ -316,17 +361,24 @@ export function createInteractionStoreV4(): StoreApi<InteractionStoreStateV4> {
       const validated = validateWorkcellProjectV4(project)
       const candidateContext = buildInteractionContextV4(validated)
       const current = get()
+      const priorContext = context
       const firstPublication = context === null
-      const firstRobotId = validated.robots[0]?.id
+      const firstRobotId = validated.robots[0]?.id ?? null
       const selection = firstPublication
-        ? firstRobotId === undefined
+        ? firstRobotId === null
           ? null
           : frozenSelectionV4({ kind: 'robot', robotId: firstRobotId })
         : current.selection === null || selectionExistsV4(candidateContext, current.selection)
           ? current.selection
-          : firstRobotId === undefined
+          : firstRobotId === null
             ? null
             : frozenSelectionV4({ kind: 'robot', robotId: firstRobotId })
+      const activeRobotId = nextActiveRobotIdV4(
+        current.activeRobotId,
+        priorContext,
+        candidateContext,
+        firstRobotId,
+      )
 
       const jobSelections: Array<readonly [RobotIdV4, RobotJobIdV4 | null]> = []
       for (const robot of validated.robots) {
@@ -351,6 +403,7 @@ export function createInteractionStoreV4(): StoreApi<InteractionStoreStateV4> {
         ...current,
         projectRevisionId: validated.revisionId,
         selection,
+        activeRobotId,
         isolation: null,
         transformClipboard: null,
         selectedJobIdsByRobotId: readonlyMapV4(jobSelections),
@@ -363,6 +416,7 @@ export function createInteractionStoreV4(): StoreApi<InteractionStoreStateV4> {
       set((state) => ({
         ...state,
         selection: selection === null ? null : frozenSelectionV4(selection),
+        activeRobotId: activeRobotIdForSelectionV4(selection) ?? state.activeRobotId,
       }), true)
     },
     clearSelection: () => {
@@ -393,6 +447,16 @@ export function createInteractionStoreV4(): StoreApi<InteractionStoreStateV4> {
     clearTransformClipboard: () => {
       set((state) => ({ ...state, transformClipboard: null }), true)
     },
+    activateRobot: (robotId) => {
+      if (context === null || !context.robotFactsById.has(robotId)) {
+        interactionFailure(
+          'ROBOT_ACTIVE_SELECTION_INVALID',
+          '$.activeRobotId',
+          `Robot ${robotId} does not exist in the published Project.`,
+        )
+      }
+      set((state) => ({ ...state, activeRobotId: robotId }), true)
+    },
     selectJob: (robotId, jobId) => {
       if (context === null || !context.robotFactsById.has(robotId)) {
         interactionFailure(
@@ -410,6 +474,7 @@ export function createInteractionStoreV4(): StoreApi<InteractionStoreStateV4> {
       }
       set((state) => ({
         ...state,
+        activeRobotId: robotId,
         selectedJobIdsByRobotId: readonlyMapV4([...state.selectedJobIdsByRobotId].map(
           ([id, selectedJobId]) => [id, id === robotId ? jobId : selectedJobId] as const,
         )),

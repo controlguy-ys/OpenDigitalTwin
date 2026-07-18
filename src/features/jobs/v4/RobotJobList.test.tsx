@@ -118,7 +118,7 @@ afterEach(() => {
 })
 
 describe('RobotJobListV4', () => {
-  it('offers explicit Robot activation when the selected Scene item is not a Robot', async () => {
+  it('offers explicit Active Robot activation when no Robot is available to the Job list', async () => {
     const user = userEvent.setup()
     const state = harness()
     render(
@@ -133,10 +133,26 @@ describe('RobotJobListV4', () => {
     expect(screen.getByText('Select a Robot to view its Jobs.')).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Control Robot Beta' }))
 
-    expect(state.interaction.getState().selection).toEqual({
-      kind: 'robot',
-      robotId: 'robot-B',
-    })
+    expect(state.interaction.getState().activeRobotId).toBe('robot-B')
+  })
+
+  it('activates a Job owner before opening its Job commands', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    render(
+      <RobotJobListV4
+        {...state}
+        commands={commandService()}
+        playback={playbackController()}
+        selectedRobotId="robot-B"
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Beta Job commands' }))
+
+    expect(state.interaction.getState().activeRobotId).toBe('robot-B')
+    expect(state.interaction.getState().selectedJobIdsByRobotId.get('robot-B')).toBe('job-B')
+    expect(screen.getByRole('menu', { name: 'Beta Job commands' })).toBeVisible()
   })
 
   it('shows only the selected Robot Jobs with total-step and Joint-Pose counts', () => {

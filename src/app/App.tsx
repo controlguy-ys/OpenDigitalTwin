@@ -17,10 +17,8 @@ import { CollisionPanelV4 } from '../features/collision/v4/CollisionPanel.js'
 import type {
   CollisionGeometryProxyV4,
 } from '../features/collision/v4/scene-entity-adapter-v4.js'
-import {
-  robotIdFromSceneSelectionV4,
-  type SceneSelectionTargetV4,
-} from '../features/interaction/v4/scene-selection.js'
+import { activeJobIdV4 } from '../features/interaction/v4/interaction-store.js'
+import type { SceneSelectionTargetV4 } from '../features/interaction/v4/scene-selection.js'
 import { RobotJobListV4 } from '../features/jobs/v4/RobotJobList.js'
 import {
   browserProjectResourcesV4,
@@ -518,13 +516,11 @@ export function App({
       request,
     })
   }
-  const selectedRobotId = robotIdFromSceneSelectionV4(interaction.selection)
-  const selectedJobId = selectedRobotId === null
+  const activeRobotId = interaction.activeRobotId
+  const activeJobId = activeJobIdV4(interaction)
+  const activeRobot = activeRobotId === null
     ? null
-    : interaction.selectedJobIdsByRobotId.get(selectedRobotId) ?? null
-  const selectedRobot = selectedRobotId === null
-    ? null
-    : project.robots.find((robot) => robot.id === selectedRobotId) ?? null
+    : project.robots.find((robot) => robot.id === activeRobotId) ?? null
   const placementFrameId = projectFrameIdV4('mcp', project.scene.frames)
     ?? projectFrameIdV4('world', project.scene.frames)
   if (placementFrameId === null) {
@@ -590,11 +586,11 @@ export function App({
               <TimelineV4
                 commands={resources.jobCommands}
                 disabled={controlsDisabled}
-                jobId={selectedJobId}
+                jobId={activeJobId}
                 jobs={resources.jobs}
                 playback={runtimeBundle.active.jobs.playback}
                 project={project}
-                robotId={selectedRobotId}
+                robotId={activeRobotId}
               />
             )}
           />
@@ -610,7 +606,7 @@ export function App({
             robots={resources.robots}
             runtime={sceneRuntime}
             sceneCommands={resources.sceneCommands}
-            selectedJobId={selectedJobId}
+            selectedJobId={activeJobId}
             selection={interaction.selection}
           />
         )}
@@ -621,7 +617,7 @@ export function App({
             jobs={resources.jobs}
             playback={runtimeBundle.active.jobs.playback}
             project={project}
-            selectedRobotId={selectedRobotId}
+            selectedRobotId={activeRobotId}
           />
         )}
         onCreateBox={() => {
@@ -658,7 +654,7 @@ export function App({
             store={resources.projectStore}
           />
         )}
-        robotSourceLabel={sourceLabelV4(selectedRobot?.jointSource ?? null)}
+        robotSourceLabel={sourceLabelV4(activeRobot?.jointSource ?? null)}
         viewport={(
           <>
             <SceneCanvasV4
