@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -16,7 +17,9 @@ import {
   Vector3,
 } from 'three'
 import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-support'
+import { validateWorkcellProjectV4 } from '../../../core/project-v4/validate'
 import type { SpatialEntityV4, WorkcellProjectV4 } from '../../../core/project-v4/types'
+import { createObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4'
 import { buildInitialRobotRuntimeStatesV4 } from '../../robot/v4/robot-runtime-registry'
 import {
   selectSceneRuntimeV4,
@@ -25,12 +28,18 @@ import {
   type SceneRuntimeSpatialEntityV4,
 } from './scene-runtime-selector'
 import {
+  resolveSpatialEntityWorldPoseV4,
   SpatialEntitySceneV4,
   type SpatialEntitySceneRegistrationV4,
 } from './SpatialEntityScene'
 
+const fiberCapture = vi.hoisted(() => ({
+  frame: null as (() => void) | null,
+}))
+
 vi.mock('@react-three/fiber', () => ({
   createPortal: (node: unknown) => node,
+  useFrame: (callback: () => void) => { fiberCapture.frame = callback },
 }))
 
 vi.mock('@react-three/drei/web/Html.js', () => ({
@@ -131,6 +140,121 @@ function spatialProject(): WorkcellProjectV4 {
         color: '#778899',
       }, 'hidden-group'),
     ],
+  }
+}
+
+const LIVE_REVISION = 'e'.repeat(64)
+
+function liveSpatialProject(): WorkcellProjectV4 {
+  const source = spatialProject()
+  const owner = 'opcua:endpoint-live' as const
+  const box = source.spatialEntities.find(({ id }) => id === 'box-entity')!
+  const frameId = 'box-entity-motion'
+  const target = { type: 'entity-frame' as const, entityId: box.id, frameId }
+  return validateWorkcellProjectV4({
+    ...source,
+    revisionId: LIVE_REVISION,
+    spatialEntities: [{
+      ...box,
+      parentFrameId: frameId,
+      localPose: { positionM: [0.25, 0, 0], quaternion: [0, 0, 0, 1] },
+      transformOwner: owner,
+      numericStatus: { ...box.numericStatus, sourceOwnership: owner },
+      movingFrames: [{
+        frameId,
+        name: 'Box live motion',
+        parentFrameId: 'world',
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+        sourceOwnership: owner,
+      }],
+    }],
+    opcUa: {
+      mode: 'client',
+      endpoints: [{
+        endpointId: 'endpoint-live',
+        name: 'Live',
+        endpointUrl: 'opc.tcp://127.0.0.1:4840',
+        enabled: true,
+        publishingIntervalMs: 100,
+        reconnectDelayMs: 1_000,
+      }],
+      mappings: [{
+        id: 'mapping-live-pose',
+        endpointId: 'endpoint-live',
+        direction: 'read',
+        publishingIntervalMs: 100,
+        coherenceGroupId: 'box-live-pose',
+        sourceOwnership: owner,
+        interpolationMode: 'shortest-quaternion',
+        coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw',
+        leaves: [
+          ['positionM', 0, 'X'], ['positionM', 1, 'Y'], ['positionM', 2, 'Z'],
+          ['rpyDegrees', 0, 'Roll'], ['rpyDegrees', 1, 'Pitch'], ['rpyDegrees', 2, 'Yaw'],
+        ].map(([root, index, suffix]) => ({
+          leafPath: [root as string, index as number],
+          nodeId: `ns=2;s=Box/${suffix}`,
+          projectTarget: target,
+          opcUaDataType: 'Double',
+          projectDataType: 'number',
+          scale: 1,
+          offset: 0,
+          unit: root === 'positionM' ? 'metre' : 'degree',
+          required: true,
+        })),
+      }, {
+        id: 'mapping-live-status',
+        endpointId: 'endpoint-live',
+        direction: 'read',
+        publishingIntervalMs: 100,
+        coherenceGroupId: null,
+        sourceOwnership: owner,
+        interpolationMode: 'none',
+        coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw',
+        leaves: [{
+          leafPath: [],
+          nodeId: 'ns=2;s=Box/Status',
+          projectTarget: { type: 'entity-status', entityId: box.id },
+          opcUaDataType: 'Double',
+          projectDataType: 'number',
+          scale: 1,
+          offset: 0,
+          unit: 'number',
+          required: true,
+        }],
+      }],
+      actionBindings: [],
+      bridgeRoutes: [],
+    },
+  })
+}
+
+function liveBatch(sequence: number, x: number, status = 42) {
+  return {
+    type: 'state-batch-v1' as const,
+    protocolVersion: 1 as const,
+    gatewayId: 'gateway-live',
+    projectId: 'project-v4',
+    configRevision: LIVE_REVISION,
+    endpointId: 'endpoint-live',
+    sequence,
+    sourceTimestampMs: 900 + sequence * 100,
+    publishedTimestampMs: 4_900 + sequence * 100,
+    originId: 'gateway-live:client',
+    values: [{
+      mappingId: 'mapping-live-pose',
+      coherenceGroupId: 'box-live-pose',
+      value: { positionM: [x, 0, 0], quaternion: [0, 0, 0, 1] },
+      unit: 'project-v4-z-up-metres-quaternion-xyzw',
+      quality: 'GOOD' as const,
+      statusCode: 'Good',
+    }, {
+      mappingId: 'mapping-live-status',
+      coherenceGroupId: null,
+      value: status,
+      unit: 'number',
+      quality: 'GOOD' as const,
+      statusCode: 'Good',
+    }],
   }
 }
 
@@ -963,5 +1087,61 @@ describe('SpatialEntitySceneV4', () => {
       expect(registration!.roots.get('box-entity')!.visible).toBe(false)
     })
     view.unmount()
+  })
+
+  it('renders and republishes live OPC UA Object pose, status, and collision data without rebuilding geometry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(5_000)
+    fiberCapture.frame = null
+    try {
+      const project = liveSpatialProject()
+      const sceneRuntime = runtimeFor(project)
+      const objectRuntime = createObjectRuntimeStateV4(project)
+      expect(objectRuntime.ingest(liveBatch(1, 1), 5_000)).toBe(true)
+      const resolved = resolveSpatialEntityWorldPoseV4(
+        project,
+        sceneRuntime,
+        project.spatialEntities[0]!,
+        objectRuntime,
+        5_000,
+      )
+      expect(resolved.positionM).toEqual([1.25, 0, 0])
+
+      let registration: SpatialEntitySceneRegistrationV4 | null = null
+      render(
+        <SpatialEntitySceneV4
+          objectRuntime={objectRuntime}
+          onRegister={(value) => { if (value !== null) registration = value }}
+          project={project}
+          sceneRuntime={sceneRuntime}
+        />,
+      )
+      await waitFor(() => expect(registration?.roots.size).toBe(1))
+      const root = registration!.roots.get('box-entity')!
+      const geometry = firstMesh(root).geometry
+      expect(root.position.x).toBeCloseTo(1.25)
+      expect(registration!.collisionProxies[0]!.entity.worldMatrix.slice(12, 15))
+        .toEqual([1.25, 0, 0])
+      expect(screen.getByRole('status', { name: 'box-entity numeric status' }))
+        .toHaveTextContent('42')
+
+      vi.setSystemTime(5_100)
+      expect(objectRuntime.ingest(liveBatch(2, 2, 43), 5_100)).toBe(true)
+      vi.setSystemTime(5_200)
+      expect(objectRuntime.ingest(liveBatch(3, 3, 44), 5_200)).toBe(true)
+      vi.setSystemTime(5_400)
+      act(() => { fiberCapture.frame?.() })
+
+      expect(root.position.x).toBeCloseTo(3.25)
+      await waitFor(() => {
+        expect(registration!.collisionProxies[0]!.entity.worldMatrix.slice(12, 15))
+          .toEqual([3.25, 0, 0])
+        expect(screen.getByRole('status', { name: 'box-entity numeric status' }))
+          .toHaveTextContent('44')
+      })
+      expect(firstMesh(root).geometry).toBe(geometry)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

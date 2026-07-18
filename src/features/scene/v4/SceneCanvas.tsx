@@ -21,6 +21,7 @@ import type { CoordinateDisplayStoreStateV4 } from '../../frames/v4/coordinate-d
 import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-store.js'
 import type { SceneSelectionTargetV4 } from '../../interaction/v4/scene-selection.js'
 import type { RobotDefinitionGeometryRepositoryV4 } from '../../robot/v4/robot-definition-geometry-repository.js'
+import type { ObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4.js'
 import { CoordinateFrameLayersV4 } from '../../viewport/v4/CoordinateFrameLayers.js'
 import { SelectedTcpFrameMarkerV4 } from '../../viewport/v4/SelectedTcpFrameMarker.js'
 import type { ViewportPreferenceStoreV4 } from '../../viewport/v4/viewport-preference-store.js'
@@ -83,6 +84,7 @@ export interface SceneCanvasPropsV4 {
     entityId: SpatialEntityIdV4,
     localPose: RigidTransformV4,
   ) => Promise<void>
+  readonly objectRuntime?: ObjectRuntimeStateV4 | null
 }
 
 interface RevisionRegistrationV4 {
@@ -105,6 +107,7 @@ export function SceneCanvasV4({
   onStatusChange,
   onRegistration,
   onCommitSpatialEntityLocalPose,
+  objectRuntime = null,
 }: SceneCanvasPropsV4): ReactNode {
   const selection = useStore(interaction, (state) => state.selection)
   const viewIsolation = useStore(interaction, (state) => state.isolation)
@@ -343,6 +346,7 @@ export function SceneCanvasV4({
                 }}
                 onDraggingChange={setTransformDragging}
                 onRegister={handleRegistration}
+                objectRuntime={objectRuntime}
                 project={project}
                 sceneRuntime={sceneRuntime}
                 selection={selection}
