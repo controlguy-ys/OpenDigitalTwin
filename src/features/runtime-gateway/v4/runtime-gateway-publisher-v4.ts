@@ -392,12 +392,19 @@ export function createRuntimeGatewayPublisherV4(
   const activateProject = (
     project: WorkcellProjectV4,
     signal?: AbortSignal,
-  ): Promise<RuntimeGatewayStatusV4> => enqueueCommand(async () => (
-    assertExpectedRevisionV4(
+  ): Promise<RuntimeGatewayStatusV4> => enqueueCommand(async () => {
+    const status = assertExpectedRevisionV4(
       await requestStatus('PUT', '/project', project, signal),
       project,
     )
-  ))
+    if (status.mode !== project.opcUa.mode) {
+      return gatewayFailureV4(
+        'RUNTIME_GATEWAY_MODE_MISMATCH',
+        `Runtime Gateway returned ${status.mode} for requested ${project.opcUa.mode} mode.`,
+      )
+    }
+    return status
+  })
 
   const drainState = (): void => {
     if (drainingState) return

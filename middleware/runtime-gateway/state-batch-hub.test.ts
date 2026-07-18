@@ -298,4 +298,82 @@ describe('StateBatchHubV1', () => {
     socket.complete()
     expect(socket.sentSequences()).toEqual([1, 10_000])
   })
+
+  it('replays the newest active-endpoint State snapshot when a browser attaches after subscription publication', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(1))
+    hub.publish(batch(2))
+
+    hub.attach(socket)
+
+    expect(socket.sentBatches()).toEqual([
+      expect.objectContaining({
+        endpointId: 'endpoint-test',
+        values: [expect.objectContaining({ mappingId: 'mapping-2' })],
+      }),
+    ])
+    expect(socket.sentSequences()).toEqual([1])
+  })
+
+  it('replays a reconnect snapshot with a fresh monotonic wire sequence', () => {
+    const hub = createStateBatchHubV1()
+    const first = new ControlledSocket()
+    const reconnected = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(1))
+    hub.attach(first)
+    first.complete()
+    first.emit('close')
+    hub.publish(batch(2))
+
+    hub.attach(reconnected)
+
+    expect(reconnected.sentBatches()[0]).toMatchObject({
+      sequence: 2,
+      values: [expect.objectContaining({ mappingId: 'mapping-2' })],
+    })
+  })
+
+  it('fences cached snapshots at revision activation so an attaching browser never receives a stale revision', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(1))
+    hub.activateRevision('project-next', 'b'.repeat(64))
+
+    hub.attach(socket)
+    expect(socket.sent).toEqual([])
+
+    hub.publish(batch(1, {
+      projectId: 'project-next',
+      configRevision: 'b'.repeat(64),
+      endpointId: 'endpoint-next',
+    }))
+    expect(socket.sentBatches()[0]).toMatchObject({
+      projectId: 'project-next',
+      configRevision: 'b'.repeat(64),
+      endpointId: 'endpoint-next',
+    })
+  })
+
+  it('replays each endpoint latest snapshot in deterministic order under bounded socket backpressure', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(1, { endpointId: 'endpoint-z', values: [mappedValue(10)] }))
+    hub.publish(batch(2, { endpointId: 'endpoint-a', values: [mappedValue(20)] }))
+
+    hub.attach(socket)
+    expect(socket.sentBatches()).toHaveLength(1)
+    expect(socket.sentBatches()[0]).toMatchObject({ endpointId: 'endpoint-a' })
+    expect(hub.queueDepth(socket)).toBe(2)
+    socket.complete()
+    expect(socket.sentBatches()).toHaveLength(2)
+    expect(socket.sentBatches()[1]).toMatchObject({ endpointId: 'endpoint-z' })
+    expect(socket.sent.every((payload) => (
+      new TextEncoder().encode(payload).byteLength <= MAX_RUNTIME_BATCH_BYTES_V1
+    ))).toBe(true)
+  })
 })

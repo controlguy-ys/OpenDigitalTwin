@@ -963,6 +963,112 @@ describe('SceneCommandServiceV4', () => {
       .toMatchObject({ endpointId: 'endpoint-shared', sourceOwnership: 'opcua:endpoint-shared' })
   })
 
+  it('does not retarget an Entity endpoint when an Action Binding and Bridge route consume it', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-shared', 'frame-object', 'mapping-object', 'endpoint-private',
+    ])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    const bound = harness.mutations.active
+    harness.mutations.active = validateWorkcellProjectV4({
+      ...bound,
+      actions: [{
+        id: 'action-gripper',
+        kind: 'set-gripper-state',
+        robotId: bound.robots[0]!.id,
+        state: 'OPEN',
+      }],
+      opcUa: {
+        ...bound.opcUa,
+        mode: 'bridge',
+        actionBindings: [{
+          id: 'binding-command',
+          endpointId: 'endpoint-shared',
+          nodeId: 'ns=2;s=Command.Open',
+          kind: 'action-execute',
+          actionId: 'action-gripper',
+          triggerMode: 'boolean-rising-edge',
+          integerCommandValue: null,
+        }],
+        bridgeRoutes: [{
+          id: 'route-object-command',
+          sourceChannelId: 'mapping-object',
+          destinationChannelId: 'binding-command',
+          direction: 'forward',
+          scale: 1,
+          offset: 0,
+          unit: 'number',
+          sourceOwnership: 'client',
+        }],
+      },
+    })
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object', { endpointUrl: 'opc.tcp://127.0.0.1:4841' }),
+    ))
+
+    expect(harness.mutations.active.opcUa.endpoints).toEqual([
+      expect.objectContaining({ endpointId: 'endpoint-shared', endpointUrl: 'opc.tcp://127.0.0.1:4840' }),
+      expect.objectContaining({ endpointId: 'endpoint-private', endpointUrl: 'opc.tcp://127.0.0.1:4841', enabled: true }),
+    ])
+    expect(harness.mutations.active.opcUa.actionBindings[0]?.endpointId).toBe('endpoint-shared')
+    expect(harness.mutations.active.opcUa.bridgeRoutes[0]).toMatchObject({
+      sourceChannelId: 'mapping-object', destinationChannelId: 'binding-command',
+    })
+    expect(harness.mutations.active.opcUa.mappings[0]).toMatchObject({
+      endpointId: 'endpoint-private', sourceOwnership: 'opcua:endpoint-private',
+    })
+  })
+
+  it('creates a private enabled endpoint instead of reviving a disabled matching URL used by another channel', async () => {
+    const source = authoredProject()
+    const project = validateWorkcellProjectV4({
+      ...source,
+      actions: [{
+        id: 'action-gripper',
+        kind: 'set-gripper-state',
+        robotId: source.robots[0]!.id,
+        state: 'OPEN',
+      }],
+      opcUa: {
+        mode: 'client',
+        endpoints: [{
+          endpointId: 'endpoint-disabled',
+          name: 'Disabled command endpoint',
+          endpointUrl: 'opc.tcp://127.0.0.1:4840',
+          enabled: false,
+          publishingIntervalMs: 100,
+          reconnectDelayMs: 1_000,
+        }],
+        mappings: [],
+        actionBindings: [{
+          id: 'binding-command',
+          endpointId: 'endpoint-disabled',
+          nodeId: 'ns=2;s=Command.Open',
+          kind: 'action-execute',
+          actionId: 'action-gripper',
+          triggerMode: 'boolean-rising-edge',
+          integerCommandValue: null,
+        }],
+        bridgeRoutes: [],
+      },
+    })
+    const harness = commandHarness(project, ['endpoint-private', 'frame-object', 'mapping-object'])
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+
+    expect(harness.mutations.active.opcUa.endpoints).toEqual([
+      expect.objectContaining({ endpointId: 'endpoint-disabled', enabled: false }),
+      expect.objectContaining({ endpointId: 'endpoint-private', enabled: true }),
+    ])
+    expect(harness.mutations.active.opcUa.actionBindings[0]?.endpointId).toBe('endpoint-disabled')
+    expect(harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object'))
+      .toMatchObject({ transformOwner: 'opcua:endpoint-private' })
+  })
+
   it('clears Status independently while retaining pose and retains configured Status through manual takeover', async () => {
     const harness = commandHarness(authoredProject(), [
       'endpoint-object', 'frame-object', 'mapping-object', 'mapping-status',

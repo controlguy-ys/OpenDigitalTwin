@@ -39,6 +39,8 @@ interface SocketStateV1 {
   transmitting: boolean
   // Depth is logical transmissions: one complete multipart send plus one newest pending update.
   pending: EncodedLogicalTransmissionV1 | null
+  // A bounded attach-time replay sends one latest snapshot per configured endpoint.
+  replay: EncodedLogicalTransmissionV1[]
   detached: boolean
 }
 
@@ -48,6 +50,7 @@ interface ActiveRevisionV1 {
 }
 
 const encoder = new TextEncoder()
+const MAX_REPLAY_ENDPOINTS_V1 = 8
 
 export class StateBatchHubErrorV1 extends Error {
   readonly code: string
@@ -211,6 +214,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
   const sockets = new Map<GatewayWebSocketV1, SocketStateV1>()
   const lastSourceSequenceByEndpoint = new Map<string, number>()
   const wireSequenceByEndpoint = new Map<string, number>()
+  const latestSnapshotChunksByEndpoint = new Map<string, readonly StateBatchV1[]>()
   let activeRevision: ActiveRevisionV1 | null = null
   let closed = false
 
@@ -218,6 +222,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     if (state.detached) return
     state.detached = true
     state.pending = null
+    state.replay = []
     state.transmitting = false
     sockets.delete(state.socket)
     state.socket.off('close', state.onClose)
@@ -241,11 +246,23 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
           return
         }
         state.transmitting = false
+        if (!sameRevisionV1(transmission, activeRevision)) {
+          const pending = state.pending
+          state.pending = null
+          if (pending !== null && sameRevisionV1(pending, activeRevision)) {
+            sendNext(state, pending)
+          }
+          return
+        }
         if (
-          sameRevisionV1(transmission, activeRevision)
-          && chunkIndex + 1 < transmission.chunks.length
+          chunkIndex + 1 < transmission.chunks.length
         ) {
           sendNext(state, transmission, chunkIndex + 1)
+          return
+        }
+        const replay = state.replay.shift()
+        if (replay !== undefined) {
+          sendNext(state, replay)
           return
         }
         const pending = state.pending
@@ -275,11 +292,37 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
       onError,
       transmitting: false,
       pending: null,
+      replay: [],
       detached: false,
     }
     sockets.set(socket, state)
     socket.on('close', onClose)
     socket.on('error', onError)
+    if (activeRevision !== null) {
+      const replay = [...latestSnapshotChunksByEndpoint.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([endpointId, cachedChunks]) => {
+          let nextWireSequence = (wireSequenceByEndpoint.get(endpointId) ?? 0) + 1
+          const chunks = cachedChunks.flatMap((cachedChunk) => {
+            const replayed = splitStateBatchesV1(
+              { ...cachedChunk, sequence: nextWireSequence },
+              nextWireSequence,
+            )
+            nextWireSequence = replayed.at(-1)!.sequence + 1
+            return replayed
+          })
+          chunks.forEach((chunk) => wireSequenceByEndpoint.set(chunk.endpointId, chunk.sequence))
+          return Object.freeze({
+            projectId: activeRevision!.projectId,
+            configRevision: activeRevision!.configRevision,
+            endpointId,
+            chunks: Object.freeze(chunks.map((chunk) => Object.freeze({ payload: JSON.stringify(chunk) }))),
+          })
+        })
+      const first = replay.shift()
+      state.replay = replay
+      if (first !== undefined) sendNext(state, first)
+    }
     return () => detachState(state)
   }
 
@@ -287,7 +330,11 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     activeRevision = Object.freeze({ projectId, configRevision })
     lastSourceSequenceByEndpoint.clear()
     wireSequenceByEndpoint.clear()
-    for (const state of sockets.values()) state.pending = null
+    latestSnapshotChunksByEndpoint.clear()
+    for (const state of sockets.values()) {
+      state.pending = null
+      state.replay = []
+    }
   }
 
   const publish = (untrustedBatch: StateBatchV1): void => {
@@ -299,6 +346,13 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     const previousSourceSequence = lastSourceSequenceByEndpoint.get(batch.endpointId)
     if (previousSourceSequence !== undefined && untrustedBatch.sequence <= previousSourceSequence) return
     lastSourceSequenceByEndpoint.set(batch.endpointId, untrustedBatch.sequence)
+    latestSnapshotChunksByEndpoint.delete(batch.endpointId)
+    latestSnapshotChunksByEndpoint.set(batch.endpointId, chunks)
+    if (latestSnapshotChunksByEndpoint.size > MAX_REPLAY_ENDPOINTS_V1) {
+      const oldestEndpointId = latestSnapshotChunksByEndpoint.keys().next().value as string | undefined
+      if (oldestEndpointId !== undefined) latestSnapshotChunksByEndpoint.delete(oldestEndpointId)
+    }
+    if (sockets.size === 0) return
     const encoded: EncodedLogicalTransmissionV1 = Object.freeze({
       projectId: batch.projectId,
       configRevision: batch.configRevision,
@@ -317,13 +371,16 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
   const queueDepth = (socket: GatewayWebSocketV1): number => {
     const state = sockets.get(socket)
     if (state === undefined) return 0
-    return (state.transmitting ? 1 : 0) + (state.pending === null ? 0 : 1)
+    return (state.transmitting ? 1 : 0)
+      + state.replay.length
+      + (state.pending === null ? 0 : 1)
   }
 
   const close = async (): Promise<void> => {
     if (closed) return
     closed = true
     activeRevision = null
+    latestSnapshotChunksByEndpoint.clear()
     for (const state of sockets.values()) {
       detachState(state)
       try {

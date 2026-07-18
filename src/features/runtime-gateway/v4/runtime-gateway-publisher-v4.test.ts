@@ -100,6 +100,10 @@ describe('RuntimeGatewayPublisherV4', () => {
       ...makeMinimalWorkcellProjectV4(),
       projectId: 'project-test-v4',
       revisionId: 'revision-test-v4',
+      opcUa: {
+        ...makeMinimalWorkcellProjectV4().opcUa,
+        mode: 'server' as const,
+      },
     }
     const fetchV4 = vi.fn<(
       input: string,
@@ -119,6 +123,25 @@ describe('RuntimeGatewayPublisherV4', () => {
     fetchV4.mockResolvedValueOnce(jsonResponse(status('revision-stale')))
     await expect(publisher.activateProject(project)).rejects.toMatchObject({
       code: 'RUNTIME_GATEWAY_REVISION_MISMATCH',
+    })
+  })
+
+  it('rejects a ready activation response whose mode differs from the requested Project mode', async () => {
+    const project = {
+      ...makeMinimalWorkcellProjectV4(),
+      projectId: 'project-test-v4',
+      revisionId: 'revision-test-v4',
+      opcUa: {
+        ...makeMinimalWorkcellProjectV4().opcUa,
+        mode: 'client' as const,
+      },
+    }
+    const publisher = createRuntimeGatewayPublisherV4({
+      fetch: vi.fn(async () => jsonResponse(status('revision-test-v4', 'server'))),
+    })
+
+    await expect(publisher.activateProject(project)).rejects.toMatchObject({
+      code: 'RUNTIME_GATEWAY_MODE_MISMATCH',
     })
   })
 

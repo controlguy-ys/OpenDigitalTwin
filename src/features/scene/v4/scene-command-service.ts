@@ -323,7 +323,20 @@ function endpointIsSharedOutsideEntity(
       (leaf.projectTarget.type === 'entity-frame' || leaf.projectTarget.type === 'entity-status')
       && leaf.projectTarget.entityId === entityId
     ))
-  ))
+  )) || project.opcUa.actionBindings.some((binding) => binding.endpointId === endpointId)
+    || (() => {
+      const channelIds = new Set<string>([
+        ...project.opcUa.mappings
+          .filter((mapping) => mapping.endpointId === endpointId)
+          .map((mapping) => mapping.id),
+        ...project.opcUa.actionBindings
+          .filter((binding) => binding.endpointId === endpointId)
+          .map((binding) => binding.id),
+      ])
+      return project.opcUa.bridgeRoutes.some((route) => (
+        channelIds.has(route.sourceChannelId) || channelIds.has(route.destinationChannelId)
+      ))
+    })()
 }
 
 function poseMappingLeaves(
@@ -754,7 +767,7 @@ export function createSceneCommandServiceV4(
             ? undefined
             : active.opcUa.endpoints.find(({ endpointId }) => endpointId === currentOwnerEndpointId)
           const matchingEndpoint = active.opcUa.endpoints.find((endpoint) => (
-            endpoint.endpointUrl === snapshot.endpointUrl
+            endpoint.endpointUrl === snapshot.endpointUrl && endpoint.enabled
           ))
           const currentEndpointIsShared = currentEndpoint !== undefined
             && endpointIsSharedOutsideEntity(active, currentEndpoint.endpointId, entity.id)
