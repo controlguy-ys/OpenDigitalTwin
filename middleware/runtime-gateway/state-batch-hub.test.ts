@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type { StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
+import {
+  MAX_RUNTIME_BATCH_BYTES_V1,
+  type StateBatchV1,
+} from '../../src/core/runtime-protocol/v1.js'
 import {
   createStateBatchHubV1,
   splitStateBatchesV1,
@@ -35,6 +38,18 @@ function batch(
     originId: 'gateway-test',
     values: [mappedValue(sequence)],
     ...overrides,
+  }
+}
+
+function batchAtExactEncodedSize(sequence: number, byteLength: number): StateBatchV1 {
+  const source = batch(sequence, {
+    values: [{ ...mappedValue(1), value: '' }, mappedValue(2)],
+  })
+  const padding = byteLength - new TextEncoder().encode(JSON.stringify(source)).byteLength
+  if (padding < 0) throw new Error('Requested batch size is below its fixed envelope.')
+  return {
+    ...source,
+    values: [{ ...source.values[0]!, value: 'x'.repeat(padding) }, source.values[1]!],
   }
 }
 
@@ -184,6 +199,40 @@ describe('StateBatchHubV1', () => {
     expect(hub.queueDepth(socket)).toBe(1)
     socket.complete()
     expect(hub.queueDepth(socket)).toBe(0)
+  })
+
+  it('resplits an exact-size source batch when its assigned wire sequence expands the envelope', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(socket)
+
+    // One source update uses ten 128-value chunks, leaving the endpoint at wire sequence 10.
+    hub.publish(batch(1, { values: Array.from({ length: 1_280 }, (_, index) => mappedValue(index)) }))
+    hub.publish(batchAtExactEncodedSize(2, MAX_RUNTIME_BATCH_BYTES_V1))
+
+    for (let index = 0; index < 10; index += 1) socket.complete()
+    socket.complete()
+
+    const finalPayloads = socket.sent.slice(10)
+    expect(finalPayloads).toHaveLength(2)
+    expect(finalPayloads.every((payload) => (
+      new TextEncoder().encode(payload).byteLength <= MAX_RUNTIME_BATCH_BYTES_V1
+    ))).toBe(true)
+    expect(new Set(socket.sentSequences()).size).toBe(socket.sent.length)
+  })
+
+  it('bounds split serialization work to one value encoding per source mapping', () => {
+    const stringify = vi.spyOn(JSON, 'stringify')
+    try {
+      splitStateBatchesV1(batch(1, {
+        values: Array.from({ length: 128 }, (_, index) => mappedValue(index)),
+      }))
+      // 128 mapped values, one empty-envelope measurement, and one validated final chunk.
+      expect(stringify.mock.calls.length).toBeLessThanOrEqual(130)
+    } finally {
+      stringify.mockRestore()
+    }
   })
 
   it('rejects delayed source sequence 2 after accepted sequence 3 so it cannot replace pending state', () => {

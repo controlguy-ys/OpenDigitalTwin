@@ -68,10 +68,6 @@ function sameRevisionV1(
     && batch.configRevision === active.configRevision
 }
 
-function encodedSizeV1(batch: StateBatchV1): number {
-  return encoder.encode(JSON.stringify(batch)).byteLength
-}
-
 function batchWithValuesV1(
   source: StateBatchV1,
   values: readonly RuntimeMappedValueV1[],
@@ -122,41 +118,90 @@ function oversizedGroupV1(reason: string): never {
   )
 }
 
+function encodedMappedValueBytesV1(value: RuntimeMappedValueV1): number {
+  return encoder.encode(JSON.stringify(value) ?? 'null').byteLength
+}
+
+function encodedValueListBytesV1(
+  values: readonly RuntimeMappedValueV1[],
+  encodedValueBytesByMappingId: ReadonlyMap<string, number>,
+): number {
+  return values.reduce(
+    (bytes, value) => bytes + encodedValueBytesByMappingId.get(value.mappingId)!,
+    Math.max(0, values.length - 1),
+  )
+}
+
 export function splitStateBatchesV1(
   source: StateBatchV1,
+  firstWireSequence = source.sequence,
 ): readonly StateBatchV1[] {
   if (!Array.isArray(source.values) || source.values.length === 0) {
     return Object.freeze([validateStateBatchV1(source)])
   }
   assertUniqueSourceMappingIdsV1(source.values)
 
+  const encodedValueBytesByMappingId = new Map(
+    source.values.map((value) => [value.mappingId, encodedMappedValueBytesV1(value)]),
+  )
+  const encodedEmptyBatchBytesBySequence = new Map<number, number>()
+  const encodedBatchBytesV1 = (
+    sequence: number,
+    valueBytes: number,
+  ): number => {
+    let emptyBatchBytes = encodedEmptyBatchBytesBySequence.get(sequence)
+    if (emptyBatchBytes === undefined) {
+      emptyBatchBytes = encoder.encode(JSON.stringify({ ...source, sequence, values: [] })).byteLength
+      encodedEmptyBatchBytesBySequence.set(sequence, emptyBatchBytes)
+    }
+    return emptyBatchBytes + valueBytes
+  }
+
   const chunks: StateBatchV1[] = []
   let pending: RuntimeMappedValueV1[] = []
+  let pendingValueBytes = 0
 
   const publishPending = (): void => {
     if (pending.length === 0) return
-    chunks.push(validateStateBatchV1(batchWithValuesV1(source, pending)))
+    const sequence = firstWireSequence + chunks.length
+    if (!Number.isSafeInteger(sequence)) {
+      throw new StateBatchHubErrorV1(
+        'RUNTIME_STATE_WIRE_SEQUENCE_EXHAUSTED',
+        `Endpoint ${source.endpointId} exhausted its wire sequence range.`,
+      )
+    }
+    chunks.push(validateStateBatchV1({ ...batchWithValuesV1(source, pending), sequence }))
     pending = []
+    pendingValueBytes = 0
   }
 
   for (const group of groupedValuesV1(source.values)) {
     if (group.length > MAX_RUNTIME_STATE_VALUES_V1) oversizedGroupV1('value limit')
-    const groupBatch = batchWithValuesV1(source, group)
-    if (encodedSizeV1(groupBatch) > MAX_RUNTIME_BATCH_BYTES_V1) {
+    const groupValueBytes = encodedValueListBytesV1(group, encodedValueBytesByMappingId)
+    const candidateValueBytes = pending.length === 0
+      ? groupValueBytes
+      : pendingValueBytes + 1 + groupValueBytes
+    const sequence = firstWireSequence + chunks.length
+    if (pending.length > 0 && (
+      pending.length + group.length > MAX_RUNTIME_STATE_VALUES_V1
+      || encodedBatchBytesV1(sequence, candidateValueBytes) > MAX_RUNTIME_BATCH_BYTES_V1
+    )) {
+      publishPending()
+    }
+    const pendingSequence = firstWireSequence + chunks.length
+    if (!Number.isSafeInteger(pendingSequence)) {
+      throw new StateBatchHubErrorV1(
+        'RUNTIME_STATE_WIRE_SEQUENCE_EXHAUSTED',
+        `Endpoint ${source.endpointId} exhausted its wire sequence range.`,
+      )
+    }
+    if (encodedBatchBytesV1(pendingSequence, groupValueBytes) > MAX_RUNTIME_BATCH_BYTES_V1) {
       oversizedGroupV1('encoded byte limit')
     }
-
-    const candidate = [...pending, ...group]
-    const candidateBatch = batchWithValuesV1(source, candidate)
-    if (
-      candidate.length > MAX_RUNTIME_STATE_VALUES_V1
-      || encodedSizeV1(candidateBatch) > MAX_RUNTIME_BATCH_BYTES_V1
-    ) {
-      publishPending()
-      pending = [...group]
-    } else {
-      pending = candidate
-    }
+    pending = pending.length === 0 ? [...group] : [...pending, ...group]
+    pendingValueBytes = pending.length === group.length
+      ? groupValueBytes
+      : pendingValueBytes + 1 + groupValueBytes
   }
   publishPending()
   return Object.freeze(chunks)
@@ -247,26 +292,20 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
 
   const publish = (untrustedBatch: StateBatchV1): void => {
     if (closed) return
-    const chunks = splitStateBatchesV1(untrustedBatch)
+    const firstWireSequence = (wireSequenceByEndpoint.get(untrustedBatch.endpointId) ?? 0) + 1
+    const chunks = splitStateBatchesV1(untrustedBatch, firstWireSequence)
     const batch = chunks[0]!
     if (!sameRevisionV1(batch, activeRevision)) return
     const previousSourceSequence = lastSourceSequenceByEndpoint.get(batch.endpointId)
-    if (previousSourceSequence !== undefined && batch.sequence <= previousSourceSequence) return
-    lastSourceSequenceByEndpoint.set(batch.endpointId, batch.sequence)
+    if (previousSourceSequence !== undefined && untrustedBatch.sequence <= previousSourceSequence) return
+    lastSourceSequenceByEndpoint.set(batch.endpointId, untrustedBatch.sequence)
     const encoded: EncodedLogicalTransmissionV1 = Object.freeze({
       projectId: batch.projectId,
       configRevision: batch.configRevision,
       endpointId: batch.endpointId,
       chunks: Object.freeze(chunks.map((chunk) => {
-        const nextWireSequence = (wireSequenceByEndpoint.get(chunk.endpointId) ?? 0) + 1
-        if (!Number.isSafeInteger(nextWireSequence)) {
-          throw new StateBatchHubErrorV1(
-            'RUNTIME_STATE_WIRE_SEQUENCE_EXHAUSTED',
-            `Endpoint ${chunk.endpointId} exhausted its wire sequence range.`,
-          )
-        }
-        wireSequenceByEndpoint.set(chunk.endpointId, nextWireSequence)
-        return Object.freeze({ payload: JSON.stringify({ ...chunk, sequence: nextWireSequence }) })
+        wireSequenceByEndpoint.set(chunk.endpointId, chunk.sequence)
+        return Object.freeze({ payload: JSON.stringify(chunk) })
       })),
     })
     for (const state of sockets.values()) {
