@@ -22,9 +22,14 @@ export interface StateBatchHubV1 {
 }
 
 interface EncodedBatchV1 {
+  readonly payload: string
+}
+
+interface EncodedLogicalTransmissionV1 {
   readonly projectId: string
   readonly configRevision: string
-  readonly payload: string
+  readonly endpointId: string
+  readonly chunks: readonly EncodedBatchV1[]
 }
 
 interface SocketStateV1 {
@@ -32,7 +37,8 @@ interface SocketStateV1 {
   readonly onClose: () => void
   readonly onError: () => void
   transmitting: boolean
-  pending: EncodedBatchV1 | null
+  // Depth is logical transmissions: one complete multipart send plus one newest pending update.
+  pending: EncodedLogicalTransmissionV1 | null
   detached: boolean
 }
 
@@ -94,6 +100,21 @@ function groupedValuesV1(
   return groups
 }
 
+function assertUniqueSourceMappingIdsV1(
+  values: readonly RuntimeMappedValueV1[],
+): void {
+  const mappingIds = new Set<string>()
+  for (const value of values) {
+    if (mappingIds.has(value.mappingId)) {
+      throw new StateBatchHubErrorV1(
+        'RUNTIME_STATE_MAPPING_DUPLICATE',
+        `Source State Batch contains duplicate Mapping ID ${value.mappingId}.`,
+      )
+    }
+    mappingIds.add(value.mappingId)
+  }
+}
+
 function oversizedGroupV1(reason: string): never {
   throw new StateBatchHubErrorV1(
     'RUNTIME_STATE_BATCH_SIZE_EXCEEDED',
@@ -107,6 +128,7 @@ export function splitStateBatchesV1(
   if (!Array.isArray(source.values) || source.values.length === 0) {
     return Object.freeze([validateStateBatchV1(source)])
   }
+  assertUniqueSourceMappingIdsV1(source.values)
 
   const chunks: StateBatchV1[] = []
   let pending: RuntimeMappedValueV1[] = []
@@ -142,6 +164,8 @@ export function splitStateBatchesV1(
 
 export function createStateBatchHubV1(): StateBatchHubV1 {
   const sockets = new Map<GatewayWebSocketV1, SocketStateV1>()
+  const lastSourceSequenceByEndpoint = new Map<string, number>()
+  const wireSequenceByEndpoint = new Map<string, number>()
   let activeRevision: ActiveRevisionV1 | null = null
   let closed = false
 
@@ -155,8 +179,14 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     state.socket.off('error', state.onError)
   }
 
-  const sendNext = (state: SocketStateV1, encoded: EncodedBatchV1): void => {
+  const sendNext = (
+    state: SocketStateV1,
+    transmission: EncodedLogicalTransmissionV1,
+    chunkIndex = 0,
+  ): void => {
     if (state.detached || closed) return
+    const encoded = transmission.chunks[chunkIndex]
+    if (encoded === undefined) return
     state.transmitting = true
     try {
       state.socket.send(encoded.payload, (error?: Error) => {
@@ -166,6 +196,13 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
           return
         }
         state.transmitting = false
+        if (
+          sameRevisionV1(transmission, activeRevision)
+          && chunkIndex + 1 < transmission.chunks.length
+        ) {
+          sendNext(state, transmission, chunkIndex + 1)
+          return
+        }
         const pending = state.pending
         state.pending = null
         if (pending === null || !sameRevisionV1(pending, activeRevision)) return
@@ -203,17 +240,34 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
 
   const activateRevision = (projectId: string, configRevision: string): void => {
     activeRevision = Object.freeze({ projectId, configRevision })
+    lastSourceSequenceByEndpoint.clear()
+    wireSequenceByEndpoint.clear()
     for (const state of sockets.values()) state.pending = null
   }
 
   const publish = (untrustedBatch: StateBatchV1): void => {
     if (closed) return
-    const batch = validateStateBatchV1(untrustedBatch)
+    const chunks = splitStateBatchesV1(untrustedBatch)
+    const batch = chunks[0]!
     if (!sameRevisionV1(batch, activeRevision)) return
-    const encoded: EncodedBatchV1 = Object.freeze({
+    const previousSourceSequence = lastSourceSequenceByEndpoint.get(batch.endpointId)
+    if (previousSourceSequence !== undefined && batch.sequence <= previousSourceSequence) return
+    lastSourceSequenceByEndpoint.set(batch.endpointId, batch.sequence)
+    const encoded: EncodedLogicalTransmissionV1 = Object.freeze({
       projectId: batch.projectId,
       configRevision: batch.configRevision,
-      payload: JSON.stringify(batch),
+      endpointId: batch.endpointId,
+      chunks: Object.freeze(chunks.map((chunk) => {
+        const nextWireSequence = (wireSequenceByEndpoint.get(chunk.endpointId) ?? 0) + 1
+        if (!Number.isSafeInteger(nextWireSequence)) {
+          throw new StateBatchHubErrorV1(
+            'RUNTIME_STATE_WIRE_SEQUENCE_EXHAUSTED',
+            `Endpoint ${chunk.endpointId} exhausted its wire sequence range.`,
+          )
+        }
+        wireSequenceByEndpoint.set(chunk.endpointId, nextWireSequence)
+        return Object.freeze({ payload: JSON.stringify({ ...chunk, sequence: nextWireSequence }) })
+      })),
     })
     for (const state of sockets.values()) {
       if (state.transmitting) state.pending = encoded
@@ -231,7 +285,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     if (closed) return
     closed = true
     activeRevision = null
-    for (const state of [...sockets.values()]) {
+    for (const state of sockets.values()) {
       detachState(state)
       try {
         state.socket.close()

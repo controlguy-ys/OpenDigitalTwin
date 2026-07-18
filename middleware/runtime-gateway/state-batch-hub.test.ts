@@ -72,6 +72,10 @@ class ControlledSocket implements GatewayWebSocketV1 {
   sentSequences(): number[] {
     return this.sent.map((payload) => JSON.parse(payload).sequence as number)
   }
+
+  sentBatches(): StateBatchV1[] {
+    return this.sent.map((payload) => JSON.parse(payload) as StateBatchV1)
+  }
 }
 
 describe('StateBatchHubV1', () => {
@@ -138,6 +142,86 @@ describe('StateBatchHubV1', () => {
     expect(split.map(({ values: chunk }) => chunk.length)).toEqual([127, 2])
     expect(split.flatMap(({ values: chunk }) => chunk.map(({ mappingId }) => mappingId)))
       .toEqual(values.map(({ mappingId }) => mappingId))
+  })
+
+  it.each([
+    [128, [128]],
+    [129, [128, 1]],
+  ])('splits exactly %i source values into %j bounded chunks', (count, expectedChunkSizes) => {
+    const values = Array.from({ length: count }, (_, index) => mappedValue(index))
+
+    expect(splitStateBatchesV1(batch(1, { values })).map(({ values: chunk }) => chunk.length))
+      .toEqual(expectedChunkSizes)
+  })
+
+  it('rejects duplicate mapping IDs across source chunks before splitting', () => {
+    const values = Array.from({ length: 129 }, (_, index) => mappedValue(index))
+    values[128] = { ...values[128]!, mappingId: values[0]!.mappingId }
+
+    expect(() => splitStateBatchesV1(batch(1, { values })))
+      .toThrow(/RUNTIME_STATE_MAPPING_DUPLICATE/)
+  })
+
+  it('sends every split chunk as one logical transmission with unique hub-owned wire sequences', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(socket)
+
+    hub.publish(batch(41, { values: Array.from({ length: 129 }, (_, index) => mappedValue(index)) }))
+
+    expect(socket.sentSequences()).toEqual([1])
+    // queueDepth is measured in logical transmissions, not individual wire chunks.
+    expect(hub.queueDepth(socket)).toBe(1)
+    hub.publish(batch(42))
+    expect(hub.queueDepth(socket)).toBe(2)
+    socket.complete()
+    expect(socket.sentSequences()).toEqual([1, 2])
+    expect(hub.queueDepth(socket)).toBe(2)
+    socket.complete()
+    expect(socket.sentSequences()).toEqual([1, 2, 3])
+    expect(new Set(socket.sentSequences()).size).toBe(3)
+    expect(hub.queueDepth(socket)).toBe(1)
+    socket.complete()
+    expect(hub.queueDepth(socket)).toBe(0)
+  })
+
+  it('rejects delayed source sequence 2 after accepted sequence 3 so it cannot replace pending state', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(socket)
+
+    hub.publish(batch(1))
+    hub.publish(batch(3))
+    hub.publish(batch(2))
+    socket.complete()
+
+    expect(socket.sentBatches()).toHaveLength(2)
+    expect(socket.sentBatches()[1]?.values[0]?.mappingId).toBe('mapping-3')
+  })
+
+  it('resets source ordering and endpoint wire sequences while clearing pending work on revision activation', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(socket)
+    hub.publish(batch(5))
+    hub.publish(batch(6))
+
+    hub.activateRevision('project-next', 'b'.repeat(64))
+    hub.publish(batch(1, {
+      projectId: 'project-next',
+      configRevision: 'b'.repeat(64),
+      values: [mappedValue(99)],
+    }))
+    socket.complete()
+
+    expect(socket.sentSequences()).toEqual([1, 1])
+    expect(socket.sentBatches()[1]?.values[0]?.mappingId).toBe('mapping-99')
+    expect(hub.queueDepth(socket)).toBe(1)
+    socket.complete()
+    expect(hub.queueDepth(socket)).toBe(0)
   })
 
   it('rejects one coherence group whose encoded envelope exceeds 256 KiB', () => {
