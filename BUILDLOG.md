@@ -135,6 +135,28 @@
 - Focused evidence: documentation link and outdated-claim searches were run for
   this documentation-only change. No new full-suite count is claimed here; the
   preceding verification numbers remain historical baseline evidence.
+- Working Object flow: Add or import a generic Object, select it, and place it
+  with the Inspector XYZ/RPY fields or viewport move gizmo. Bind six external
+  OPC UA pose nodes to make Client/Bridge runtime data authoritative; the manual
+  fields and gizmo then lock until **Take Manual Control** is selected. An
+  optional numeric Status node remains independently bound and visible.
+- Regression and recovery: the Project V4 cutover removed the V3
+  `EquipmentTransformControls` path without a V4 replacement, so Object
+  selection remained but viewport movement disappeared. V4 now owns one generic
+  SpatialEntity move-gizmo path for Box, Cylinder, and imported STEP Objects.
+  OPC UA transform ownership deterministically disables both the gizmo and
+  manual XYZ/RPY inputs; returning to Manual restores the saved manual pose.
+- Current verification: the final serialized `npm run verify` passed `122`
+  Vitest files and `1427` tests; CAD validation reported `7 link assets valid; 0
+  errors; 0 warnings`; deployment contracts, Gateway configuration, Gateway/Web
+  production builds, and Chromium acceptance passed (`2/2` multi-Robot, `1/1`
+  viewport, `11/11` docked workspace). Independent review found no remaining
+  P1/P2 issue in activation staging, replay, backpressure, or revision fencing.
+- Live Object evidence: a local external OPC UA Server drove the selected Box to
+  `2200/600/800 mm`, `12/24/36 deg`, and Status `92`. The browser displayed the
+  values with all six manual pose fields disabled and exposed **Take Manual
+  Control**. Before rebinding, Manual mode retained `X=650 mm`, `Rz=15 deg`, and
+  the viewport move gizmo.
 
 ## Human Decisions
 

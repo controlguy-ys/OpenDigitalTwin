@@ -22,7 +22,10 @@ the applied Project.
 - `GET /readyz` - `503` until a Project Revision is active.
 - `GET /runtime/status` - active Project, Revision, mode, and endpoint.
 - `PUT /runtime/project` - validate and atomically activate one Project V4.
-- `POST /runtime/state` - publish a revision-fenced multi-Robot Joint snapshot.
+- `POST /runtime/state` - publish a revision-fenced multi-Robot Joint snapshot
+  in Server or Bridge mode.
+- `/runtime/ws` - stream bounded, revision-fenced Client/Bridge mapping batches
+  to the browser over WebSocket.
 
 Modes are `off`, `server`, `client`, and `bridge`. `server` exposes only
 read-only Robot Actual Joint values. `client` subscribes to configured external

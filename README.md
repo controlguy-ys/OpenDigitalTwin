@@ -3,7 +3,8 @@
 WebDigitalTwin is a lightweight, browser-first Robot workcell simulator. The
 current release uses one deterministic Project V4 model for multiple independent
 Robot Instances, scene objects, Robot-owned Simulation Jobs, geometric collision
-checks, and an optional read-only OPC UA Server.
+checks, and an optional Runtime Gateway with read-only OPC UA Server and
+Client/Bridge subscriptions.
 
 It is an engineering visualization tool, not a Robot controller, physics engine,
 or safety-rated system.
@@ -101,7 +102,9 @@ The browser and Gateway exchange exact Project/Revision-qualified JSON:
 - `GET /runtime/status` - active Project, revision, mode, and OPC UA endpoint.
 - `PUT /runtime/project` - validate and atomically activate one Project V4.
 - `POST /runtime/state` - publish one validated multi-Robot Joint batch for the
-  exact active revision; Server mode only.
+  exact active revision; Server or Bridge mode only.
+- `/runtime/ws` - stream revision-fenced OPC UA Client/Bridge state batches to
+  the browser over a same-origin WebSocket.
 
 Project bodies are bounded to 1 MiB. Runtime state uses the Project V4 runtime
 batch budget. Unknown Robots/Joints, duplicate Robots, non-finite values, and

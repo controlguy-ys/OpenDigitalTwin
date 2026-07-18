@@ -18,7 +18,7 @@ Browser -> web:8080 (Nginx SPA)
              |
              +-- /runtime/* -> runtime-gateway:8081
 
-OPC UA Client -> host:4840 -> runtime-gateway:4840 (Server mode only)
+OPC UA Client -> host:4840 -> runtime-gateway:4840 (Server or Bridge mode)
 
 runtime-gateway -- outbound OPC UA Client connection --> external OPC UA Server
 ```
