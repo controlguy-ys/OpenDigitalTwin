@@ -58,7 +58,7 @@ UA endpoint discovery also works when the published port is changed.
 
 ## Select OPC UA Server mode
 
-1. Load the intended Project, or choose **Dual sample**.
+1. Load the intended Project, or choose **Project → Samples → Dual-Robot Technical Demo**.
 2. Change the Project's **OPC UA** selector from **Off** to **Server**.
 3. Wait for **Gateway ready** and inspect the reported endpoint.
 4. Connect an external OPC UA Client to

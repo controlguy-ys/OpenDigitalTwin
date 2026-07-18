@@ -46,10 +46,10 @@
   six-Joint assumptions, and invalid OPC UA batches.
 - Result: The browser now has one V4 authority and instance-keyed Robot/Job
   state; the old V1-V3/fixed-singleton paths and automatic nearest grasp were
-  removed. A source-only dual-Robot sample demonstrates independent Jobs and
-  Server publication. The Gateway validates exact Project/Revision payloads and
-  publishes read-only Actual Joint nodes. Final evidence is recorded by command
-  rather than freezing an intermediate test count in this log.
+  removed. The **Dual-Robot Technical Demo** provides an executable CRB Job with
+  12 Joint Poses, the original CRB sweep, and an independent logical-slide Job.
+  The Gateway validates exact Project/Revision payloads and publishes read-only
+  Actual Joint nodes. Current verification evidence is recorded below.
 - Next human decision: Confirm the official Build Week track, make the repository
   publicly judgeable, record and publish the under-three-minute YouTube demo,
   submit `/feedback` and retain its Session ID, confirm the final developer-tool
@@ -93,28 +93,31 @@
 
 ## Verification
 
-- Tests and checks: the final serialized `npm run verify` passed `88` Vitest
-  files and `993` tests, CRB CAD validation reported `7 link assets valid; 0
-  errors; 0 warnings`, Gateway and Web production builds passed, and the V4
-  Chromium acceptance passed `1/1`. `npm run deploy:validate` and Compose config
-  validation passed. The final Docker smoke built both images, verified exact
-  pre/post-activation readiness, selected the two-Robot Server flow in headless
-  Chromium, and used a strict external `node-opcua` Client to read `CRB J1=0`
-  and `Slide X=0.2` before clean teardown. Client writes are independently
-  covered as `BadNotWritable`.
-- Working user flow: Start the app, load **Dual sample**, select each Robot,
-  change its Joint values without changing the other Robot, run the CRB and
-  logical-slide Jobs, switch OPC UA from **Off** to **Server**, observe Gateway
-  readiness and endpoint, then read each Robot's Actual Joint nodes from an
-  external OPC UA Client. Save/export and import the canonical Project V4 JSON
-  to reproduce the configuration.
+- Tests and checks: the current serialized `npm run verify` passed `116` Vitest
+  files and `1305` tests; CRB CAD validation reported `7 link assets valid; 0
+  errors; 0 warnings`; deployment contracts, Runtime Gateway configuration, and
+  production builds passed. Chromium acceptance passed the two-Robot V4 flow
+  `2/2`, responsive viewport flow `1/1`, and docked workspace matrix `11/11`.
+  Live browser verification additionally observed the 12-Pose CRB Job traverse
+  both positive and negative J1 ranges, finish `SUCCEEDED · Step 12 of 12`,
+  auto-scroll the active Timeline card into view, and return J1-J6 to Home.
+- Working user flow: Open **Project → Samples → Dual-Robot Technical
+  Demo**, select **CRB 12-Pose Technical Demo**, open Timeline, and start the
+  Job. Observe all 12 Pose cards, positive and negative CRB motion, terminal
+  `SUCCEEDED · Step 12 of 12`, and the final Home pose. Then select the
+  logical-slide Robot to confirm its independent Job. Switch OPC UA from
+  **Off** to **Server** when the optional Runtime Gateway is running, and use
+  save/export/import to reproduce the canonical Project V4 configuration.
 - Known limitations: The second sample Robot is a logical one-axis slide without
   STEP Geometry; arbitrary single-STEP Robot assembly authoring and MRb05
-  mechanical confirmation are pending. OPC UA Client/Bridge and command writes,
-  XML/XLSX mapping interchange, explicit Attach/Detach pick-place, automatic
-  assembly splitting, physics, IK/path planning, security hardening, and Legacy
-  migration are not included in this short-term release. Public deployment and
-  submission media are also not implementation-complete claims.
+  mechanical confirmation are pending. The 12-Pose demo currently uses Joint
+  targets only: named Poses/dwell, Cartesian IK and reachability, collision-based
+  stop, execution-trace export, synchronized multi-Robot scheduling, and
+  browser-level cancel/restart acceptance remain checklist items. OPC UA
+  Client/Bridge and command writes, XML/XLSX mapping interchange, explicit
+  Attach/Detach pick-place, automatic assembly splitting, physics, security
+  hardening, Legacy migration, public deployment, and submission media are not
+  included in this short-term release.
 
 ## Human Decisions
 

@@ -63,14 +63,18 @@ The direct Gateway defaults are HTTP `http://127.0.0.1:8081` and OPC UA
 `opc.tcp://127.0.0.1:4840`. The browser expects a same-origin `/runtime` route,
 so Docker Compose is the supported full browser-plus-Gateway topology.
 
-## Two-Robot sample flow
+## Two-Robot Technical Demo flow
 
-1. Open the application and choose **Dual sample**.
-2. Select **ABB CRB15000** or **Logical Linear Slide** in Scene Objects.
-3. Select and run that Robot's Job from the lower-left Robot Jobs area or the
-   Timeline. Each Robot keeps its own Joint values and Job state.
-4. Change **OPC UA** from **Off** to **Server** to activate the Gateway namespace.
-5. Read the Joint Actual nodes with an external OPC UA Client. Node IDs are
+1. Open **Project → Samples → Dual-Robot Technical Demo**.
+2. Select **ABB CRB15000**, then select **CRB 12-Pose Technical Demo** in Robot
+   Jobs. The Timeline contains 12 Joint Poses with per-transition speeds.
+3. Press **Start Job**. The approximately 5.2-second sequence moves J1 through
+   +60° and -60°, follows all 12 Poses, reaches **SUCCEEDED**, and returns J1-J6
+   to the Home value `0`.
+4. Select **Logical Linear Slide** and run **Linear Slide Traverse** to verify
+   that each Robot keeps independent Joint values and Job state.
+5. Change **OPC UA** from **Off** to **Server** to activate the Gateway namespace.
+6. Read the Joint Actual nodes with an external OPC UA Client. Node IDs are
    deterministic:
 
    ```text
@@ -82,6 +86,8 @@ The second sample Robot is deliberately a source-only, one-axis prismatic
 state, but no Geometry occurrences and no imported STEP mesh. It proves
 multi-Robot identity and data flow; it does **not** prove MRb05 assembly
 extraction, mechanical correctness, or a second rendered industrial Robot.
+The full Pose table, acceptance checks, and remaining scope checklist are in the
+[12-Pose Technical Demo guide](docs/operator/technical-demo-12-pose.md).
 
 ## Runtime Gateway contract
 
@@ -149,9 +155,10 @@ docker compose config --quiet
 ```
 
 `tests/project-v4-multi-robot.spec.ts` is the browser acceptance path for
-loading the two-Robot Project, changing each Robot independently, and running
-both sample Jobs. Middleware tests start a real `node-opcua` Client and verify
-read-only values for both Robots.
+loading the two-Robot Project, rendering all 12 CRB Poses, observing positive
+and negative intermediate motion, returning Home, preserving the second Robot,
+and running its slide Job. Middleware tests start a real `node-opcua` Client and
+verify read-only values for both Robots.
 
 ## Architecture
 
