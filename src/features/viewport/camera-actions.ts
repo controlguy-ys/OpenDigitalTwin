@@ -30,6 +30,8 @@ export const HOME_CAMERA = Object.freeze({
 export type StandardWorldView =
   | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'isometric'
 
+export type WorldViewDirectionV4 = readonly [number, number, number]
+
 export interface OrbitTargetController {
   readonly target: Vector3
   update(): void
@@ -39,6 +41,7 @@ export interface ViewportCameraActions {
   home(): void
   fitAll(bounds: Box3): void
   focusSelection(bounds: Box3): void
+  setWorldDirection(direction: WorldViewDirectionV4): boolean
   setStandardView(view: StandardWorldView): void
 }
 
@@ -75,7 +78,7 @@ export function restoreViewportCameraState(
   controls.update()
 }
 
-const WORLD_VIEW_DIRECTIONS: Record<StandardWorldView, readonly [number, number, number]> = {
+const WORLD_VIEW_DIRECTIONS: Record<StandardWorldView, WorldViewDirectionV4> = {
   front: [0, -1, 0],
   back: [0, 1, 0],
   left: [-1, 0, 0],
@@ -83,6 +86,13 @@ const WORLD_VIEW_DIRECTIONS: Record<StandardWorldView, readonly [number, number,
   top: [0, 0, 1],
   bottom: [0, 0, -1],
   isometric: [1, -1, 1],
+}
+
+function finiteWorldDirectionV4(direction: WorldViewDirectionV4): Vector3 | null {
+  if (!direction.every(Number.isFinite)) return null
+  const normalized = new Vector3(...direction)
+  if (normalized.lengthSq() < 1e-8) return null
+  return normalized.normalize()
 }
 
 function applyView(
@@ -119,6 +129,22 @@ export function createViewportCameraActions(
   camera: PerspectiveCamera,
   controls: OrbitTargetController,
 ): ViewportCameraActions {
+  const setWorldDirection = (direction: WorldViewDirectionV4): boolean => {
+    const normalized = finiteWorldDirectionV4(direction)
+    if (normalized === null) return false
+    const target = controls.target.clone()
+    const currentDistance = camera.position.distanceTo(target)
+    const distance = Math.max(
+      Number.isFinite(currentDistance) ? currentDistance : 0,
+      0.8,
+    )
+    camera.position.copy(target).addScaledVector(normalized, distance)
+    const up: WorldViewDirectionV4 =
+      Math.abs(normalized.z) >= 0.999 ? [0, 1, 0] : [0, 0, 1]
+    applyView(camera, controls, up)
+    return true
+  }
+
   return {
     home: () => {
       camera.position.set(...HOME_CAMERA.position)
@@ -134,11 +160,7 @@ export function createViewportCameraActions(
     },
     fitAll: (bounds) => frameBounds(camera, controls, bounds),
     focusSelection: (bounds) => frameBounds(camera, controls, bounds),
-    setStandardView: (view) => {
-      const distance = Math.max(camera.position.distanceTo(controls.target), 0.8)
-      const direction = new Vector3(...WORLD_VIEW_DIRECTIONS[view]).normalize()
-      camera.position.copy(controls.target).addScaledVector(direction, distance)
-      applyView(camera, controls, view === 'top' || view === 'bottom' ? [0, 1, 0] : [0, 0, 1])
-    },
+    setWorldDirection,
+    setStandardView: (view) => { setWorldDirection(WORLD_VIEW_DIRECTIONS[view]) },
   }
 }

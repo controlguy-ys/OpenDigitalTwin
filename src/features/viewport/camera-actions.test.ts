@@ -74,21 +74,70 @@ describe('viewport camera actions', () => {
     expect(controls.update).not.toHaveBeenCalled()
   })
 
-  it('selects fixed World directions for faces and isometric corners', () => {
+  it('rejects non-finite and zero directions without mutation', () => {
     const { camera, controls, actions } = harness()
-    controls.target.set(1, 2, 3)
+    const position = camera.position.clone()
+
+    expect(actions.setWorldDirection([0, 0, 0])).toBe(false)
+    expect(actions.setWorldDirection([Number.NaN, 0, 1])).toBe(false)
+    expect(actions.setWorldDirection([Number.POSITIVE_INFINITY, 0, 1])).toBe(false)
+    expect(camera.position).toEqual(position)
+    expect(controls.update).not.toHaveBeenCalled()
+  })
+
+  it('normalizes a diagonal and preserves target and distance', () => {
+    const { camera, controls, actions } = harness()
+    const target = controls.target.clone()
+    const distance = camera.position.distanceTo(target)
+
+    expect(actions.setWorldDirection([2, -2, 2])).toBe(true)
+    expect(controls.target).toEqual(target)
+    expect(camera.position.distanceTo(target)).toBeCloseTo(distance)
+    expect(camera.position.clone().sub(target).normalize().distanceTo(
+      new Vector3(2, -2, 2).normalize(),
+    )).toBeCloseTo(0)
+    expect(camera.up.toArray()).toEqual([0, 0, 1])
+  })
+
+  it('uses the pole-aware up vector for Top, Bottom, and near-pole directions', () => {
+    const { camera, actions } = harness()
 
     actions.setStandardView('top')
-    expect(camera.position.clone().sub(controls.target).normalize().z).toBeCloseTo(1)
     expect(camera.up.toArray()).toEqual([0, 1, 0])
+    actions.setStandardView('bottom')
+    expect(camera.up.toArray()).toEqual([0, 1, 0])
+    expect(actions.setWorldDirection([0.01, 0, 1])).toBe(true)
+    expect(camera.up.toArray()).toEqual([0, 1, 0])
+    expect(actions.setWorldDirection([0.1, 0, 1])).toBe(true)
+    expect(camera.up.toArray()).toEqual([0, 0, 1])
+  })
 
-    actions.setStandardView('front')
-    expect(camera.position.clone().sub(controls.target).normalize().y).toBeCloseTo(-1)
+  it('uses the OrbitControls minimum distance for a close camera', () => {
+    const { camera, controls, actions } = harness()
+    camera.position.copy(controls.target).add(new Vector3(0.1, 0, 0))
 
-    actions.setStandardView('isometric')
-    const direction = camera.position.clone().sub(controls.target).normalize()
-    expect(direction.x).toBeGreaterThan(0)
-    expect(direction.y).toBeLessThan(0)
-    expect(direction.z).toBeGreaterThan(0)
+    expect(actions.setWorldDirection([1, 0, 0])).toBe(true)
+    expect(camera.position.distanceTo(controls.target)).toBeCloseTo(0.8)
+  })
+
+  it('delegates every standard preset to its raw World direction', () => {
+    const { camera, controls, actions } = harness()
+    controls.target.set(1, 2, 3)
+    const directions = {
+      front: [0, -1, 0],
+      back: [0, 1, 0],
+      left: [-1, 0, 0],
+      right: [1, 0, 0],
+      top: [0, 0, 1],
+      bottom: [0, 0, -1],
+      isometric: [1, -1, 1],
+    } as const
+
+    for (const [view, rawDirection] of Object.entries(directions)) {
+      actions.setStandardView(view as keyof typeof directions)
+      expect(camera.position.clone().sub(controls.target).normalize().distanceTo(
+        new Vector3(...rawDirection).normalize(),
+      )).toBeCloseTo(0)
+    }
   })
 })
