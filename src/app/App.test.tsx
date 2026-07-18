@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { StrictMode } from 'react'
 import { createStore } from 'zustand/vanilla'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -466,6 +467,42 @@ describe('App Project V4 production composition', () => {
 
     view.unmount()
     expect(() => controller?.setDockVisible('bottom', false)).not.toThrow()
+  })
+
+  it('keeps exactly one live Shell controller subscription through StrictMode replay', async () => {
+    const resources = resourcesForTest()
+    const originalSubscribe = resources.shellLayoutStore.subscribe
+    let liveSubscriptions = 0
+    let subscribeCalls = 0
+    resources.shellLayoutStore.subscribe = (...args: Parameters<typeof originalSubscribe>) => {
+      subscribeCalls += 1
+      liveSubscriptions += 1
+      const unsubscribe = originalSubscribe(...args)
+      return () => {
+        liveSubscriptions -= 1
+        unsubscribe()
+      }
+    }
+    const user = userEvent.setup()
+    const view = render(
+      <StrictMode>
+        <App gatewayPublisher={null} resources={resources} />
+      </StrictMode>,
+    )
+
+    await waitFor(() => expect(liveSubscriptions).toBe(1))
+    expect(subscribeCalls).toBeGreaterThanOrEqual(2)
+    const controller = observed.shellLayoutControllers.at(-1)!
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Theme' }), 'dark')
+    await user.click(screen.getByRole('button', { name: 'Empty context' }))
+    await user.click(screen.getByRole('button', { name: 'Open Collision' }))
+
+    expect(controller.getState().preferences.theme).toBe('dark')
+    expect(controller.getState().preferences.bottom.activeTab).toBe('collision')
+    expect(controller.getState().isDockVisible('bottom')).toBe(true)
+
+    view.unmount()
+    expect(liveSubscriptions).toBe(0)
   })
 
   it('drops a camera request from the previous Project revision', async () => {

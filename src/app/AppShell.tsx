@@ -232,11 +232,12 @@ export function AppShellV4({
         <aside
           aria-label="Scene Assets"
           className={`asset-rail${isAssetRailOpen ? ' is-open' : ''}`}
+          data-scene-job-handle={showSceneJobHandle ? 'visible' : 'hidden'}
           hidden={!isAssetRailOpen}
           id="scene-assets-panel"
           ref={setAssetRailRef}
         >
-          <section aria-label="Scene Objects" className="sidebar-pane scene-objects-pane">{assetTree}</section>
+          <section aria-label="Scene Objects" className="sidebar-pane scene-objects-pane" style={{ gridRow: 1 }}>{assetTree}</section>
           {showSceneJobHandle ? (
             <DockResizeHandleV4
               direction={1}
@@ -251,7 +252,13 @@ export function AppShellV4({
               valueFromPointerDelta={(start, deltaPx) => start + deltaPx / splitReferenceHeightPx * 100}
             />
           ) : null}
-          <section aria-label="Robot Jobs" className="sidebar-pane robot-jobs-pane">{jobTree}</section>
+          <section
+            aria-label="Robot Jobs"
+            className="sidebar-pane robot-jobs-pane"
+            style={{ gridRow: showSceneJobHandle ? 3 : 2 }}
+          >
+            {jobTree}
+          </section>
         </aside>
         {showSidebarDockHandle ? (
           <DockResizeHandleV4

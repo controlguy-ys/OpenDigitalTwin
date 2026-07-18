@@ -2483,6 +2483,17 @@ button {
   border-right: 1px solid var(--color-border);
 }
 
+.asset-rail[data-scene-job-handle='hidden'] {
+  grid-template-rows:
+    minmax(0, calc(var(--sidebar-split-percent, 60) * 1%))
+    minmax(0, 1fr);
+}
+
+.asset-rail[data-scene-job-handle='visible'] > .scene-objects-pane { grid-row: 1; }
+.asset-rail[data-scene-job-handle='visible'] > .robot-jobs-pane { grid-row: 3; }
+.asset-rail[data-scene-job-handle='hidden'] > .scene-objects-pane { grid-row: 1; }
+.asset-rail[data-scene-job-handle='hidden'] > .robot-jobs-pane { grid-row: 2; }
+
 .asset-rail > [role='separator'] {
   min-height: 0;
   cursor: row-resize;

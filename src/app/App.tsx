@@ -48,7 +48,11 @@ import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selecto
 import type { WorkcellRegistrationV4 } from '../features/scene/v4/Workcell.js'
 import { BottomWorkspace } from '../features/ui/BottomWorkspace.js'
 import { TimelineV4 } from '../features/ui/v4/Timeline.js'
-import { createShellLayoutControllerV4 } from '../features/ui/v4/shell-layout-controller.js'
+import {
+  createShellLayoutControllerV4,
+  type ShellLayoutControllerSnapshotV4,
+  type ShellLayoutControllerV4,
+} from '../features/ui/v4/shell-layout-controller.js'
 import { initialShellLayoutBoundsV4 } from '../features/ui/v4/shell-layout-geometry.js'
 import { AppShellV4 } from './AppShell.js'
 import { createInitialProjectBootstrapV4 } from './initial-project-bootstrap.js'
@@ -72,6 +76,31 @@ const IDLE_GATEWAY_PRESENTATION_V4: RuntimeGatewayPresentationV4 = Object.freeze
   endpointUrl: null,
   message: null,
 })
+
+const INACTIVE_SHELL_LAYOUT_SNAPSHOT_V4: ShellLayoutControllerSnapshotV4 = Object.freeze({
+  mode: 'wide',
+  bounds: Object.freeze({ mode: 'wide', widthPx: 1200, workspaceHeightPx: 800, dividerPx: 6 }),
+  preferences: Object.freeze({
+    version: 1,
+    modes: Object.freeze({
+      wide: Object.freeze({ ribbonExpanded: true, dockVisible: Object.freeze({ sidebar: true, inspector: true, bottom: false }) }),
+      compact: Object.freeze({ ribbonExpanded: false, dockVisible: Object.freeze({ sidebar: true, inspector: false, bottom: false }) }),
+      narrow: Object.freeze({ ribbonExpanded: false, dockVisible: Object.freeze({ sidebar: false, inspector: false, bottom: false }) }),
+    }),
+    sidebar: Object.freeze({ widthPx: 248, sceneJobSplitPercent: 60 }),
+    inspector: Object.freeze({ widthPx: 320 }),
+    bottom: Object.freeze({ heightPx: 160, activeTab: 'timeline' }),
+    theme: 'system',
+  }),
+  overlays: Object.freeze({ sidebarOpen: false, inspectorOpen: false, bottomOpen: false }),
+  resolved: Object.freeze({ sidebarWidthPx: 248, inspectorWidthPx: 320, bottomHeightPx: 160, viewportWidthPx: 620 }),
+  safeAreaInsets: Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 }),
+  isDockVisible: () => false,
+  isRibbonExpanded: () => false,
+})
+
+const getInactiveShellLayoutSnapshotV4 = () => INACTIVE_SHELL_LAYOUT_SNAPSHOT_V4
+const subscribeInactiveShellLayoutV4 = () => () => undefined
 
 interface RevisionQualifiedSceneStatusV4 {
   readonly projectRevisionId: string | null
@@ -189,17 +218,12 @@ export function App({
     resources.coordinateDisplay,
     (state) => state,
   )
-  const shellLayoutController = useMemo(() => createShellLayoutControllerV4({
-    preferencesStore: resources.shellLayoutStore,
-    initialBounds: initialShellLayoutBoundsV4(
-      document.documentElement.clientWidth,
-      document.documentElement.clientHeight,
-    ),
-  }), [resources.shellLayoutStore])
+  const [shellLayoutController, setShellLayoutController] =
+    useState<ShellLayoutControllerV4 | null>(null)
   const shellLayoutSnapshot = useSyncExternalStore(
-    shellLayoutController.subscribe,
-    shellLayoutController.getState,
-    shellLayoutController.getState,
+    shellLayoutController?.subscribe ?? subscribeInactiveShellLayoutV4,
+    shellLayoutController?.getState ?? getInactiveShellLayoutSnapshotV4,
+    shellLayoutController?.getState ?? getInactiveShellLayoutSnapshotV4,
   )
   const [sceneStatusState, setSceneStatusState] =
     useState<RevisionQualifiedSceneStatusV4>({
@@ -235,7 +259,20 @@ export function App({
     }
   }, [bootstrap])
 
-  useEffect(() => () => shellLayoutController.dispose(), [shellLayoutController])
+  useEffect(() => {
+    const controller = createShellLayoutControllerV4({
+      preferencesStore: resources.shellLayoutStore,
+      initialBounds: initialShellLayoutBoundsV4(
+        document.documentElement.clientWidth,
+        document.documentElement.clientHeight,
+      ),
+    })
+    setShellLayoutController(controller)
+    return () => {
+      controller.dispose()
+      setShellLayoutController((current) => current === controller ? null : current)
+    }
+  }, [resources.shellLayoutStore])
 
   const project = projectState.activeProject
   const revisionId = project?.revisionId ?? null
@@ -501,7 +538,8 @@ export function App({
   }, [])
 
   if (
-    !ready
+    shellLayoutController === null
+    || !ready
     || project === null
     || runtimeBundle.active === null
     || liveSceneRuntime === null
