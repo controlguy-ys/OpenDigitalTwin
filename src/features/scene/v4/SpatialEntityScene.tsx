@@ -591,6 +591,7 @@ export function SpatialEntitySceneV4({
                   <SpatialEntityTransformControlsV4
                     entityId={entity.id}
                     gizmoFrame={gizmoFrame}
+                    key={entity.id}
                     object={root}
                     onCommitLocalPose={onCommitLocalPose}
                     onDraggingChange={onDraggingChange ?? (() => undefined)}

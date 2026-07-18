@@ -146,7 +146,9 @@ describe('SpatialEntityTransformControlsV4', () => {
   })
 
   it('does not begin a second drag while its prior pose commit is pending', async () => {
+    const scene = new Group()
     const object = new Group()
+    scene.add(object)
     const onDraggingChange = vi.fn()
     let resolveCommit: () => void = () => undefined
     const onCommitLocalPose = vi.fn(() => new Promise<void>((resolve) => {
@@ -155,7 +157,7 @@ describe('SpatialEntityTransformControlsV4', () => {
     render(
       <SpatialEntityTransformControlsV4
         entityId="entity-a"
-        gizmoFrame="world"
+        gizmoFrame="parent"
         object={object}
         onCommitLocalPose={onCommitLocalPose}
         onDraggingChange={onDraggingChange}
@@ -164,14 +166,70 @@ describe('SpatialEntityTransformControlsV4', () => {
       />,
     )
 
+    expect(transformControlsCapture.props).toMatchObject({ enabled: true })
     act(() => {
       callControl('onMouseDown')
       callControl('onMouseUp')
     })
     await waitFor(() => expect(onCommitLocalPose).toHaveBeenCalledOnce())
-    act(() => callControl('onMouseDown'))
+    await waitFor(() => expect(transformControlsCapture.props).toMatchObject({ enabled: false }))
+    const proxy = transformControlsCapture.props?.object as Group
+    act(() => {
+      callControl('onMouseDown')
+      proxy.position.set(9, 8, 7)
+      callControl('onObjectChange')
+      callControl('onMouseUp')
+    })
 
     expect(onDraggingChange.mock.calls).toEqual([[true], [false]])
+    expect(onCommitLocalPose).toHaveBeenCalledOnce()
+    expect(object.position.toArray()).toEqual([0, 0, 0])
     act(() => resolveCommit())
+    await waitFor(() => expect(transformControlsCapture.props).toMatchObject({ enabled: true }))
+  })
+
+  it('rolls a rejected Entity A commit back to its immutable pose after rendering Entity B', async () => {
+    const objectA = new Group()
+    const objectB = new Group()
+    objectA.position.set(1, 2, 3)
+    objectB.position.set(20, 30, 40)
+    let rejectCommit: (error: Error) => void = () => undefined
+    const onCommitLocalPose = vi.fn(() => new Promise<void>((_resolve, reject) => {
+      rejectCommit = reject
+    }))
+    const common = {
+      gizmoFrame: 'world' as const,
+      onCommitLocalPose,
+      onDraggingChange: vi.fn(),
+      parentWorldPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] } as RigidTransformV4,
+    }
+    const { rerender } = render(
+      <SpatialEntityTransformControlsV4
+        {...common}
+        entityId="entity-a"
+        object={objectA}
+        persistedWorldPose={{ positionM: [1, 2, 3], quaternion: [0, 0, 0, 1] }}
+      />,
+    )
+
+    act(() => {
+      callControl('onMouseDown')
+      objectA.position.set(9, 9, 9)
+      callControl('onObjectChange')
+      callControl('onMouseUp')
+    })
+    await waitFor(() => expect(onCommitLocalPose).toHaveBeenCalledOnce())
+    rerender(
+      <SpatialEntityTransformControlsV4
+        {...common}
+        entityId="entity-b"
+        object={objectB}
+        persistedWorldPose={{ positionM: [20, 30, 40], quaternion: [0, 0, 0, 1] }}
+      />,
+    )
+
+    act(() => rejectCommit(new Error('Entity A write rejected')))
+    await waitFor(() => expect(objectA.position.toArray()).toEqual([1, 2, 3]))
+    expect(objectB.position.toArray()).toEqual([20, 30, 40])
   })
 })

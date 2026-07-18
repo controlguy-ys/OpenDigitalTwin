@@ -39,14 +39,23 @@ vi.mock('@react-three/drei/web/Html.js', () => ({
 
 const transformControlsCapture = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
+  instances: new Map<string, object>(),
 }))
 
-vi.mock('./SpatialEntityTransformControls.js', () => ({
-  SpatialEntityTransformControlsV4: (props: Record<string, unknown>) => {
-    transformControlsCapture.props = props
-    return <output data-testid="spatial-transform-controls" />
-  },
-}))
+vi.mock('./SpatialEntityTransformControls.js', async () => {
+  const React = await import('react')
+  return {
+    SpatialEntityTransformControlsV4: (props: Record<string, unknown>) => {
+      const instance = React.useRef<object>({})
+      transformControlsCapture.props = props
+      transformControlsCapture.instances.set(
+        props.entityId as string,
+        instance.current,
+      )
+      return <output data-testid="spatial-transform-controls" />
+    },
+  }
+})
 
 function entity(
   id: string,
@@ -175,6 +184,7 @@ function expectRuntimeReadonlyMap(map: ReadonlyMap<unknown, unknown>): void {
 
 describe('SpatialEntitySceneV4', () => {
   it('shows a translate gizmo only for the selected manually owned Spatial Entity', async () => {
+    transformControlsCapture.instances.clear()
     const project = spatialProject()
     let registration: SpatialEntitySceneRegistrationV4 | null = null
     const commitLocalPose = vi.fn(async () => undefined)
@@ -214,6 +224,7 @@ describe('SpatialEntitySceneV4', () => {
       )
       expect(transformControlsCapture.props).toMatchObject({ entityId })
     }
+    expect([...new Set(transformControlsCapture.instances.values())]).toHaveLength(3)
 
     rerender(
       <SpatialEntitySceneV4

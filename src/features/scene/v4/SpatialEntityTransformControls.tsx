@@ -3,6 +3,7 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useState,
   type ReactNode,
 } from 'react'
 import { Object3D } from 'three'
@@ -25,10 +26,24 @@ export interface SpatialEntityTransformControlsPropsV4 {
   readonly onDraggingChange: (dragging: boolean) => void
 }
 
+interface SpatialEntityCommitAttemptV4 {
+  readonly token: number
+  readonly entityId: SpatialEntityIdV4
+  readonly object: Object3D
+  readonly rollbackPose: RigidTransformV4
+}
+
 function applyWorldPoseV4(object: Object3D, pose: RigidTransformV4): void {
   object.position.set(...pose.positionM)
   object.quaternion.set(...pose.quaternion)
   object.updateMatrixWorld()
+}
+
+function cloneRigidTransformV4(pose: RigidTransformV4): RigidTransformV4 {
+  return {
+    positionM: [...pose.positionM],
+    quaternion: [...pose.quaternion],
+  }
 }
 
 function objectWorldPoseV4(object: Object3D): RigidTransformV4 {
@@ -63,9 +78,13 @@ export function SpatialEntityTransformControlsV4({
   onCommitLocalPose,
   onDraggingChange,
 }: SpatialEntityTransformControlsPropsV4): ReactNode {
+  const [committing, setCommitting] = useState(false)
   const parentProxyRef = useRef(new Object3D())
   const draggingRef = useRef(false)
   const committingRef = useRef(false)
+  const mountedRef = useRef(true)
+  const nextAttemptTokenRef = useRef(0)
+  const activeAttemptRef = useRef<SpatialEntityCommitAttemptV4 | null>(null)
   const persistedWorldPoseRef = useRef(persistedWorldPose)
   const parentWorldPoseRef = useRef(parentWorldPose)
   const onCommitLocalPoseRef = useRef(onCommitLocalPose)
@@ -85,16 +104,21 @@ export function SpatialEntityTransformControlsV4({
     }
   }, [gizmoFrame, object, parentWorldPose])
 
-  useEffect(() => () => {
-    if (!draggingRef.current) return
-    draggingRef.current = false
-    onDraggingChangeRef.current(false)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (!draggingRef.current) return
+      draggingRef.current = false
+      onDraggingChangeRef.current(false)
+    }
   }, [])
 
   const controlObject = gizmoFrame === 'parent' ? parentProxyRef.current : object
 
   return (
     <TransformControls
+      enabled={!committing}
       mode="translate"
       object={controlObject}
       onMouseDown={() => {
@@ -115,14 +139,36 @@ export function SpatialEntityTransformControlsV4({
         draggingRef.current = false
         onDraggingChangeRef.current(false)
         committingRef.current = true
+        setCommitting(true)
+        const attempt: SpatialEntityCommitAttemptV4 = {
+          token: ++nextAttemptTokenRef.current,
+          entityId,
+          object,
+          rollbackPose: cloneRigidTransformV4(persistedWorldPoseRef.current),
+        }
+        activeAttemptRef.current = attempt
         const localPose = relativeRigidTransformV4(
           parentWorldPoseRef.current,
-          objectWorldPoseV4(object),
+          objectWorldPoseV4(attempt.object),
         )
-        void onCommitLocalPoseRef.current(entityId, localPose)
-          .catch(() => applyWorldPoseV4(object, persistedWorldPoseRef.current))
+        void onCommitLocalPoseRef.current(attempt.entityId, localPose)
+          .catch(() => {
+            const activeAttempt = activeAttemptRef.current
+            if (
+              activeAttempt?.token !== attempt.token
+              || activeAttempt.entityId !== attempt.entityId
+            ) return
+            applyWorldPoseV4(activeAttempt.object, activeAttempt.rollbackPose)
+          })
           .finally(() => {
+            const activeAttempt = activeAttemptRef.current
+            if (
+              activeAttempt?.token !== attempt.token
+              || activeAttempt.entityId !== attempt.entityId
+            ) return
+            activeAttemptRef.current = null
             committingRef.current = false
+            if (mountedRef.current) setCommitting(false)
           })
       }}
       onObjectChange={() => {
