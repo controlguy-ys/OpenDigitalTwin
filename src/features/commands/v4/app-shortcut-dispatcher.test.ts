@@ -3,6 +3,13 @@ import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from './app-com
 import { createAppCommandRegistryV4 } from './app-command-registry.js'
 import { createAppShortcutDispatcherV4 } from './app-shortcut-dispatcher.js'
 describe('createAppShortcutDispatcherV4', () => {
+  it('dispatches the catalog Ctrl+S, H, and F commands exactly once', async () => {
+    let listener: ((event: KeyboardEvent) => void) | null = null; const save = vi.fn(); const home = vi.fn(); const focus = vi.fn()
+    const runtime = createAppCommandRuntimeV4(createAppCommandRegistryV4([{ id: 'project.save', label: 'Save', section: 'project', kind: 'action', visible: true, enabled: true, shortcut: 'Ctrl+S', execute: save }, { id: 'view.home', label: 'Home', section: 'view', kind: 'action', visible: true, enabled: true, shortcut: 'H', execute: home }, { id: 'view.focusSelection', label: 'Focus', section: 'view', kind: 'action', visible: true, enabled: true, shortcut: 'F', execute: focus }]))
+    createAppShortcutDispatcherV4({ target: { addEventListener: vi.fn((_type, callback) => { listener = callback as (event: KeyboardEvent) => void }), removeEventListener: vi.fn() }, bindings: createAppCommandBindingsV4(runtime) })
+    listener!(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, cancelable: true })); listener!(new KeyboardEvent('keydown', { key: 'h', cancelable: true })); listener!(new KeyboardEvent('keydown', { key: 'f', cancelable: true }))
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1)); expect(home).toHaveBeenCalledTimes(1); expect(focus).toHaveBeenCalledTimes(1)
+  })
   it('dispatches an exact shortcut once and disposes its one listener', async () => {
     const execute = vi.fn(); const addEventListener = vi.fn(); const removeEventListener = vi.fn(); let listener: ((event: KeyboardEvent) => void) | null = null
     addEventListener.mockImplementation((_type: string, value: (event: KeyboardEvent) => void) => { listener = value })

@@ -56,4 +56,12 @@ describe('AppCommandMenuItemV4', () => {
     render(<AppCommandMenuItemV4 commandBindings={bindings(radio)} commandId="radio" onOutcome={vi.fn()} />)
     expect(screen.getByRole('menuitemradio', { name: 'Server' })).toHaveAttribute('aria-checked', 'false')
   })
+
+  it('reports cancelled outcome without a local error', async () => {
+    const outcome = vi.fn()
+    render(<AppCommandMenuItemV4 commandBindings={bindings({ id: 'cancelled', label: 'cancelled', section: 'project', kind: 'action', visible: true, enabled: true, execute: () => 'cancelled' })} commandId="cancelled" onOutcome={outcome} />)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'cancelled' }))
+    await vi.waitFor(() => expect(outcome).toHaveBeenCalledWith('cancelled', 'cancelled'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })
