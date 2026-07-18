@@ -14,7 +14,7 @@ const COMPLETE_CATALOG = [
   ['model.add.box', 'model'], ['model.add.cylinder', 'model'], ['model.add.group', 'model'], ['scene.group.move', 'model'], ['scene.group.remove', 'model'], ['robot.base.edit', 'model'], ['robot.mount.edit', 'model'],
   ['job.new', 'job'], ['job.pose.save', 'job'], ['job.start', 'job'], ['job.cancel', 'job'], ['job.rename', 'job'], ['job.duplicate', 'job'], ['job.delete', 'job'], ['view.timeline.open', 'job'],
   ['collision.validate', 'simulation'], ['view.collision.open', 'simulation'],
-  ['connectivity.mode.off', 'connectivity'], ['connectivity.mode.server', 'connectivity'], ['connectivity.details.open', 'connectivity'],
+  ['connectivity.mode.off', 'connectivity'], ['connectivity.mode.client', 'connectivity'], ['connectivity.mode.server', 'connectivity'], ['connectivity.mode.bridge', 'connectivity'], ['connectivity.details.open', 'connectivity'],
   ['view.sidebar', 'view'], ['view.inspector', 'view'], ['view.bottom', 'view'], ['view.ribbon', 'view'], ['view.layout.reset', 'view'], ['view.theme.system', 'view'], ['view.theme.light', 'view'], ['view.theme.dark', 'view'], ['view.layer.grid', 'view'], ['view.layer.world', 'view'], ['view.layer.mcp', 'view'], ['view.layer.base', 'view'], ['view.layer.tcp', 'view'], ['view.home', 'view'], ['view.fitAll', 'view'], ['view.orientation.isometric', 'view'], ['view.orientation.top', 'view'], ['view.orientation.front', 'view'], ['view.orientation.right', 'view'], ['view.orientation.back', 'view'], ['view.orientation.left', 'view'], ['view.orientation.bottom', 'view'],
   ['help.controls', 'help'], ['help.stepImport', 'help'], ['help.opcUaMapping', 'help'], ['help.about', 'help'],
 ] as const satisfies readonly (readonly [string, AppCommandV4['section']])[]
@@ -34,7 +34,7 @@ describe('buildAppMenuModelV4', () => {
   it('keeps placement order, submenus, separators, and cross-section ids', () => {
     const commands = [
       command('project.new', 'project'), command('project.save', 'project'), command('project.import', 'project'), command('project.export', 'project'), command('project.sample.dual', 'project'),
-      command('connectivity.mode.off', 'connectivity'), command('connectivity.mode.server', 'connectivity'), command('connectivity.details.open', 'connectivity'),
+      command('connectivity.mode.off', 'connectivity'), command('connectivity.mode.client', 'connectivity'), command('connectivity.mode.server', 'connectivity'), command('connectivity.mode.bridge', 'connectivity'), command('connectivity.details.open', 'connectivity'),
       command('view.sidebar', 'view'), command('view.inspector', 'view'), command('view.bottom', 'view'), command('view.ribbon', 'view'), command('view.layout.reset', 'view'), command('view.theme.system', 'view'), command('view.theme.light', 'view'), command('view.theme.dark', 'view'), command('view.layer.grid', 'view'), command('view.layer.world', 'view'), command('view.layer.mcp', 'view'), command('view.layer.base', 'view'), command('view.layer.tcp', 'view'), command('view.home', 'view'), command('view.fitAll', 'view'), command('view.focusSelection', 'view'), command('view.orientation.isometric', 'view'), command('view.orientation.top', 'view'), command('view.orientation.front', 'view'), command('view.orientation.right', 'view'), command('view.orientation.back', 'view'), command('view.orientation.left', 'view'), command('view.orientation.bottom', 'view'),
     ]
     const model = buildAppMenuModelV4(createAppCommandRegistryV4(commands))
@@ -82,7 +82,7 @@ describe('buildAppMenuModelV4', () => {
       { kind: 'separator', id: 'connectivity.separator.1' },
       { kind: 'command', commandId: 'connectivity.details.open' },
     ])
-    expect(commandIds((connectivity.children[0] as Extract<typeof connectivity.children[number], { kind: 'submenu' }>).children)).toEqual(['connectivity.mode.off', 'connectivity.mode.server'])
+    expect(commandIds((connectivity.children[0] as Extract<typeof connectivity.children[number], { kind: 'submenu' }>).children)).toEqual(['connectivity.mode.off', 'connectivity.mode.client', 'connectivity.mode.server', 'connectivity.mode.bridge'])
     const view = model.find((section) => section.id === 'view')!
     const groups = view.children.filter((node): node is Extract<typeof node, { kind: 'submenu' }> => node.kind === 'submenu')
     expect(groups.map(({ id, label }) => [id, label])).toEqual([

@@ -39,7 +39,7 @@ export interface AppCommandActionPortsV4 {
     exportProject(): Promise<void>
     loadDualRobotSample(): void | Promise<void>
   }
-  readonly connectivity: { setMode(mode: 'off' | 'server'): Promise<void> }
+  readonly connectivity: { setMode(mode: WorkcellProjectV4['opcUa']['mode']): Promise<void> }
   readonly presentation: {
     openRobotBase(robotId: RobotIdV4): void
     openInspector(request: {
@@ -103,7 +103,7 @@ export const APP_COMMAND_PLACEMENTS_BY_SECTION_V4: PlacementMapV4 = Object.freez
     ['job.start', null, null], ['job.cancel', null, null], ['view.timeline.open', null, null], ['collision.validate', null, null], ['view.collision.open', null, null],
   ]),
   connectivity: placements([
-    ['connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.details.open', null, null],
+    ['connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.details.open', null, null],
   ]),
   view: placements([
     ['view.sidebar', 'view.panels', 'Panels'], ['view.inspector', 'view.panels', 'Panels'], ['view.bottom', 'view.panels', 'Panels'], ['view.ribbon', 'view.panels', 'Panels'], ['view.layout.reset', 'view.panels', 'Panels'],
@@ -282,7 +282,9 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
     }),
     command('view.collision.open', 'Open Collision Findings', 'simulation', { kind: 'action', visible: true, enabled: true, execute: () => context.actions.presentation.openCollision(selectedSceneOrNull(context)) }),
     command('connectivity.mode.off', 'Off', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'off' }, execute: () => context.actions.connectivity.setMode('off') }),
+    command('connectivity.mode.client', 'OPC UA Client', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'client' }, execute: () => context.actions.connectivity.setMode('client') }),
     command('connectivity.mode.server', 'OPC UA Server', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'server' }, execute: () => context.actions.connectivity.setMode('server') }),
+    command('connectivity.mode.bridge', 'OPC UA Bridge', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'bridge' }, execute: () => context.actions.connectivity.setMode('bridge') }),
     command('connectivity.details.open', 'Gateway Details', 'connectivity', { kind: 'action', visible: true, enabled: true, execute: () => context.actions.presentation.openGatewayDetails() }),
   ]
 

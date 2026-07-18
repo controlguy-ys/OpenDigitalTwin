@@ -786,7 +786,7 @@ export function App({
         },
       }),
       connectivity: Object.freeze({
-        setMode: async (mode: 'off' | 'server') => {
+        setMode: async (mode: WorkcellProjectV4['opcUa']['mode']) => {
           await resources.mutations.replaceFromActive({
             description: `Set OPC UA mode to ${mode}`,
             mutate: (active) => ({

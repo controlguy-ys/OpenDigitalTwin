@@ -77,7 +77,7 @@ describe('composeAppCommandsV4', () => {
       model: ['model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'].map(root),
       job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'].map(root),
       simulation: ['job.start', 'job.cancel', 'view.timeline.open', 'collision.validate', 'view.collision.open'].map(root),
-      connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.details.open')],
+      connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.details.open')],
       view: [
         ...['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset'].map((id) => submenu(id, 'view.panels', 'Panels')),
         ...['view.theme.system', 'view.theme.light', 'view.theme.dark'].map((id) => submenu(id, 'view.theme', 'Theme')),
@@ -304,7 +304,8 @@ describe('composeAppCommandsV4', () => {
     expect(composed.camera.setStandardView).toHaveBeenCalledWith('top')
     expect(composed.collision.validate).toHaveBeenCalledTimes(1)
     expect(composed.help.open).toHaveBeenCalledWith('controls')
-    expect(registry.get('connectivity.mode.client')).toBeNull()
+    expect(registry.get('connectivity.mode.client')).toMatchObject({ label: 'OPC UA Client' })
+    expect(registry.get('connectivity.mode.bridge')).toMatchObject({ label: 'OPC UA Bridge' })
     expect(registry.get('model.importRobotStep')).toBeNull()
   })
 
@@ -326,7 +327,7 @@ describe('composeAppCommandsV4', () => {
   it('routes all remaining shell, view, connectivity, presentation, and available Help actions exactly once', async () => {
     const composed = context()
     const registry = composeAppCommandsV4(composed)
-    for (const id of ['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset', 'view.theme.system', 'view.theme.light', 'view.theme.dark', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp', 'view.home', 'view.fitAll', 'view.focusSelection', 'view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom', 'view.timeline.open', 'connectivity.mode.off', 'connectivity.mode.server', 'connectivity.details.open', 'help.controls', 'help.stepImport', 'help.about'] as const) {
+    for (const id of ['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset', 'view.theme.system', 'view.theme.light', 'view.theme.dark', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp', 'view.home', 'view.fitAll', 'view.focusSelection', 'view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom', 'view.timeline.open', 'connectivity.mode.off', 'connectivity.mode.client', 'connectivity.mode.server', 'connectivity.mode.bridge', 'connectivity.details.open', 'help.controls', 'help.stepImport', 'help.about'] as const) {
       await registry.get(id)!.execute()
     }
     composed.interaction.getState().select({ kind: 'scene-frame', frameId: 'mcp' })
@@ -340,7 +341,9 @@ describe('composeAppCommandsV4', () => {
     expect(composed.actions.presentation.openTimeline).toHaveBeenCalledTimes(1)
     expect(composed.actions.presentation.openCollision).toHaveBeenCalledWith({ kind: 'scene-frame', frameId: 'mcp' })
     expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(1, 'off')
-    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(2, 'server')
+    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(2, 'client')
+    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(3, 'server')
+    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(4, 'bridge')
     expect(composed.actions.presentation.openGatewayDetails).toHaveBeenCalledTimes(1)
     expect(composed.help.open).toHaveBeenCalledWith('controls')
     expect(composed.help.open).toHaveBeenCalledWith('stepImport')
@@ -384,7 +387,7 @@ describe('composeAppCommandsV4', () => {
       'scene.visibility.toggle', 'view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp',
     ])
     expect(all.filter(({ kind }) => kind === 'radio').map(({ id, groupId }) => [id, groupId])).toEqual([
-      ['connectivity.mode.off', 'connectivity.runtime-mode'], ['connectivity.mode.server', 'connectivity.runtime-mode'], ['view.theme.system', 'view.theme'], ['view.theme.light', 'view.theme'], ['view.theme.dark', 'view.theme'],
+      ['connectivity.mode.off', 'connectivity.runtime-mode'], ['connectivity.mode.client', 'connectivity.runtime-mode'], ['connectivity.mode.server', 'connectivity.runtime-mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode'], ['view.theme.system', 'view.theme'], ['view.theme.light', 'view.theme'], ['view.theme.dark', 'view.theme'],
     ])
     expect(all.filter(({ destructive }) => destructive === true).map(({ id }) => id)).toEqual(['scene.delete', 'job.delete'])
     expect(all.filter(({ shortcut }) => shortcut !== undefined).map(({ id, shortcut }) => [id, shortcut])).toEqual([
@@ -394,7 +397,7 @@ describe('composeAppCommandsV4', () => {
       ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Technical Demo'],
     ])
     expect(all.filter(({ section }) => section === 'connectivity').map(({ id, label }) => [id, label])).toEqual([
-      ['connectivity.mode.off', 'Off'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.details.open', 'Gateway Details'],
+      ['connectivity.mode.off', 'Off'], ['connectivity.mode.client', 'OPC UA Client'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.mode.bridge', 'OPC UA Bridge'], ['connectivity.details.open', 'Gateway Details'],
     ])
   })
 
@@ -439,7 +442,9 @@ describe('composeAppCommandsV4', () => {
       { id: 'collision.validate', label: 'Validate Geometry Collision', section: 'simulation' },
       { id: 'view.collision.open', label: 'Open Collision Findings', section: 'simulation' },
       { id: 'connectivity.mode.off', label: 'Off', section: 'connectivity' },
+      { id: 'connectivity.mode.client', label: 'OPC UA Client', section: 'connectivity' },
       { id: 'connectivity.mode.server', label: 'OPC UA Server', section: 'connectivity' },
+      { id: 'connectivity.mode.bridge', label: 'OPC UA Bridge', section: 'connectivity' },
       { id: 'connectivity.details.open', label: 'Gateway Details', section: 'connectivity' },
       { id: 'view.sidebar', label: 'Scene and Job Sidebar', section: 'view' },
       { id: 'view.inspector', label: 'Inspector', section: 'view' },
@@ -515,6 +520,6 @@ describe('composeAppCommandsV4', () => {
     expect(help.open).toHaveBeenCalledWith('stepImport')
     expect(help.open).toHaveBeenCalledWith('opcUaMapping')
     expect(help.open).toHaveBeenCalledWith('about')
-    for (const id of ['job.pause', 'job.resume', 'connectivity.mode.client', 'connectivity.mode.bridge', 'model.importRobotStep', 'robot.geometry.open', 'robot.kinematics.open', 'robot.rapid.open', 'scene.opcUaMapping.open', 'coordinate.frames.open'] as const) expect(registry.get(id)).toBeNull()
+    for (const id of ['job.pause', 'job.resume', 'model.importRobotStep', 'robot.geometry.open', 'robot.kinematics.open', 'robot.rapid.open', 'scene.opcUaMapping.open', 'coordinate.frames.open'] as const) expect(registry.get(id)).toBeNull()
   })
 })
