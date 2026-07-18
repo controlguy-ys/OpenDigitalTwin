@@ -11,6 +11,7 @@ import type { JobCommandServiceV4 } from '../../jobs/v4/job-command-service.js'
 import { createJobRuntimeStoreV4 } from '../../jobs/v4/job-runtime-store.js'
 import type { RobotJobPlaybackControllerV4 } from '../../jobs/v4/simulation-clock.js'
 import { TimelineV4 } from './Timeline.js'
+import type { JobOperatorServiceV4 } from '../../jobs/v4/job-operator-service.js'
 
 function pose(speedPercentToNext: number): RobotJobStepV4 {
   return {
@@ -412,5 +413,19 @@ describe('TimelineV4', () => {
 
     await waitFor(() => expect(setJointPoseSpeed).toHaveBeenCalledOnce())
     expect(state.playback.startJob).not.toHaveBeenCalled()
+  })
+
+  it('delegates explicit Start and Stop actions through an injected Job operator', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    const operator: JobOperatorServiceV4 = {
+      canStart: vi.fn(() => true),
+      start: vi.fn(async () => undefined),
+      canCancel: vi.fn(() => false),
+      cancel: vi.fn(async () => undefined),
+    }
+    render(<TimelineV4 {...state} jobId="job-A" jobOperator={operator} robotId="robot-A" />)
+    await user.click(screen.getByRole('button', { name: 'Start Job' }))
+    expect(operator.start).toHaveBeenCalledWith('robot-A', 'job-A')
   })
 })

@@ -25,6 +25,10 @@ import type {
 } from '../../robot/v4/robot-runtime-registry.js'
 import { useStore } from 'zustand'
 import type { StoreApi } from 'zustand/vanilla'
+import {
+  createRobotOperatorCommandServiceV4,
+  type RobotOperatorCommandServiceV4,
+} from './robot-operator-command-service.js'
 
 export interface JointInspectorPropsV4 {
   readonly project: WorkcellProjectV4
@@ -33,6 +37,7 @@ export interface JointInspectorPropsV4 {
   readonly robots: StoreApi<RobotRuntimeRegistryV4>
   readonly jobs: StoreApi<JobRuntimeStoreV4>
   readonly commands: JobCommandServiceV4
+  readonly robotOperator?: RobotOperatorCommandServiceV4
 }
 
 type JointDraftsV4 = Record<string, string>
@@ -48,17 +53,6 @@ function defineOwnValueV4<T>(record: Record<string, T>, key: string, value: T): 
     value,
     writable: true,
   })
-}
-
-function createJointValueRecordV4(
-  joints: readonly RobotJointDefinitionV4[],
-  readValue: (joint: RobotJointDefinitionV4) => number,
-): Readonly<Record<string, number>> {
-  const values = createOwnRecordV4<number>()
-  for (const joint of joints) {
-    defineOwnValueV4(values, joint.id, readValue(joint))
-  }
-  return values
 }
 
 function createPartialJointValueV4(
@@ -152,6 +146,7 @@ export function JointInspectorV4({
   robots,
   jobs,
   commands,
+  robotOperator: suppliedRobotOperator,
 }: JointInspectorPropsV4): ReactNode {
   const runtimeSelector = useCallback(
     (state: RobotRuntimeRegistryV4) => selectedRuntimeV4(state, robotId),
@@ -177,12 +172,13 @@ export function JointInspectorV4({
       : project.robotDefinitions.find((candidate) => candidate.id === robot.definitionId) ?? null,
     [project, robot],
   )
-  const selectedJob = useMemo(
-    () => selectedJobId === null
-      ? null
-      : project.jobs.find((candidate) => candidate.id === selectedJobId) ?? null,
-    [project, selectedJobId],
-  )
+  const defaultRobotOperator = useMemo(() => createRobotOperatorCommandServiceV4({
+    readProject: () => project,
+    robots,
+    jobs,
+    jobCommands: commands,
+  }), [commands, jobs, project, robots])
+  const robotOperator = suppliedRobotOperator ?? defaultRobotOperator
   const [drafts, setDrafts] = useState<JointDraftsV4>(() => (
     createJointDraftsV4(definition, selectedRuntime)
   ))
@@ -257,15 +253,10 @@ export function JointInspectorV4({
   }
 
   const writeHome = (): void => {
-    const actionWriter = allowedWriterAtActionV4(robots, jobs, robotId)
-    if (actionWriter === null || definition === null) return
+    if (!robotOperator.canHome(robotId)) return
     setCommandError(null)
     try {
-      robots.getState().writeJointValues(
-        robotId,
-        createJointValueRecordV4(definition.joints, (joint) => joint.home),
-        actionWriter,
-      )
+      robotOperator.home(robotId)
     } catch (error) {
       setCommandError(errorMessageV4(error))
     }
@@ -274,42 +265,21 @@ export function JointInspectorV4({
   const setGripper = (state: 'OPEN' | 'CLOSED'): void => {
     setCommandError(null)
     try {
-      robots.getState().setGripperState(robotId, state)
+      robotOperator.setGripper(robotId, state)
     } catch (error) {
       setCommandError(errorMessageV4(error))
     }
   }
 
-  const saveAllowed = selectedRuntime !== null
-    && definition !== null
-    && selectedJob !== null
-    && selectedJob.robotId === robotId
-    && !selectedRobotRunning
-    && !savePending
+  const saveAllowed = robotOperator.canSavePose(robotId, selectedJobId) && !savePending
 
   const savePose = (): void => {
-    const latestSelectedJob = selectedJobId === null
-      ? null
-      : project.jobs.find((candidate) => candidate.id === selectedJobId) ?? null
-    const selectedRunning = selectedJobRuntimeV4(jobs.getState(), robotId)?.state === 'RUNNING'
-    if (
-      savePendingRef.current
-      || definition === null
-      || latestSelectedJob === null
-      || latestSelectedJob.robotId !== robotId
-      || selectedRunning
-    ) return
-    const latest = selectedRuntimeV4(robots.getState(), robotId)
-    if (latest === null) return
-    const values = createJointValueRecordV4(
-      definition.joints,
-      (joint) => liveJointValueV4(latest, joint.id),
-    )
+    if (savePendingRef.current || selectedJobId === null || !robotOperator.canSavePose(robotId, selectedJobId)) return
     savePendingRef.current = true
     setSavePending(true)
     setCommandError(null)
     void Promise.resolve()
-      .then(() => commands.saveJointPose(latestSelectedJob.id, values, 100))
+      .then(() => robotOperator.savePose(robotId, selectedJobId))
       .catch((error: unknown) => setCommandError(errorMessageV4(error)))
       .finally(() => {
         savePendingRef.current = false
@@ -384,7 +354,7 @@ export function JointInspectorV4({
       )}
 
       <div className="inspector-actions-v4">
-        <button disabled={allowedWriter === null} onClick={writeHome} type="button">
+        <button disabled={!robotOperator.canHome(robotId)} onClick={writeHome} type="button">
           Robot Home
         </button>
         <button disabled={selectedRuntime === null} onClick={() => setGripper('OPEN')} type="button">

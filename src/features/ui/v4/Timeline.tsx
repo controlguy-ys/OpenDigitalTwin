@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Play, Square, Trash2 } from 'lucide-react'
-import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type {
   RobotIdV4,
   RobotJobIdV4,
@@ -12,6 +12,10 @@ import type {
   RobotJobRuntimeStateV4,
 } from '../../jobs/v4/job-runtime-store.js'
 import type { RobotJobPlaybackControllerV4 } from '../../jobs/v4/simulation-clock.js'
+import {
+  createJobOperatorServiceV4,
+  type JobOperatorServiceV4,
+} from '../../jobs/v4/job-operator-service.js'
 
 export interface TimelinePropsV4 {
   readonly project: WorkcellProjectV4
@@ -21,6 +25,7 @@ export interface TimelinePropsV4 {
   readonly commands: JobCommandServiceV4
   readonly playback: RobotJobPlaybackControllerV4
   readonly disabled?: boolean
+  readonly jobOperator?: JobOperatorServiceV4
 }
 
 function useRobotRuntimeV4(
@@ -64,7 +69,14 @@ export function TimelineV4({
   commands,
   playback,
   disabled = false,
+  jobOperator: suppliedJobOperator,
 }: TimelinePropsV4): ReactNode {
+  const defaultJobOperator = useMemo(() => createJobOperatorServiceV4({
+    readProject: () => project,
+    jobs,
+    playback,
+  }), [jobs, playback, project])
+  const jobOperator = suppliedJobOperator ?? defaultJobOperator
   const runtime = useRobotRuntimeV4(jobs, robotId)
   const job = project.jobs.find((candidate) => (
     candidate.id === jobId && candidate.robotId === robotId
@@ -141,15 +153,16 @@ export function TimelineV4({
         <div className="timeline-controls">
           <button
             aria-label="Start Job"
-            disabled={authoringDisabled || job === null}
+            disabled={authoringDisabled || robotId === null || !jobOperator.canStart(robotId, jobId)}
             onClick={() => {
               const currentJob = job
               if (
                 currentJob === null
+                || robotId === null
                 || pendingCommandTokenRef.current !== null
-                || !canAuthorCurrentJob()
+                || !jobOperator.canStart(robotId, jobId)
               ) return
-              runPlaybackCommand('start', () => playback.startJob(currentJob.id))
+              runPlaybackCommand('start', () => jobOperator.start(robotId, currentJob.id))
             }}
             title="Start Job"
             type="button"
@@ -158,18 +171,11 @@ export function TimelineV4({
           </button>
           <button
             aria-label="Stop Job"
-            disabled={disabled || robotId === null || !running}
+            disabled={disabled || robotId === null || !jobOperator.canCancel(robotId)}
             onClick={() => {
               if (disabled || robotId === null) return
-              const currentRuntime = currentRobotRuntimeV4(
-                jobs,
-                project.revisionId,
-                robotId,
-              )
-              if (currentRuntime?.state !== 'RUNNING') return
-              runPlaybackCommand('stop', () => (
-                playback.cancelRobotJob(robotId, 'Operator stopped Job.')
-              ))
+              if (!jobOperator.canCancel(robotId)) return
+              runPlaybackCommand('stop', () => jobOperator.cancel(robotId))
             }}
             title="Stop Job"
             type="button"

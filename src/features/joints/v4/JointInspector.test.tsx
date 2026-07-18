@@ -16,6 +16,7 @@ import {
 } from '../../jobs/v4/job-runtime-store.js'
 import { createRobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
 import { JointInspectorV4 } from './JointInspector.js'
+import type { RobotOperatorCommandServiceV4 } from './robot-operator-command-service.js'
 
 interface JointSpecV4 {
   readonly id: string
@@ -165,7 +166,11 @@ function makeCommands() {
   return { commands, saveJointPose }
 }
 
-function makeHarness(project: WorkcellProjectV4, selectedJobId: string | null = null) {
+function makeHarness(
+  project: WorkcellProjectV4,
+  selectedJobId: string | null = null,
+  robotOperator?: RobotOperatorCommandServiceV4,
+) {
   const robots = createRobotRuntimeRegistryV4()
   const jobs = createJobRuntimeStoreV4()
   robots.getState().replaceProject(project)
@@ -178,6 +183,7 @@ function makeHarness(project: WorkcellProjectV4, selectedJobId: string | null = 
       project={project}
       robotId="robot-a"
       robots={robots}
+      {...(robotOperator === undefined ? {} : { robotOperator })}
       selectedJobId={selectedJobId}
     />,
   )
@@ -484,5 +490,26 @@ describe('JointInspectorV4', () => {
     expect(setGripperState).toHaveBeenCalledWith('robot-b', 'OPEN')
     expect(within(screen.getByRole('group', { name: 'Robot B Joint controls' }))
       .getAllByRole('spinbutton')).toHaveLength(1)
+  })
+
+  it('delegates Robot Home, Gripper, and Save Pose through an injected operator', async () => {
+    const user = userEvent.setup()
+    const project = makeProject([{ id: 'axis-a' }], {
+      jobs: [{ id: 'job-a', name: 'Job A', robotId: 'robot-a', steps: [] }],
+    })
+    const operator: RobotOperatorCommandServiceV4 = {
+      canHome: vi.fn(() => true),
+      home: vi.fn(),
+      setGripper: vi.fn(),
+      canSavePose: vi.fn(() => true),
+      savePose: vi.fn(async () => undefined),
+    }
+    makeHarness(project, 'job-a', operator)
+    await user.click(screen.getByRole('button', { name: 'Robot Home' }))
+    await user.click(screen.getByRole('button', { name: 'Close Gripper' }))
+    await user.click(screen.getByRole('button', { name: 'Save Pose' }))
+    await waitFor(() => expect(operator.savePose).toHaveBeenCalledWith('robot-a', 'job-a'))
+    expect(operator.home).toHaveBeenCalledWith('robot-a')
+    expect(operator.setGripper).toHaveBeenCalledWith('robot-a', 'CLOSED')
   })
 })

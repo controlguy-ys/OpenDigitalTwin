@@ -12,6 +12,8 @@ import type { JobCommandServiceV4 } from './job-command-service.js'
 import { createJobRuntimeStoreV4 } from './job-runtime-store.js'
 import type { RobotJobPlaybackControllerV4 } from './simulation-clock.js'
 import { RobotJobListV4 } from './RobotJobList.js'
+import type { JobOperatorServiceV4 } from './job-operator-service.js'
+import type { UserPromptPortV4 } from '../../ui/v4/user-prompt-port.js'
 
 function jointPose(speedPercentToNext = 100): RobotJobStepV4 {
   return {
@@ -682,5 +684,32 @@ describe('RobotJobListV4', () => {
     }
     expect(confirm).toHaveBeenCalledTimes(2)
     expect(commands.deleteJob).toHaveBeenCalledOnce()
+  })
+
+  it('uses injected Job operator and prompt ports without retargeting the selected Robot', async () => {
+    const user = userEvent.setup()
+    const state = harness()
+    const operator: JobOperatorServiceV4 = {
+      canStart: vi.fn(() => true), start: vi.fn(async () => undefined),
+      canCancel: vi.fn(() => false), cancel: vi.fn(async () => undefined),
+    }
+    const promptPort: UserPromptPortV4 = { requestText: vi.fn(async () => null) }
+    const commands = commandService()
+    render(
+      <RobotJobListV4
+        {...state}
+        commands={commands}
+        jobOperator={operator}
+        playback={playbackController()}
+        promptPort={promptPort}
+        selectedRobotId="robot-A"
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Start Job' }))
+    expect(operator.start).toHaveBeenCalledWith('robot-A', 'job-A-main')
+    await user.click(screen.getByRole('button', { name: 'Alpha Main commands' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    await waitFor(() => expect(promptPort.requestText).toHaveBeenCalledOnce())
+    expect(commands.renameJob).not.toHaveBeenCalled()
   })
 })

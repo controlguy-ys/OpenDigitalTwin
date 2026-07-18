@@ -156,4 +156,19 @@ describe('CollisionPanelV4', () => {
     )
     expect(screen.getByRole('button', { name: 'Validate Collision' })).toBeDisabled()
   })
+
+  it('renders controller-owned rejected-query errors without unhandled click rejection', async () => {
+    const user = userEvent.setup()
+    render(
+      <CollisionPanelV4
+        onFocus={vi.fn()}
+        policy={policy()}
+        projectRevisionId="revision-error"
+        proxies={[proxy(robotLinkCollisionIdV4('robot-1', 'base'), 'robot-link')]}
+        query={() => Promise.reject(new Error('Collision query unavailable'))}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Validate Collision' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Collision query unavailable')
+  })
 })

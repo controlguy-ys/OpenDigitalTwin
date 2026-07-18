@@ -1,6 +1,7 @@
 import { MoreHorizontal, Play, Plus, Square } from 'lucide-react'
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -21,6 +22,14 @@ import type {
   RobotJobRuntimeStateV4,
 } from './job-runtime-store.js'
 import type { RobotJobPlaybackControllerV4 } from './simulation-clock.js'
+import {
+  createBrowserUserPromptPortV4,
+  type UserPromptPortV4,
+} from '../../ui/v4/user-prompt-port.js'
+import {
+  createJobOperatorServiceV4,
+  type JobOperatorServiceV4,
+} from './job-operator-service.js'
 
 export interface RobotJobListPropsV4 {
   readonly project: WorkcellProjectV4
@@ -29,6 +38,8 @@ export interface RobotJobListPropsV4 {
   readonly jobs: StoreApi<JobRuntimeStoreV4>
   readonly commands: JobCommandServiceV4
   readonly playback: RobotJobPlaybackControllerV4
+  readonly jobOperator?: JobOperatorServiceV4
+  readonly promptPort?: UserPromptPortV4
 }
 
 function countLabel(count: number, singular: string, plural: string): string {
@@ -99,7 +110,17 @@ export function RobotJobListV4({
   jobs,
   commands,
   playback,
+  jobOperator: suppliedJobOperator,
+  promptPort: suppliedPromptPort,
 }: RobotJobListPropsV4): ReactNode {
+  const defaultJobOperator = useMemo(() => createJobOperatorServiceV4({
+    readProject: () => project,
+    jobs,
+    playback,
+  }), [jobs, playback, project])
+  const jobOperator = suppliedJobOperator ?? defaultJobOperator
+  const defaultPromptPort = useMemo(() => createBrowserUserPromptPortV4(), [])
+  const promptPort = suppliedPromptPort ?? defaultPromptPort
   const selectedJobId = useSelectedJobIdV4(interaction, selectedRobotId)
   const runtime = useRobotJobRuntimeV4(jobs, selectedRobotId)
   const robotJobs = project.jobs.filter((job) => job.robotId === selectedRobotId)
@@ -316,26 +337,17 @@ export function RobotJobListV4({
         </button>
         <button
           aria-label="Start Job"
-          disabled={selectedJob === null || authoringLocked}
+          disabled={selectedRobotId === null || authoringLocked || !jobOperator.canStart(selectedRobotId, selectedJobId)}
           onClick={() => {
             if (
               selectedRobotId === null
               || pendingCommandTokenRef.current !== null
               || !isCurrentActiveRobot(selectedRobotId)
             ) return
-            const currentRuntime = currentRobotRuntimeV4(
-              jobs,
-              project.revisionId,
-              selectedRobotId,
-            )
-            if (currentRuntime === null || currentRuntime.state === 'RUNNING') return
             const currentJobId = interaction.getState()
               .selectedJobIdsByRobotId.get(selectedRobotId) ?? null
-            const currentJob = project.jobs.find((job) => (
-              job.id === currentJobId && job.robotId === selectedRobotId
-            ))
-            if (currentJob === undefined) return
-            runPlaybackCommand('start', () => playback.startJob(currentJob.id))
+            if (!jobOperator.canStart(selectedRobotId, currentJobId)) return
+            runPlaybackCommand('start', () => jobOperator.start(selectedRobotId, currentJobId!))
           }}
           title="Start Job"
           type="button"
@@ -344,18 +356,11 @@ export function RobotJobListV4({
         </button>
         <button
           aria-label="Cancel Job"
-          disabled={selectedRobotId === null || !running}
+          disabled={selectedRobotId === null || !jobOperator.canCancel(selectedRobotId)}
           onClick={() => {
             if (selectedRobotId === null || !isCurrentActiveRobot(selectedRobotId)) return
-            const currentRuntime = currentRobotRuntimeV4(
-              jobs,
-              project.revisionId,
-              selectedRobotId,
-            )
-            if (currentRuntime?.state !== 'RUNNING') return
-            runPlaybackCommand('cancel', () => (
-              playback.cancelRobotJob(selectedRobotId, 'Operator cancelled Job.')
-            ))
+            if (!jobOperator.canCancel(selectedRobotId)) return
+            runPlaybackCommand('cancel', () => jobOperator.cancel(selectedRobotId))
           }}
           title="Cancel Job"
           type="button"
@@ -456,7 +461,11 @@ export function RobotJobListV4({
                 `rename:${contextJob.id}`,
                 contextJob.robotId,
                 async () => {
-                  const name = window.prompt('Job name', contextJob.name)
+                  const name = await promptPort.requestText({
+                    title: 'Job name',
+                    initialValue: contextJob.name,
+                    required: true,
+                  })
                   closeContextMenu()
                   if (name !== null) await commands.renameJob(contextJob.id, name)
                 },
