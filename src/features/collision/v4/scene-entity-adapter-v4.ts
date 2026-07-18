@@ -24,6 +24,11 @@ import {
 export interface CollisionGeometryProxyV4 {
   readonly entity: GeometryCollisionEntityV4
   readonly effectiveVisible: boolean
+  /**
+   * Reads a current transform without replacing the registered collision
+   * geometry. Static proxies intentionally omit this hook.
+   */
+  readonly resolveEntity?: () => GeometryCollisionEntityV4
 }
 
 function rigidTransformMatrixV4(poseCandidate: RigidTransformV4): Matrix4Tuple {
@@ -112,6 +117,7 @@ export function spatialEntityCollisionProxyV4(input: {
   readonly entity: SpatialEntityV4
   readonly worldPose: RigidTransformV4
   readonly effectiveVisible: boolean
+  readonly resolveWorldPose?: () => RigidTransformV4
 }): CollisionGeometryProxyV4 | null {
   const { geometry } = input.entity
   const boxes: readonly CollisionBox[] = geometry.kind === 'box'
@@ -133,15 +139,22 @@ export function spatialEntityCollisionProxyV4(input: {
           encodeRuntimeIdentitySegmentV4(box.id),
         ))
   if (boxes.length === 0) return null
-  return Object.freeze({
-    entity: validateGeometryCollisionEntityV4({
+  const entity = validateGeometryCollisionEntityV4({
       id: spatialEntityCollisionIdV4(input.entity.id),
       name: input.entity.name,
       category: 'spatial-entity',
       worldMatrix: rigidTransformMatrixV4(input.worldPose),
       boxes,
-    }),
+    })
+  return Object.freeze({
+    entity,
     effectiveVisible: input.effectiveVisible,
+    ...(input.resolveWorldPose === undefined ? {} : {
+      resolveEntity: (): GeometryCollisionEntityV4 => Object.freeze({
+        ...entity,
+        worldMatrix: rigidTransformMatrixV4(input.resolveWorldPose!()),
+      }),
+    }),
   })
 }
 
@@ -149,6 +162,8 @@ export function visibleCollisionEntitiesV4(
   proxies: readonly CollisionGeometryProxyV4[],
 ): readonly GeometryCollisionEntityV4[] {
   return Object.freeze(
-    proxies.filter(({ effectiveVisible }) => effectiveVisible).map(({ entity }) => entity),
+    proxies
+      .filter(({ effectiveVisible }) => effectiveVisible)
+      .map(({ entity, resolveEntity }) => resolveEntity?.() ?? entity),
   )
 }

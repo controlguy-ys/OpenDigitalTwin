@@ -20,6 +20,7 @@ import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-supp
 import { validateWorkcellProjectV4 } from '../../../core/project-v4/validate'
 import type { SpatialEntityV4, WorkcellProjectV4 } from '../../../core/project-v4/types'
 import { createObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4'
+import { visibleCollisionEntitiesV4 } from '../../collision/v4/scene-entity-adapter-v4'
 import { buildInitialRobotRuntimeStatesV4 } from '../../robot/v4/robot-runtime-registry'
 import {
   selectSceneRuntimeV4,
@@ -1153,7 +1154,7 @@ describe('SpatialEntitySceneV4', () => {
 
       expect(root.position.x).toBeCloseTo(3.25)
       await waitFor(() => {
-        expect(registration!.collisionProxies[0]!.entity.worldMatrix.slice(12, 15))
+        expect(visibleCollisionEntitiesV4(registration!.collisionProxies)[0]!.worldMatrix.slice(12, 15))
           .toEqual([3.25, 0, 0])
         expect(screen.getByRole('status', { name: 'box-entity numeric status' }))
           .toHaveTextContent('44')
@@ -1202,6 +1203,100 @@ describe('SpatialEntitySceneV4', () => {
           .toHaveTextContent('43')
       })
       expect(firstMesh(root).geometry).toBe(geometry)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shares an intermediate live pose between rendering and the collision query without republishing geometry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(5_000)
+    fiberCapture.frame = null
+    try {
+      const project = liveSpatialProject()
+      const sceneRuntime = runtimeFor(project)
+      const objectRuntime = createObjectRuntimeStateV4(project)
+      expect(objectRuntime.ingest(liveBatch(1, 1), 5_000)).toBe(true)
+      const registrations: SpatialEntitySceneRegistrationV4[] = []
+      render(
+        <SpatialEntitySceneV4
+          objectRuntime={objectRuntime}
+          onRegister={(value) => { if (value !== null) registrations.push(value) }}
+          project={project}
+          sceneRuntime={sceneRuntime}
+        />,
+      )
+      await waitFor(() => expect(registrations).toHaveLength(1))
+      const registration = registrations[0]!
+      const root = registration.roots.get('box-entity')!
+      const geometry = firstMesh(root).geometry
+
+      vi.setSystemTime(5_100)
+      expect(objectRuntime.ingest(liveBatch(2, 2), 5_100)).toBe(true)
+      vi.setSystemTime(5_200)
+      expect(objectRuntime.ingest(liveBatch(3, 3), 5_200)).toBe(true)
+      vi.setSystemTime(5_350)
+      act(() => { fiberCapture.frame?.() })
+
+      expect(root.position.x).toBeCloseTo(2.75)
+      expect(visibleCollisionEntitiesV4(registration.collisionProxies)[0]!.worldMatrix.slice(12, 15))
+        .toEqual([2.75, 0, 0])
+      expect(registrations).toHaveLength(1)
+      expect(firstMesh(root).geometry).toBe(geometry)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('inherits a live parent moving frame for a manually owned child Object', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(5_000)
+    fiberCapture.frame = null
+    try {
+      const source = liveSpatialProject()
+      const project = validateWorkcellProjectV4({
+        ...source,
+        spatialEntities: [
+          ...source.spatialEntities,
+          {
+            ...entity('child-entity', {
+              kind: 'box',
+              dimensionsM: [0.2, 0.2, 0.2],
+              color: '#aabbcc',
+            }),
+            parentFrameId: 'box-entity-motion',
+            localPose: { positionM: [0.5, 0, 0], quaternion: [0, 0, 0, 1] },
+          },
+        ],
+      })
+      const objectRuntime = createObjectRuntimeStateV4(project)
+      expect(objectRuntime.ingest(liveBatch(1, 1), 5_000)).toBe(true)
+      expect(resolveSpatialEntityWorldPoseV4(
+        project,
+        runtimeFor(project),
+        project.spatialEntities.find(({ id }) => id === 'child-entity')!,
+        objectRuntime,
+        5_000,
+      ).positionM).toEqual([1.5, 0, 0])
+
+      let registration: SpatialEntitySceneRegistrationV4 | null = null
+      render(
+        <SpatialEntitySceneV4
+          objectRuntime={objectRuntime}
+          onRegister={(value) => { if (value !== null) registration = value }}
+          project={project}
+          sceneRuntime={runtimeFor(project)}
+        />,
+      )
+      await waitFor(() => expect(registration?.roots.size).toBe(2))
+      const childRoot = registration!.roots.get('child-entity')!
+
+      vi.setSystemTime(5_100)
+      expect(objectRuntime.ingest(liveBatch(2, 2), 5_100)).toBe(true)
+      vi.setSystemTime(5_350)
+      act(() => { fiberCapture.frame?.() })
+
+      expect(childRoot.position.x).toBeCloseTo(2.5)
     } finally {
       vi.useRealTimers()
     }

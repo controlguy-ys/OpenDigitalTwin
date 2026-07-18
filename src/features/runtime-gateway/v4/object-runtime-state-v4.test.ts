@@ -353,4 +353,62 @@ describe('ObjectRuntimeStateV4', () => {
       pose: expect.objectContaining({ positionM: [1, 0, 0] }),
     }))
   })
+
+  it('holds the last valid Object pose and Status through a gateway session reset until a fresh baseline arrives', () => {
+    const runtime = createObjectRuntimeStateV4(mappedProject())
+    const status = {
+      mappingId: 'mapping-box-status', coherenceGroupId: null, value: 42,
+      unit: 'number', quality: 'GOOD' as const, statusCode: 'Good',
+    }
+    expect(runtime.ingest(batch(10, [poseValue('mapping-box-live', 10), status]), 5_100)).toBe(true)
+
+    runtime.resetGatewaySession()
+
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 5_200)).toEqual(expect.objectContaining({
+      pose: expect.objectContaining({ positionM: [10, 0, 0] }),
+      quality: 'STALE',
+      statusCode: 'BadNoCommunication',
+    }))
+    expect(runtime.readEntityStatus('box-live', 5_200)).toEqual(expect.objectContaining({
+      value: 42,
+      quality: 'STALE',
+      statusCode: 'BadNoCommunication',
+    }))
+
+    expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1), {
+      ...status,
+      value: 7,
+    }]), 5_300)).toBe(true)
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 5_300)?.pose.positionM)
+      .toEqual([1, 0, 0])
+    expect(runtime.readEntityStatus('box-live', 5_300)?.value).toBe(7)
+  })
+
+  it('does not refresh stale timing when a newer wire sequence carries an older source timestamp', () => {
+    const runtime = createObjectRuntimeStateV4(mappedProject())
+    expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)]), 5_100)).toBe(true)
+    expect(runtime.ingest(batch(2, [poseValue('mapping-box-live', 2)], {
+      sourceTimestampMs: 999,
+    }), 7_000)).toBe(false)
+
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 6_101)).toEqual(expect.objectContaining({
+      quality: 'STALE',
+      statusCode: 'BadNoCommunication',
+    }))
+  })
+
+  it('holds the last interpolated display pose across a reconnect instead of jumping to the newest target', () => {
+    const runtime = createObjectRuntimeStateV4(mappedProject())
+    expect(runtime.ingest(batch(1, [poseValue('mapping-box-live', 1)]), 5_000)).toBe(true)
+    expect(runtime.ingest(batch(2, [poseValue('mapping-box-live', 2)]), 5_100)).toBe(true)
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 5_250)?.pose.positionM)
+      .toEqual([1.5, 0, 0])
+
+    runtime.resetGatewaySession(5_250)
+
+    expect(runtime.sampleEntityFrame('box-live', 'box-live-motion', 5_250)).toEqual(expect.objectContaining({
+      pose: expect.objectContaining({ positionM: [1.5, 0, 0] }),
+      quality: 'STALE',
+    }))
+  })
 })

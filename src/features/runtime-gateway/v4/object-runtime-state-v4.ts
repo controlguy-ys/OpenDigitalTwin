@@ -35,7 +35,7 @@ export interface ObjectRuntimeNumericStatusV4 {
 
 export interface ObjectRuntimeStateV4 {
   ingest(value: unknown, receivedTimestampMs?: number): boolean
-  resetGatewaySession(): void
+  resetGatewaySession(nowMs?: number): void
   sampleEntityFrame(
     entityId: SpatialEntityIdV4,
     frameId: FrameIdV4,
@@ -56,6 +56,10 @@ interface PoseChannelV4 {
   readonly frameId: FrameIdV4
   readonly publishingIntervalMs: number
   buffer: RuntimePoseBufferV1
+  heldPose: {
+    readonly sourceTimestampMs: number
+    readonly pose: WorkcellProjectV4['spatialEntities'][number]['localPose']
+  } | null
   latestSignalTimestampMs: number
   latestReceiptTimestampMs: number
   quality: Exclude<ObjectRuntimeQualityV4, 'STALE'>
@@ -212,6 +216,7 @@ function compileChannelsV4(project: WorkcellProjectV4): readonly RuntimeChannelV
         `${entityId}:${frameId}`,
         publishingIntervalMs,
       ),
+      heldPose: null,
       publishingIntervalMs,
       latestSignalTimestampMs: -1,
       latestReceiptTimestampMs: -1,
@@ -282,20 +287,25 @@ export function createObjectRuntimeStateV4(
   )
   const latestSequenceByEndpoint = new Map<string, number>()
 
-  const resetGatewaySession = (): void => {
+  const resetGatewaySession = (nowCandidate = Date.now()): void => {
+    const nowMs = positiveSafeTimestampV4(nowCandidate, 'Current time')
     latestSequenceByEndpoint.clear()
     for (const channel of channels) {
       channel.latestSignalTimestampMs = -1
       if (channel.kind === 'pose') {
+        const displayed = channel.buffer.sample(nowMs)
+        if (displayed !== null) {
+          channel.heldPose = {
+            sourceTimestampMs: displayed.sourceTimestampMs,
+            pose: displayed.pose,
+          }
+        }
         channel.buffer = createRuntimePoseBufferV1(
           `${channel.entityId}:${channel.frameId}`,
           channel.publishingIntervalMs,
         )
         channel.latestReceiptTimestampMs = -1
       } else {
-        channel.value = null
-        channel.sourceTimestampMs = 0
-        channel.receivedTimestampMs = 0
         channel.latestReceiptTimestampMs = -1
       }
       channel.quality = 'BAD'
@@ -327,8 +337,8 @@ export function createObjectRuntimeStateV4(
     for (const mapped of batch.values) {
       const channel = channelsByMappingId.get(mapped.mappingId)
       if (channel === undefined || channel.endpointId !== batch.endpointId) continue
-      channel.latestReceiptTimestampMs = receivedTimestampMs
       if (batch.sourceTimestampMs < channel.latestSignalTimestampMs) continue
+      channel.latestReceiptTimestampMs = receivedTimestampMs
       if (mapped.quality === 'BAD') {
         channel.latestSignalTimestampMs = batch.sourceTimestampMs
         channel.quality = mapped.quality
@@ -353,6 +363,10 @@ export function createObjectRuntimeStateV4(
         })
         if (accepted) {
           channel.latestSignalTimestampMs = batch.sourceTimestampMs
+          channel.heldPose = {
+            sourceTimestampMs: batch.sourceTimestampMs,
+            pose,
+          }
           channel.quality = mapped.quality
           channel.statusCode = mapped.statusCode
           applied = true
@@ -384,14 +398,15 @@ export function createObjectRuntimeStateV4(
     const channel = poseChannelsByKey.get(`${entityId}:${frameId}`)
     if (channel === undefined) return null
     const result = channel.buffer.sample(nowMs)
-    if (result === null) return null
+    const held = channel.heldPose
+    if (result === null && held === null) return null
     const staleAfterMs = Math.max(1_000, 3 * channel.publishingIntervalMs)
     const stale = nowMs - channel.latestReceiptTimestampMs > staleAfterMs
     return Object.freeze({
       entityId,
       frameId,
-      sourceTimestampMs: result.sourceTimestampMs,
-      pose: result.pose,
+      sourceTimestampMs: result?.sourceTimestampMs ?? held!.sourceTimestampMs,
+      pose: result?.pose ?? held!.pose,
       quality: stale ? 'STALE' : channel.quality,
       statusCode: stale ? 'BadNoCommunication' : channel.statusCode,
     })

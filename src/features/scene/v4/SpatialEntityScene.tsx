@@ -2,6 +2,7 @@ import { Html } from '@react-three/drei/web/Html.js'
 import { createPortal, useFrame, type ThreeEvent } from '@react-three/fiber'
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -26,6 +27,7 @@ import {
 } from '../../../core/project-v4/rigid-transform'
 import type {
   SceneGroupIdV4,
+  FrameIdV4,
   SpatialEntityIdV4,
   SpatialEntityV4,
   WorkcellProjectV4,
@@ -78,6 +80,7 @@ interface LocalBoundsV4 {
 
 interface SpatialOverlayV4 {
   readonly anchor: Object3D
+  readonly entityId: SpatialEntityIdV4
   readonly name: string
   readonly value: number
 }
@@ -120,6 +123,10 @@ const NO_ATTEMPT_FAILURE_V4: AttemptFailureV4 = Object.freeze({
 })
 
 const LIVE_RUNTIME_PUBLICATION_INTERVAL_MS_V4 = 100
+const IDENTITY_POSE_V4: RigidTransformV4 = Object.freeze({
+  positionM: Object.freeze([0, 0, 0] as const),
+  quaternion: Object.freeze([0, 0, 0, 1] as const),
+})
 
 function attemptV4(
   failure: AttemptFailureV4,
@@ -346,6 +353,108 @@ function createSceneResourcesV4(
   }
 }
 
+export interface SpatialEntityEffectiveTransformRuntimeV4 {
+  update(nowMs: number): void
+  readEntityWorldPose(entityId: SpatialEntityIdV4): RigidTransformV4
+  isEntityDynamicallyDriven(entityId: SpatialEntityIdV4): boolean
+}
+
+/**
+ * The render loop and collision resolver share this one pose cache. The
+ * Project graph is already validated, but the bounded guards preserve a
+ * deterministic persisted fallback if an invalid graph somehow reaches a
+ * live renderer.
+ */
+export function createSpatialEntityEffectiveTransformRuntimeV4(
+  project: WorkcellProjectV4,
+  sceneRuntime: SceneRuntimeProjectionV4,
+  objectRuntime: ObjectRuntimeStateV4 | null,
+): SpatialEntityEffectiveTransformRuntimeV4 {
+  if (sceneRuntime.projectRevisionId !== project.revisionId) {
+    throw new Error('Spatial Entity Scene runtime and Project revisions must match.')
+  }
+  const entitiesById = new Map(project.spatialEntities.map((entity) => [entity.id, entity]))
+  const maximumDepth = project.spatialEntities.length + sceneRuntime.globalFrames.size + 1
+  interface ResolvedPoseV4 {
+    readonly pose: RigidTransformV4
+    readonly dynamic: boolean
+  }
+  const entityWorldPoses = new Map<SpatialEntityIdV4, ResolvedPoseV4>()
+  const frameWorldPoses = new Map<FrameIdV4, ResolvedPoseV4>()
+
+  const persistedEntityPose = (entityId: SpatialEntityIdV4): RigidTransformV4 => {
+    const persisted = sceneRuntime.entities.get(entityId)
+    if (persisted?.kind !== 'spatial-entity') {
+      throw new Error(`Spatial Entity ${entityId} has no V4 runtime projection.`)
+    }
+    return persisted.worldPose
+  }
+
+  const update = (nowMs: number): void => {
+    const resolvingEntities = new Set<SpatialEntityIdV4>()
+    const resolvingFrames = new Set<FrameIdV4>()
+    entityWorldPoses.clear()
+    frameWorldPoses.clear()
+
+    const resolveEntity = (entityId: SpatialEntityIdV4, depth: number): ResolvedPoseV4 => {
+      const cached = entityWorldPoses.get(entityId)
+      if (cached !== undefined) return cached
+      if (depth > maximumDepth || resolvingEntities.has(entityId)) {
+        return { pose: persistedEntityPose(entityId), dynamic: false }
+      }
+      const entity = entitiesById.get(entityId)
+      if (entity === undefined) return { pose: persistedEntityPose(entityId), dynamic: false }
+      resolvingEntities.add(entityId)
+      const parent = resolveFrame(entity.parentFrameId, depth + 1)
+      const resolved: ResolvedPoseV4 = parent.dynamic
+        ? { pose: composeRigidTransformV4(parent.pose, entity.localPose), dynamic: true }
+        : { pose: persistedEntityPose(entityId), dynamic: false }
+      resolvingEntities.delete(entityId)
+      entityWorldPoses.set(entityId, resolved)
+      return resolved
+    }
+
+    const resolveFrame = (frameId: FrameIdV4, depth: number): ResolvedPoseV4 => {
+      const cached = frameWorldPoses.get(frameId)
+      if (cached !== undefined) return cached
+      const frame = sceneRuntime.globalFrames.get(frameId)
+      if (frame === undefined || depth > maximumDepth || resolvingFrames.has(frameId)) {
+        return { pose: frame?.worldPose ?? IDENTITY_POSE_V4, dynamic: false }
+      }
+      resolvingFrames.add(frameId)
+      const parent = frame.parent === null
+        ? { pose: IDENTITY_POSE_V4, dynamic: false }
+        : frame.parent.kind === 'global-frame'
+          ? resolveFrame(frame.parent.frameId, depth + 1)
+          : resolveEntity(frame.parent.entityId, depth + 1)
+      const live = objectRuntime !== null && frame.frameKind === 'moving' && frame.ownerEntityId !== null
+        ? objectRuntime.sampleEntityFrame(frame.ownerEntityId, frame.frameId, nowMs)
+        : null
+      const resolved: ResolvedPoseV4 = (live !== null || parent.dynamic)
+        ? {
+            pose: composeRigidTransformV4(parent.pose, live?.pose ?? frame.localPose),
+            dynamic: true,
+          }
+        : { pose: frame.worldPose, dynamic: false }
+      resolvingFrames.delete(frameId)
+      frameWorldPoses.set(frameId, resolved)
+      return resolved
+    }
+
+    for (const entity of project.spatialEntities) resolveEntity(entity.id, 0)
+  }
+
+  return Object.freeze({
+    update,
+    readEntityWorldPose(entityId: SpatialEntityIdV4) {
+      return entityWorldPoses.get(entityId)?.pose ?? persistedEntityPose(entityId)
+    },
+    isEntityDynamicallyDriven(entityId: SpatialEntityIdV4) {
+      return entityWorldPoses.get(entityId)?.dynamic ?? false
+    },
+  })
+}
+
 export function resolveSpatialEntityWorldPoseV4(
   project: WorkcellProjectV4,
   sceneRuntime: SceneRuntimeProjectionV4,
@@ -353,27 +462,13 @@ export function resolveSpatialEntityWorldPoseV4(
   objectRuntime: ObjectRuntimeStateV4 | null,
   nowMs: number,
 ): RigidTransformV4 {
-  if (sceneRuntime.projectRevisionId !== project.revisionId) {
-    throw new Error('Spatial Entity Scene runtime and Project revisions must match.')
-  }
-  const persisted = sceneRuntime.entities.get(entity.id)
-  if (persisted?.kind !== 'spatial-entity') {
-    throw new Error(`Spatial Entity ${entity.id} has no V4 runtime projection.`)
-  }
-  if (objectRuntime === null || !entity.transformOwner.startsWith('opcua:')) {
-    return persisted.worldPose
-  }
-  const frame = entity.movingFrames.find(({ frameId }) => frameId === entity.parentFrameId)
-  if (frame === undefined || frame.sourceOwnership !== entity.transformOwner) {
-    return persisted.worldPose
-  }
-  const parent = sceneRuntime.globalFrames.get(frame.parentFrameId)
-  const live = objectRuntime.sampleEntityFrame(entity.id, frame.frameId, nowMs)
-  if (parent === undefined || live === null) return persisted.worldPose
-  return composeRigidTransformV4(
-    parent.worldPose,
-    composeRigidTransformV4(live.pose, entity.localPose),
+  const effective = createSpatialEntityEffectiveTransformRuntimeV4(
+    project,
+    sceneRuntime,
+    objectRuntime,
   )
+  effective.update(nowMs)
+  return effective.readEntityWorldPose(entity.id)
 }
 
 function projectRuntimeStateV4(
@@ -382,6 +477,7 @@ function projectRuntimeStateV4(
   sceneRuntime: SceneRuntimeProjectionV4,
   viewIsolation: SceneIsolationTargetV4 | null,
   objectRuntime: ObjectRuntimeStateV4 | null,
+  effectiveTransforms: SpatialEntityEffectiveTransformRuntimeV4,
   nowMs: number,
 ): Omit<SpatialRenderStateV4, 'resources'> {
   if (sceneRuntime.projectRevisionId !== project.revisionId) {
@@ -390,6 +486,7 @@ function projectRuntimeStateV4(
   const visibleRoots = new Map<SpatialEntityIdV4, Object3D>()
   const proxies: CollisionGeometryProxyV4[] = []
   const overlays: SpatialOverlayV4[] = []
+  effectiveTransforms.update(nowMs)
   for (const entity of project.spatialEntities) {
     const record = resources.records.get(entity.id)
     if (record === undefined) {
@@ -400,13 +497,7 @@ function projectRuntimeStateV4(
       throw new Error(`Spatial Entity ${entity.id} has no V4 runtime projection.`)
     }
     const spatialRuntime = runtime as SceneRuntimeSpatialEntityV4
-    const worldPose = resolveSpatialEntityWorldPoseV4(
-      project,
-      sceneRuntime,
-      entity,
-      objectRuntime,
-      nowMs,
-    )
+    const worldPose = effectiveTransforms.readEntityWorldPose(entity.id)
     applyPoseV4(record.root, worldPose)
     const viewVisible = spatialRuntime.effectiveVisible
       && spatialEntityVisibleInIsolationV4(project, entity, viewIsolation)
@@ -418,6 +509,7 @@ function projectRuntimeStateV4(
       entity,
       worldPose,
       effectiveVisible: true,
+      resolveWorldPose: () => effectiveTransforms.readEntityWorldPose(entity.id),
     })
     if (proxy !== null) proxies.push(proxy)
     if (viewVisible && entity.numericStatus.overlay.visible) {
@@ -440,6 +532,7 @@ function projectRuntimeStateV4(
       }
       overlays.push(Object.freeze({
         anchor: record.overlayAnchor,
+        entityId: entity.id,
         name: entity.name,
         value: objectRuntime?.readEntityStatus(entity.id, nowMs)?.value
           ?? spatialRuntime.numericStatus,
@@ -508,29 +601,31 @@ export function SpatialEntitySceneV4({
 }: SpatialEntityScenePropsV4): ReactNode {
   const [resources, setResources] = useState<SpatialSceneResourcesV4 | null>(null)
   const [renderState, setRenderState] = useState<SpatialRenderStateV4 | null>(null)
-  const [runtimeProjectionVersion, setRuntimeProjectionVersion] = useState(0)
+  const [livePresentationNowMs, setLivePresentationNowMs] = useState(0)
   const activePublication = useRef<ActivePublicationV4 | null>(null)
   const lastRuntimeProjection = useRef({ atMs: 0, signature: '' })
   const resourceSignature = JSON.stringify(project.spatialEntities.map(
     ({ id, geometry }) => [id, geometry],
   ))
+  const effectiveTransforms = useMemo(() => createSpatialEntityEffectiveTransformRuntimeV4(
+    project,
+    sceneRuntime,
+    objectRuntime,
+  ), [objectRuntime, project, sceneRuntime])
 
   useFrame(() => {
     if (objectRuntime === null || renderState === null || renderState.resources.disposed) return
     const nowMs = Date.now()
+    effectiveTransforms.update(nowMs)
     const signature: string[] = []
     for (const entity of project.spatialEntities) {
       const record = renderState.resources.records.get(entity.id)
       if (record === undefined) continue
       const status = objectRuntime.readEntityStatus(entity.id, nowMs)
+      if (effectiveTransforms.isEntityDynamicallyDriven(entity.id)) {
+        applyPoseV4(record.root, effectiveTransforms.readEntityWorldPose(entity.id))
+      }
       if (entity.transformOwner.startsWith('opcua:')) {
-        applyPoseV4(record.root, resolveSpatialEntityWorldPoseV4(
-          project,
-          sceneRuntime,
-          entity,
-          objectRuntime,
-          nowMs,
-        ))
         const pose = objectRuntime.sampleEntityFrame(entity.id, entity.parentFrameId, nowMs)
         signature.push(
           entity.id,
@@ -553,7 +648,7 @@ export function SpatialEntitySceneV4({
     lastRuntimeProjection.current.atMs = nowMs
     if (nextSignature === lastRuntimeProjection.current.signature) return
     lastRuntimeProjection.current.signature = nextSignature
-    setRuntimeProjectionVersion((version) => version + 1)
+    setLivePresentationNowMs(nowMs)
   })
 
   useEffect(() => {
@@ -594,6 +689,7 @@ export function SpatialEntitySceneV4({
         sceneRuntime,
         viewIsolation,
         objectRuntime,
+        effectiveTransforms,
         Date.now(),
       )
     } catch (error) {
@@ -641,12 +737,13 @@ export function SpatialEntitySceneV4({
     project,
     resourceSignature,
     resources,
-    runtimeProjectionVersion,
+    effectiveTransforms,
     sceneRuntime,
     viewIsolation,
   ])
 
   if (renderState === null || renderState.resources.disposed) return null
+  const overlayNowMs = livePresentationNowMs === 0 ? Date.now() : livePresentationNowMs
   return (
     <>
       {[...renderState.registration.roots].map(([entityId, root]) => {
@@ -664,12 +761,12 @@ export function SpatialEntitySceneV4({
         }
         return <primitive key={entityId} object={root} {...interactionProps} />
       })}
-      {renderState.overlays.map(({ anchor, name, value }) => (
+      {renderState.overlays.map(({ anchor, entityId, name, value }) => (
         <FragmentOverlayV4
           anchor={anchor}
           key={anchor.uuid}
           name={name}
-          value={value}
+          value={objectRuntime?.readEntityStatus(entityId, overlayNowMs)?.value ?? value}
         />
       ))}
       {selection?.kind === 'spatial-entity'
@@ -710,7 +807,7 @@ function FragmentOverlayV4({
   anchor,
   name,
   value,
-}: SpatialOverlayV4): ReactNode {
+}: Pick<SpatialOverlayV4, 'anchor' | 'name' | 'value'>): ReactNode {
   return createPortal(
     <NumericStatusOverlayV4 name={name} value={value} />,
     anchor,
