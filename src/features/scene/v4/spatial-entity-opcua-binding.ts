@@ -17,6 +17,18 @@ function endpointIdFromOwner(owner: string): string | null {
   return owner.startsWith('opcua:') ? owner.slice('opcua:'.length) : null
 }
 
+function hasCanonicalPoseLeafPaths(mapping: OpcUaMappingV4): boolean {
+  const paths = [
+    ['positionM', 0], ['positionM', 1], ['positionM', 2],
+    ['rpyDegrees', 0], ['rpyDegrees', 1], ['rpyDegrees', 2],
+  ] as const
+  return mapping.leaves.every((leaf, index) => (
+    leaf.leafPath.length === 2
+    && leaf.leafPath[0] === paths[index]![0]
+    && leaf.leafPath[1] === paths[index]![1]
+  ))
+}
+
 function isEntityFrameMapping(
   mapping: OpcUaMappingV4,
   entityId: SpatialEntityIdV4,
@@ -27,6 +39,9 @@ function isEntityFrameMapping(
     && mapping.endpointId === endpointId
     && mapping.sourceOwnership === `opcua:${endpointId}`
     && mapping.leaves.length === 6
+    && mapping.interpolationMode === 'shortest-quaternion'
+    && mapping.coordinateConvention === 'project-v4-z-up-metres-quaternion-xyzw'
+    && hasCanonicalPoseLeafPaths(mapping)
     && mapping.leaves.every((leaf) => (
       leaf.projectTarget.type === 'entity-frame'
       && leaf.projectTarget.entityId === entityId

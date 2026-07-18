@@ -584,6 +584,29 @@ describe('SceneEntityInspectorV4', () => {
       .toHaveBeenCalledWith('platform'))
   })
 
+  it('exposes manual takeover for a partially authored OPC UA transform binding', async () => {
+    const user = userEvent.setup()
+    const source = boundInspectorProject()
+    const partial = validateWorkcellProjectV4({
+      ...source,
+      opcUa: {
+        ...source.opcUa,
+        mappings: source.opcUa.mappings.map((mapping) => ({
+          ...mapping,
+          leaves: [mapping.leaves[1]!, mapping.leaves[0]!, ...mapping.leaves.slice(2)],
+        })),
+      },
+    })
+    renderInspector(
+      { kind: 'spatial-entity', entityId: 'platform' },
+      sceneCommands(),
+      partial,
+    )
+
+    await user.click(screen.getByText('OPC UA Pose Binding'))
+    expect(screen.getByRole('button', { name: 'Take Manual Control' })).toBeVisible()
+  })
+
   it('preserves dirty Entity drafts across an equivalent fresh runtime projection', async () => {
     const user = userEvent.setup()
     const harness = renderInspector({ kind: 'spatial-entity', entityId: 'platform' })

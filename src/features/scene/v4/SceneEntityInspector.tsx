@@ -373,6 +373,7 @@ function SpatialEntityInspectorV4({
 
   const poseEditable = entity.transformOwner === 'manual'
   const statusEditable = entity.numericStatus.sourceOwnership === 'manual'
+  const hasOpcUaTransformOwner = entity.transformOwner.startsWith('opcua:')
   const setOpcUaNode = (key: keyof typeof opcUaNodes, value: string): void => {
     setOpcUaNodes((current) => ({ ...current, [key]: value }))
   }
@@ -513,7 +514,7 @@ function SpatialEntityInspectorV4({
           <button disabled={command.pending} onClick={submitOpcUaBinding} type="button">
             {opcUaBinding === null ? 'Bind OPC UA Pose' : 'Update OPC UA Pose'}
           </button>
-          {opcUaBinding === null ? null : (
+          {!hasOpcUaTransformOwner ? null : (
             <button
               disabled={command.pending}
               onClick={() => command.run(() => commands.takeSpatialEntityManualControl(entityId))}

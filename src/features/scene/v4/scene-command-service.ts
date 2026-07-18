@@ -275,21 +275,55 @@ function opcUaModeForSpatialEntityBinding(
   return mode
 }
 
-function mappingTargetsAnyEntity(
+function ownerEndpointId(owner: string): string | null {
+  return owner.startsWith('opcua:') ? owner.slice('opcua:'.length) : null
+}
+
+function mappingTargetsEntityFrame(
   mapping: WorkcellProjectV4['opcUa']['mappings'][number],
-  entityIds: ReadonlySet<SpatialEntityIdV4>,
+  entityId: SpatialEntityIdV4,
 ): boolean {
   return mapping.leaves.some((leaf) => (
-    (leaf.projectTarget.type === 'entity-frame' || leaf.projectTarget.type === 'entity-status')
-    && entityIds.has(leaf.projectTarget.entityId)
+    leaf.projectTarget.type === 'entity-frame' && leaf.projectTarget.entityId === entityId
   ))
 }
 
-function withoutEntityOpcUaMappings(
-  project: WorkcellProjectV4,
-  entityIds: ReadonlySet<SpatialEntityIdV4>,
+function mappingTargetsEntityStatus(
+  mapping: WorkcellProjectV4['opcUa']['mappings'][number],
+  entityId: SpatialEntityIdV4,
+): boolean {
+  return mapping.leaves.some((leaf) => (
+    leaf.projectTarget.type === 'entity-status' && leaf.projectTarget.entityId === entityId
+  ))
+}
+
+function pruneMappingLeaves(
+  mappings: WorkcellProjectV4['opcUa']['mappings'],
+  shouldRemove: (leaf: WorkcellProjectV4['opcUa']['mappings'][number]['leaves'][number]) => boolean,
 ): WorkcellProjectV4['opcUa']['mappings'] {
-  return project.opcUa.mappings.filter((mapping) => !mappingTargetsAnyEntity(mapping, entityIds))
+  return mappings.flatMap((mapping) => {
+    const leaves = mapping.leaves.filter((leaf) => !shouldRemove(leaf))
+    return leaves.length === 0 ? [] : [{ ...mapping, leaves }]
+  })
+}
+
+function endpointIsSharedOutsideEntity(
+  project: WorkcellProjectV4,
+  endpointId: string,
+  entityId: SpatialEntityIdV4,
+): boolean {
+  const owner = `opcua:${endpointId}`
+  if (project.spatialEntities.some((entity) => (
+    entity.id !== entityId
+    && (entity.transformOwner === owner || entity.numericStatus.sourceOwnership === owner)
+  ))) return true
+  return project.opcUa.mappings.some((mapping) => (
+    mapping.endpointId === endpointId
+    && !mapping.leaves.every((leaf) => (
+      (leaf.projectTarget.type === 'entity-frame' || leaf.projectTarget.type === 'entity-status')
+      && leaf.projectTarget.entityId === entityId
+    ))
+  ))
 }
 
 function poseMappingLeaves(
@@ -708,22 +742,57 @@ export function createSceneCommandServiceV4(
         mutate(active) {
           const entity = requireEntity(active, snapshot.entityId)
           const existing = selectSpatialEntityOpcUaBindingV4(active, entity.id)
-          if (entity.transformOwner !== 'manual' && existing === null) {
+          const currentOwnerEndpointId = ownerEndpointId(entity.transformOwner)
+          if (entity.transformOwner !== 'manual' && currentOwnerEndpointId === null) {
             commandFailure(
               'SPATIAL_ENTITY_TRANSFORM_OWNERSHIP_CONFLICT',
               `$.spatialEntities.${entity.id}.transformOwner`,
               `Spatial Entity transform is owned by ${entity.transformOwner}.`,
             )
           }
+          const currentEndpoint = currentOwnerEndpointId === null
+            ? undefined
+            : active.opcUa.endpoints.find(({ endpointId }) => endpointId === currentOwnerEndpointId)
           const matchingEndpoint = active.opcUa.endpoints.find((endpoint) => (
             endpoint.endpointUrl === snapshot.endpointUrl
           ))
-          const endpointId = existing?.endpointId ?? matchingEndpoint?.endpointId ?? options.createId()
-          const frameId = existing?.frameId ?? options.createId()
-          const poseMappingId = existing?.poseMappingId ?? options.createId()
+          const currentEndpointIsShared = currentEndpoint !== undefined
+            && endpointIsSharedOutsideEntity(active, currentEndpoint.endpointId, entity.id)
+          const keepCurrentEndpoint = currentEndpoint !== undefined && (
+            currentEndpoint.endpointUrl === snapshot.endpointUrl || !currentEndpointIsShared
+          )
+          const endpointId = keepCurrentEndpoint
+            ? currentEndpoint!.endpointId
+            : matchingEndpoint?.endpointId ?? options.createId()
+          const currentFrame = entity.movingFrames.find((frame) => (
+            frame.frameId === entity.parentFrameId
+            && currentOwnerEndpointId !== null
+            && frame.sourceOwnership === `opcua:${currentOwnerEndpointId}`
+          ))
+          const frameId = existing?.frameId ?? currentFrame?.frameId ?? options.createId()
+          const reusablePoseMapping = active.opcUa.mappings.find((mapping) => (
+            mapping.id === existing?.poseMappingId
+            || (
+              currentOwnerEndpointId !== null
+              && mapping.endpointId === currentOwnerEndpointId
+              && mappingTargetsEntityFrame(mapping, entity.id)
+              && mapping.leaves.every((leaf) => (
+                leaf.projectTarget.type === 'entity-frame'
+                && leaf.projectTarget.entityId === entity.id
+              ))
+            )
+          ))
+          const poseMappingId = reusablePoseMapping?.id ?? options.createId()
+          const reusableStatusMapping = active.opcUa.mappings.find((mapping) => (
+            mappingTargetsEntityStatus(mapping, entity.id)
+            && mapping.leaves.every((leaf) => (
+              leaf.projectTarget.type === 'entity-status'
+              && leaf.projectTarget.entityId === entity.id
+            ))
+          ))
           const statusMappingId = snapshot.numericStatusNodeId === undefined
             ? null
-            : existing?.statusMappingId ?? options.createId()
+            : reusableStatusMapping?.id ?? options.createId()
           const owner = `opcua:${endpointId}` as const
           const endpoint = {
             endpointId,
@@ -733,7 +802,7 @@ export function createSceneCommandServiceV4(
             publishingIntervalMs: snapshot.publishingIntervalMs,
             reconnectDelayMs: 1_000,
           }
-          const baselineFrame = existing === null ? {
+          const baselineFrame = currentFrame === undefined ? {
             frameId,
             name: `${entity.name} OPC UA Frame`,
             parentFrameId: entity.parentFrameId,
@@ -772,9 +841,12 @@ export function createSceneCommandServiceV4(
               required: true,
             }],
           }
-          const oldBindingMappingIds = new Set(
-            [existing?.poseMappingId, existing?.statusMappingId].filter((id): id is string => id !== null && id !== undefined),
-          )
+          const mappingsWithoutPose = pruneMappingLeaves(active.opcUa.mappings, (leaf) => (
+            leaf.projectTarget.type === 'entity-frame' && leaf.projectTarget.entityId === entity.id
+          ))
+          const mappingsWithoutStatus = pruneMappingLeaves(mappingsWithoutPose, (leaf) => (
+            leaf.projectTarget.type === 'entity-status' && leaf.projectTarget.entityId === entity.id
+          ))
           return validateCandidate({
             ...active,
             spatialEntities: active.spatialEntities.map((candidate) => (
@@ -787,7 +859,7 @@ export function createSceneCommandServiceV4(
                   ...candidate.numericStatus,
                   sourceOwnership: statusMapping === null ? 'manual' : owner,
                 },
-                movingFrames: existing === null
+                movingFrames: currentFrame === undefined
                   ? [...candidate.movingFrames, baselineFrame!]
                   : candidate.movingFrames.map((frame) => (
                       frame.frameId === frameId ? { ...frame, sourceOwnership: owner } : frame
@@ -797,13 +869,15 @@ export function createSceneCommandServiceV4(
             opcUa: {
               ...active.opcUa,
               mode: opcUaModeForSpatialEntityBinding(active.opcUa.mode),
-              endpoints: active.opcUa.endpoints.some(({ endpointId: id }) => id === endpointId)
+              endpoints: currentEndpoint?.endpointId === endpointId && !currentEndpointIsShared
                 ? active.opcUa.endpoints.map((candidate) => (
                     candidate.endpointId === endpointId ? endpoint : candidate
                   ))
-                : [...active.opcUa.endpoints, endpoint],
+                : active.opcUa.endpoints.some(({ endpointId: id }) => id === endpointId)
+                  ? active.opcUa.endpoints
+                  : [...active.opcUa.endpoints, endpoint],
               mappings: [
-                ...active.opcUa.mappings.filter(({ id }) => !oldBindingMappingIds.has(id)),
+                ...mappingsWithoutStatus,
                 poseMapping,
                 ...(statusMapping === null ? [] : [statusMapping]),
               ],
@@ -818,30 +892,38 @@ export function createSceneCommandServiceV4(
         description: `Take manual control of Spatial Entity ${entityId}`,
         mutate(active) {
           const entity = requireEntity(active, entityId)
-          const binding = selectSpatialEntityOpcUaBindingV4(active, entity.id)
-          if (binding === null) {
+          const endpointId = ownerEndpointId(entity.transformOwner)
+          if (endpointId === null) {
             commandFailure(
               'SPATIAL_ENTITY_OPCUA_BINDING_NOT_FOUND',
               `$.spatialEntities.${entity.id}`,
               'Spatial Entity does not have one complete OPC UA transform binding.',
             )
           }
-          const frame = entity.movingFrames.find(({ frameId }) => frameId === binding.frameId)!
+          const frame = entity.movingFrames.find(({ frameId, sourceOwnership }) => (
+            frameId === entity.parentFrameId && sourceOwnership === `opcua:${endpointId}`
+          ))
+          const mappings = pruneMappingLeaves(active.opcUa.mappings, (leaf) => (
+            leaf.projectTarget.type === 'entity-frame' && leaf.projectTarget.entityId === entity.id
+          ))
           return validateCandidate({
             ...active,
             spatialEntities: active.spatialEntities.map((candidate) => (
               candidate.id !== entity.id ? candidate : {
                 ...candidate,
-                parentFrameId: frame.parentFrameId,
-                localPose: composeRigidTransformV4(frame.localPose, candidate.localPose),
+                parentFrameId: frame?.parentFrameId ?? candidate.parentFrameId,
+                localPose: frame === undefined
+                  ? candidate.localPose
+                  : composeRigidTransformV4(frame.localPose, candidate.localPose),
                 transformOwner: 'manual',
-                numericStatus: { ...candidate.numericStatus, sourceOwnership: 'manual' },
-                movingFrames: candidate.movingFrames.filter(({ frameId }) => frameId !== binding.frameId),
+                movingFrames: candidate.movingFrames.filter(({ sourceOwnership }) => (
+                  sourceOwnership !== `opcua:${endpointId}`
+                )),
               }
             )),
             opcUa: {
               ...active.opcUa,
-              mappings: withoutEntityOpcUaMappings(active, new Set([entity.id])),
+              mappings,
             },
           })
         },
@@ -955,7 +1037,10 @@ export function createSceneCommandServiceV4(
             spatialEntities: active.spatialEntities.filter(({ id }) => id !== target.id),
             opcUa: {
               ...active.opcUa,
-              mappings: withoutEntityOpcUaMappings(active, new Set([target.id])),
+              mappings: pruneMappingLeaves(active.opcUa.mappings, (leaf) => (
+                (leaf.projectTarget.type === 'entity-frame' || leaf.projectTarget.type === 'entity-status')
+                && leaf.projectTarget.entityId === target.id
+              )),
             },
           })
         },
@@ -1000,7 +1085,10 @@ export function createSceneCommandServiceV4(
             sceneGroups: active.sceneGroups.filter(({ id }) => !descendantIds.has(id)),
             opcUa: {
               ...active.opcUa,
-              mappings: withoutEntityOpcUaMappings(active, contentIds),
+              mappings: pruneMappingLeaves(active.opcUa.mappings, (leaf) => (
+                (leaf.projectTarget.type === 'entity-frame' || leaf.projectTarget.type === 'entity-status')
+                && contentIds.has(leaf.projectTarget.entityId)
+              )),
             },
           })
         },

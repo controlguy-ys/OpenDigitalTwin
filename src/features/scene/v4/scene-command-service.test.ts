@@ -930,6 +930,145 @@ describe('SceneCommandServiceV4', () => {
     expect(harness.mutations.active.opcUa.mappings).toEqual([])
   })
 
+  it('moves only the reconfigured Entity off a shared endpoint and preserves the other binding', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-shared', 'frame-a', 'mapping-a', 'frame-b', 'mapping-b', 'endpoint-private',
+    ])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('platform'),
+    ))
+    const sharedEndpoint = harness.mutations.active.opcUa.endpoints[0]!
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object', {
+        endpointUrl: 'opc.tcp://127.0.0.1:4841',
+        publishingIntervalMs: 250,
+      }),
+    ))
+
+    const loose = harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object')!
+    const platform = harness.mutations.active.spatialEntities.find(({ id }) => id === 'platform')!
+    expect(loose).toMatchObject({ parentFrameId: 'frame-a', transformOwner: 'opcua:endpoint-private' })
+    expect(platform).toMatchObject({ parentFrameId: 'frame-b', transformOwner: 'opcua:endpoint-shared' })
+    expect(harness.mutations.active.opcUa.endpoints).toEqual([
+      sharedEndpoint,
+      expect.objectContaining({ endpointId: 'endpoint-private', endpointUrl: 'opc.tcp://127.0.0.1:4841', publishingIntervalMs: 250 }),
+    ])
+    expect(harness.mutations.active.opcUa.mappings.find(({ id }) => id === 'mapping-a'))
+      .toMatchObject({ endpointId: 'endpoint-private', sourceOwnership: 'opcua:endpoint-private' })
+    expect(harness.mutations.active.opcUa.mappings.find(({ id }) => id === 'mapping-b'))
+      .toMatchObject({ endpointId: 'endpoint-shared', sourceOwnership: 'opcua:endpoint-shared' })
+  })
+
+  it('clears Status independently while retaining pose and retains configured Status through manual takeover', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-object', 'frame-object', 'mapping-object', 'mapping-status',
+    ])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object', { numericStatusNodeId: 'ns=2;s=Object.Status' }),
+    ))
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    let entity = harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object')!
+    expect(entity).toMatchObject({ transformOwner: 'opcua:endpoint-object', numericStatus: { sourceOwnership: 'manual' } })
+    expect(harness.mutations.active.opcUa.mappings.map(({ id }) => id)).toEqual(['mapping-object'])
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object', { numericStatusNodeId: 'ns=2;s=Object.Status' }),
+    ))
+    await runOne(harness, () => harness.service.takeSpatialEntityManualControl('loose-object'))
+    entity = harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object')!
+    expect(entity).toMatchObject({ transformOwner: 'manual', numericStatus: { sourceOwnership: 'opcua:endpoint-object' } })
+    expect(harness.mutations.active.opcUa.mappings).toEqual([
+      expect.objectContaining({ leaves: expect.arrayContaining([
+        expect.objectContaining({ projectTarget: { type: 'entity-status', entityId: 'loose-object' } }),
+      ]) }),
+    ])
+  })
+
+  it('requires canonical pose leaf paths for selection but recovers malformed owned pose state', async () => {
+    const harness = commandHarness(authoredProject(), [
+      'endpoint-object', 'frame-object', 'mapping-object',
+    ])
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    const bound = harness.mutations.active
+    harness.mutations.active = validateWorkcellProjectV4({
+      ...bound,
+      opcUa: {
+        ...bound.opcUa,
+        mappings: bound.opcUa.mappings.map((mapping) => mapping.id !== 'mapping-object' ? mapping : {
+          ...mapping,
+          leaves: [mapping.leaves[1]!, mapping.leaves[0]!, ...mapping.leaves.slice(2)],
+        }),
+      },
+    })
+    expect(selectSpatialEntityOpcUaBindingV4(harness.mutations.active, 'loose-object')).toBeNull()
+
+    await runOne(harness, () => harness.service.configureSpatialEntityOpcUaBinding(
+      opcUaBindingCommand('loose-object'),
+    ))
+    expect(selectSpatialEntityOpcUaBindingV4(harness.mutations.active, 'loose-object')).toMatchObject({
+      frameId: 'frame-object', poseMappingId: 'mapping-object',
+    })
+
+    harness.mutations.active = validateWorkcellProjectV4({
+      ...harness.mutations.active,
+      opcUa: {
+        ...harness.mutations.active.opcUa,
+        mappings: harness.mutations.active.opcUa.mappings.map((mapping) => mapping.id !== 'mapping-object' ? mapping : {
+          ...mapping,
+          leaves: [mapping.leaves[1]!, mapping.leaves[0]!, ...mapping.leaves.slice(2)],
+        }),
+      },
+    })
+    await runOne(harness, () => harness.service.takeSpatialEntityManualControl('loose-object'))
+    expect(harness.mutations.active.spatialEntities.find(({ id }) => id === 'loose-object'))
+      .toMatchObject({ transformOwner: 'manual', movingFrames: [] })
+  })
+
+  it('prunes only deleted Entity leaves from a mixed OPC UA mapping', async () => {
+    const source = authoredProject()
+    const project = validateWorkcellProjectV4({
+      ...source,
+      spatialEntities: source.spatialEntities.map((candidate) => (
+        candidate.id === 'loose-object' || candidate.id === 'platform'
+          ? { ...candidate, numericStatus: { ...candidate.numericStatus, sourceOwnership: 'opcua:endpoint-mixed' as const } }
+          : candidate
+      )),
+      opcUa: {
+        mode: 'client',
+        endpoints: [{ endpointId: 'endpoint-mixed', name: 'Mixed', endpointUrl: 'opc.tcp://127.0.0.1:4840', enabled: true, publishingIntervalMs: 100, reconnectDelayMs: 1_000 }],
+        mappings: [{
+          id: 'mapping-mixed', endpointId: 'endpoint-mixed', direction: 'read', coherenceGroupId: null,
+          sourceOwnership: 'opcua:endpoint-mixed', interpolationMode: 'none', coordinateConvention: 'project-v4-z-up-metres-quaternion-xyzw',
+          leaves: [
+            { leafPath: ['loose'], nodeId: 'ns=2;s=Loose.Status', projectTarget: { type: 'entity-status', entityId: 'loose-object' }, opcUaDataType: 'Double', projectDataType: 'number', scale: 1, offset: 0, unit: 'number', required: true },
+            { leafPath: ['platform'], nodeId: 'ns=2;s=Platform.Status', projectTarget: { type: 'entity-status', entityId: 'platform' }, opcUaDataType: 'Double', projectDataType: 'number', scale: 1, offset: 0, unit: 'number', required: true },
+          ],
+        }],
+        actionBindings: [], bridgeRoutes: [],
+      },
+    })
+    const harness = commandHarness(project)
+
+    await runOne(harness, () => harness.service.deleteSpatialEntity('loose-object'))
+
+    expect(harness.mutations.active.opcUa.mappings).toEqual([
+      expect.objectContaining({
+        id: 'mapping-mixed',
+        leaves: [expect.objectContaining({ projectTarget: { type: 'entity-status', entityId: 'platform' } })],
+      }),
+    ])
+    expect(harness.mutations.active.spatialEntities.find(({ id }) => id === 'platform')?.numericStatus)
+      .toMatchObject({ sourceOwnership: 'opcua:endpoint-mixed' })
+  })
+
   it('accepts exact Entity and Group limits and rejects one more deterministic create ID', async () => {
     const entityAt255 = projectAtLimit('spatialEntities', MAX_SPATIAL_ENTITIES_V4 - 1)
     const entityPassing = commandHarness(entityAt255, ['entity-256'])
