@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 import {
   MAX_RUNTIME_POSE_SAMPLES_V1,
   createRuntimePoseBufferV1,
-  interpolateRigidTransformV4,
+  interpolateRuntimeRigidTransformV1,
   rpyDegreesToRuntimeQuaternionV1,
 } from './v1.js'
 
@@ -32,6 +34,15 @@ function runtimeSample(
 }
 
 describe('runtime interpolation v1', () => {
+  it('exposes a project-version-neutral runtime boundary without project imports', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/core/runtime-interpolation/v1.ts'), 'utf8')
+
+    expect(source).not.toMatch(/project-v[45]/u)
+    expect(source).toContain('export type RuntimeVector3V1')
+    expect(source).toContain('export type RuntimeQuaternionV1')
+    expect(source).toContain('export interface RuntimeRigidTransformV1')
+  })
+
   it('converts degrees with intrinsic Z-Y-X Roll/Pitch/Yaw composition', () => {
     const quaternion = rpyDegreesToRuntimeQuaternionV1([90, 0, 90])
 
@@ -40,7 +51,7 @@ describe('runtime interpolation v1', () => {
   })
 
   it('interpolates translation linearly and rotation on the shortest quaternion arc', () => {
-    const result = interpolateRigidTransformV4(
+    const result = interpolateRuntimeRigidTransformV1(
       poseAt(0, [0, 0, 0, 1]),
       poseAt(10, [0, 0, 1, 0]),
       0.5,
@@ -51,7 +62,7 @@ describe('runtime interpolation v1', () => {
   })
 
   it('treats antipodal quaternions as the same rotation during interpolation', () => {
-    const result = interpolateRigidTransformV4(
+    const result = interpolateRuntimeRigidTransformV1(
       poseAt(0, [0, 0, 0, 1]),
       poseAt(10, [0, 0, 0, -1]),
       0.5,
@@ -62,7 +73,7 @@ describe('runtime interpolation v1', () => {
   })
 
   it('uses the shorter arc when the endpoint quaternion has a negative dot product', () => {
-    const result = interpolateRigidTransformV4(
+    const result = interpolateRuntimeRigidTransformV1(
       poseAt(0, [0, 0, 0, 1]),
       poseAt(10, [0, 0, Math.sin(100 * Math.PI / 180), Math.cos(100 * Math.PI / 180)]),
       0.5,
@@ -72,18 +83,18 @@ describe('runtime interpolation v1', () => {
   })
 
   it('rejects non-finite direct interpolation poses and returns a deeply frozen result', () => {
-    expect(() => interpolateRigidTransformV4(
+    expect(() => interpolateRuntimeRigidTransformV1(
       { positionM: [Number.NaN, 0, 0], quaternion: [0, 0, 0, 1] },
       poseAt(1),
       0.5,
     )).toThrow(/position/i)
-    expect(() => interpolateRigidTransformV4(
+    expect(() => interpolateRuntimeRigidTransformV1(
       poseAt(0),
       { positionM: [1, 2, 3], quaternion: [0, 0, Number.POSITIVE_INFINITY, 1] },
       0.5,
     )).toThrow(/quaternion/i)
 
-    const result = interpolateRigidTransformV4(poseAt(0), poseAt(1), 0.5)
+    const result = interpolateRuntimeRigidTransformV1(poseAt(0), poseAt(1), 0.5)
     expect(Object.isFrozen(result)).toBe(true)
     expect(Object.isFrozen(result.positionM)).toBe(true)
     expect(Object.isFrozen(result.quaternion)).toBe(true)
