@@ -131,11 +131,12 @@ function uniqueMap<T>(
   values: readonly T[],
   idOf: (value: T) => string,
   path: string,
+  keyField = 'id',
 ): ReadonlyMap<string, T> {
   const result = new Map<string, T>()
   values.forEach((value, index) => {
     const id = idOf(value)
-    if (result.has(id)) fail('PROJECT_ID_DUPLICATE', `${path}[${index}].id`, `Duplicate persisted id ${id}.`)
+    if (result.has(id)) fail('PROJECT_ID_DUPLICATE', `${path}[${index}].${keyField}`, `Duplicate persisted id ${id}.`)
     result.set(id, value)
   })
   return result
@@ -185,6 +186,7 @@ function validatePathSegments(
   enforceMaximum(segments.length, MAX_OPC_UA_STRUCTURE_DEPTH_V5, path, 'OPCUA_STRUCTURE_DEPTH_LIMIT_EXCEEDED')
   segments.forEach((segment, index) => {
     if (typeof segment === 'number') {
+      if (Object.is(segment, -0)) fail('OPCUA_PATH_INVALID', `${path}[${index}]`, 'OPC UA path segments must not use negative zero.')
       requireSafeIntegerInRange(segment, 0, Number.MAX_SAFE_INTEGER, `${path}[${index}]`, 'OPCUA_PATH_INVALID')
     }
   })
@@ -227,9 +229,6 @@ function validateFixedArrayIndexes(
     if (size > MAX_OPC_UA_FIXED_ARRAY_ELEMENTS_V5) {
       fail('OPCUA_FIXED_ARRAY_LIMIT_EXCEEDED', path, `Fixed array at ${prefix} exceeds ${MAX_OPC_UA_FIXED_ARRAY_ELEMENTS_V5} elements.`)
     }
-    if (sorted.some((index, position) => index !== position)) {
-      fail('OPCUA_FIXED_ARRAY_SPARSE', path, `Fixed array at ${prefix} has sparse indices.`)
-    }
   }
 }
 
@@ -248,12 +247,12 @@ function validateGenericDataTypePair(leaf: OpcUaMappingLeafV5, path: string): vo
 }
 
 function targetKey(target: OpcUaProjectTargetV5): string {
-  if (target.type === 'logical-signal') return `logical-signal:${target.signalId}`
-  if (target.type === 'robot-joint') return `robot-joint:${target.robotId}:${target.jointId}`
-  if (target.type === 'robot-frame') return `robot-frame:${target.robotId}:${target.frameId}`
-  if (target.type === 'robot-status') return `robot-status:${target.robotId}`
-  if (target.type === 'entity-frame') return `entity-frame:${target.entityId}:${target.frameId}`
-  return `entity-status:${target.entityId}`
+  if (target.type === 'logical-signal') return JSON.stringify(['logical-signal', target.signalId])
+  if (target.type === 'robot-joint') return JSON.stringify(['robot-joint', target.robotId, target.jointId])
+  if (target.type === 'robot-frame') return JSON.stringify(['robot-frame', target.robotId, target.frameId])
+  if (target.type === 'robot-status') return JSON.stringify(['robot-status', target.robotId])
+  if (target.type === 'entity-frame') return JSON.stringify(['entity-frame', target.entityId, target.frameId])
+  return JSON.stringify(['entity-status', target.entityId])
 }
 
 function pathKey(path: readonly (string | number)[]): string {
@@ -283,6 +282,17 @@ function validateProjectPath(target: OpcUaProjectTargetV5, leaf: OpcUaMappingLea
   const valid = FRAME_PROJECT_PATHS_V5.some((expected) => pathKey(expected) === pathKey(leaf.projectPath))
   if (!valid) {
     fail('OPCUA_PROJECT_PATH_INVALID', `${path}.projectPath`, 'Frame Mapping Project path is not canonical.')
+  }
+}
+
+function validateNumericTargetDataType(target: OpcUaProjectTargetV5, leaf: OpcUaMappingLeafV5, path: string): void {
+  if (target.type === 'logical-signal') return
+  if (
+    leaf.opcUaDataType === 'Boolean'
+    || leaf.opcUaDataType === 'String'
+    || (leaf.projectDataType !== 'integer' && leaf.projectDataType !== 'number')
+  ) {
+    fail('OPCUA_DATA_TYPE_MISMATCH', `${path}.opcUaDataType`, 'This Project target requires a numeric OPC UA scalar.')
   }
 }
 
@@ -415,10 +425,6 @@ function definitionFacts(
 }
 
 function globalFrameFacts(project: WorkcellProjectV5): GlobalFrameFacts {
-  const frameCount = project.scene.frames.length
-    + project.spatialEntities.reduce((sum, entity) => sum + entity.graspFrames.length + entity.movingFrames.length, 0)
-  enforceMaximum(frameCount, MAX_PROJECT_FRAMES_V5, '$', 'PROJECT_FRAME_LIMIT_EXCEEDED')
-
   const sceneFrames = uniqueMap(project.scene.frames, (frame) => frame.id, '$.scene.frames')
   const worldFrames = project.scene.frames.filter((frame) => frame.role === 'world')
   if (worldFrames.length !== 1 || worldFrames[0]?.parentFrameId !== null) {
@@ -471,6 +477,10 @@ function globalFrameFacts(project: WorkcellProjectV5): GlobalFrameFacts {
 }
 
 function createProjectIndexes(project: WorkcellProjectV5): ProjectIndexes {
+  const frameCount = project.scene.frames.length
+    + project.robotDefinitions.reduce((sum, definition) => sum + definition.frames.length, 0)
+    + project.spatialEntities.reduce((sum, entity) => sum + entity.graspFrames.length + entity.movingFrames.length, 0)
+  enforceMaximum(frameCount, MAX_PROJECT_FRAMES_V5, '$', 'PROJECT_FRAME_LIMIT_EXCEEDED')
   enforceMaximum(project.controllers.length, MAX_ROBOT_CONTROLLERS_V5, '$.controllers', 'ROBOT_CONTROLLER_LIMIT_EXCEEDED')
   enforceMaximum(project.robotDefinitions.length, MAX_ROBOT_DEFINITIONS_V5, '$.robotDefinitions', 'ROBOT_DEFINITION_LIMIT_EXCEEDED')
   enforceMaximum(project.robots.length, MAX_ROBOT_INSTANCES_V5, '$.robots', 'ROBOT_INSTANCE_LIMIT_EXCEEDED')
@@ -487,7 +497,7 @@ function createProjectIndexes(project: WorkcellProjectV5): ProjectIndexes {
   const groups = uniqueMap(project.sceneGroups, (group) => group.id, '$.sceneGroups')
   const signals = uniqueMap(project.logicalSignals, (signal) => signal.id, '$.logicalSignals')
   const jobs = uniqueMap(project.jobs, (job) => job.id, '$.jobs')
-  const endpoints = uniqueMap(project.opcUa.endpoints, (endpoint) => endpoint.endpointId, '$.opcUa.endpoints')
+  const endpoints = uniqueMap(project.opcUa.endpoints, (endpoint) => endpoint.endpointId, '$.opcUa.endpoints', 'endpointId')
   const mappings = uniqueMap(project.opcUa.mappings, (mapping) => mapping.id, '$.opcUa.mappings')
 
   const referencedAssetIds = new Set<string>()
@@ -502,8 +512,8 @@ function createProjectIndexes(project: WorkcellProjectV5): ProjectIndexes {
   project.spatialEntities.forEach((entity, index) => {
     const path = `$.spatialEntities[${index}]`
     enforceMaximum(entity.movingFrames.length, MAX_MOVING_FRAMES_PER_ENTITY_V5, `${path}.movingFrames`, 'MOVING_FRAME_LIMIT_EXCEEDED')
-    const graspFrames = uniqueMap(entity.graspFrames, (frame) => frame.frameId, `${path}.graspFrames`)
-    const movingFrames = uniqueMap(entity.movingFrames, (frame) => frame.frameId, `${path}.movingFrames`)
+    const graspFrames = uniqueMap(entity.graspFrames, (frame) => frame.frameId, `${path}.graspFrames`, 'frameId')
+    const movingFrames = uniqueMap(entity.movingFrames, (frame) => frame.frameId, `${path}.movingFrames`, 'frameId')
     for (const frameId of graspFrames.keys()) {
       if (movingFrames.has(frameId)) fail('PROJECT_ID_DUPLICATE', `${path}.movingFrames`, `Duplicate Entity Frame id ${frameId}.`)
     }
@@ -811,6 +821,7 @@ function validateMappingLeaves(
   mapping.leaves.forEach((leaf, leafIndex) => {
     const leafPath = `${mappingPath}.leaves[${leafIndex}]`
     const segments = validatePathSegments(leaf.leafPath, `${leafPath}.leafPath`)
+    validatePathSegments(leaf.projectPath, `${leafPath}.projectPath`)
     const key = pathKey(segments)
     if (leafPaths.has(key)) fail('OPCUA_LEAF_PATH_TREE_INVALID', `${leafPath}.leafPath`, 'Mapping Leaf path is duplicated.')
     leafPaths.add(key)
@@ -832,6 +843,7 @@ function validateMappingLeaves(
     } else if (targetKey(mappingTarget) !== targetKey(leaf.projectTarget)) {
       fail('OPCUA_MAPPING_TARGET_MISMATCH', `${leafPath}.projectTarget`, 'Every Mapping Leaf must target the same Project resource.')
     }
+    validateNumericTargetDataType(leaf.projectTarget, leaf, leafPath)
   })
   validateFixedArrayIndexes(indexesByPrefix, `${mappingPath}.leaves`)
   const target = mappingTarget!

@@ -90,6 +90,9 @@ function clonePlainValue(value: unknown, path: string, ancestors: WeakSet<object
     if (!Number.isFinite(value)) {
       invalidProjectV5(path, 'Persisted Project numbers must be finite.', 'PROJECT_NUMBER_NOT_FINITE')
     }
+    if (Object.is(value, -0) && /(?:\.leafPath|\.projectPath)\[\d+\]$/u.test(path)) {
+      invalidProjectV5(path, 'OPC UA path segments must not use negative zero.', 'OPCUA_PATH_INVALID')
+    }
     return value === 0 ? 0 : value
   }
   if (typeof value !== 'object') {
