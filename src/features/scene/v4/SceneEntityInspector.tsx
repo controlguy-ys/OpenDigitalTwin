@@ -59,7 +59,7 @@ export interface SceneEntityInspectorFocusRequestV4 {
   readonly id: number
   readonly projectRevisionId: WorkcellProjectV4['revisionId']
   readonly selection: SceneSelectionTargetV4
-  readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'numericStatus'
+  readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'binding' | 'numericStatus'
 }
 
 interface RobotInspectorPropsV4 extends Omit<
@@ -472,7 +472,7 @@ function SpatialEntityInspectorV4({
         prefix="Entity Local"
       />
       <details className="scene-entity-opcua-binding-v4">
-        <summary>OPC UA Pose Binding</summary>
+        <summary data-inspector-section-v4="binding">OPC UA Pose Binding</summary>
         {opcUaBinding === null ? null : (
           <p>Bound to {boundEndpoint?.endpointUrl ?? opcUaBinding.endpointId} ({entity.transformOwner}).</p>
         )}
@@ -862,6 +862,8 @@ export function SceneEntityInspectorV4({
       `[data-inspector-section-v4="${focusRequest.section}"]`,
     )
     if (target === undefined || target === null) return
+    const disclosure = target.closest<HTMLDetailsElement>('details')
+    if (disclosure !== null) disclosure.open = true
     target.scrollIntoView?.({ block: 'nearest' })
     target.focus({ preventScroll: true })
     consumedFocusRequestKey.current = requestKey

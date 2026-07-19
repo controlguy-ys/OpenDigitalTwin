@@ -23,8 +23,10 @@ manual ownership while retaining a configured OPC UA Status binding.
 
 ## Configure an Object
 
-1. Select a Box, Cylinder, or imported STEP Object and open its Inspector.
-2. Expand **OPC UA Pose Binding** and provide the external endpoint URL and a
+1. Right-click a Box, Cylinder, or imported STEP Object in the Scene tree or
+   viewport and choose **Open Binding**. The Inspector opens and expands the
+   existing **OPC UA Pose Binding** editor for that exact Object.
+2. Provide the external endpoint URL and a
    whole-number publishing interval of at least 50 ms.
 3. Select `m` or `mm` for X/Y/Z. `m` is passed through; `mm` is multiplied by
    `0.001` before the project stores metres. Roll, Pitch, and Yaw are degrees.
@@ -61,6 +63,9 @@ does not take Status ownership.
   mappings.
 - **Bridge** runs the Client plus the read-only Server namespace for Robot
   Actual Joint values.
+- If another OPC UA Server already owns the Gateway's configured Server port,
+  use **Client** mode. Bridge also starts the Robot Actual Server and cannot
+  share one TCP listen port with the external Server.
 - The browser connects to the Gateway over same-origin `/runtime/`, including
   the `/runtime/ws` WebSocket. In Docker, Nginx proxies that WebSocket upgrade.
 - Docker must be able to route from `runtime-gateway` to the external OPC UA
@@ -71,3 +76,9 @@ This feature never writes OPC UA values, calls OPC UA methods, starts motion,
 transfers to a PLC, or provides a safety function. Authentication,
 authorization, TLS, signing/encryption, certificate trust workflows, and
 public-internet hardening remain out of scope.
+
+An endpoint being connected does not prove mapped values are readable. If the
+Server returns `BadUserAccessDenied`, the Binding remains saved and ownership
+stays OPC UA-controlled, but the Object retains its latest valid pose/status.
+Grant read access to the mapped variables or return the Object to manual control;
+do not treat a connected Gateway indicator as a successful live-value test.

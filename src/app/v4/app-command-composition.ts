@@ -44,7 +44,7 @@ export interface AppCommandActionPortsV4 {
     openRobotBase(robotId: RobotIdV4): void
     openInspector(request: {
       readonly selection: SceneSelectionTargetV4
-      readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'numericStatus'
+      readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'binding' | 'numericStatus'
     }): void
     openTimeline(): void
     openCollision(selection: SceneSelectionTargetV4 | null): void

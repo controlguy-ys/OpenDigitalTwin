@@ -363,6 +363,34 @@ describe('SceneEntityInspectorV4', () => {
     expect(focus).toHaveBeenCalledTimes(2)
   })
 
+  it('opens and focuses the OPC UA Binding disclosure for a repeated binding request', () => {
+    const harness = renderInspector({ kind: 'spatial-entity', entityId: 'platform' })
+    const summary = screen.getByText('OPC UA Pose Binding')
+    const details = summary.closest('details')
+    if (details === null) throw new Error('Expected OPC UA Binding details.')
+    expect(details).not.toHaveAttribute('open')
+    const focus = vi.spyOn(summary, 'focus')
+    const request = {
+      id: 1,
+      projectRevisionId: harness.project.revisionId,
+      selection: { kind: 'spatial-entity' as const, entityId: 'platform' },
+      section: 'binding' as const,
+    }
+
+    harness.rerender(<SceneEntityInspectorV4 {...harness.props} focusRequest={request} />)
+    expect(details).toHaveAttribute('open')
+    expect(focus).toHaveBeenCalled()
+    expect(summary).toHaveFocus()
+    const firstRequestFocusCount = focus.mock.calls.length
+
+    harness.rerender(<SceneEntityInspectorV4
+      {...harness.props}
+      focusRequest={{ ...request, id: 2 }}
+    />)
+    expect(focus.mock.calls.length).toBeGreaterThan(firstRequestFocusCount)
+    expect(summary).toHaveFocus()
+  })
+
   it('edits manual Robot numeric Status and overlay through the exact Robot target', async () => {
     const user = userEvent.setup()
     const harness = renderInspector({ kind: 'robot', robotId: 'robot-2' })

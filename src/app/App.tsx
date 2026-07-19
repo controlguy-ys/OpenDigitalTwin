@@ -155,7 +155,7 @@ interface AppInspectorFocusRequestV4 {
   readonly id: number
   readonly projectRevisionId: RevisionIdV4
   readonly selection: SceneSelectionTargetV4
-  readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'numericStatus'
+  readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'binding' | 'numericStatus'
 }
 
 type AppContextTargetSourceV4 = 'scene' | 'job' | 'empty'
@@ -753,7 +753,7 @@ export function App({
     if (shellLayoutController === null || project === null) return null
     const openInspector = (request: {
       readonly selection: SceneSelectionTargetV4
-      readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'numericStatus'
+      readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'binding' | 'numericStatus'
     }): void => {
       resources.interaction.getState().select(request.selection)
       setContextTargetSource('scene')

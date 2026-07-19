@@ -30,7 +30,7 @@ export interface SceneCommandPresentationPortV4 {
   openRobotBase(robotId: RobotIdV4): void
   openInspector(request: {
     readonly selection: SceneSelectionTargetV4
-    readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'numericStatus'
+    readonly section: 'joints' | 'pose' | 'parent' | 'group' | 'binding' | 'numericStatus'
   }): void
 }
 
@@ -52,7 +52,7 @@ const SCENE_CONTEXT_COMMAND_IDS_V4 = Object.freeze([
   'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle',
   'scene.isolate', 'scene.showAll', 'scene.delete', 'scene.group.move',
   'scene.group.remove', 'robot.base.edit', 'robot.mount.edit', 'robot.jog.open',
-  'scene.pose.edit', 'scene.parent.edit', 'scene.status.edit',
+  'scene.pose.edit', 'scene.parent.edit', 'scene.binding.open', 'scene.status.edit',
 ] as const)
 
 function stale(selection: SceneSelectionTargetV4): SceneContextTargetV4 {
@@ -132,6 +132,7 @@ export function sceneContextCommandIdsV4(
   ])
   if (target.kind === 'spatial-entity') return freezeIds([
     'view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset',
+    'scene.binding.open',
     'scene.group.move', ...(target.entity.groupId === null ? [] : ['scene.group.remove']),
     'scene.visibility.toggle', 'scene.isolate', ...(target.entity.removable ? ['scene.delete'] : []),
     'view.collision.open',
@@ -391,6 +392,13 @@ export function composeSceneContextCommandsV4(
       get disabledReason() { const target = liveTarget(options); return target.kind === 'entity-frame' && target.frameKind === 'moving' && target.movingOwnership === 'manual' ? undefined : 'Select a compatible Scene item.' },
       get label() { return liveTarget(options).kind === 'entity-frame' ? 'Edit Moving Frame' : 'Parent' },
       execute() { const target = liveTarget(options); if (target.kind !== 'entity-frame' || target.frameKind !== 'moving' || target.movingOwnership !== 'manual') unavailable(); options.presentation.openInspector({ selection: target.selection, section: 'parent' }) },
+    }),
+    definition('scene.binding.open', 'Open Binding', 'connectivity', {
+      kind: 'action',
+      get visible() { return liveTarget(options).kind === 'spatial-entity' },
+      get enabled() { return liveTarget(options).kind === 'spatial-entity' },
+      get disabledReason() { return liveTarget(options).kind === 'spatial-entity' ? undefined : 'Select a compatible Scene item.' },
+      execute() { const target = liveTarget(options); if (target.kind !== 'spatial-entity') unavailable(); options.presentation.openInspector({ selection: target.selection, section: 'binding' }) },
     }),
     definition('scene.status.edit', 'Numeric Status', 'model', {
       kind: 'action',

@@ -91,6 +91,7 @@ describe('scene context commands', () => {
     const ids = sceneContextCommandIdsV4(project, project.revisionId, { kind: 'spatial-entity', entityId: 'entity-a' })
     expect(ids).toEqual([
       'view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset',
+      'scene.binding.open',
       'scene.group.move', 'scene.group.remove', 'scene.visibility.toggle', 'scene.isolate', 'scene.delete', 'view.collision.open',
     ])
     expect(() => (ids as string[]).push('bad')).toThrow()
@@ -102,7 +103,7 @@ describe('scene context commands', () => {
     [null, ['model.add.group', 'model.add.box', 'model.add.cylinder', 'view.fitAll', 'scene.showAll']],
     [{ kind: 'robot', robotId: 'robot-1' }, ['view.focusSelection', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'robot.base.edit', 'view.collision.open']],
     [{ kind: 'robot-link', robotId: 'robot-1', linkId: 'L0' }, ['view.focusSelection', 'scene.visibility.toggle', 'scene.isolate', 'view.collision.open']],
-    [{ kind: 'spatial-entity', entityId: 'entity-b' }, ['view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.group.move', 'scene.visibility.toggle', 'scene.isolate', 'view.collision.open']],
+    [{ kind: 'spatial-entity', entityId: 'entity-b' }, ['view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.binding.open', 'scene.group.move', 'scene.visibility.toggle', 'scene.isolate', 'view.collision.open']],
     [{ kind: 'scene-group', groupId: 'group-a' }, ['view.focusSelection', 'scene.rename', 'scene.group.move', 'scene.group.remove', 'scene.visibility.toggle', 'scene.isolate', 'scene.delete']],
     [{ kind: 'scene-frame', frameId: 'world' }, ['view.focusSelection', 'scene.rename']],
     [{ kind: 'scene-frame', frameId: 'fixture' }, ['view.focusSelection', 'scene.rename', 'scene.pose.edit']],
@@ -225,19 +226,22 @@ describe('scene context commands', () => {
     expect(commandById(commands, 'scene.pose.edit').visible).toBe(false)
   })
 
-  it('defines exactly the approved 19 Scene commands with canonical sections and kinds', () => {
+  it('defines exactly the approved 20 Scene commands with canonical sections and kinds', () => {
     const project = projectWithTargets()
     const interaction = createInteractionStoreV4()
     interaction.getState().replaceProject(project)
     const commands = composeSceneContextCommandsV4({ project, interaction, scene: sceneService(), prompt: { requestText: vi.fn(async () => null) }, presentation: { openRobotBase: vi.fn(), openInspector: vi.fn() } })
-    expect(commands).toHaveLength(19)
-    expect(new Set(commands.map(({ id }) => id)).size).toBe(19)
+    expect(commands).toHaveLength(20)
+    expect(new Set(commands.map(({ id }) => id)).size).toBe(20)
     expect(commands.filter(({ kind }) => kind === 'toggle').map(({ id }) => id)).toEqual(['scene.visibility.toggle'])
     expect(commands.filter(({ section }) => section === 'home').map(({ id }) => id)).toEqual([
       'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'scene.showAll', 'scene.delete', 'robot.jog.open',
     ])
     expect(commands.filter(({ section }) => section === 'model').map(({ id }) => id)).toEqual([
       'model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit', 'scene.pose.edit', 'scene.parent.edit', 'scene.status.edit',
+    ])
+    expect(commands.filter(({ section }) => section === 'connectivity').map(({ id }) => id)).toEqual([
+      'scene.binding.open',
     ])
   })
 
@@ -340,11 +344,12 @@ describe('scene context commands', () => {
     await commandById(commands, 'robot.jog.open').execute()
     interaction.getState().select({ kind: 'spatial-entity', entityId: 'entity-a' })
     await commandById(commands, 'scene.pose.edit').execute()
+    await commandById(commands, 'scene.binding.open').execute()
     await commandById(commands, 'scene.status.edit').execute()
     expect(openRobotBase).toHaveBeenNthCalledWith(1, 'robot-1')
     expect(openRobotBase).toHaveBeenNthCalledWith(2, 'robot-1')
     expect(openInspector.mock.calls.map(([request]) => request)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ section: 'joints' }), expect.objectContaining({ section: 'pose' }), expect.objectContaining({ section: 'numericStatus' }),
+      expect.objectContaining({ section: 'joints' }), expect.objectContaining({ section: 'pose' }), expect.objectContaining({ section: 'binding' }), expect.objectContaining({ section: 'numericStatus' }),
     ]))
   })
 

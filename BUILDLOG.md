@@ -158,6 +158,35 @@
   Control**. Before rebinding, Manual mode retained `X=650 mm`, `Rz=15 deg`, and
   the viewport move gizmo.
 
+## Object Binding Context Entry and B&R PLC Probe
+
+- Scope: Added a geometry-independent **Open Binding** command to the Object
+  right-click menu. It selects the exact Spatial Entity, opens the Inspector,
+  expands the existing OPC UA Binding disclosure, and focuses its summary. No
+  duplicate modal, form, state store, or Geometry-specific branch was added.
+- Browser flow: Right-clicking the sample Box exposed **Open Binding** between
+  **Reset Pose** and grouping actions. The command opened the XYZ/RPY/Status
+  mapping editor. A saved binding was re-opened with all seven Node IDs intact,
+  OPC UA transform/status ownership visible, manual XYZ/RPY disabled, and
+  **Take Manual Control** available.
+- External probe: `opc.tcp://127.0.0.1:4840` was confirmed as a reachable B&R
+  Embedded OPC UA Server. The Project was changed from Bridge to Client to avoid
+  competing for the already-owned 4840 listen port. The Gateway connected and
+  saved mappings for `g6AxRobC.MCSPosition0..5` plus a numeric Shuttle state.
+- Known blocker: The B&R Server allowed anonymous browse/session creation but
+  returned `BadUserAccessDenied` for the sampled application values. Therefore
+  binding authoring, persistence, ownership, and Gateway connection were proven,
+  but live Box motion was not claimed. The next real-value test requires
+  anonymous read permission for dedicated Box variables or future authenticated
+  Client support.
+- Future Color: Keep Color independent from pose/status ownership. Add an Object
+  runtime appearance channel that updates renderer materials; do not mutate
+  imported Geometry or rebuild Geometry resources on every color sample.
+- Verification: `110/110` focused App/command/menu/Inspector tests passed. The
+  complete Vitest run, lint, Runtime Gateway TypeScript build, and Web production
+  build also passed. An independent read-only review found no implementation
+  issue after removing its two accidentally generated pnpm files.
+
 ## Human Decisions
 
 - What Codex handled: Source inspection, design-to-code traceability, planning,

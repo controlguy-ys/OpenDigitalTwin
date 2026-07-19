@@ -122,7 +122,7 @@ describe('SceneContextMenuV4', () => {
     const cases: readonly [SceneSelectionTargetV4, readonly string[]][] = [
       [{ kind: 'robot', robotId: 'robot-1' }, ['Focus', 'Copy Pose', 'Paste Pose', 'Reset Pose', 'Hide', 'Isolate', 'Edit Robot Base', 'Open Collision']],
       [{ kind: 'robot-link', robotId: 'robot-1', linkId: 'L0' }, ['Focus', 'Hide Robot', 'Isolate', 'Open Collision']],
-      [{ kind: 'spatial-entity', entityId: 'entity-a' }, ['Focus', 'Rename', 'Copy Pose', 'Paste Pose', 'Reset Pose', 'Move to Group', 'Remove from Group', 'Hide', 'Isolate', 'Delete', 'Open Collision']],
+      [{ kind: 'spatial-entity', entityId: 'entity-a' }, ['Focus', 'Rename', 'Copy Pose', 'Paste Pose', 'Reset Pose', 'Open Binding', 'Move to Group', 'Remove from Group', 'Hide', 'Isolate', 'Delete', 'Open Collision']],
       [{ kind: 'scene-group', groupId: 'group-root' }, ['Focus', 'Rename', 'Move Group', 'Ungroup', 'Hide', 'Isolate', 'Delete Group and Contents']],
       [{ kind: 'scene-frame', frameId: 'world' }, ['Focus', 'Rename']],
       [{ kind: 'scene-frame', frameId: 'fixture-frame' }, ['Focus', 'Rename', 'Edit Frame']],
@@ -155,6 +155,9 @@ describe('SceneContextMenuV4', () => {
     harness.rerenderMenu({ kind: 'entity-frame', entityId: 'entity-a', frameId: 'entity-a-moving' })
     await user.click(screen.getByRole('menuitem', { name: 'Edit Moving Frame' }))
     expect(harness.presentation.openInspector).toHaveBeenCalledWith({ selection: { kind: 'entity-frame', entityId: 'entity-a', frameId: 'entity-a-moving' }, section: 'parent' })
+    harness.rerenderMenu({ kind: 'spatial-entity', entityId: 'entity-a' })
+    await user.click(screen.getByRole('menuitem', { name: 'Open Binding' }))
+    expect(harness.presentation.openInspector).toHaveBeenCalledWith({ selection: { kind: 'spatial-entity', entityId: 'entity-a' }, section: 'binding' })
   })
 
   it('creates deterministic empty-space primitives and routes Fit All and Show All through their own shared IDs', async () => {
