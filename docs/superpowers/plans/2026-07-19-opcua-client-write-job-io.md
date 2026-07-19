@@ -21,7 +21,7 @@
 - A disconnect retains the last display value, changes its quality to `STALE`, sets status to `BadNoCommunication`, and never transfers ownership to Manual.
 - One SetDO instruction issues one OPC UA `Session.write`; it advances only after a terminal `SUCCEEDED` result. Any rejection or failed write fails the Job with the returned stable code.
 - The Gateway rejects wrong Project, wrong Revision, stale lease generation, expired request, disconnected Endpoint, type mismatch, and direction mismatch before calling `Session.write`.
-- Retain at most 4,096 command deduplication records. An identical duplicate of an admitted record returns the retained in-flight/terminal result even after the original request expiry; preflight-rejected records are not retained. A reused admitted Command ID with a different fingerprint fails as `COMMAND_ID_CONFLICT` without a second write. Temporal and target preflight applies only to a new record and runs before admission. Evict the oldest terminal record before admitting a new record; if all 4,096 records are in-flight, reject the new command before its operation starts as `COMMAND_DEDUPE_CAPACITY_EXHAUSTED`.
+- Retain at most 4,096 command deduplication records. An identical duplicate of an admitted record returns the retained in-flight/terminal result even after the original request expiry; preflight-rejected records are not retained. A reused admitted command identity `(projectId, configRevision, leaseGeneration, targetId, commandId)` with a different fingerprint fails as `COMMAND_ID_CONFLICT` without a second write. Temporal and target preflight applies only to a new record and runs before admission. Evict the oldest terminal record before admitting a new record; if all 4,096 records are in-flight, reject the new command before its operation starts as `COMMAND_DEDUPE_CAPACITY_EXHAUSTED`.
 - The Client-write command lease uses publisher ID `${gatewayId}:client-write`, a five-second TTL refreshed on every `GET /runtime/command-lease`, and the active activation generation. A command expiry must be no later than both the returned lease expiry and five seconds after command creation.
 - `attach` and `detach` use only the IDs in the instruction. Never search selection, collision candidates, names, or a nearest Object; gripper state does not imply attachment state.
 - Attach and Detach preserve Object World pose. An OPC UA-owned Object fails as `SOURCE_OWNERSHIP_CONFLICT`; an already attached Object fails as `ALREADY_ATTACHED`; an out-of-range attach fails as `OUT_OF_RANGE`.
@@ -625,25 +625,32 @@ Expected: all focused and full tests PASS, Gateway/browser TypeScript compile, a
 - Test: `middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts`
 - Create: `middleware/runtime-gateway/runtime-command-service.ts`
 - Test: `middleware/runtime-gateway/runtime-command-service.test.ts`
+- Modify: `middleware/runtime-gateway/deployment-config.ts`
+- Test: `middleware/runtime-gateway/deployment-config.test.ts`
 - Modify: `middleware/runtime-gateway/main.ts`
 - Test: `middleware/runtime-gateway/main.test.ts`
 
 **Interfaces:**
-- Consumes: the Task 2 V5-only Gateway/adapter boundary, `OpcUaClientAdapterV1.write`, `CommandRequestV1`, `CommandResultV1`, and active Gateway Project/Revision state.
-- Produces: `RuntimeCommandDedupeRegistryV1`, `RuntimeCommandDedupeAdmissionErrorV1`, `RuntimeCommandServiceV1`, `GET /runtime/command-lease`, and `POST /runtime/command`.
+- Consumes: the Task 2 V5-only Gateway/adapter boundary, `compileOpcUaClientWritePlanV1`, `OpcUaClientAdapterV1.status/write`, Runtime Protocol v1 validators, and Task 2's atomic activation/recovery lifecycle.
+- Produces: `RuntimeCommandDedupeRegistryV1`, `RuntimeCommandDedupeAdmissionErrorV1`, `RuntimeCommandServiceV1`, process-local active generation, `GET /runtime/command-lease`, and `POST /runtime/command`.
 
-- [ ] **Step 1: Write RED fencing and deduplication tests**
+- [ ] **Step 1: Write RED dedupe, fencing, and close-race tests**
 
 ```ts
-it('executes one write and returns the retained result for an identical duplicate', async () => {
-  const write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))
-  const service = createRuntimeCommandServiceV1(activeContext({ write, generation: 7, nowMs: 1_000 }))
-  const request = commandRequest({ commandId: 'set-start-1', leaseGeneration: 7, expiresAt: 2_000 })
-  const first = await service.execute(request)
-  const duplicate = await service.execute(structuredClone(request))
+it('inserts before invoking the operation so simultaneous duplicates join one write', async () => {
+  const gate = deferred<CommandResultV1>()
+  const key = commandKey(request)
+  const operation = vi.fn(() => {
+    expect(registry.has('client-write', key)).toBe(true)
+    return gate.promise
+  })
+  const record = commandRecord('client-write', key, commandFingerprint(request))
+  const first = registry.execute(record, { preflight: () => null, operation })
+  const duplicate = registry.execute(structuredClone(record), { preflight: () => null, operation })
   expect(first).toBe(duplicate)
-  expect(first).toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED' })
-  expect(write).toHaveBeenCalledOnce()
+  expect(operation).toHaveBeenCalledOnce()
+  gate.resolve(terminal(request))
+  await expect(Promise.all([first, duplicate])).resolves.toEqual([terminal(request), terminal(request)])
 })
 
 it.each([
@@ -655,131 +662,196 @@ it.each([
   ['unknown target', { targetId: 'missing-mapping' }, 'COMMAND_TARGET_INVALID'],
   ['non-write target', { targetId: 'read-only-mapping' }, 'COMMAND_TARGET_INVALID'],
   ['wrong direction', { targetId: 'wrong-direction-mapping' }, 'COMMAND_TARGET_INVALID'],
-  ['disconnected endpoint', { targetId: 'disconnected-output' }, 'OPC_UA_ENDPOINT_DISCONNECTED'],
   ['wrong type', { value: 1 }, 'COMMAND_TYPE_MISMATCH'],
-])('%s rejects before write', async (_name, override, code) => {
+  ['disconnected endpoint', { targetId: 'disconnected-output' }, 'OPC_UA_ENDPOINT_DISCONNECTED'],
+])('%s is an unretained rejection before write', async (_name, override, failureCode) => {
   const write = vi.fn()
   const service = createRuntimeCommandServiceV1(activeContext({ write, generation: 7, nowMs: 1_000 }))
   await expect(service.execute(commandRequest(override))).resolves.toMatchObject({
-    acknowledgement: 'REJECTED', executionState: 'FAILED', failureCode: code,
+    acknowledgement: 'REJECTED', executionState: 'FAILED', failureCode,
   })
   expect(write).not.toHaveBeenCalled()
+  expect(service.size()).toBe(0)
 })
 
-it('accepts the exact five-second command-expiry boundary', async () => {
-  const write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))
-  const service = createRuntimeCommandServiceV1(activeContext({ write, nowMs: 1_000 }))
+it('accepts expiresAt equal to the fixed five-second boundary using one preflight clock sample', async () => {
+  const nowMs = vi.fn().mockReturnValueOnce(1_000).mockReturnValue(1_001)
+  const service = createRuntimeCommandServiceV1(activeContext({ nowMs }))
   await expect(service.execute(commandRequest({ expiresAt: 6_000 }))).resolves.toMatchObject({
-    acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED',
+    acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED', failureCode: null,
   })
-  expect(write).toHaveBeenCalledOnce()
+  expect(nowMs).toHaveBeenCalledTimes(2) // one preflight sample and one completion timestamp
 })
 
-it('renews the fixed client-write lease without changing publisher or generation', () => {
-  const clock = controlledClock(1_000)
-  const service = createRuntimeCommandServiceV1(activeContext({
-    publisherId: 'gateway-a:client-write', generation: 7, nowMs: clock.now,
-  }))
-  expect(service.lease()).toEqual(expect.objectContaining({
-    publisherId: 'gateway-a:client-write', generation: 7, expiresAt: 6_000,
-  }))
-  clock.set(1_250)
-  expect(service.lease()).toEqual(expect.objectContaining({
-    publisherId: 'gateway-a:client-write', generation: 7, expiresAt: 6_250,
-  }))
-})
-
-it('serves the Gateway-derived publisher ID and renewed expiry on consecutive lease GETs', async () => {
-  const harness = activeGatewayHarness({ gatewayId: 'gateway-a', generation: 7, nowMs: 1_000 })
-  await expect(harness.get('/runtime/command-lease')).resolves.toMatchObject({
-    publisherId: 'gateway-a:client-write', generation: 7, expiresAt: 6_000,
+it('keys identity by active context and rejects only a same-identity fingerprint conflict', async () => {
+  const original = commandRequest({ commandId: 'same', value: false })
+  await service.execute(original)
+  await expect(service.execute({ ...original, value: true })).resolves.toMatchObject({
+    failureCode: 'COMMAND_ID_CONFLICT',
   })
-  harness.clock.set(1_250)
-  await expect(harness.get('/runtime/command-lease')).resolves.toMatchObject({
-    publisherId: 'gateway-a:client-write', generation: 7, expiresAt: 6_250,
-  })
+  expect(commandKey({ ...original, leaseGeneration: original.leaseGeneration + 1 }))
+    .not.toBe(commandKey(original))
 })
 
-it('rejects a reused Command ID with a different payload', async () => {
-  const service = createRuntimeCommandServiceV1(activeContext({ generation: 7, nowMs: 1_000 }))
-  await service.execute(commandRequest({ commandId: 'same', value: false }))
-  await expect(service.execute(commandRequest({ commandId: 'same', value: true })))
-    .resolves.toMatchObject({ failureCode: 'COMMAND_ID_CONFLICT' })
-})
-
-it('rejects a registry fingerprint conflict before preflight or operation', async () => {
-  const registry = createRuntimeCommandDedupeRegistryV1({ maximumRecords: 4_096 })
-  await registry.execute(commandRecord('client-write', 'same', 'fingerprint-a'), {
-    preflight: () => null,
-    operation: async () => terminal('same'),
-  })
-  const preflight = vi.fn(() => null)
-  const operation = vi.fn(async () => terminal('same'))
-  await expect(registry.execute(commandRecord('client-write', 'same', 'fingerprint-b'), {
-    preflight, operation,
-  })).rejects.toMatchObject({ code: 'COMMAND_ID_CONFLICT' })
-  expect(preflight).not.toHaveBeenCalled()
-  expect(operation).not.toHaveBeenCalled()
-})
-
-it('returns the retained identical result after the original request expires', async () => {
-  const clock = controlledClock(1_000)
-  const write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))
-  const service = createRuntimeCommandServiceV1(activeContext({ write, nowMs: clock.now }))
-  const request = commandRequest({ commandId: 'same-after-expiry', expiresAt: 2_000 })
-  const first = await service.execute(request)
-  clock.set(2_001)
-  const duplicate = await service.execute(structuredClone(request))
-  expect(duplicate).toBe(first)
-  expect(write).toHaveBeenCalledOnce()
-})
-
-it('shares one exact 4096-record budget across command channels', async () => {
-  const registry = createRuntimeCommandDedupeRegistryV1({ maximumRecords: 4_096 })
-  await fillTerminalRecords(registry, 4_096, 'client-write')
-  await registry.execute(commandRecord('server-command', 'next'), {
-    preflight: () => null,
-    operation: async () => terminal('next'),
-  })
+it('evicts only the oldest terminal record when in-flight and terminal records share capacity', async () => {
+  const oldestInFlightKey = startOldestInFlightRecord(registry)
+  const nextOldestTerminalKey = await insertNextTerminalRecord(registry)
+  await fillRemainingMixedCapacity(registry, { terminal: 2_047, inFlight: 2_047 })
+  await registry.execute(nextRecord, acceptedCallbacks())
   expect(registry.size()).toBe(4_096)
-  expect(registry.has(oldestRecordKey())).toBe(false)
+  expect(registry.has('client-write', nextOldestTerminalKey)).toBe(false)
+  expect(registry.has('client-write', oldestInFlightKey)).toBe(true)
 })
 
-it('rejects registry admission for record 4097 before execution when every record is in flight', async () => {
-  const registry = createRuntimeCommandDedupeRegistryV1({ maximumRecords: 4_096 })
+it('rejects record 4097 before execution when all 4096 records are in flight', async () => {
   await fillInFlightRecordsWithoutSettling(registry, 4_096)
-  const operation = vi.fn(async () => terminal('overflow'))
-  await expect(registry.execute(commandRecord('client-write', 'overflow'), {
-    preflight: () => null, operation,
-  }))
+  const operation = vi.fn()
+  await expect(registry.execute(overflowRecord, { preflight: () => null, operation }))
     .rejects.toMatchObject({ code: 'COMMAND_DEDUPE_CAPACITY_EXHAUSTED' })
   expect(operation).not.toHaveBeenCalled()
 })
 
-it('converts dedupe capacity exhaustion into a valid rejected command result', async () => {
-  const write = vi.fn()
-  const service = createRuntimeCommandServiceV1(activeContext({
-    dedupe: fullInFlightRegistry(), write,
-  }))
-  await expect(service.execute(commandRequest({ commandId: 'overflow' }))).resolves.toMatchObject({
-    commandId: 'overflow', acknowledgement: 'REJECTED', executionState: 'FAILED',
-    failureCode: 'COMMAND_DEDUPE_CAPACITY_EXHAUSTED',
+it('does not resurrect an in-flight record after clear and completion', async () => {
+  const gate = deferred<CommandResultV1>()
+  const result = registry.execute(record, { preflight: () => null, operation: () => gate.promise })
+  registry.clear()
+  gate.resolve(terminal(request))
+  await result
+  expect(registry.size()).toBe(0)
+})
+
+it('close fences new records, settles a never-ending admitted write, and preserves joined duplicates', async () => {
+  const write = vi.fn(() => new Promise<never>(() => undefined))
+  const service = createRuntimeCommandServiceV1(activeContext({ write }))
+  const request = commandRequest()
+  const first = service.execute(request)
+  const joined = service.execute(structuredClone(request))
+  service.close()
+  const afterClose = service.execute(structuredClone(request))
+  expect(first).toBe(joined)
+  expect(first).toBe(afterClose)
+  expect(write).toHaveBeenCalledOnce()
+  await expect(Promise.all([first, joined, afterClose])).resolves.toEqual([
+    expect.objectContaining({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_SERVICE_CLOSED' }),
+    expect.objectContaining({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_SERVICE_CLOSED' }),
+    expect.objectContaining({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_SERVICE_CLOSED' }),
+  ])
+  await expect(service.execute(commandRequest({ commandId: 'new' }))).resolves.toMatchObject({
+    acknowledgement: 'REJECTED', failureCode: 'COMMAND_LEASE_STALE',
   })
-  expect(write).not.toHaveBeenCalled()
 })
 ```
 
-- [ ] **Step 2: Run RED**
+Also test retained identical results after expiry, different-fingerprint conflict before preflight/operation, one shared 4,096-record budget across `client-write` and future `server-command`, completion/admission interleaving without in-flight eviction, unexpected adapter rejection becoming a retained `ACCEPTED/FAILED OPC_UA_WRITE_FAILED` result, exact 13-field terminal envelopes, and non-Good Task 2 write results mapping without a `statusCode` field.
 
-```powershell
-npm run test:run -- middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.test.ts
-```
-
-Expected: FAIL because command execution routes and deduplication do not exist.
-
-- [ ] **Step 3: Implement the bounded command service**
+- [ ] **Step 2: Write RED Gateway generation, HTTP, and shutdown tests**
 
 ```ts
+it('publishes generation one and renews the fixed client-write lease', async () => {
+  const clock = controlledClock(1_000)
+  const harness = activeClientGateway({ gatewayId: 'gateway-a', nowMs: clock.now })
+  await expect(harness.get('/runtime/command-lease')).resolves.toEqual({
+    status: 200,
+    body: {
+      projectId: harness.project.projectId, configRevision: harness.configRevision,
+      publisherId: 'gateway-a:client-write', generation: 1, expiresAt: 6_000,
+    },
+  })
+  clock.set(1_250)
+  await expect(harness.get('/runtime/command-lease')).resolves.toMatchObject({
+    status: 200,
+    body: { publisherId: 'gateway-a:client-write', generation: 1, expiresAt: 6_250 },
+  })
+})
+
+it('admits under the runtime transition fence but awaits the write outside it', async () => {
+  const writeGate = deferred<OpcUaClientWriteResultV1>()
+  const command = harness.postCommand(commandRequest(), () => writeGate.promise)
+  await harness.waitForAdmission()
+  await expect(harness.putProject(nextProject)).resolves.toMatchObject({ status: 200 })
+  writeGate.resolve({ ok: false, failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', statusCode: 'BadNoCommunication', message: 'stopped' })
+  await expect(command).resolves.toMatchObject({ status: 200, body: { acknowledgement: 'ACCEPTED', executionState: 'FAILED' } })
+})
+
+it('retains generation and dedupe on recovered failure, then advances old plus one on success', async () => {
+  const before = await harness.getLease()
+  await harness.completeOneCommand('retained-id')
+  await expect(harness.putProject(failingCandidate)).resolves.toMatchObject({ status: 503 })
+  expect(await harness.getLease()).toMatchObject({ generation: before.generation })
+  expect(await harness.retryCommand('retained-id')).toEqual(harness.retainedResult)
+  await harness.putProject(nextProject)
+  expect(await harness.getLease()).toMatchObject({ generation: before.generation + 1 })
+})
+
+it('stops without waiting for a never-settling Client write', async () => {
+  const request = harness.postCommand(commandRequest(), neverSettlingWrite)
+  await harness.waitForAdmission()
+  await expect(harness.stop()).resolves.toBeUndefined()
+  await expect(request).resolves.toMatchObject({ status: 200, body: { failureCode: 'COMMAND_SERVICE_CLOSED' } })
+})
+```
+
+Add tests for first/same-revision generation and fresh registry, failed activation not consuming a generation, safe-integer exhaustion before any adapter stop, candidate cleanup, recovered rollback retaining old service, double-failure cleanup/non-ready behavior, and active resource cleanup during stop. Client activation and lease availability intentionally do not wait for an Endpoint connection; an offline Client still returns a lease, rejects a valid command unretained as `OPC_UA_ENDPOINT_DISCONNECTED`, and an identical retry may later succeed after status becomes `connected`.
+
+The exact HTTP matrix is:
+
+| Request | Status | Body |
+|---|---:|---|
+| `GET /runtime/command-lease` with active Client role | 200 | exact validated `RuntimePublisherLeaseV1` |
+| `GET /runtime/command-lease` without active Client role | 409 | exact closed `{ code: 'OPC_UA_CLIENT_NOT_ACTIVE', message }` |
+| valid `POST /runtime/command` with Client role | 200 | exact validated `CommandResultV1` |
+| valid `POST /runtime/command` without Client role | 200 | `REJECTED/FAILED OPC_UA_CLIENT_NOT_ACTIVE`, echoing validated request identity |
+| structurally invalid Command Request | 400 | exact closed `{ code: 'COMMAND_REQUEST_INVALID', message }` |
+| malformed JSON | 400 | existing `JSON_BODY_INVALID` error |
+| unsupported content type | 415 | existing `CONTENT_TYPE_UNSUPPORTED` error |
+| body over `MAX_RUNTIME_BATCH_BYTES_V1` by declared or streamed size | 413 | existing `REQUEST_BODY_TOO_LARGE` error |
+| wrong route or method | 404 | existing empty response |
+
+Every POST first calls `readJsonBody(request, MAX_RUNTIME_BATCH_BYTES_V1)` and `validateCommandRequestV1`; transport/protocol failures never call the adapter. Every syntactically valid POST returns HTTP 200, including semantic, capacity, connectivity, write, and no-Client failures. Every Task 3 result has exactly the 13 Runtime Protocol fields, echoes the validated request's Project/Revision/generation/target/command identity, sets `attachedObjectId: null`, has terminal `completedAt`, and never adds `statusCode`. Test malformed JSON, invalid shape, unsupported content type, exact/plus-one declared and chunked limits, and no execution on every error.
+
+Add deployment configuration tests accepting an ASCII `gatewayId` of exactly 115 characters and rejecting 116. Change the pattern to `^[A-Za-z0-9][A-Za-z0-9._-]{0,114}$` so both `${gatewayId}:client-write` and Task 2 `${gatewayId}:opcua-client` remain within the Runtime Protocol 128-byte identifier limit.
+
+- [ ] **Step 3: Run RED**
+
+```powershell
+npm run test:run -- middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/deployment-config.test.ts middleware/runtime-gateway/main.test.ts
+```
+
+Expected: FAIL because command registry/service/routes/generation do not exist, the Gateway ID bound is too large, and shutdown does not fence pending commands.
+
+- [ ] **Step 4: Implement the bounded registry and command service**
+
+```ts
+export const RUNTIME_COMMAND_LEASE_TTL_MS_V1 = 5_000
+export const MAX_RUNTIME_COMMAND_RECORDS_V1 = 4_096
+
+export type RuntimeCommandChannelV1 = 'client-write' | 'server-command'
+
+export interface RuntimeCommandDedupeRecordV1 {
+  readonly channel: RuntimeCommandChannelV1
+  readonly key: string
+  readonly fingerprint: string
+}
+
+export interface RuntimeCommandDedupeRegistryV1 {
+  execute(
+    record: RuntimeCommandDedupeRecordV1,
+    callbacks: Readonly<{
+      preflight: () => CommandResultV1 | null
+      operation: () => Promise<CommandResultV1>
+    }>,
+  ): Promise<CommandResultV1>
+  size(): number
+  has(channel: RuntimeCommandChannelV1, key: string): boolean
+  clear(): void
+}
+
+export function createRuntimeCommandDedupeRegistryV1(): RuntimeCommandDedupeRegistryV1
+
+export class RuntimeCommandDedupeAdmissionErrorV1 extends Error {
+  readonly code: 'COMMAND_ID_CONFLICT' | 'COMMAND_DEDUPE_CAPACITY_EXHAUSTED'
+}
+
 export interface RuntimeCommandServiceV1 {
   lease(): RuntimePublisherLeaseV1
   execute(value: unknown): Promise<CommandResultV1>
@@ -787,41 +859,30 @@ export interface RuntimeCommandServiceV1 {
   close(): void
 }
 
+export class RuntimeCommandServiceClosedErrorV1 extends Error {
+  readonly code = 'COMMAND_LEASE_STALE' as const
+}
+
 export function createRuntimeCommandServiceV1(options: {
   readonly project: WorkcellProjectV5
   readonly configRevision: string
   readonly publisherId: string
   readonly generation: number
-  readonly leaseTtlMs?: 5_000
   readonly nowMs: () => number
   readonly clientAdapter: Pick<OpcUaClientAdapterV1, 'status' | 'write'>
   readonly dedupe: RuntimeCommandDedupeRegistryV1
 }): RuntimeCommandServiceV1
 ```
 
-```ts
-export interface RuntimeCommandDedupeRegistryV1 {
-  execute(
-    record: Readonly<{ key: string; fingerprint: string; channel: 'client-write' | 'server-command' }>,
-    callbacks: Readonly<{
-      preflight: () => CommandResultV1 | null
-      operation: () => Promise<CommandResultV1>
-    }>,
-  ): Promise<CommandResultV1>
-  size(): number
-  clear(): void
-}
+The registry identity is `(channel, key)`, where a validated Client request key is exactly `JSON.stringify([projectId, configRevision, leaseGeneration, targetId, commandId])`; its fingerprint is exactly `JSON.stringify([projectId, configRevision, leaseGeneration, expiresAt, targetId, value])`. `execute` always returns a Promise. It checks an existing record synchronously: identical fingerprint joins the same in-flight/terminal Promise without rerunning preflight, while a conflict returns a rejected Promise with `COMMAND_ID_CONFLICT`. For a new key, run synchronous preflight; a rejected result is returned but not retained. Capacity admission follows. Insert a deferred record into the Map before invoking `operation`, convert a synchronous throw to a settled operation Promise, and never call `Map.set` again on completion so `clear()` cannot be undone.
 
-export class RuntimeCommandDedupeAdmissionErrorV1 extends Error {
-  readonly code: 'COMMAND_ID_CONFLICT' | 'COMMAND_DEDUPE_CAPACITY_EXHAUSTED'
-}
-```
+At capacity, iterate insertion order and evict the oldest terminal record only. Never evict an in-flight record. If all 4,096 are in flight, return a rejected Promise with `COMMAND_DEDUPE_CAPACITY_EXHAUSTED` before operation. The budget is one shared active-runtime registry across both channels.
 
-`RuntimeCommandDedupeRegistryV1.execute` first checks the `(channel, key)` record synchronously. An identical fingerprint joins/returns the existing in-flight or terminal result without rerunning preflight, so an idempotent retry still receives the original result after expiry. A different fingerprint throws the typed `COMMAND_ID_CONFLICT` admission error. For a new key, invoke the caller's synchronous `preflight` before capacity admission; a non-null rejected result is returned but not retained. Only a null preflight result proceeds to capacity admission and operation insertion. The registry throws a typed `RuntimeCommandDedupeAdmissionErrorV1` with code `COMMAND_DEDUPE_CAPACITY_EXHAUSTED` when it cannot admit a new record; it does not manufacture a `CommandResultV1` because it does not own Project, generation, target, command, or completion-time context. Client-write and Milestone 4 Server-command callers convert admission errors into their own validated `REJECTED/FAILED` envelope without invoking the operation or browser dispatch.
+The service validates shape before computing identity. Existing identical records are returned before new-record preflight, preserving idempotent retries after expiry and already-admitted duplicates across close. For a new record, a closed service returns unretained `REJECTED/FAILED COMMAND_LEASE_STALE`; then use this exact semantic precedence: Project, Revision, generation, expiry, target, type, connectivity. Capture `nowMs()` once. Expired means `< now`; future-invalid means `> now + RUNTIME_COMMAND_LEASE_TTL_MS_V1`, so the exact boundary is accepted. Reuse `compileOpcUaClientWritePlanV1`; `targetId` is its Mapping ID. Require Boolean value and the exact target Endpoint status `phase === 'connected'`.
 
-Validate command request shape before forming the key/fingerprint. Fingerprint the closed request fields with deterministic `JSON.stringify([projectId, configRevision, leaseGeneration, expiresAt, targetId, value])`. Put wrong Project/Revision/generation, `expiresAt < nowMs()` (`COMMAND_EXPIRED`), `expiresAt > nowMs() + 5_000` (`COMMAND_EXPIRY_INVALID`), unknown/non-write/direction-invalid target, type, and `clientAdapter.status()` Endpoint connectivity checks in the synchronous new-record `preflight`; the exact future boundary is accepted. A missing or non-connected Endpoint returns `REJECTED/FAILED` with `OPC_UA_ENDPOINT_DISCONNECTED` before registry admission and is not retained. The shared registry inserts the in-flight Promise before awaiting `clientAdapter.write` so concurrent duplicates join it. A disconnect racing after admission is an attempted command and returns `ACCEPTED/FAILED`. The registry keeps terminal records in insertion order and evicts the oldest terminal record before admitting a new record when total Client-write plus Server-command records would exceed 4,096; it never evicts an in-flight record. If all 4,096 retained records are in-flight, reject admission with the typed error before calling the operation. Return one terminal envelope with both acknowledgement and execution state: successful write is `ACCEPTED/SUCCEEDED`; a validated attempted write failure is `ACCEPTED/FAILED`; preflight or admission failure is `REJECTED/FAILED`.
+An admitted write is raced against the service close signal. Success is `ACCEPTED/SUCCEEDED`; any Task 2 failure or unexpected rejection is a retained `ACCEPTED/FAILED` result. Closing is idempotent, rejects new records, and settles a never-ending admitted operation once with `COMMAND_SERVICE_CLOSED`; identical callers already joined to that record, including a lookup after close, receive the same Promise/result. `close()` does not clear the injected registry because Milestone 4 shares it. Runtime disposal owns `registry.clear()`. While open, every `lease()` samples `nowMs()` once and returns the same Project/Revision/publisher/generation with `expiresAt = now + 5_000`; `lease()` after close throws a typed `COMMAND_LEASE_STALE` service error. Every result is passed through `validateCommandResultV1` and uses only these local failure codes: `PROJECT_MISMATCH`, `REVISION_MISMATCH`, `COMMAND_LEASE_STALE`, `COMMAND_EXPIRED`, `COMMAND_EXPIRY_INVALID`, `COMMAND_TARGET_INVALID`, `COMMAND_TYPE_MISMATCH`, `COMMAND_ID_CONFLICT`, `COMMAND_DEDUPE_CAPACITY_EXHAUSTED`, `COMMAND_SERVICE_CLOSED`, `OPC_UA_CLIENT_NOT_ACTIVE`, and Task 2's OPC UA write failure codes.
 
-- [ ] **Step 4: Wire activation generation and HTTP routes**
+- [ ] **Step 5: Wire committed generation, command lifecycle, and HTTP routes**
 
 ```ts
 interface ActiveProjectRuntimeV1 {
@@ -835,22 +896,28 @@ interface ActiveProjectRuntimeV1 {
 }
 ```
 
-Begin from Task 2's already V5-only `ActiveProjectRuntimeV1`, staging payload, and Client/Server adapters. Increment a process-local safe integer for every successful candidate activation, including reactivation of the same Revision. Create one 4,096-record dedupe registry for every active Revision in all modes, inject it into the Client command service when Client role is active, and expose that same instance to Milestone 4 Server-command dispatch. Create `commandService` only after the Client adapter has started; it remains `null` in Off and Server-only modes while `commandDedupe` remains available. Build its publisher ID exactly as `${config.gatewayId}:client-write`; `lease()` returns the active generation and `expiresAt = nowMs() + 5_000` on each call. `GET /runtime/command-lease` returns `validateRuntimePublisherLeaseV1(active.commandService.lease())` only when the service exists and otherwise returns a closed `OPC_UA_CLIENT_NOT_ACTIVE` failure; `POST /runtime/command` reads at most `MAX_RUNTIME_BATCH_BYTES_V1`, executes once when available, and returns `validateCommandResultV1(result)`. With no Client adapter, return a valid `REJECTED/FAILED` result with `OPC_UA_CLIENT_NOT_ACTIVE`, not an untyped 500 response. Milestone 4's separate browser-publisher lease keeps Server-only product commands functional without manufacturing a Client write service.
+Extend `RuntimeGatewayEntrypointDependenciesV1` with `initialCommittedCommandGeneration?: number`, defaulting to `0`; it accepts only a non-negative safe integer and is an explicit deterministic test/process-restore seam. Start the process-local committed generation from that value. Compute a tentative safe `committedGeneration + 1` before stopping prior adapters; safe-integer exhaustion is a 503 pre-destructive activation failure. A Gateway test seeds `Number.MAX_SAFE_INTEGER - 1`, successfully activates the prior Client/Bridge runtime at generation `Number.MAX_SAFE_INTEGER`, then proves the next PUT returns 503 before either prior adapter `stop()`, with readiness and the active max-generation lease unchanged. Create one fresh fixed-limit registry after candidate adapters start, and create the Client service only for Client/Bridge mode. Client `start()` remains nonblocking: service/lease availability does not claim Endpoint connectivity. Publish the candidate runtime and committed generation once, then close the previous service and clear its registry. Every successful activation, including Off/Server and the same Revision, advances generation and receives a fresh registry. A failed candidate does not consume generation.
 
-Candidate activation must retain Task 2's atomic behavior: publish the new generation, registry, command service, and adapters only after all requested candidate adapters start successfully. On any failure, stop candidate resources and retain the prior active runtime, generation, registry, command service, and adapters.
+Preserve Task 2 recovery exactly. If prior adapter recovery succeeds, retain its generation, service, registry, and records unchanged; discard only candidate command resources. If recovery fails, close/clear both candidate and prior command resources, keep Task 2's non-ready runtime and Hub deactivation, and do not advance generation. On Gateway stop, use the runtime transition queue first to detach the active runtime, close the service, clear the registry, and stop adapters; only then close Hub/WebSocket/HTTP resources. The service close race makes never-ending command handlers settle, so shutdown remains bounded.
 
-- [ ] **Step 5: Run GREEN and commit**
+For POST, parse and validate outside the runtime queue. Enter the existing runtime transition queue only long enough to select the active runtime and synchronously call `commandService.execute`, which performs registry lookup/admission before returning its Promise. Do not await the OPC UA operation inside the queue; await the captured result afterward. This prevents project replacement from stopping an adapter between active-runtime selection and admission without allowing a never-ending write to block activation. A missing Client service produces the exact validated no-Client result inside the same selection fence.
+
+Add both command source files to the existing V5/no-Project-V4 static-boundary assertion. Do not modify Runtime Protocol v1 or the Server adapter in this task.
+
+- [ ] **Step 6: Run GREEN and commit**
 
 ```powershell
-npm run test:run -- middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.test.ts
+npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway
+npm run test:run
 npm run build:gateway
 npm run lint
-git add middleware/runtime-gateway/runtime-command-dedupe-registry.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.ts middleware/runtime-gateway/main.test.ts
+npm run build
+git add middleware/runtime-gateway/runtime-command-dedupe-registry.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/deployment-config.ts middleware/runtime-gateway/deployment-config.test.ts middleware/runtime-gateway/main.ts middleware/runtime-gateway/main.test.ts
 git diff --cached --check
 git commit -m "feat: transport deduplicated runtime commands"
 ```
 
-Expected: exact fencing codes PASS, duplicate execution count remains one, Task 2's V5 Client/Server/Bridge activation remains available, and the Gateway build passes.
+Expected: exact fencing/result/HTTP codes PASS; simultaneous duplicates execute once; mixed/all-in-flight capacity remains exactly 4,096; successful activation alone advances generation; recovered rollback retains prior dedupe; stop is bounded; Task 2 Client/Server/Bridge, Hub, and write lifecycle regressions remain green.
 
 ### Task 4: Add the Browser Command Client and Signal Write Port
 
