@@ -14,8 +14,7 @@
 - Consume `WorkcellProjectV5`, `LogicalSignalV1`, `RobotJobInstructionV1`, `OpcUaMappingV5`, `OpcUaNodeAddressV1`, and `validateWorkcellProjectV5` from `src/core/project-v5/index.ts`; do not reopen or duplicate those contracts.
 - Consume `RigidTransformV5`, `normalizeRigidTransformV5`, `composeRigidTransformV5`, and `relativeRigidTransformV5` from the standalone `src/core/project-v5/rigid-transform.ts` module delivered by Milestone 2; do not import Project V4 transform types.
 - Consume `RuntimeGatewayStatusV1` from `src/core/runtime-protocol/gateway-status-v1.ts` and `RuntimePublisherLeaseV1`, `CommandRequestV1`, `CommandResultV1`, `StateBatchV1`, and their validators from `src/core/runtime-protocol/v1.ts`.
-- Cut `src/core/runtime-protocol/v1.ts` atomically from its Project V4 imports to `WorkcellProjectV5` and `validateWorkcellProjectV5`. The wire envelope remains Runtime Protocol v1 for this closed deployment, but a staged Project payload is V5-only and V4 fails before adapter preparation.
-- In Task 3, cut the existing OPC UA Server adapter input to validated Project V5 before `main.ts` becomes V5-only. Preserve Off/Client/Server/Bridge activation and the temporary custom read-only telemetry tree; official Robotics NodeSets and model semantics remain Milestone 4 work. Never cast or translate V5 through Project V4.
+- In Task 2, atomically cut `src/core/runtime-protocol/v1.ts`, Gateway staging/main, and both OPC UA adapters from Project V4 to validated Project V5. The wire envelope remains Runtime Protocol v1 for this closed deployment, but a staged Project payload is V5-only and V4 fails before adapter preparation. Preserve Off/Client/Server/Bridge activation and the temporary custom read-only Server telemetry tree; official Robotics NodeSets and model semantics remain Milestone 4 work. Never accept a V4/V5 union, cast, translate, or retain a V4 compatibility path.
 - Use `OpcUaMappingV5.id` as `CommandRequestV1.targetId`; Job instructions and runtime state continue to address stable `LogicalSignalV1.id` values.
 - `set-do` may target only a Boolean `output` or `bidirectional` Signal with exactly one enabled `write` or `readWrite` Mapping.
 - `wait-di` may observe only a Boolean `input` or `bidirectional` Signal and completes only from current `GOOD` quality. `BAD`, `UNCERTAIN`, and `STALE` retained values cannot satisfy it.
@@ -40,7 +39,8 @@
 - `src/features/signals/v5/logical-signal-runtime-store.ts` and test — quality-aware Signal values compiled from V5 read Mappings.
 - `src/features/scene/v5/object-runtime-state.ts` and test — V5 Object pose/status ownership, smoothing, freshness, and disconnect state compiled from read Mappings.
 - `src/features/robot/v5/robot-frame-status-runtime-store.ts` and test — V5 Robot Frame/status subscription state, ownership, smoothing, and disconnect behavior.
-- `middleware/runtime-gateway/opcua-client-write-service.ts` and test — deterministic Mapping compilation, Namespace-URI resolution, type conversion, and one OPC UA write.
+- `middleware/runtime-gateway/opcua-client-read-plan.ts` and test — endpoint-wide V5 root-node planning and Project-semantic Mapping assembly.
+- `middleware/runtime-gateway/opcua-client-write-service.ts` and test — deterministic Mapping compilation, live-Session Namespace resolution, and one OPC UA write.
 - `middleware/runtime-gateway/runtime-command-dedupe-registry.ts` and test — one active-Revision, direction-neutral 4,096-record command deduplication budget shared by Client writes and later Server commands.
 - `middleware/runtime-gateway/runtime-command-service.ts` and test — command fencing, expiry, stable results, and Client-write execution through the shared registry.
 - `src/features/runtime-gateway/v5/runtime-gateway-command-client.ts` and test — browser lease acquisition and Runtime Protocol command transport.
@@ -63,11 +63,11 @@
 
 **Modify:**
 
-- `src/core/runtime-protocol/v1.ts` and test — remove all Project V4 imports and make revision staging V5-only.
-- `middleware/runtime-gateway/opcua-client-adapter.ts` and test — expose one write boundary on the active Endpoint Session.
-- `middleware/runtime-gateway/opcua-server-adapter.ts` and test — narrow compatibility cutover from V4 input to validated V5 while retaining temporary Server/Bridge telemetry until Milestone 4.
-- `middleware/runtime-gateway/main.ts` and test — active command generation, lease route, command route, and adapter wiring.
-- `middleware/runtime-gateway/opcua-client-adapter.ts` and test are converted from V4 Project input to the V5 Project/Mapping contract; no V4 browser runtime file is modified.
+- `src/core/runtime-protocol/v1.ts` and test — Task 2 removes all Project V4 imports and makes revision staging V5-only before adapter preparation.
+- `middleware/runtime-gateway/opcua-client-adapter.ts` and test — Task 2 atomically becomes V5-only, adds endpoint-wide root subscriptions, and exposes one live-Session write boundary.
+- `middleware/runtime-gateway/opcua-server-adapter.ts` and test — Task 2 performs the narrow V5 compatibility cutover while retaining temporary Server/Bridge telemetry until Milestone 4.
+- `middleware/runtime-gateway/main.ts` and test — Task 2 owns V5 staging/adapter activation; Task 3 adds active command generation, lease route, and command route.
+- `src/features/signals/v5/logical-signal-runtime-store.ts` and test — accept valid Signal values assembled from either scalar or structured OPC UA roots.
 - `package.json` — add a focused `test:job-io` verification script.
 
 ## Runtime Interfaces Used Across Tasks
@@ -360,75 +360,193 @@ git commit -m "feat: add logical signal runtime state"
 
 Expected: all focused tests PASS and no lint errors.
 
-### Task 2: Add One Typed OPC UA Client Write Boundary
+### Task 2: Atomically Cut the Gateway to V5 and Add the Typed OPC UA Client Boundary
 
 **Files:**
+- Create: `middleware/runtime-gateway/opcua-client-read-plan.ts`
+- Test: `middleware/runtime-gateway/opcua-client-read-plan.test.ts`
 - Create: `middleware/runtime-gateway/opcua-client-write-service.ts`
 - Test: `middleware/runtime-gateway/opcua-client-write-service.test.ts`
 - Modify: `middleware/runtime-gateway/opcua-client-adapter.ts`
 - Test: `middleware/runtime-gateway/opcua-client-adapter.test.ts`
+- Modify: `middleware/runtime-gateway/opcua-server-adapter.ts`
+- Test: `middleware/runtime-gateway/opcua-server-adapter.test.ts`
+- Modify: `middleware/runtime-gateway/main.ts`
+- Test: `middleware/runtime-gateway/main.test.ts`
+- Modify: `src/core/runtime-protocol/v1.ts`
+- Test: `src/core/runtime-protocol/v1.test.ts`
+- Modify: `src/features/signals/v5/logical-signal-runtime-store.ts`
+- Test: `src/features/signals/v5/logical-signal-runtime-store.test.ts`
 
 **Interfaces:**
-- Consumes: V5 Endpoint/Mapping/Signal contracts and the active `ClientSession` held by `OpcUaClientAdapterV1`.
-- Produces: `compileOpcUaClientReadPlanV1`, `resolveOpcUaClientReadRootsV1`, and `assembleMappingValueV1` using independent root/`leafPath`/`projectPath`; `CompiledOpcUaClientWriteV1`, `OpcUaClientWriteRequestV1`, `OpcUaClientWriteResultV1`, `compileOpcUaClientWritePlanV1`, and `OpcUaClientAdapterV1.write`.
+- Consumes: validated V5 Endpoint/Mapping/Signal contracts, Task 1 canonical Frame consumers, and the live `ClientSession` plus connection generation held by `OpcUaClientAdapterV1`.
+- Produces: a V5-only Runtime Protocol/Gateway/adapter boundary; `compileOpcUaClientReadPlanV1`, `resolveOpcUaClientReadRootsV1`, `groupResolvedRootsBySamplingIntervalV1`, and `assembleMappingValueV1`; `CompiledOpcUaClientWriteV1`, `OpcUaClientWriteRequestV1`, `OpcUaClientWriteResultV1`, `compileOpcUaClientWritePlanV1`, `createOpcUaClientWriteServiceV1`; and `OpcUaClientAdapterV1.write`.
 
-- [ ] **Step 1: Write RED plan, disconnect, and one-write tests**
+- [ ] **Step 1: Write the RED V5 cutover, root-plan, assembly, and one-write tests**
+
+Add protocol and static-boundary regressions first:
 
 ```ts
-it('compiles exactly one Boolean output Mapping by Namespace URI', () => {
-  expect(compileOpcUaClientWritePlanV1(projectWithBooleanOutput())).toEqual([{
-    mappingId: 'map-start', endpointId: 'plc', signalId: 'start',
-    nodeAddress: { namespaceUri: 'urn:virtual-plc', identifierType: 'string', identifier: 'Start' },
-    dataType: 'Boolean',
-  }])
+it('accepts a staged Project V5 and rejects a staged Project V4', () => {
+  expect(validateRevisionStageRequestV1(revisionStageRequest(projectV5)))
+    .toMatchObject({ project: { schemaVersion: 5 } })
+  expect(() => validateRevisionStageRequestV1(revisionStageRequest(projectV4)))
+    .toThrowError(expect.objectContaining({ code: 'PROJECT_SCHEMA_UNSUPPORTED' }))
 })
 
-it('writes once through the connected Endpoint Session', async () => {
-  const write = vi.fn(async () => 'Good')
-  const service = createOpcUaClientWriteServiceV1(projectWithBooleanOutput(), {
-    resolveEndpoint: () => ({ phase: 'connected', namespaceIndex: async () => 4, write }),
-  })
-  await expect(service.write({ mappingId: 'map-start', value: true })).resolves.toEqual({
-    ok: true, statusCode: 'Good',
-  })
-  expect(write).toHaveBeenCalledOnce()
-  expect(write).toHaveBeenCalledWith({ nodeId: 'ns=4;s=Start', dataType: 'Boolean', value: true })
+it('has no production Gateway dependency on project-v4', async () => {
+  for (const source of await gatewayCutoverSources()) {
+    expect(source).not.toContain('project-v4')
+    expect(source).not.toContain('WorkcellProjectV4')
+  }
 })
 
-it('fails before Session.write while disconnected', async () => {
-  const write = vi.fn()
-  const service = createOpcUaClientWriteServiceV1(projectWithBooleanOutput(), {
-    resolveEndpoint: () => ({ phase: 'reconnecting', namespaceIndex: async () => 4, write }),
-  })
-  await expect(service.write({ mappingId: 'map-start', value: true }))
-    .resolves.toMatchObject({ ok: false, failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED' })
-  expect(write).not.toHaveBeenCalled()
-})
-
-it('assembles an array source into the canonical Project pose shape', () => {
-  const mapped = assembleMappingValueV1(arrayObjectPoseMapping(), [1, 2, 3, 10, 20, 30])
-  expect(mapped.value).toMatchObject({ positionM: [1, 2, 3] })
-  expect(mapped.value).toHaveProperty('quaternion')
-})
-
-it('creates one monitored root for six leaves of one structured Mapping', () => {
-  const plan = compileOpcUaClientReadPlanV1(projectWithArrayMappedBox())
-  const resolved = resolveOpcUaClientReadRootsV1(plan, sessionNamespaceArray())
-  expect(resolved[0]!.monitoredRoots).toEqual([
-    expect.objectContaining({ mappingId: 'box-pose', nodeId: 'ns=4;s=ObjectPos' }),
-  ])
+it('rejects a V4 project at PUT before adapter preparation and retains active V5', async () => {
+  const harness = await activeGatewayHarness(projectV5)
+  const before = harness.activeSnapshot()
+  const clientCalls = harness.createClientAdapter.mock.calls.length
+  const serverCalls = harness.createServerAdapter.mock.calls.length
+  await expect(harness.putRuntimeProject(projectV4)).resolves.toMatchObject({ status: 400 })
+  expect(harness.createClientAdapter).toHaveBeenCalledTimes(clientCalls)
+  expect(harness.createServerAdapter).toHaveBeenCalledTimes(serverCalls)
+  expect(harness.activeSnapshot()).toEqual(before)
 })
 ```
+
+Add read-planning and assembly regressions:
+
+```ts
+it('deduplicates a shared root endpoint-wide and fans out to ordered Mapping consumers', () => {
+  const endpoint = compileOpcUaClientReadPlanV1(projectWithTwoMappingsOnObjectPos())[0]!
+  expect(endpoint.monitoredRoots).toEqual([expect.objectContaining({
+    rootKey: `plc\0${opcUaNodeAddressKeyV1(objectPosAddress)}`,
+    mappingIds: ['box-pose', 'box-status'],
+    samplingIntervalMs: 50,
+  })])
+})
+
+it('keeps roots with different sampling intervals in separate monitored groups', () => {
+  const endpoint = compileOpcUaClientReadPlanV1(projectWithFastAndSlowRoots())[0]!
+  const resolved = resolveOpcUaClientReadRootsV1(endpoint.monitoredRoots, sessionNamespaceArray())
+  expect(groupResolvedRootsBySamplingIntervalV1(resolved))
+    .toEqual([
+      expect.objectContaining({ samplingIntervalMs: 50, roots: [expect.objectContaining({ mappingIds: ['fast'] })] }),
+      expect.objectContaining({ samplingIntervalMs: 100, roots: [expect.objectContaining({ mappingIds: ['slow'] })] }),
+    ])
+})
+
+it('assembles a typed-array root into the canonical Project Frame pose', () => {
+  expect(assembleMappingValueV1(arrayObjectPoseMapping(), new Float64Array([1, 2, 3, 10, 20, 30])))
+    .toMatchObject({ ok: true, value: { positionM: [1, 2, 3] } })
+})
+
+it('uses leafPath only for source extraction and projectPath only for destination assembly', () => {
+  expect(assembleMappingValueV1(extensionObjectPoseMapping(), extensionObjectPose()))
+    .toMatchObject({ ok: true, value: { positionM: [1, 2, 3] } })
+})
+```
+
+Add write and lifecycle regressions against an actual `ClientSession`-shaped fake:
+
+```ts
+it('writes one Boolean Value through the still-current live Session', async () => {
+  const session = fakeSession({ namespaceArray: ['http://opcfoundation.org/UA/', 'urn:virtual-plc'] })
+  const service = createOpcUaClientWriteServiceV1(projectWithBooleanOutput(), currentSessionHarness(session))
+  await expect(service.write({ mappingId: 'map-start', value: true }))
+    .resolves.toEqual({ ok: true, statusCode: 'Good' })
+  expect(session.write).toHaveBeenCalledOnce()
+  expect(session.write).toHaveBeenCalledWith({
+    nodeId: 'ns=1;s=Start', attributeId: AttributeIds.Value,
+    value: { value: { dataType: DataType.Boolean, value: true } },
+  })
+})
+
+it('connects a write-only Endpoint with an empty active Subscription', async () => {
+  const adapter = createOpcUaClientAdapterV1(projectWithWriteOnlyEndpoint(), fakeClientOptions())
+  await adapter.start()
+  await eventually(() => adapter.status()[0]?.phase === 'connected')
+  expect(adapter.status()[0]).toMatchObject({
+    subscriptionActive: true, monitoredItemCount: 0, mappingCount: 1,
+  })
+})
+
+it('recovers a write-only Endpoint when its empty Subscription terminates', async () => {
+  const harness = writeOnlyAdapterHarness()
+  await harness.adapter.start()
+  await eventually(() => harness.adapter.status()[0]?.phase === 'connected')
+  await harness.firstSubscription.terminateFromServer()
+  expect(harness.adapter.status()[0]?.phase).toBe('reconnecting')
+  await expect(harness.adapter.write({ mappingId: 'map-start', value: true }))
+    .resolves.toMatchObject({ ok: false, failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED' })
+  await eventually(() => harness.subscriptions.length === 2)
+  expect(harness.subscriptions[1]!.monitoredGroupCount).toBe(0)
+})
+```
+
+Also add tests for Namespace Index change after reconnect, all four Node identifier kinds, absent Namespace URI, namespace-read failure, non-Good write StatusCode, write-versus-stop/reconnect generation races, scalar Signal extraction from a structured root, Float64Array and ExtensionObject reads, numeric range/type/scale failures, retained last complete payload on invalid/BAD/UNCERTAIN notification, and no publication before any complete GOOD payload exists.
 
 - [ ] **Step 2: Run RED**
 
 ```powershell
-npm run test:run -- middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/opcua-client-adapter.test.ts
+npm run test:run -- src/core/runtime-protocol/v1.test.ts src/features/signals/v5/logical-signal-runtime-store.test.ts middleware/runtime-gateway/opcua-client-read-plan.test.ts middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/opcua-client-adapter.test.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.test.ts
 ```
 
-Expected: FAIL because no Client write port exists.
+Expected: FAIL because Gateway staging/adapters are V4, no V5 root plan or live-Session write port exists, and a valid structured-root Signal Mapping is still ignored by the browser store.
 
-- [ ] **Step 3: Define and implement the typed write service**
+- [ ] **Step 3: Implement the endpoint-wide read plan and Project-semantic assembly**
+
+```ts
+export interface CompiledOpcUaClientMonitoredRootV1 {
+  readonly rootKey: string
+  readonly endpointId: string
+  readonly nodeAddress: OpcUaNodeAddressV1
+  readonly mappingIds: readonly string[]
+  readonly samplingIntervalMs: number
+}
+
+export interface CompiledOpcUaClientEndpointReadPlanV1 {
+  readonly endpointId: string
+  readonly monitoredRoots: readonly CompiledOpcUaClientMonitoredRootV1[]
+}
+
+export interface ResolvedOpcUaClientMonitoredRootV1 {
+  readonly rootKey: string
+  readonly endpointId: string
+  readonly nodeId: string
+  readonly mappingIds: readonly string[]
+  readonly samplingIntervalMs: number
+}
+
+export interface ResolvedOpcUaClientMonitoredGroupV1 {
+  readonly samplingIntervalMs: number
+  readonly roots: readonly ResolvedOpcUaClientMonitoredRootV1[]
+}
+
+export function groupResolvedRootsBySamplingIntervalV1(
+  roots: readonly ResolvedOpcUaClientMonitoredRootV1[],
+): readonly ResolvedOpcUaClientMonitoredGroupV1[]
+
+export function compileOpcUaClientReadPlanV1(
+  project: WorkcellProjectV5,
+): readonly CompiledOpcUaClientEndpointReadPlanV1[]
+
+export function resolveOpcUaClientReadRootsV1(
+  roots: readonly CompiledOpcUaClientMonitoredRootV1[],
+  namespaceArray: readonly string[],
+): readonly ResolvedOpcUaClientMonitoredRootV1[]
+
+export type AssembleMappingValueResultV1 =
+  | { readonly ok: true; readonly value: RuntimeScalarOrStructureV1; readonly unit: string }
+  | { readonly ok: false; readonly statusCode: 'BadNoData' | 'BadTypeMismatch' | 'BadOutOfRange' }
+```
+
+Validate the V5 Project before compilation. Define a root as `endpointId + '\0' + opcUaNodeAddressKeyV1(nodeAddress)`. Deduplicate roots across the entire Endpoint, retain Mapping consumers in Project order, and use the minimum effective publishing interval across those consumers. Resolve each root against the exact Namespace URI in the current Session NamespaceArray. Support `string`, `numeric`, `guid`, and `byteString` identifiers and emit canonical `ns=<index>;s|i|g|b=<identifier>` NodeId text. Resolved NodeIds are Session-generation state only and are discarded on stop/recovery. Because `ClientSubscription.monitorItems` applies one `MonitoringParametersOptions` object to an entire group, group resolved roots by `samplingIntervalMs`, create one monitored-item group per distinct interval, retain every group in the Endpoint runtime, and terminate every group during recovery/stop. A write-only Endpoint retains its empty Subscription and zero monitored groups.
+
+`leafPath` extracts only from the root scalar, normal array, typed array, or ExtensionObject. Validate Boolean/String exactly; SByte/Byte/Int16/UInt16/Int32/UInt32 require integral in-range input; Float/Double require finite input. Apply numeric `scale` and `offset`, require a finite result, and retain `Math.trunc` when `projectDataType === 'integer'`. Use only `projectPath` for destination assembly. Entity and Robot Frames require the six Project-validated destinations, apply scale/offset first, then perform exactly one RPY-degrees-to-quaternion conversion and emit exactly `{ positionM: [x,y,z], quaternion: [x,y,z,w] }`. Duplicate/incomplete destinations are canonical Project V5 validation failures before adapter preparation; runtime BAD is only missing source paths, invalid runtime types/ranges/scales, or non-Good source quality.
+
+One root notification fans out to every consuming Mapping. Normalize OPC UA status with `StatusCode.name` and severity to `GOOD`, `UNCERTAIN`, or `BAD`. A complete GOOD assembly becomes the retained payload. BAD/UNCERTAIN or invalid assembly publishes the last complete payload with the current quality/status; if no complete payload exists, publish nothing and leave Task 1 state at `BAD/BadWaitingForInitialData`. Never publish a partial or fabricated identity pose. Remove the Task 1 Signal store's `leafPath.length === 0` compile filter: it receives the already assembled scalar and must accept a valid structured-root logical-signal Mapping.
+
+- [ ] **Step 4: Implement the exact live-Session Boolean write**
 
 ```ts
 export interface CompiledOpcUaClientWriteV1 {
@@ -439,34 +557,66 @@ export interface CompiledOpcUaClientWriteV1 {
   readonly dataType: 'Boolean'
 }
 
+export interface OpcUaClientWriteRequestV1 {
+  readonly mappingId: string
+  readonly value: boolean
+}
+
 export type OpcUaClientWriteResultV1 =
   | { readonly ok: true; readonly statusCode: 'Good' }
-  | { readonly ok: false; readonly statusCode: string; readonly failureCode: string; readonly message: string }
+  | { readonly ok: false; readonly statusCode: string; readonly failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED' | 'OPC_UA_WRITE_MAPPING_INVALID' | 'OPC_UA_WRITE_REJECTED' | 'OPC_UA_WRITE_FAILED'; readonly message: string }
+
+export interface OpcUaClientSessionLeaseV1 {
+  readonly endpointId: string
+  readonly generation: number
+  readonly session: Pick<ClientSession, 'readNamespaceArray' | 'write'>
+}
+
+export interface OpcUaClientWriteServiceDependenciesV1 {
+  currentSession(endpointId: string): OpcUaClientSessionLeaseV1 | null
+}
+
+export interface OpcUaClientWriteServiceV1 {
+  write(request: OpcUaClientWriteRequestV1): Promise<OpcUaClientWriteResultV1>
+}
+
+export function createOpcUaClientWriteServiceV1(
+  project: WorkcellProjectV5,
+  dependencies: OpcUaClientWriteServiceDependenciesV1,
+): OpcUaClientWriteServiceV1
 
 export interface OpcUaClientAdapterV1 {
   start(): Promise<void>
   stop(): Promise<void>
-  status(): readonly OpcUaClientEndpointStatusV1[]
-  write(request: { readonly mappingId: string; readonly value: boolean }): Promise<OpcUaClientWriteResultV1>
+  status(): readonly RuntimeGatewayOpcUaClientEndpointStatusV1[]
+  write(request: OpcUaClientWriteRequestV1): Promise<OpcUaClientWriteResultV1>
 }
 ```
 
-For subscribed reads, resolve each Mapping's root `nodeAddress` against the connected Session NamespaceArray and create one monitored item per unique root Node, not one per leaf. On a root notification, use each leaf's `leafPath` only to extract the OPC UA scalar/ExtensionObject/array component and use `projectPath` only to construct the Project-semantic value. A complete entity/robot Frame mapping becomes `{ positionM, quaternion }` after one RPY-degree conversion; missing source paths, incomplete/duplicate destinations, or leaf type mismatches publish BAD instead of a partial pose. Re-resolve root NodeIds after reconnect and never persist the Namespace Index.
+`compileOpcUaClientWritePlanV1` accepts only an enabled `write`/`readWrite` Mapping targeting a Boolean `output`/`bidirectional` Signal with exactly one required leaf whose `leafPath` and `projectPath` are both empty and whose `opcUaDataType` is `Boolean`. A structured-root Boolean Mapping is valid for reading but is not a scalar root write target and must not enter the write plan. The write service calls `dependencies.currentSession(endpointId)` before NamespaceArray resolution, calls the captured `session.readNamespaceArray()` immediately before each write, resolves the URI exactly, then calls `currentSession(endpointId)` again and compares both generation and Session object identity before calling `session.write` once with `AttributeIds.Value` and `DataType.Boolean`. Never cache a Namespace Index across Session generations. Accept only the exact numeric value of `StatusCodes.Good`; use `statusCode.name` for results. An absent URI returns `OPC_UA_WRITE_FAILED/BadNodeIdUnknown`; a namespace-read or Session-write exception returns `OPC_UA_WRITE_FAILED/BadCommunicationError`; a changed/absent Session returns `OPC_UA_ENDPOINT_DISCONNECTED/BadNoCommunication`; unknown or non-write Mapping returns `OPC_UA_WRITE_MAPPING_INVALID/BadInvalidArgument`; any returned non-Good StatusCode becomes `OPC_UA_WRITE_REJECTED` with its exact `.name`. Task 2 does no command deduplication.
 
-For writes, resolve `namespaceUri` against the live Session immediately before the write; never persist or cache a session-local Namespace Index across reconnect. Construct exactly one Value write with `AttributeIds.Value` and `DataType.Boolean`. Map non-Good StatusCodes to `OPC_UA_WRITE_REJECTED`, thrown Session errors to `OPC_UA_WRITE_FAILED`, absent active Session to `OPC_UA_ENDPOINT_DISCONNECTED`, and unknown/non-write Mapping to `OPC_UA_WRITE_MAPPING_INVALID`.
+- [ ] **Step 5: Perform the atomic V5 Gateway/adapter cutover and preserve lifecycle behavior**
 
-- [ ] **Step 4: Run GREEN, Gateway build, and commit**
+Change Runtime Protocol revision staging, `main.ts`, `OpcUaClientAdapterV1`, and `OpcUaServerAdapterV1` together to validated `WorkcellProjectV5`. Remove every production Project V4 import from those files. Do not use a V4/V5 union, cast, overload, migration alias, or translator. Preserve Off/Client/Server/Bridge candidate preparation, rollback, status diagnostics, nonblocking Client `start()`, and the temporary custom Server telemetry tree. Server telemetry derives its IDs from V5 Robot Definition/Instance records only; official Robotics NodeSets remain Milestone 4.
+
+The Client connection plan includes every enabled Client/Bridge Endpoint having at least one compiled read or write Mapping. Always create a Subscription for a connected Endpoint; a write-only Endpoint has an empty Subscription, no monitored group, and zero monitored items so the current status invariant (`connected` implies `subscriptionActive`) remains true. Attach a `subscription.on('terminated')` recovery handler to every Endpoint Subscription, including an empty write-only Subscription. Termination invalidates the Session generation/lease before setting `reconnecting`, makes writes fail disconnected, closes remaining resources, and schedules creation of a new Session plus empty Subscription. Do not rely only on monitored-group termination events. `mappingCount` is the number of distinct enabled read-or-write Mapping IDs for that Endpoint, so one `readWrite` Mapping counts once; `monitoredItemCount` is the number of deduplicated read roots. Before `start`, while connecting/reconnecting, and after `stop`, `write()` returns disconnected. `stop()` invalidates the Session generation before closing resources, prevents new writes, and waits for pending connection/recovery work. A transport loss after `Session.write` begins maps the thrown error to `OPC_UA_WRITE_FAILED` because the one authorized write was attempted.
+
+Candidate activation remains atomic: validate and prepare the V5 candidate, start both requested adapters, and publish it only after both succeed. On failure, stop candidate adapters and retain the prior active V5 runtime and adapters. Preserve the existing bare-Project `PUT /runtime/project` HTTP body and compute `configRevisionForProjectV5(validatedProject)` exactly once at that Gateway publication boundary. Separately, `RevisionStageRequestV1` continues to carry and validate its caller-supplied canonical Project hash. In both paths the active/staged `configRevision` is the canonical Project hash, never `project.revisionId`; do not change the HTTP request body into a stage envelope.
+
+- [ ] **Step 6: Run GREEN, Gateway build, and commit**
 
 ```powershell
-npm run test:run -- middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/opcua-client-adapter.test.ts
+npm run test:run -- src/core/runtime-protocol/v1.test.ts src/features/signals/v5/logical-signal-runtime-store.test.ts middleware/runtime-gateway/opcua-client-read-plan.test.ts middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/opcua-client-adapter.test.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.test.ts
+npm run test:run
 npm run build:gateway
 npm run lint
-git add middleware/runtime-gateway/opcua-client-write-service.ts middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/opcua-client-adapter.ts middleware/runtime-gateway/opcua-client-adapter.test.ts
+npm run build
+git add src/core/runtime-protocol/v1.ts src/core/runtime-protocol/v1.test.ts src/features/signals/v5/logical-signal-runtime-store.ts src/features/signals/v5/logical-signal-runtime-store.test.ts middleware/runtime-gateway/opcua-client-read-plan.ts middleware/runtime-gateway/opcua-client-read-plan.test.ts middleware/runtime-gateway/opcua-client-write-service.ts middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/opcua-client-adapter.ts middleware/runtime-gateway/opcua-client-adapter.test.ts middleware/runtime-gateway/opcua-server-adapter.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.ts middleware/runtime-gateway/main.test.ts
 git diff --cached --check
-git commit -m "feat: add opc ua client write service"
+git commit -m "feat: cut gateway client boundary to project v5"
 ```
 
-Expected: focused tests PASS and Gateway TypeScript compiles.
+Expected: all focused and full tests PASS, Gateway/browser TypeScript compile, and no production import or compatibility path to Project V4 remains in the cutover files.
 
 ### Task 3: Fence, Deduplicate, and Transport Runtime Commands
 
@@ -475,16 +625,12 @@ Expected: focused tests PASS and Gateway TypeScript compiles.
 - Test: `middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts`
 - Create: `middleware/runtime-gateway/runtime-command-service.ts`
 - Test: `middleware/runtime-gateway/runtime-command-service.test.ts`
-- Modify: `src/core/runtime-protocol/v1.ts`
-- Test: `src/core/runtime-protocol/v1.test.ts`
-- Modify: `middleware/runtime-gateway/opcua-server-adapter.ts`
-- Test: `middleware/runtime-gateway/opcua-server-adapter.test.ts`
 - Modify: `middleware/runtime-gateway/main.ts`
 - Test: `middleware/runtime-gateway/main.test.ts`
 
 **Interfaces:**
-- Consumes: Task 2 `OpcUaClientAdapterV1.write`, `CommandRequestV1`, `CommandResultV1`, and active Gateway Project/Revision state.
-- Produces: V5-only `RevisionStageRequestV1`, `RuntimeCommandDedupeRegistryV1`, `RuntimeCommandDedupeAdmissionErrorV1`, `RuntimeCommandServiceV1`, `GET /runtime/command-lease`, and `POST /runtime/command`.
+- Consumes: the Task 2 V5-only Gateway/adapter boundary, `OpcUaClientAdapterV1.write`, `CommandRequestV1`, `CommandResultV1`, and active Gateway Project/Revision state.
+- Produces: `RuntimeCommandDedupeRegistryV1`, `RuntimeCommandDedupeAdmissionErrorV1`, `RuntimeCommandServiceV1`, `GET /runtime/command-lease`, and `POST /runtime/command`.
 
 - [ ] **Step 1: Write RED fencing and deduplication tests**
 
@@ -501,10 +647,15 @@ it('executes one write and returns the retained result for an identical duplicat
 })
 
 it.each([
+  ['wrong project', { projectId: 'other-project' }, 'PROJECT_MISMATCH'],
   ['wrong revision', { configRevision: OTHER_REVISION }, 'REVISION_MISMATCH'],
   ['stale generation', { leaseGeneration: 6 }, 'COMMAND_LEASE_STALE'],
   ['expired', { expiresAt: 999 }, 'COMMAND_EXPIRED'],
   ['too far in the future', { expiresAt: 6_001 }, 'COMMAND_EXPIRY_INVALID'],
+  ['unknown target', { targetId: 'missing-mapping' }, 'COMMAND_TARGET_INVALID'],
+  ['non-write target', { targetId: 'read-only-mapping' }, 'COMMAND_TARGET_INVALID'],
+  ['wrong direction', { targetId: 'wrong-direction-mapping' }, 'COMMAND_TARGET_INVALID'],
+  ['disconnected endpoint', { targetId: 'disconnected-output' }, 'OPC_UA_ENDPOINT_DISCONNECTED'],
   ['wrong type', { value: 1 }, 'COMMAND_TYPE_MISMATCH'],
 ])('%s rejects before write', async (_name, override, code) => {
   const write = vi.fn()
@@ -618,27 +769,10 @@ it('converts dedupe capacity exhaustion into a valid rejected command result', a
 })
 ```
 
-Add protocol regression tests before touching Gateway code:
-
-```ts
-it('accepts a staged Project V5 and rejects a staged Project V4', () => {
-  expect(validateRevisionStageRequestV1(revisionStageRequest(projectV5)))
-    .toMatchObject({ project: { schemaVersion: 5 } })
-  expect(() => validateRevisionStageRequestV1(revisionStageRequest(projectV4)))
-    .toThrowError(expect.objectContaining({ code: 'PROJECT_SCHEMA_UNSUPPORTED' }))
-})
-
-it('has no production dependency on project-v4', async () => {
-  const source = await readFile(new URL('../../../src/core/runtime-protocol/v1.ts', import.meta.url), 'utf8')
-  expect(source).not.toContain('project-v4')
-  expect(source).not.toContain('WorkcellProjectV4')
-})
-```
-
 - [ ] **Step 2: Run RED**
 
 ```powershell
-npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.test.ts
+npm run test:run -- middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.test.ts
 ```
 
 Expected: FAIL because command execution routes and deduplication do not exist.
@@ -660,7 +794,7 @@ export function createRuntimeCommandServiceV1(options: {
   readonly generation: number
   readonly leaseTtlMs?: 5_000
   readonly nowMs: () => number
-  readonly write: OpcUaClientAdapterV1['write']
+  readonly clientAdapter: Pick<OpcUaClientAdapterV1, 'status' | 'write'>
   readonly dedupe: RuntimeCommandDedupeRegistryV1
 }): RuntimeCommandServiceV1
 ```
@@ -685,7 +819,7 @@ export class RuntimeCommandDedupeAdmissionErrorV1 extends Error {
 
 `RuntimeCommandDedupeRegistryV1.execute` first checks the `(channel, key)` record synchronously. An identical fingerprint joins/returns the existing in-flight or terminal result without rerunning preflight, so an idempotent retry still receives the original result after expiry. A different fingerprint throws the typed `COMMAND_ID_CONFLICT` admission error. For a new key, invoke the caller's synchronous `preflight` before capacity admission; a non-null rejected result is returned but not retained. Only a null preflight result proceeds to capacity admission and operation insertion. The registry throws a typed `RuntimeCommandDedupeAdmissionErrorV1` with code `COMMAND_DEDUPE_CAPACITY_EXHAUSTED` when it cannot admit a new record; it does not manufacture a `CommandResultV1` because it does not own Project, generation, target, command, or completion-time context. Client-write and Milestone 4 Server-command callers convert admission errors into their own validated `REJECTED/FAILED` envelope without invoking the operation or browser dispatch.
 
-Validate command request shape before forming the key/fingerprint. Fingerprint the closed request fields with deterministic `JSON.stringify([projectId, configRevision, leaseGeneration, expiresAt, targetId, value])`. Put wrong Project/Revision/generation, `expiresAt < nowMs()` (`COMMAND_EXPIRED`), `expiresAt > nowMs() + 5_000` (`COMMAND_EXPIRY_INVALID`), target/type/direction, and disconnected-Endpoint checks in the synchronous new-record `preflight`; the exact future boundary is accepted. The shared registry inserts the in-flight Promise before awaiting the write so concurrent duplicates join it. It keeps terminal records in insertion order and evicts the oldest terminal record before admitting a new record when total Client-write plus Server-command records would exceed 4,096; it never evicts an in-flight record. If all 4,096 retained records are in-flight, reject admission with the typed error before calling the operation. Return one terminal envelope with both acknowledgement and execution state: successful write is `ACCEPTED/SUCCEEDED`; a validated attempted write failure is `ACCEPTED/FAILED`; preflight or admission failure is `REJECTED/FAILED`.
+Validate command request shape before forming the key/fingerprint. Fingerprint the closed request fields with deterministic `JSON.stringify([projectId, configRevision, leaseGeneration, expiresAt, targetId, value])`. Put wrong Project/Revision/generation, `expiresAt < nowMs()` (`COMMAND_EXPIRED`), `expiresAt > nowMs() + 5_000` (`COMMAND_EXPIRY_INVALID`), unknown/non-write/direction-invalid target, type, and `clientAdapter.status()` Endpoint connectivity checks in the synchronous new-record `preflight`; the exact future boundary is accepted. A missing or non-connected Endpoint returns `REJECTED/FAILED` with `OPC_UA_ENDPOINT_DISCONNECTED` before registry admission and is not retained. The shared registry inserts the in-flight Promise before awaiting `clientAdapter.write` so concurrent duplicates join it. A disconnect racing after admission is an attempted command and returns `ACCEPTED/FAILED`. The registry keeps terminal records in insertion order and evicts the oldest terminal record before admitting a new record when total Client-write plus Server-command records would exceed 4,096; it never evicts an in-flight record. If all 4,096 retained records are in-flight, reject admission with the typed error before calling the operation. Return one terminal envelope with both acknowledgement and execution state: successful write is `ACCEPTED/SUCCEEDED`; a validated attempted write failure is `ACCEPTED/FAILED`; preflight or admission failure is `REJECTED/FAILED`.
 
 - [ ] **Step 4: Wire activation generation and HTTP routes**
 
@@ -701,24 +835,22 @@ interface ActiveProjectRuntimeV1 {
 }
 ```
 
-In `src/core/runtime-protocol/v1.ts`, replace `ProjectV4Error`, V4 limits, `WorkcellProjectV4`, and `validateWorkcellProjectV4` with the V5 error/limit/type/validator exports created in Milestone 2. `RevisionStageRequestV1.project` is exactly `WorkcellProjectV5`; `validateRevisionStageRequestV1` validates schema 5 before returning the closed request. Preserve the existing command/state envelope discriminants and protocol version so M1 status and existing transport framing do not fork.
+Begin from Task 2's already V5-only `ActiveProjectRuntimeV1`, staging payload, and Client/Server adapters. Increment a process-local safe integer for every successful candidate activation, including reactivation of the same Revision. Create one 4,096-record dedupe registry for every active Revision in all modes, inject it into the Client command service when Client role is active, and expose that same instance to Milestone 4 Server-command dispatch. Create `commandService` only after the Client adapter has started; it remains `null` in Off and Server-only modes while `commandDedupe` remains available. Build its publisher ID exactly as `${config.gatewayId}:client-write`; `lease()` returns the active generation and `expiresAt = nowMs() + 5_000` on each call. `GET /runtime/command-lease` returns `validateRuntimePublisherLeaseV1(active.commandService.lease())` only when the service exists and otherwise returns a closed `OPC_UA_CLIENT_NOT_ACTIVE` failure; `POST /runtime/command` reads at most `MAX_RUNTIME_BATCH_BYTES_V1`, executes once when available, and returns `validateCommandResultV1(result)`. With no Client adapter, return a valid `REJECTED/FAILED` result with `OPC_UA_CLIENT_NOT_ACTIVE`, not an untyped 500 response. Milestone 4's separate browser-publisher lease keeps Server-only product commands functional without manufacturing a Client write service.
 
-Increment a process-local safe integer for every successful candidate activation, including reactivation of the same Revision. Create one 4,096-record dedupe registry for every active Revision in all modes, inject it into the Client command service when Client role is active, and expose that same instance to Milestone 4 Server-command dispatch. Create `commandService` only after the Client adapter has started; it remains `null` in Off and Server-only modes while `commandDedupe` remains available. Build its publisher ID exactly as `${config.gatewayId}:client-write`; `lease()` returns the active generation and `expiresAt = nowMs() + 5_000` on each call. `GET /runtime/command-lease` returns `validateRuntimePublisherLeaseV1(active.commandService.lease())` only when the service exists and otherwise returns a closed `OPC_UA_CLIENT_NOT_ACTIVE` failure; `POST /runtime/command` reads at most `MAX_RUNTIME_BATCH_BYTES_V1`, executes once when available, and returns `validateCommandResultV1(result)`. With no Client adapter, return a valid `REJECTED/FAILED` result with `OPC_UA_CLIENT_NOT_ACTIVE`, not an untyped 500 response. Milestone 4's separate browser-publisher lease keeps Server-only product commands functional without manufacturing a Client write service.
-
-Before changing the active runtime and protocol staging payload to V5, change `OpcUaServerAdapterV1` to accept a validated `WorkcellProjectV5`. Preserve current Server/Bridge startup, endpoint diagnostics, and temporary read-only custom telemetry using V5 Robot Definition/Instance IDs. This is only a compatibility cutover: do not load Robotics NodeSets or claim the standard Robotics model here. Candidate activation must still prepare both requested adapters and publish the new generation only after both start successfully; on any failure, stop candidate adapters and retain the prior active runtime, generation, registry, and adapters.
+Candidate activation must retain Task 2's atomic behavior: publish the new generation, registry, command service, and adapters only after all requested candidate adapters start successfully. On any failure, stop candidate resources and retain the prior active runtime, generation, registry, command service, and adapters.
 
 - [ ] **Step 5: Run GREEN and commit**
 
 ```powershell
-npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.test.ts
+npm run test:run -- middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.test.ts
 npm run build:gateway
 npm run lint
-git add src/core/runtime-protocol/v1.ts src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/opcua-server-adapter.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.ts middleware/runtime-gateway/main.test.ts
+git add middleware/runtime-gateway/runtime-command-dedupe-registry.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.ts middleware/runtime-gateway/main.test.ts
 git diff --cached --check
 git commit -m "feat: transport deduplicated runtime commands"
 ```
 
-Expected: exact fencing codes PASS, duplicate execution count remains one, V5 Server/Bridge activation remains available, and the Gateway build passes.
+Expected: exact fencing codes PASS, duplicate execution count remains one, Task 2's V5 Client/Server/Bridge activation remains available, and the Gateway build passes.
 
 ### Task 4: Add the Browser Command Client and Signal Write Port
 
