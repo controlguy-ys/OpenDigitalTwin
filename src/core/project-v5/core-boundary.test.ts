@@ -15,14 +15,6 @@ const FORBIDDEN_RUNTIME_IDENTIFIERS = new Set([
   'localStorage', 'sessionStorage', 'indexedDB', 'caches', 'Cache', 'CacheStorage', 'cookieStore',
   'process', 'Buffer', 'require', 'module', '__dirname', '__filename',
 ])
-const NODE_BUILTIN_SPECIFIERS = new Set([
-  'assert', 'buffer', 'child_process', 'cluster', 'console', 'constants', 'crypto', 'dgram',
-  'diagnostics_channel', 'dns', 'domain', 'events', 'fs', 'http', 'http2', 'https', 'module',
-  'net', 'os', 'path', 'perf_hooks', 'process', 'punycode', 'querystring', 'readline', 'repl',
-  'stream', 'string_decoder', 'sys', 'timers', 'tls', 'trace_events', 'tty', 'url', 'util', 'v8',
-  'vm', 'wasi', 'worker_threads', 'zlib',
-])
-
 interface ProductionCoreModule {
   readonly path: string
   readonly source: string
@@ -67,15 +59,7 @@ function productionCoreModules(
 
 function isForbiddenImport(specifier: string): boolean {
   const normalized = specifier.replaceAll('\\', '/')
-  return normalized.startsWith('node:')
-    || NODE_BUILTIN_SPECIFIERS.has(normalized)
-    || normalized === 'node-opcua'
-    || normalized === 'react'
-    || normalized.startsWith('react/')
-    || normalized === 'react-dom'
-    || normalized.startsWith('react-dom/')
-    || normalized === 'three'
-    || normalized.startsWith('three/')
+  return (!normalized.startsWith('./') && !normalized.startsWith('../'))
     || normalized.includes('project-v4')
 }
 
@@ -182,13 +166,16 @@ describe('Project V5 Core boundary', () => {
     })
   })
 
-  it('rejects React, Three, Node, DOM, WebSocket, node-opcua, and Project V4 dependencies', () => {
+  it('rejects every bare specifier plus DOM, WebSocket, and Project V4 dependencies', () => {
     const report = scanProjectV5Core({
       './synthetic.ts': `
         import React from 'react'
         import * as THREE from 'three'
         import fs from 'node:fs'
         import { OPCUAClient } from 'node-opcua'
+        import Dexie from 'dexie'
+        import { readFile } from 'fs/promises'
+        import { OPCUAClient as SubpathOpcUaClient } from 'node-opcua/client'
         import { validateWorkcellProjectV4 } from '../project-v4/index.js'
         void window
         void document
@@ -202,6 +189,9 @@ describe('Project V5 Core boundary', () => {
       'src/core/project-v5/synthetic.ts: three',
       'src/core/project-v5/synthetic.ts: node:fs',
       'src/core/project-v5/synthetic.ts: node-opcua',
+      'src/core/project-v5/synthetic.ts: dexie',
+      'src/core/project-v5/synthetic.ts: fs/promises',
+      'src/core/project-v5/synthetic.ts: node-opcua/client',
       'src/core/project-v5/synthetic.ts: ../project-v4/index.js',
     ])
     expect(report.unresolvedRelativeImports).toEqual([
