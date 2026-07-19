@@ -44,6 +44,28 @@ describe('canonical Project V5 JSON', () => {
     expect(canonicalProjectV5Json(project)).toContain('"positionM":[0,0,0]')
   })
 
+  it('preserves authored instruction order while making it revision-significant', async () => {
+    const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(project.jobs[0]!.instructions as unknown as Array<Record<string, unknown>>).push({
+      id: 'instruction-2',
+      kind: 'move-joint',
+      jointValues: { J1: 1 },
+      speedPercentToNext: 50,
+    })
+    const swapped = cloneWorkcellProjectV5(project)
+    ;(swapped.jobs[0]!.instructions as unknown as Array<Record<string, unknown>>).reverse()
+
+    const canonical = JSON.parse(canonicalProjectV5Json(project)) as {
+      jobs: Array<{ instructions: Array<{ id: string }> }>
+    }
+    expect(canonical.jobs[0]!.instructions.map(({ id }) => id))
+      .toEqual(['instruction-1', 'instruction-2'])
+    expect(canonicalProjectV5Bytes(swapped)).not.toEqual(canonicalProjectV5Bytes(project))
+    await expect(configRevisionForProjectV5(swapped)).resolves.not.toBe(
+      await configRevisionForProjectV5(project),
+    )
+  })
+
   it('validates candidates before canonicalizing', () => {
     const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
     ;(project.logicalSignals[0] as unknown as Record<string, unknown>).quality = 'GOOD'

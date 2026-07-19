@@ -4,41 +4,102 @@ import {
 } from '../../../core/project-v5/index.js'
 import type { WorkcellProjectV5 } from '../../../core/project-v5/index.js'
 
-export class ProjectV5CodecError extends Error {
-  readonly code: 'PROJECT_JSON_SOURCE_INVALID' | 'PROJECT_JSON_ENCODING_INVALID' | 'PROJECT_JSON_PARSE_FAILED'
+export type ProjectV5CodecErrorCode =
+  | 'PROJECT_JSON_SOURCE_INVALID'
+  | 'PROJECT_JSON_ENCODING_INVALID'
+  | 'PROJECT_JSON_PARSE_FAILED'
 
-  constructor(code: ProjectV5CodecError['code'], message: string) {
+export class ProjectV5CodecError extends Error {
+  readonly code: ProjectV5CodecErrorCode
+  readonly cause?: unknown
+
+  constructor(code: ProjectV5CodecErrorCode, message: string, cause?: unknown) {
     super(`${code}: ${message}`)
     this.name = 'ProjectV5CodecError'
     this.code = code
+    if (cause !== undefined) this.cause = cause
   }
 }
 
 function codecError(
-  code: ProjectV5CodecError['code'],
+  code: ProjectV5CodecErrorCode,
   message: string,
+  cause?: unknown,
 ): ProjectV5CodecError {
-  return new ProjectV5CodecError(code, message)
+  return new ProjectV5CodecError(code, message, cause)
 }
 
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object
+const typedArrayTagGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  Symbol.toStringTag,
+)?.get as (this: unknown) => string | undefined
+const typedArrayLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  'length',
+)?.get as (this: unknown) => number
+const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength',
+)?.get as (this: unknown) => number
+const setUint8Array = Uint8Array.prototype.set
+const readBlobArrayBuffer = Blob.prototype.arrayBuffer
+const applyIntrinsic = Reflect.apply
+
 async function snapshotProjectV5Source(source: unknown): Promise<Uint8Array<ArrayBuffer>> {
+  let typedArrayBrand: string | undefined
   try {
-    const buffer = await Blob.prototype.arrayBuffer.call(source)
+    typedArrayBrand = applyIntrinsic(typedArrayTagGetter, source, [])
+  } catch {
+    typedArrayBrand = undefined
+  }
+
+  if (typedArrayBrand === 'Uint8Array') {
+    try {
+      const length = applyIntrinsic(typedArrayLengthGetter, source, [])
+      const snapshot = new Uint8Array(length)
+      applyIntrinsic(setUint8Array, snapshot, [source])
+      return snapshot
+    } catch (error) {
+      throw codecError(
+        'PROJECT_JSON_SOURCE_INVALID',
+        'Project JSON Uint8Array source could not be snapshotted.',
+        error,
+      )
+    }
+  }
+
+  let arrayBufferByteLength: number | undefined
+  try {
+    arrayBufferByteLength = applyIntrinsic(arrayBufferByteLengthGetter, source, [])
+  } catch {
+    arrayBufferByteLength = undefined
+  }
+
+  if (arrayBufferByteLength !== undefined) {
+    try {
+      const snapshot = new Uint8Array(arrayBufferByteLength)
+      const sourceView = new Uint8Array(source as ArrayBuffer)
+      applyIntrinsic(setUint8Array, snapshot, [sourceView])
+      return snapshot
+    } catch (error) {
+      throw codecError(
+        'PROJECT_JSON_SOURCE_INVALID',
+        'Project JSON ArrayBuffer source could not be snapshotted.',
+        error,
+      )
+    }
+  }
+
+  try {
+    const buffer = await applyIntrinsic(readBlobArrayBuffer, source, [])
     return new Uint8Array(buffer)
-  } catch {
-    // Continue with the remaining intrinsic source types.
-  }
-
-  try {
-    return new Uint8Array(Uint8Array.prototype.slice.call(source))
-  } catch {
-    // Continue with ArrayBuffer's intrinsic source type.
-  }
-
-  try {
-    return new Uint8Array(ArrayBuffer.prototype.slice.call(source, 0))
-  } catch {
-    throw codecError('PROJECT_JSON_SOURCE_INVALID', 'Expected a Blob, Uint8Array, or ArrayBuffer source.')
+  } catch (error) {
+    throw codecError(
+      'PROJECT_JSON_SOURCE_INVALID',
+      'Expected a Blob, Uint8Array, or ArrayBuffer source.',
+      error,
+    )
   }
 }
 
