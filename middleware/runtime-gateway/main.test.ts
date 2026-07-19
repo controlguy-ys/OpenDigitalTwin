@@ -268,9 +268,11 @@ function commandRequest(configRevision: string, overrides: Record<string, unknow
   }
 }
 
-function connectedClientAdapter(write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))): {
+function connectedClientAdapter(
+  write: OpcUaClientAdapterV1['write'] = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const })),
+): {
   readonly adapter: OpcUaClientAdapterV1
-  readonly write: typeof write
+  readonly write: OpcUaClientAdapterV1['write']
   readonly stop: ReturnType<typeof vi.fn>
 } {
   const stop = vi.fn(async () => undefined)
@@ -325,6 +327,78 @@ async function requestUpgrade(port: number, path: string): Promise<string> {
   })
 }
 
+async function openIncompleteHttpRequest(
+  port: number,
+  headers: readonly string[],
+  bodyPrefix: string,
+): Promise<{ readonly socket: ReturnType<typeof connect>; readonly response: Promise<string> }> {
+  const socket = connect({ host: '127.0.0.1', port })
+  socket.setEncoding('utf8')
+  let responseText = ''
+  let resolveResponse!: (value: string) => void
+  const response = new Promise<string>((resolve) => { resolveResponse = resolve })
+  socket.on('data', (chunk: string) => {
+    responseText += chunk
+    if (responseText.includes('\r\n\r\n')) resolveResponse(responseText)
+  })
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve)
+    socket.once('error', reject)
+  })
+  socket.write([...headers, '', bodyPrefix].join('\r\n'))
+  return { socket, response }
+}
+
+function jsonBodyAtByteLength(byteLength: number): string {
+  const empty = JSON.stringify({ padding: '' })
+  const padding = byteLength - Buffer.byteLength(empty)
+  if (padding < 0) throw new Error('Requested JSON body length is too small.')
+  return JSON.stringify({ padding: 'x'.repeat(padding) })
+}
+
+async function rawChunkedJsonRequest(
+  port: number,
+  path: string,
+  body: string,
+): Promise<{ readonly status: number; readonly body: string }> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: '127.0.0.1', port })
+    socket.setEncoding('utf8')
+    let response = ''
+    socket.once('error', reject)
+    socket.on('data', (chunk: string) => { response += chunk })
+    socket.once('close', () => {
+      const [head = '', responseBody = ''] = response.split('\r\n\r\n', 2)
+      const status = Number(head.match(/^HTTP\/1\.1 ([0-9]{3})/u)?.[1])
+      resolve({ status, body: responseBody })
+    })
+    socket.once('connect', () => {
+      const midpoint = Math.floor(body.length / 2)
+      const chunks = [body.slice(0, midpoint), body.slice(midpoint)]
+      socket.write([
+        `POST ${path} HTTP/1.1`,
+        'Host: 127.0.0.1',
+        'Content-Type: application/json',
+        'Transfer-Encoding: chunked',
+        'Connection: close',
+        '',
+        '',
+      ].join('\r\n'))
+      for (const chunk of chunks) {
+        socket.write(`${Buffer.byteLength(chunk).toString(16)}\r\n${chunk}\r\n`)
+      }
+      socket.end('0\r\n\r\n')
+    })
+  })
+}
+
+async function settlesWithin(operation: Promise<unknown>, timeoutMs = 250): Promise<boolean> {
+  return Promise.race([
+    operation.then(() => true, () => true),
+    new Promise<boolean>((resolve) => setTimeout(resolve, timeoutMs, false)),
+  ])
+}
+
 async function openWebSocket(port: number): Promise<WebSocket> {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
   await new Promise<void>((resolve, reject) => {
@@ -363,6 +437,85 @@ afterEach(() => {
 })
 
 describe('runtime Gateway entrypoint', () => {
+  it('runs every shutdown cleanup and rethrows the exact first Client stop failure', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = fakeClientAdapter()
+    const server = fakeServerAdapter()
+    const stopFailure = new Error('client-stop-failure')
+    client.stop.mockRejectedValueOnce(stopFailure)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+      createOpcUaServerAdapter: () => server.adapter,
+    })
+    await service.start()
+    const socket = await openWebSocket(port)
+    const socketClosed = new Promise<void>((resolve) => socket.once('close', resolve))
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', sampleProject('bridge'))).status).toBe(200)
+      let caught: unknown
+      try {
+        await service.stop()
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBe(stopFailure)
+      expect(server.stop).toHaveBeenCalledOnce()
+      await socketClosed
+      await expect(fetch(`http://127.0.0.1:${port}/healthz`)).rejects.toThrow()
+      await service.start()
+      expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200)
+    } finally {
+      socket.close()
+      await service.stop().catch(() => undefined)
+    }
+  })
+
+  it('destroys an incomplete command body so stop is not held by the Node request timeout', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port))
+    await service.start()
+    const sender = await openIncompleteHttpRequest(port, [
+      'POST /runtime/command HTTP/1.1',
+      'Host: 127.0.0.1',
+      'Content-Type: application/json',
+      'Content-Length: 100',
+      'Connection: keep-alive',
+    ], '{"type":"command-request-v1",')
+    const stopping = service.stop()
+    try {
+      expect(await settlesWithin(stopping)).toBe(true)
+    } finally {
+      sender.socket.destroy()
+      await stopping.catch(() => undefined)
+    }
+  })
+
+  it.each([
+    ['unsupported media', ['Content-Type: text/plain', 'Content-Length: 100'], '415'],
+    ['declared oversized', ['Content-Type: application/json', `Content-Length: ${MAX_RUNTIME_BATCH_BYTES_V1 + 1}`], '413'],
+  ])('destroys an unfinished early-%s sender during bounded stop', async (_name, requestHeaders, status) => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port))
+    await service.start()
+    const sender = await openIncompleteHttpRequest(port, [
+      'POST /runtime/command HTTP/1.1',
+      'Host: 127.0.0.1',
+      ...requestHeaders,
+      'Connection: keep-alive',
+    ], '{')
+    expect(await sender.response).toContain(`HTTP/1.1 ${status}`)
+    const stopping = service.stop()
+    try {
+      expect(await settlesWithin(stopping)).toBe(true)
+    } finally {
+      sender.socket.destroy()
+      await stopping.catch(() => undefined)
+    }
+  })
+
   it('publishes a Client write lease and transports an exact terminal command envelope', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
@@ -389,6 +542,219 @@ describe('runtime Gateway entrypoint', () => {
       expect(client.write).toHaveBeenCalledOnce()
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
       await expect((await requestLease(port)).json()).resolves.toMatchObject({ generation: 2 })
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('rejects every active-Client command transport/protocol failure before adapter execution', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+      nowMs: () => 1_000,
+    })
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', writableClientProject())).status).toBe(200)
+      const malformed = await fetch(`http://127.0.0.1:${port}/runtime/command`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{',
+      })
+      expect({ status: malformed.status, body: await malformed.json() }).toEqual({
+        status: 400,
+        body: { code: 'JSON_BODY_INVALID', message: 'Request body must contain valid JSON.' },
+      })
+      const invalid = await requestCommand(port, { type: 'wrong' })
+      expect(invalid.status).toBe(400)
+      expect(await invalid.json()).toEqual({
+        code: 'COMMAND_REQUEST_INVALID',
+        message: 'Command Request validation failed: RUNTIME_PROTOCOL_INVALID at $.protocolVersion: Required field is missing.',
+      })
+      const unsupported = await fetch(`http://127.0.0.1:${port}/runtime/command`, {
+        method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}',
+      })
+      expect({ status: unsupported.status, body: await unsupported.json() }).toEqual({
+        status: 415,
+        body: { code: 'CONTENT_TYPE_UNSUPPORTED', message: 'Content-Type must be application/json.' },
+      })
+
+      const exactBody = jsonBodyAtByteLength(MAX_RUNTIME_BATCH_BYTES_V1)
+      const exactDeclared = await fetch(`http://127.0.0.1:${port}/runtime/command`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: exactBody,
+      })
+      expect(exactDeclared.status).toBe(400)
+      expect(await exactDeclared.json()).toMatchObject({ code: 'COMMAND_REQUEST_INVALID' })
+      const oversizedBody = jsonBodyAtByteLength(MAX_RUNTIME_BATCH_BYTES_V1 + 1)
+      const oversizedDeclared = await fetch(`http://127.0.0.1:${port}/runtime/command`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: oversizedBody,
+      })
+      expect({ status: oversizedDeclared.status, body: await oversizedDeclared.json() }).toEqual({
+        status: 413,
+        body: {
+          code: 'REQUEST_BODY_TOO_LARGE',
+          message: `Request body must not exceed ${MAX_RUNTIME_BATCH_BYTES_V1} bytes.`,
+        },
+      })
+      const exactChunked = await rawChunkedJsonRequest(port, '/runtime/command', exactBody)
+      expect(exactChunked.status).toBe(400)
+      expect(JSON.parse(exactChunked.body)).toMatchObject({ code: 'COMMAND_REQUEST_INVALID' })
+      const oversizedChunked = await rawChunkedJsonRequest(port, '/runtime/command', oversizedBody)
+      expect({ status: oversizedChunked.status, body: JSON.parse(oversizedChunked.body) }).toEqual({
+        status: 413,
+        body: {
+          code: 'REQUEST_BODY_TOO_LARGE',
+          message: `Request body must not exceed ${MAX_RUNTIME_BATCH_BYTES_V1} bytes.`,
+        },
+      })
+      for (const [method, path] of [['GET', '/runtime/command'], ['POST', '/runtime/command-lease'], ['POST', '/runtime/missing']] as const) {
+        const response = await fetch(`http://127.0.0.1:${port}${path}`, { method })
+        expect({ status: response.status, body: await response.text() }).toEqual({ status: 404, body: '' })
+      }
+      expect(client.write).not.toHaveBeenCalled()
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('exposes an offline Client lease and leaves its connectivity rejection unretained for retry', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    let phase: 'reconnecting' | 'connected' = 'reconnecting'
+    const client = connectedClientAdapter()
+    client.adapter.status = () => [{
+      endpointId: 'endpoint-1', endpointUrl: 'opc.tcp://localhost:4840', phase,
+      sessionActive: phase === 'connected', subscriptionActive: phase === 'connected',
+      monitoredItemCount: 0, mappingCount: 1, lastValueQuality: null,
+      lastNotificationAtMs: null, lastGoodValueAtMs: null, reconnectAttempt: 0,
+      nextRetryAtMs: phase === 'connected' ? null : 2_000, lastError: null,
+    }]
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+      nowMs: () => 1_000,
+    })
+    const project = writableClientProject('revision-offline-command-client')
+    const revision = await configRevisionForProjectV5(project)
+    const command = commandRequest(revision)
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      expect((await requestLease(port)).status).toBe(200)
+      const offline = await requestCommand(port, command)
+      expect(offline.status).toBe(200)
+      expect(await offline.json()).toEqual({
+        type: 'command-result-v1', protocolVersion: 1, projectId: command.projectId,
+        configRevision: command.configRevision, leaseGeneration: command.leaseGeneration,
+        targetId: command.targetId, commandId: command.commandId,
+        acknowledgement: 'REJECTED', executionState: 'FAILED',
+        failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED',
+        message: 'Target OPC UA Endpoint is not connected.', attachedObjectId: null, completedAt: 1_000,
+      })
+      phase = 'connected'
+      const retried = await requestCommand(port, command)
+      expect(retried.status).toBe(200)
+      expect(await retried.json()).toEqual({
+        type: 'command-result-v1', protocolVersion: 1, projectId: command.projectId,
+        configRevision: command.configRevision, leaseGeneration: command.leaseGeneration,
+        targetId: command.targetId, commandId: command.commandId,
+        acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED', failureCode: null,
+        message: 'OPC UA write succeeded.', attachedObjectId: null, completedAt: 1_000,
+      })
+      expect(client.write).toHaveBeenCalledOnce()
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('returns semantic and adapter failures as HTTP 200 exact terminal envelopes', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter(vi.fn(async () => ({
+      ok: false as const,
+      statusCode: 'BadUserAccessDenied',
+      failureCode: 'OPC_UA_WRITE_REJECTED' as const,
+      message: 'Adapter rejected the write.',
+    })))
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+      nowMs: () => 1_000,
+    })
+    const project = writableClientProject('revision-command-http-failures')
+    const revision = await configRevisionForProjectV5(project)
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const semanticRequest = commandRequest(revision, { commandId: 'semantic-failure', projectId: 'other-project' })
+      const semantic = await requestCommand(port, semanticRequest)
+      expect(semantic.status).toBe(200)
+      expect(await semantic.json()).toEqual({
+        type: 'command-result-v1', protocolVersion: 1, projectId: 'other-project', configRevision: revision,
+        leaseGeneration: 1, targetId: 'mapping-1', commandId: 'semantic-failure',
+        acknowledgement: 'REJECTED', executionState: 'FAILED', failureCode: 'PROJECT_MISMATCH',
+        message: 'Command Project does not match the active Project.', attachedObjectId: null, completedAt: 1_000,
+      })
+      const adapterRequest = commandRequest(revision, { commandId: 'adapter-failure' })
+      const adapter = await requestCommand(port, adapterRequest)
+      expect(adapter.status).toBe(200)
+      expect(await adapter.json()).toEqual({
+        type: 'command-result-v1', protocolVersion: 1, projectId: project.projectId, configRevision: revision,
+        leaseGeneration: 1, targetId: 'mapping-1', commandId: 'adapter-failure',
+        acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'OPC_UA_WRITE_REJECTED',
+        message: 'Adapter rejected the write.', attachedObjectId: null, completedAt: 1_000,
+      })
+      expect(client.write).toHaveBeenCalledOnce()
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('retains generation and completed dedupe through recovery, then advances once with a fresh registry', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const prior = connectedClientAdapter()
+    const failing = fakeClientAdapter()
+    failing.start.mockRejectedValueOnce(new Error('candidate-command-activation-failure'))
+    const next = connectedClientAdapter()
+    const priorProject = writableClientProject('revision-command-prior')
+    const failingProject = writableClientProject('revision-command-failing')
+    const nextProject = writableClientProject('revision-command-next')
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: (project) => {
+        if (project.revisionId === failingProject.revisionId) return failing.adapter
+        if (project.revisionId === nextProject.revisionId) return next.adapter
+        return prior.adapter
+      },
+      nowMs: () => 1_000,
+    })
+    const priorRevision = await configRevisionForProjectV5(priorProject)
+    const priorCommand = commandRequest(priorRevision, { commandId: 'retained-command' })
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', priorProject)).status).toBe(200)
+      const beforeLease = await (await requestLease(port)).json() as { generation: number }
+      const retainedResult = await (await requestCommand(port, priorCommand)).json()
+      expect(prior.write).toHaveBeenCalledOnce()
+
+      const failed = await requestJson(port, 'PUT', '/runtime/project', failingProject)
+      expect(failed.status).toBe(503)
+      expect((await (await requestLease(port)).json() as { generation: number }).generation)
+        .toBe(beforeLease.generation)
+      expect(await (await requestCommand(port, priorCommand)).json()).toEqual(retainedResult)
+      expect(prior.write).toHaveBeenCalledOnce()
+
+      expect((await requestJson(port, 'PUT', '/runtime/project', nextProject)).status).toBe(200)
+      expect((await (await requestLease(port)).json() as { generation: number }).generation)
+        .toBe(beforeLease.generation + 1)
+      const staleRetry = await requestCommand(port, priorCommand)
+      expect(staleRetry.status).toBe(200)
+      expect(await staleRetry.json()).toEqual({
+        type: 'command-result-v1', protocolVersion: 1, projectId: priorCommand.projectId,
+        configRevision: priorCommand.configRevision, leaseGeneration: priorCommand.leaseGeneration,
+        targetId: priorCommand.targetId, commandId: priorCommand.commandId,
+        acknowledgement: 'REJECTED', executionState: 'FAILED', failureCode: 'REVISION_MISMATCH',
+        message: 'Command Revision does not match the active Revision.', attachedObjectId: null, completedAt: 1_000,
+      })
+      expect(next.write).not.toHaveBeenCalled()
     } finally {
       await service.stop()
     }
@@ -451,7 +817,7 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
-  it('settles a never-ending command during stop without letting the write block shutdown', async () => {
+  it('preserves a completed-body admitted command response while stop closes its never-ending write', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     const write = vi.fn(() => new Promise<never>(() => undefined))
@@ -468,8 +834,14 @@ describe('runtime Gateway entrypoint', () => {
       const pending = requestCommand(port, commandRequest(revision))
       await vi.waitFor(() => expect(write).toHaveBeenCalledOnce())
       await service.stop()
-      await expect(pending).resolves.toMatchObject({ status: 200 })
-      await expect((await pending).json()).resolves.toMatchObject({ failureCode: 'COMMAND_SERVICE_CLOSED' })
+      const response = await pending
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toEqual({
+        type: 'command-result-v1', protocolVersion: 1, projectId: project.projectId,
+        configRevision: revision, leaseGeneration: 1, targetId: 'mapping-1', commandId: 'command-http-1',
+        acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_SERVICE_CLOSED',
+        message: 'Command service closed before write completion.', attachedObjectId: null, completedAt: 1_000,
+      })
     } finally {
       await service.stop()
     }
@@ -1127,6 +1499,7 @@ describe('runtime Gateway entrypoint', () => {
         createOpcUaClientAdapter: (project) => (
           project.revisionId === 'revision-client-double-failure' ? candidate.adapter : prior.adapter
         ),
+        nowMs: () => 1_000,
       },
     )
     const firstProject = sampleProject('client', 'revision-client-double-prior')
@@ -1148,6 +1521,17 @@ describe('runtime Gateway entrypoint', () => {
         opcUa: { mode: 'off' },
       })
       expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(503)
+      expect(prior.stop).toHaveBeenCalledTimes(2)
+      expect(candidate.stop).toHaveBeenCalledOnce()
+      const oldRevision = await configRevisionForProjectV5(firstProject)
+      const afterDoubleFailure = await requestCommand(port, commandRequest(oldRevision))
+      expect(afterDoubleFailure.status).toBe(200)
+      expect(await afterDoubleFailure.json()).toEqual({
+        type: 'command-result-v1', protocolVersion: 1, projectId: firstProject.projectId,
+        configRevision: oldRevision, leaseGeneration: 1, targetId: 'mapping-1', commandId: 'command-http-1',
+        acknowledgement: 'REJECTED', executionState: 'FAILED', failureCode: 'OPC_UA_CLIENT_NOT_ACTIVE',
+        message: 'Runtime command requires an active OPC UA Client Project.', attachedObjectId: null, completedAt: 1_000,
+      })
     } finally {
       await service.stop()
     }

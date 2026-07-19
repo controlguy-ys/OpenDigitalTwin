@@ -270,7 +270,24 @@ function requestContentLength(request: IncomingMessage): number | null {
 async function readJsonBody(
   request: IncomingMessage,
   maximumBytes: number,
+  incompleteRequests: Set<IncomingMessage>,
+  shutdownRequested: () => boolean,
 ): Promise<unknown> {
+  const stopTracking = (): void => {
+    incompleteRequests.delete(request)
+    request.off('end', stopTracking)
+    request.off('close', stopTracking)
+    request.off('aborted', stopTracking)
+  }
+  if (!request.complete) {
+    incompleteRequests.add(request)
+    request.once('end', stopTracking)
+    request.once('close', stopTracking)
+    request.once('aborted', stopTracking)
+    if (request.complete) stopTracking()
+    else if (shutdownRequested()) request.destroy()
+  }
+
   const contentType = request.headers['content-type']?.split(';', 1)[0]?.trim()
   if (contentType !== 'application/json') {
     request.resume()
@@ -339,10 +356,12 @@ export function createRuntimeGatewayEntrypointService(
   let server: Server | null = null
   let webSocketServer: WebSocketServer | null = null
   let stateBatchHub = createStateBatchHub()
+  const incompleteBodyRequests = new Set<IncomingMessage>()
   let activeRuntime: ActiveProjectRuntimeV1 | null = null
   let lifecycleTail: Promise<void> = Promise.resolve()
   let runtimeTail: Promise<void> = Promise.resolve()
   let committedCommandGeneration = initialCommittedCommandGeneration
+  let shutdownRequested = false
 
   function status(): RuntimeGatewayStatusV1 {
     const active = activeRuntime
@@ -664,7 +683,12 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   async function applyProjectRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
-    const body = await readJsonBody(request, MAX_RUNTIME_PROJECT_BODY_BYTES_V1)
+    const body = await readJsonBody(
+      request,
+      MAX_RUNTIME_PROJECT_BODY_BYTES_V1,
+      incompleteBodyRequests,
+      () => shutdownRequested,
+    )
     let project: WorkcellProjectV5
     try {
       project = validateWorkcellProjectV5(body)
@@ -680,7 +704,12 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   async function publishStateRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
-    const body = await readJsonBody(request, MAX_RUNTIME_BATCH_BYTES_V5)
+    const body = await readJsonBody(
+      request,
+      MAX_RUNTIME_BATCH_BYTES_V5,
+      incompleteBodyRequests,
+      () => shutdownRequested,
+    )
 
     await enqueueRuntimeTransition(async () => {
       const active = activeRuntime
@@ -746,7 +775,12 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   async function commandRequest(request: IncomingMessage): Promise<CommandResultV1> {
-    const body = await readJsonBody(request, MAX_RUNTIME_BATCH_BYTES_V1)
+    const body = await readJsonBody(
+      request,
+      MAX_RUNTIME_BATCH_BYTES_V1,
+      incompleteBodyRequests,
+      () => shutdownRequested,
+    )
     let command: CommandRequestV1
     try {
       command = validateCommandRequestV1(body)
@@ -768,7 +802,7 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   function writeRequestError(response: ServerResponse, error: unknown): void {
-    if (response.headersSent || response.writableEnded) return
+    if (response.destroyed || response.headersSent || response.writableEnded) return
     if (error instanceof RuntimeGatewayHttpError) {
       writeJson(response, error.statusCode, {
         code: error.code,
@@ -886,6 +920,7 @@ export function createRuntimeGatewayEntrypointService(
     if (server?.listening === true) return
     server = null
     await startListening()
+    shutdownRequested = false
   }
 
   async function closeHttpServer(): Promise<void> {
@@ -914,18 +949,63 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   async function closeService(): Promise<void> {
-    await enqueueRuntimeTransition(async () => {
-      const active = activeRuntime
-      activeRuntime = null
-      active?.commandService?.close()
-      active?.commandDedupe.clear()
-      await active?.clientAdapter?.stop()
-      await active?.serverAdapter?.stop()
-    })
-    await stateBatchHub.close()
-    await closeWebSocketServer()
-    await closeHttpServer()
+    shutdownRequested = true
+    let firstFailure: unknown
+    let hasFailure = false
+    const retainFirstFailure = (error: unknown): void => {
+      if (hasFailure) return
+      hasFailure = true
+      firstFailure = error
+    }
+    try {
+      await enqueueRuntimeTransition(async () => {
+        const active = activeRuntime
+        activeRuntime = null
+        active?.commandService?.close()
+        active?.commandDedupe.clear()
+        for (const request of incompleteBodyRequests) {
+          incompleteBodyRequests.delete(request)
+          request.destroy()
+        }
+
+        let adapterFailure: unknown
+        let hasAdapterFailure = false
+        try {
+          await active?.clientAdapter?.stop()
+        } catch (error) {
+          hasAdapterFailure = true
+          adapterFailure = error
+        }
+        try {
+          await active?.serverAdapter?.stop()
+        } catch (error) {
+          if (!hasAdapterFailure) {
+            hasAdapterFailure = true
+            adapterFailure = error
+          }
+        }
+        if (hasAdapterFailure) throw adapterFailure
+      })
+    } catch (error) {
+      retainFirstFailure(error)
+    }
+    try {
+      await stateBatchHub.close()
+    } catch (error) {
+      retainFirstFailure(error)
+    }
+    try {
+      await closeWebSocketServer()
+    } catch (error) {
+      retainFirstFailure(error)
+    }
+    try {
+      await closeHttpServer()
+    } catch (error) {
+      retainFirstFailure(error)
+    }
     stateBatchHub = createStateBatchHub()
+    if (hasFailure) throw firstFailure
   }
 
   function enqueueLifecycleTransition(

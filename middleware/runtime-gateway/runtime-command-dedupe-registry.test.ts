@@ -49,9 +49,16 @@ describe('RuntimeCommandDedupeRegistryV1', () => {
     await expect(registry.execute(record(), { preflight: () => rejection, operation })).resolves.toBe(rejection)
     expect(registry.size()).toBe(0)
     await registry.execute(record(), { preflight: () => null, operation })
-    await expect(registry.execute(record('key-1', 'different'), { preflight: () => null, operation }))
+    const conflictingPreflight = vi.fn(() => null)
+    const conflictingOperation = vi.fn(async () => result('conflict'))
+    await expect(registry.execute(record('key-1', 'different'), {
+      preflight: conflictingPreflight,
+      operation: conflictingOperation,
+    }))
       .rejects.toMatchObject({ code: 'COMMAND_ID_CONFLICT' })
     expect(operation).toHaveBeenCalledOnce()
+    expect(conflictingPreflight).not.toHaveBeenCalled()
+    expect(conflictingOperation).not.toHaveBeenCalled()
   })
 
   it('evicts the oldest terminal record but never an in-flight record at shared capacity', async () => {
@@ -80,6 +87,30 @@ describe('RuntimeCommandDedupeRegistryV1', () => {
     expect(registry.has('client-write', 'terminal-0')).toBe(false)
   })
 
+  it('makes a gated completion evictable before its awaiting caller immediately admits at capacity', async () => {
+    const registry = createRuntimeCommandDedupeRegistryV1()
+    const gate = deferred<CommandResultV1>()
+    const gated = registry.execute(record('gated-oldest'), {
+      preflight: () => null,
+      operation: () => gate.promise,
+    })
+    for (let index = 1; index < MAX_RUNTIME_COMMAND_RECORDS_V1; index += 1) {
+      await registry.execute(record(`later-terminal-${index}`), {
+        preflight: () => null,
+        operation: async () => result(String(index)),
+      })
+    }
+    gate.resolve(result('gated'))
+    await gated
+    await registry.execute(record('immediate-admission'), {
+      preflight: () => null,
+      operation: async () => result('immediate'),
+    })
+    expect(registry.size()).toBe(MAX_RUNTIME_COMMAND_RECORDS_V1)
+    expect(registry.has('client-write', 'gated-oldest')).toBe(false)
+    expect(registry.has('client-write', 'later-terminal-1')).toBe(true)
+  })
+
   it('rejects capacity before execution when every shared record is in flight', async () => {
     const registry = createRuntimeCommandDedupeRegistryV1()
     const gate = deferred<CommandResultV1>()
@@ -102,6 +133,19 @@ describe('RuntimeCommandDedupeRegistryV1', () => {
     registry.clear()
     gate.resolve(result())
     await pending
+    expect(registry.size()).toBe(0)
+  })
+
+  it('turns a synchronous operation throw into a terminal rejection without resurrecting after clear', async () => {
+    const registry = createRuntimeCommandDedupeRegistryV1()
+    const failure = new Error('synchronous-operation-failure')
+    const pending = registry.execute(record(), {
+      preflight: () => null,
+      operation: () => { throw failure },
+    })
+    expect(registry.has('client-write', 'key-1')).toBe(true)
+    registry.clear()
+    await expect(pending).rejects.toBe(failure)
     expect(registry.size()).toBe(0)
   })
 })
