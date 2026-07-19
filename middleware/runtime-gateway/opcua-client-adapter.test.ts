@@ -18,6 +18,7 @@ import {
   createOpcUaClientAdapterV1,
   createOpcUaClientSnapshotAssemblerV1,
 } from './opcua-client-adapter.js'
+import { createStateBatchHubV1, type GatewayWebSocketV1 } from './state-batch-hub.js'
 
 const REVISION = 'a'.repeat(64)
 
@@ -193,6 +194,32 @@ function changed(value: unknown, statusCode = 'Good') {
   }
 }
 
+function immediateGatewaySocket(): {
+  readonly socket: GatewayWebSocketV1
+  readonly sent: string[]
+} {
+  const listeners = new Map<'close' | 'error', Set<() => void>>()
+  const sent: string[] = []
+  return {
+    sent,
+    socket: {
+      send(data, callback) {
+        sent.push(data)
+        callback()
+      },
+      close() {},
+      on(event, listener) {
+        const current = listeners.get(event) ?? new Set<() => void>()
+        current.add(listener)
+        listeners.set(event, current)
+      },
+      off(event, listener) {
+        listeners.get(event)?.delete(listener)
+      },
+    },
+  }
+}
+
 describe('OPC UA client adapter V1 Project V5 root-notification boundary', () => {
   it('fans out a maximal shared String root through bounded State Batches without dropping mapping IDs', () => {
     const project = sharedRootStringProject()
@@ -240,6 +267,61 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     await expect(adapter.write({ mappingId: 'map-start', value: true })).resolves.toEqual({ ok: true, statusCode: 'Good' })
     expect(connection.session.write).toHaveBeenCalledOnce()
     await adapter.stop()
+  })
+
+  it('recovers a write-only empty Subscription, fences the stale lease, and writes through the replacement Session', async () => {
+    const first = fakeConnection()
+    const second = fakeConnection()
+    const connections = [first, second]
+    const adapter = createOpcUaClientAdapterV1(writeOnlyProject(), {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
+      publish: () => undefined, createClient: () => connections.shift()!.client as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    expect(first.groups).toHaveLength(0)
+    first.subscriptions[0]!.emit('terminated')
+
+    await eventually(() => adapter.status()[0]?.phase === 'reconnecting')
+    await expect(adapter.write({ mappingId: 'map-start', value: true }))
+      .resolves.toMatchObject({ failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED' })
+    await eventually(() => adapter.status()[0]?.phase === 'connected' && second.subscriptions.length === 1)
+    expect(second.groups).toHaveLength(0)
+    await expect(adapter.write({ mappingId: 'map-start', value: true }))
+      .resolves.toEqual({ ok: true, statusCode: 'Good' })
+    expect(second.session.write).toHaveBeenCalledOnce()
+    await adapter.stop()
+  })
+
+  it('preserves adapter source continuity through reconnect so the real StateBatchHub forwards the first fresh root', async () => {
+    const project = readProject()
+    const first = fakeConnection(['http://opcfoundation.org/UA/', 'urn:virtual-plc'])
+    const second = fakeConnection(['http://opcfoundation.org/UA/', 'urn:other', 'urn:virtual-plc'])
+    const connections = [first, second]
+    const hub = createStateBatchHubV1()
+    const browser = immediateGatewaySocket()
+    hub.activateRevision(project.projectId, REVISION)
+    hub.attach(browser.socket)
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
+      publish: (batch) => hub.publish(batch), createClient: () => connections.shift()!.client as never,
+    })
+    await adapter.start()
+    await eventually(() => first.groups.length === 1)
+    first.groups[0]!.emit('changed', {}, changed({ payload: { present: true } }), 0)
+    await eventually(() => browser.sent.length === 1)
+
+    first.client.emit('connection_lost')
+    await eventually(() => second.monitorRequests.length === 1)
+    expect(second.monitorRequests[0]!.items[0]).toMatchObject({ nodeId: 'ns=2;s=Machine.State' })
+    second.groups[0]!.emit('changed', {}, changed({ payload: { present: false } }), 0)
+
+    await eventually(() => browser.sent.length === 2)
+    const batches = browser.sent.map((payload) => validateStateBatchV1(JSON.parse(payload)))
+    expect(batches.map(({ sequence }) => sequence)).toEqual([1, 2])
+    expect(batches.at(-1)?.values).toEqual([expect.objectContaining({ value: false, mappingId: 'map-part-present' })])
+    await adapter.stop()
+    await hub.close()
   })
 
   it('counts one readWrite Mapping once while retaining its read root', async () => {

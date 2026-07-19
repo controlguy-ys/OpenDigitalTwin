@@ -288,7 +288,7 @@ export function createOpcUaClientAdapterV1(
       ...(writeMappingIdsByEndpoint.get(endpoint.endpointId) ?? []),
     ])
     const eligible = isClientMode(project) && endpoint.enabled && mappingIds.size > 0
-    runtimes.set(endpoint.endpointId, {
+    const runtime: EndpointRuntimeV1 = {
       endpoint,
       readPlan: eligible ? readPlan : null,
       mappingCount: eligible ? mappingIds.size : 0,
@@ -310,7 +310,19 @@ export function createOpcUaClientAdapterV1(
       reconnectAttempt: 0,
       nextRetryAtMs: null,
       lastError: null,
-    })
+    }
+    if (runtime.readPlan !== null && runtime.readPlan.monitoredRoots.length > 0) {
+      runtime.assembler = createOpcUaClientSnapshotAssemblerV1({
+        project,
+        endpoint: runtime.readPlan,
+        configRevision: options.configRevision,
+        gatewayId: options.gatewayId,
+        originId: options.originId,
+        nowMs,
+        publish: options.publish,
+      })
+    }
+    runtimes.set(endpoint.endpointId, runtime)
   }
 
   function scheduleReconnect(runtime: EndpointRuntimeV1): void {
@@ -438,15 +450,6 @@ export function createOpcUaClientAdapterV1(
         if (!active()) return
         const resolvedRoots = resolveOpcUaClientReadRootsV1(readPlan.monitoredRoots, namespaceArray)
         const resolvedGroups = groupResolvedRootsBySamplingIntervalV1(resolvedRoots)
-        runtime.assembler = createOpcUaClientSnapshotAssemblerV1({
-          project,
-          endpoint: readPlan,
-          configRevision: options.configRevision,
-          gatewayId: options.gatewayId,
-          originId: options.originId,
-          nowMs,
-          publish: options.publish,
-        })
         for (const resolvedGroup of resolvedGroups) {
           const group = await subscription.monitorItems(
             resolvedGroup.roots.map((root) => ({ nodeId: root.nodeId, attributeId: AttributeIds.Value })),

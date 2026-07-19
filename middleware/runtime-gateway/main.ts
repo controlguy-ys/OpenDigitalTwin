@@ -462,6 +462,7 @@ export function createRuntimeGatewayEntrypointService(
         recovered = await recoverPreviousRuntime(previous, previousAdaptersStopped)
       } catch (caughtRecoveryError) {
         recoveryError = caughtRecoveryError
+        activeRuntime = null
       }
 
       throw new RuntimeGatewayHttpError(

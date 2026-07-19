@@ -914,6 +914,45 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
+  it('becomes non-ready when both candidate activation and prior Client restart fail', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const prior = fakeClientAdapter()
+    prior.start.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('prior-restart-failure'))
+    const candidate = fakeClientAdapter()
+    candidate.start.mockRejectedValueOnce(new Error('candidate-start-failure'))
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      {
+        createOpcUaClientAdapter: (project) => (
+          project.revisionId === 'revision-client-double-failure' ? candidate.adapter : prior.adapter
+        ),
+      },
+    )
+    const firstProject = sampleProject('client', 'revision-client-double-prior')
+    const replacement = sampleProject('client', 'revision-client-double-failure')
+
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', firstProject)).status).toBe(200)
+      const failed = await requestJson(port, 'PUT', '/runtime/project', replacement)
+
+      expect(failed.status).toBe(503)
+      expect(await failed.json()).toMatchObject({
+        code: 'PROJECT_ACTIVATION_FAILED',
+        recoveredRevisionId: null,
+        recoveryError: 'prior-restart-failure',
+      })
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: { phase: 'not-applied', readinessCode: 'NO_ACTIVE_REVISION' },
+        opcUa: { mode: 'off' },
+      })
+      expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(503)
+    } finally {
+      await service.stop()
+    }
+  })
+
   it('keeps the prior Project publication visible while a replacement Client start is pending', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
