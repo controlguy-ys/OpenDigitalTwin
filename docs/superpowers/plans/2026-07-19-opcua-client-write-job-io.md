@@ -99,14 +99,23 @@ export interface LogicalSignalRuntimeStoreV1 {
   read(signalId: string): LogicalSignalRuntimeValueV1 | null
 }
 
-export interface ObjectRuntimeValueV5 {
+export interface ObjectFrameRuntimeValueV5 {
   readonly entityId: string
   readonly frameId: string
-  readonly pose: RigidTransformV5 | null
-  readonly numericStatus: number | null
+  readonly worldPose: RigidTransformV5 | null
   readonly quality: LogicalSignalRuntimeQualityV1
   readonly statusCode: string
   readonly owner: 'manual' | 'simulation' | `opcua:${string}` | 'attachment'
+  readonly sourceTimestampMs: number
+  readonly receivedTimestampMs: number
+}
+
+export interface ObjectNumericStatusRuntimeValueV5 {
+  readonly entityId: string
+  readonly value: number | null
+  readonly quality: LogicalSignalRuntimeQualityV1
+  readonly statusCode: string
+  readonly owner: 'manual' | 'simulation' | `opcua:${string}`
   readonly sourceTimestampMs: number
   readonly receivedTimestampMs: number
 }
@@ -116,7 +125,8 @@ export interface ObjectRuntimeStateV5 {
   readonly configRevision: string | null
   replaceProject(project: WorkcellProjectV5, configRevision: string): void
   ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
-  sample(entityId: string, renderTimestampMs: number): ObjectRuntimeValueV5 | null
+  sampleFrame(entityId: string, frameId: string, renderTimestampMs: number): ObjectFrameRuntimeValueV5 | null
+  readNumericStatus(entityId: string): ObjectNumericStatusRuntimeValueV5 | null
   markEndpointDisconnected(endpointId: string, atMs: number): void
   resetGatewaySession(atMs: number): void
 }
@@ -189,6 +199,8 @@ export interface JobInstructionContextV1 {
 ### Task 1: Build Quality-Aware Signal and Smoothed Object Runtime State
 
 **Files:**
+- Modify: `src/core/runtime-interpolation/v1.ts`
+- Test: `src/core/runtime-interpolation/v1.test.ts`
 - Create: `src/features/signals/v5/logical-signal-runtime-store.ts`
 - Test: `src/features/signals/v5/logical-signal-runtime-store.test.ts`
 - Create: `src/features/scene/v5/object-runtime-state.ts`
@@ -197,10 +209,12 @@ export interface JobInstructionContextV1 {
 - Test: `src/features/robot/v5/robot-frame-status-runtime-store.test.ts`
 
 **Interfaces:**
-- Consumes: `WorkcellProjectV5`, logical-signal/entity-frame/entity-status/robot-frame/robot-status Mapping targets, Mapping `projectPath`, `StateBatchV1`, `RuntimeValueQualityV1`, and the existing version-neutral runtime interpolation functions.
+- Consumes: `WorkcellProjectV5`, logical-signal/entity-frame/entity-status/robot-frame/robot-status Mapping targets, Mapping `projectPath`, `StateBatchV1`, `RuntimeValueQualityV1`, and the runtime interpolation functions after making their public types and names genuinely Project-version-neutral.
 - Produces: `LogicalSignalRuntimeStoreV1`, `ObjectRuntimeStateV5`, `RobotFrameStatusRuntimeStoreV5`, `createLogicalSignalRuntimeStoreV1(project, configRevision)`, `createObjectRuntimeStateV5(project, configRevision)`, and `createRobotFrameStatusRuntimeStoreV5(project, configRevision)`.
 
 - [ ] **Step 1: Write the RED Signal ingestion tests**
+
+First add a runtime-interpolation boundary regression: `src/core/runtime-interpolation/v1.ts` must import neither `project-v4` nor `project-v5`, expose structural `RuntimeVector3V1`, `RuntimeQuaternionV1`, and `RuntimeRigidTransformV1` types, and export `interpolateRuntimeRigidTransformV1` rather than the V4-named `interpolateRigidTransformV4`. Update the existing interpolation tests to the neutral export. Do not retain a legacy V4 alias. Preserve the existing quaternion normalization, finite-value validation, deep freezing, shortest-arc SLERP, delayed sampling, and stale behavior.
 
 ```ts
 it('publishes a subscribed GOOD Boolean by stable Signal ID', () => {
@@ -209,6 +223,19 @@ it('publishes a subscribed GOOD Boolean by stable Signal ID', () => {
   expect(runtime.getState().read('part-present')).toMatchObject({
     signalId: 'part-present', value: true, quality: 'GOOD',
     owner: 'opcua:plc', sourceTimestampMs: 1_000, publishedTimestampMs: 1_020,
+  })
+})
+
+it('retains the last GOOD Signal payload when a later value is UNCERTAIN', () => {
+  const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+  runtime.getState().ingest(signalBatch({ sequence: 1, value: true, quality: 'GOOD' }), 1_050)
+  runtime.getState().ingest(signalBatch({
+    sequence: 2, sourceTimestampMs: 1_100, value: false,
+    quality: 'UNCERTAIN', statusCode: 'UncertainLastUsableValue',
+  }), 1_150)
+  expect(runtime.getState().read('part-present')).toMatchObject({
+    value: true, quality: 'UNCERTAIN', statusCode: 'UncertainLastUsableValue',
+    sourceTimestampMs: 1_100, receivedTimestampMs: 1_150,
   })
 })
 
@@ -238,12 +265,19 @@ it('rejects old sequence, wrong revision, wrong endpoint, and non-Boolean payloa
 Add Object regressions using a PLC `Double[6]` source whose `leafPath` values are `[0]..[5]` and whose `projectPath` values are `positionM[0..2]` plus `rpyDegrees[0..2]`:
 
 ```ts
-it('samples a coherent OPC UA-owned Object pose smoothly', () => {
-  const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
-  runtime.ingest(objectPoseBatch({ sequence: 1, positionM: [0, 0, 0], yaw: 0 }), 1_000)
-  runtime.ingest(objectPoseBatch({ sequence: 2, positionM: [1, 0, 0], yaw: 90 }), 1_100)
-  expect(runtime.sample('box', 1_050)).toMatchObject({
-    pose: { positionM: [0.5, 0, 0] }, quality: 'GOOD', owner: 'opcua:plc',
+it('samples a coherent OPC UA-owned Object Frame two publishing cycles behind', () => {
+  const runtime = createObjectRuntimeStateV5(
+    projectWithArrayMappedBox({ publishingIntervalMs: 100 }), REVISION,
+  )
+  runtime.ingest(objectPoseBatch({
+    sequence: 1, sourceTimestampMs: 1_000, positionM: [0, 0, 0], yaw: 0,
+  }), 1_000)
+  runtime.ingest(objectPoseBatch({
+    sequence: 2, sourceTimestampMs: 1_100, positionM: [1, 0, 0], yaw: 90,
+  }), 1_100)
+  expect(runtime.sampleFrame('box', 'box-motion', 1_250)).toMatchObject({
+    sourceTimestampMs: 1_050,
+    worldPose: { positionM: [0.5, 0, 0] }, quality: 'GOOD', owner: 'opcua:plc',
   })
 })
 
@@ -251,8 +285,21 @@ it('retains the Object but marks it STALE and keeps OPC UA ownership on disconne
   const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
   runtime.ingest(objectPoseBatch({ sequence: 1 }), 1_000)
   runtime.markEndpointDisconnected('plc', 1_100)
-  expect(runtime.sample('box', 1_100)).toMatchObject({
+  expect(runtime.sampleFrame('box', 'box-motion', 1_100)).toMatchObject({
     quality: 'STALE', statusCode: 'BadNoCommunication', owner: 'opcua:plc',
+  })
+})
+
+it('keeps Object Frame and numeric Status channels independent', () => {
+  const runtime = createObjectRuntimeStateV5(
+    projectWithMappedBoxFrameAndStatusOnSeparateEndpoints(), REVISION,
+  )
+  runtime.ingest(objectPoseBatch({ endpointId: 'motion-plc', sequence: 1 }), 1_000)
+  runtime.ingest(objectStatusBatch({ endpointId: 'status-plc', sequence: 1, status: 7 }), 1_010)
+  runtime.markEndpointDisconnected('motion-plc', 1_100)
+  expect(runtime.sampleFrame('box', 'box-motion', 1_100)).toMatchObject({ quality: 'STALE' })
+  expect(runtime.readNumericStatus('box')).toMatchObject({
+    value: 7, quality: 'GOOD', owner: 'opcua:status-plc',
   })
 })
 
@@ -276,12 +323,14 @@ it('ingests a coherent Robot Frame and numeric Status, then retains both STALE',
 - [ ] **Step 2: Run RED**
 
 ```powershell
-npm run test:run -- src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts
+npm run test:run -- src/core/runtime-interpolation/v1.test.ts src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts
 ```
 
 Expected: FAIL because the V5 logical-Signal, Object, and Robot Frame/status runtime modules do not exist.
 
 - [ ] **Step 3: Implement exact Mapping compilation and immutable snapshots**
+
+Make `src/core/runtime-interpolation/v1.ts` self-contained before the V5 stores consume it. Define and validate its structural tuple/pose types locally, implement RPY-to-quaternion and rigid-transform normalization locally, and use only neutral V1 names throughout the module. This is a type-boundary cleanup only: existing structurally compatible V4 callers must continue to compile without conversion or casts, while new V5 callers must not acquire any V4 dependency.
 
 ```ts
 export function createLogicalSignalRuntimeStoreV1(
@@ -290,19 +339,21 @@ export function createLogicalSignalRuntimeStoreV1(
 ): StoreApi<LogicalSignalRuntimeStoreV1>
 ```
 
-Require `configRevision` to be the lowercase 64-hex result of `configRevisionForProjectV5(projectInput)` supplied by the publication boundary; never substitute `project.revisionId`. Validate the Project once. Compile only enabled Endpoint Mappings with `read` or `readWrite` direction whose single root Leaf target is `{ type: 'logical-signal', signalId }`. Reject duplicate compiled writers for one Signal by leaving that Signal at `BAD/BadConfigurationError`. Initialize every Signal from `initialValue` with owner `initial`, timestamps `0`, and `BAD/BadWaitingForInitialData`. Apply only increasing per-Endpoint sequences and exact `projectId` plus `configRevision` matches. On BAD or type mismatch, retain the last valid value while updating quality/status/timestamps.
+Require `configRevision` to be the lowercase 64-hex result of `configRevisionForProjectV5(projectInput)` supplied by the publication boundary; never substitute `project.revisionId`. Validate the Project once. Construction throws the existing Project V5 validation error for any malformed or duplicate Mapping. `replaceProject` validates both the Project and its supplied Revision before mutating anything and preserves the prior runtime snapshot on failure. Compile only enabled Endpoint Mappings with `read` or `readWrite` direction whose single root Leaf target is `{ type: 'logical-signal', signalId }`; Project V5 validation is the sole duplicate-writer gate. Initialize every Signal from `initialValue` with owner `initial`, timestamps `0`, and `BAD/BadWaitingForInitialData`. Apply only increasing per-Endpoint sequences and exact `projectId` plus `configRevision` matches. On BAD, UNCERTAIN, or type mismatch, retain the last GOOD payload while updating quality, status code, source/published/received timestamps, and OPC UA ownership; only GOOD replaces the payload.
 
-For Objects, compile exactly one enabled read/readWrite Mapping per entity-frame and entity-status target. Require all six unique Frame `projectPath` destinations, coherent pose publication, and the target's authored owner `opcua:<endpointId>`. Reuse `createRuntimePoseBufferV1` and shortest-quaternion interpolation; do not import the V4 Object runtime. Status is held without interpolation. `sample` returns the last pose with BAD/STALE quality after freshness/disconnect and never changes its owner to Manual. Attachment projection retains precedence over an OPC UA pose at the render selector boundary.
+For Objects, key Frame channels by `(entityId, frameId)` and Status channels independently by `entityId`; never aggregate their quality, owner, status code, or timestamps. Support every mapped Moving Frame independently. Project V5 validation rejects duplicate or malformed Mapping definitions before channel compilation. Require all six unique Frame `projectPath` destinations, coherent pose publication, and the target Moving Frame's authored owner `opcua:<endpointId>`. Interpret each completed mapped Frame as a Project World pose. Reuse `createRuntimePoseBufferV1` and shortest-quaternion interpolation; do not import the V4 Object runtime. `sampleFrame(entityId, frameId, ...)` returns only Frame state. `readNumericStatus(entityId)` returns only held Status state, without interpolation. At the render selector boundary, only a mapped Frame whose ID equals the Entity's authored `parentFrameId` changes that Entity's World transform: compose the sampled Frame World pose with the Entity's authored `localPose`. Other mapped Moving Frames update only their own frame consumers. Attachment projection retains precedence over an OPC UA parent-Frame pose. BAD, UNCERTAIN, type-mismatched, stale, and disconnected updates retain the last GOOD pose/status payload while updating only that channel's quality, status code, and timestamps; ownership remains OPC UA.
 
-For Robots, compile exactly one enabled read/readWrite Mapping per robot-frame and robot-status target. A Frame requires the same six unique `projectPath` destinations and `robot.frameSources[frameId] === opcua:<endpointId>`; Status requires `projectPath: []` and matching `robot.numericStatus.sourceOwnership`. Interpret the completed mapped Frame pose as a Project World pose. Smooth it with the same pose buffer, hold Status without interpolation, preserve OPC UA ownership through BAD/STALE/disconnect, and reject partial/duplicate Frame destinations as `BadConfigurationError`. A mapped Base Frame becomes the V5 kinematic world-base input; another mapped Robot Frame overrides only that Frame's Actual marker/readout/attachment lookup, not the link chain or Joint state.
+For Robots, compile exactly one enabled read/readWrite Mapping per robot-frame and robot-status target after Project V5 validation has rejected partial or duplicate Frame destinations. A Frame requires the same six unique `projectPath` destinations and `robot.frameSources[frameId] === opcua:<endpointId>`; Status requires `projectPath: []` and matching `robot.numericStatus.sourceOwnership`. Interpret the completed mapped Frame pose as a Project World pose. Smooth it with the same pose buffer, hold Status without interpolation, and preserve OPC UA ownership through BAD/UNCERTAIN/STALE/disconnect. BAD, UNCERTAIN, and type-mismatched updates retain the last GOOD Frame/Status payload while updating quality, status code, and timestamps. A mapped Base Frame becomes the V5 kinematic world-base input; another mapped Robot Frame overrides only that Frame's Actual marker/readout/attachment lookup, not the link chain or Joint state.
+
+Sequence acceptance is independent per Endpoint. Tests must ingest two Endpoints, reject only a non-increasing sequence for the affected Endpoint, and prove that disconnecting one Endpoint marks only its owned Signal/Frame/Status channels STALE. Also prove that a value carrying an unknown or wrong-target Mapping ID cannot mutate another store, that older source timestamps and future source timestamps cannot rewind or snap an emitted pose, that duplicate or partial six-path Frames are rejected with the existing Project V5 validation codes (`OPCUA_READ_OWNER_DUPLICATE` or `OPCUA_PROJECT_PATH_INVALID`) without replacing an active runtime snapshot, and that numeric Status is held rather than interpolated.
 
 - [ ] **Step 4: Run GREEN and commit**
 
 ```powershell
-npm run test:run -- src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts
+npm run test:run -- src/core/runtime-interpolation/v1.test.ts src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts
 npm run lint
 npm run build
-git add src/features/signals/v5/logical-signal-runtime-store.ts src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts
+git add src/core/runtime-interpolation/v1.ts src/core/runtime-interpolation/v1.test.ts src/features/signals/v5/logical-signal-runtime-store.ts src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts
 git diff --cached --check
 git commit -m "feat: add logical signal runtime state"
 ```
