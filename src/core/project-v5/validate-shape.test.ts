@@ -132,12 +132,14 @@ describe('Project V5 aggregate shape validation', () => {
     expect(Object.isFrozen(callerProject.metadata)).toBe(false)
   })
 
-  it('stops at closed shape validation without enforcing cross references or budgets', () => {
+  it('passes closed shapes to the cross-reference validator', () => {
     const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
     ;(project.robots[0] as unknown as Record<string, unknown>).controllerId = 'not-checked-yet'
     ;(project.jobs[0] as unknown as Record<string, unknown>).robotId = 'not-checked-yet'
 
-    expect(() => validateWorkcellProjectV5(project)).not.toThrow()
+    expect(() => validateWorkcellProjectV5(project)).toThrowError(
+      expect.objectContaining({ code: 'ROBOT_CONTROLLER_NOT_FOUND', path: '$.robots[0].controllerId' }),
+    )
   })
 
   it('always reports the shared ProjectV5Error contract', () => {
