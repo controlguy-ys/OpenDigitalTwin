@@ -55,7 +55,7 @@ export class ProjectRepositoryV5Error extends Error {
   }
 }
 
-type PreparedStatus = 'prepared' | 'committed' | 'discarded' | 'failed'
+type PreparedStatus = 'prepared' | 'committing' | 'committed' | 'discarded' | 'failed'
 
 interface PreparedState {
   readonly authority: object
@@ -240,6 +240,7 @@ export function createProjectRepositoryV5(options: ProjectRepositoryV5Options): 
 
     async commitPreparedRevision(expectedRevisionId, prepared, commitToken) {
       const state = preparedState(prepared)
+      state.status = 'committing'
       try {
         validateCommitToken(commitToken)
         await database.transaction('rw', database.projectRevisions, database.projectPointers, database.projectCommitTokens, async () => {

@@ -93,6 +93,28 @@ describe('ProjectRepositoryV5 preparation authority', () => {
     expect(() => repository.materializePreparedProject(prepared)).toThrow('PROJECT_PREPARED_REVISION_CONSUMED')
   })
 
+  it('rejects forged and cross-repository handles at the commit boundary without writing', async () => {
+    const database = new ProjectDatabaseV5(uniqueDatabaseName())
+    openDatabases.push(database)
+    const repository = createRepository(database)
+    const other = createRepository(database)
+    const prepared = await repository.prepareRevision(project('revision-a'))
+    const forged = { ...prepared } as PreparedProjectRevisionV5
+
+    await expectRepositoryError(
+      repository.commitPreparedRevision(null, forged, 'token-forged'),
+      'PROJECT_PREPARED_REVISION_INVALID',
+    )
+    await expectRepositoryError(
+      other.commitPreparedRevision(null, prepared, 'token-cross-repository'),
+      'PROJECT_PREPARED_REVISION_INVALID',
+    )
+    await expect(Promise.all([
+      database.projectRevisions.count(), database.projectPointers.count(), database.projectCommitTokens.count(),
+    ])).resolves.toEqual([0, 0, 0])
+    expect(repository.materializePreparedProject(prepared)).toEqual(project('revision-a'))
+  })
+
   it('prepares without Dexie writes, snapshots canonical content, and returns frozen fresh materializations', async () => {
     const database = new ProjectDatabaseV5(uniqueDatabaseName())
     openDatabases.push(database)
@@ -145,6 +167,36 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
       await expect(run(repository, prepared)).rejects.toBeInstanceOf(Error)
       expect(() => repository.materializePreparedProject(prepared)).toThrow('PROJECT_PREPARED_REVISION_CONSUMED')
     }
+  })
+
+  it('consumes a prepared handle synchronously when its first commit is blocked in Dexie', async () => {
+    const database = new ProjectDatabaseV5(uniqueDatabaseName())
+    openDatabases.push(database)
+    const repository = createRepository(database)
+    const prepared = await repository.prepareRevision(project('revision-a'))
+    const pointerRead = deferred<void>()
+    const release = deferred<void>()
+    const originalGet = database.projectPointers.get.bind(database.projectPointers)
+    database.projectPointers.get = (async (key: string) => {
+      const value = await originalGet(key)
+      if (key === 'active') {
+        pointerRead.resolve()
+        await Dexie.waitFor(release.promise)
+      }
+      return value
+    }) as typeof database.projectPointers.get
+
+    const first = repository.commitPreparedRevision(null, prepared, 'token-a')
+    await pointerRead.promise
+    let secondResult: string | undefined
+    void repository.commitPreparedRevision(null, prepared, 'token-b').then(
+      () => { secondResult = 'fulfilled' },
+      (error: unknown) => { secondResult = (error as { code?: string }).code },
+    )
+    await Promise.resolve()
+    expect(secondResult).toBe('PROJECT_PREPARED_REVISION_CONSUMED')
+    release.resolve()
+    await first
   })
 
   it('consumes handles after token reuse, an in-progress publication, and an immutable collision', async () => {
@@ -207,7 +259,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     ])).resolves.toEqual([0, 0, 0])
   })
 
-  it('lets only one of two database instances win a first-publication race', async () => {
+  it('permanently reserves a racing token across distinct connections and reopen', async () => {
     const database = new ProjectDatabaseV5(uniqueDatabaseName())
     const secondDatabase = new ProjectDatabaseV5(database.name)
     openDatabases.push(database, secondDatabase)
@@ -216,25 +268,73 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     const a = await first.prepareRevision(project('revision-a'))
     const b = await second.prepareRevision(project('revision-b'))
     const results = await Promise.allSettled([
-      first.commitPreparedRevision(null, a, 'token-a'),
-      second.commitPreparedRevision(null, b, 'token-b'),
+      first.commitPreparedRevision(null, a, 'racing-token'),
+      second.commitPreparedRevision(null, b, 'racing-token'),
     ])
     expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1)
     expect(results.filter(({ status }) => status === 'rejected')).toHaveLength(1)
+    expect((results.find(({ status }) => status === 'rejected') as PromiseRejectedResult).reason)
+      .toMatchObject({ code: 'PROJECT_COMMIT_TOKEN_REUSED' })
+    const winner = results.find(({ status }) => status === 'fulfilled') === results[0] ? 'revision-a' : 'revision-b'
+    await expect(database.projectCommitTokens.toArray()).resolves.toEqual([{
+      commitToken: 'racing-token', revisionId: winner, createdAt: NOW,
+    }])
+    await expect(first.readPointer()).resolves.toMatchObject({
+      state: 'publishing', revisionId: winner, commitToken: 'racing-token',
+    })
+    await expect(database.projectRevisions.toCollection().primaryKeys()).resolves.toEqual([winner])
+    database.close()
+    secondDatabase.close()
+    const reopenedDatabase = new ProjectDatabaseV5(database.name)
+    openDatabases.push(reopenedDatabase)
+    const reopened = createRepository(reopenedDatabase)
+    const replay = await reopened.prepareRevision(project('revision-replay'))
+    await expectRepositoryError(
+      reopened.commitPreparedRevision(winner, replay, 'racing-token'),
+      'PROJECT_COMMIT_TOKEN_REUSED',
+    )
   })
 
-  it('reopens publishing target B, reads it as active, and finalizes idempotently only for its token', async () => {
+  it('reopens publishing B from a new connection and finalizes only its matching token', async () => {
     const database = new ProjectDatabaseV5(uniqueDatabaseName())
     openDatabases.push(database)
     const repository = createRepository(database)
     await publishStable(repository, project('revision-a'), 'token-a')
     const prepared = await repository.prepareRevision(project('revision-b'))
     await repository.commitPreparedRevision('revision-a', prepared, 'token-b')
-    const reopened = createRepository(database)
+    database.close()
+    const reopenedDatabase = new ProjectDatabaseV5(database.name)
+    openDatabases.push(reopenedDatabase)
+    const reopened = createRepository(reopenedDatabase)
     await expect(reopened.readActive()).resolves.toEqual(project('revision-b'))
-    await reopened.finalizePublication('token-b')
-    await reopened.finalizePublication('token-b')
     await expectRepositoryError(reopened.finalizePublication('token-other'), 'PROJECT_PUBLICATION_TOKEN_MISMATCH')
+    await expectRepositoryError(reopened.compensatePublication('token-other'), 'PROJECT_PUBLICATION_TOKEN_MISMATCH')
+    await reopened.finalizePublication('token-b')
+    await reopened.finalizePublication('token-b')
+    await expect(reopened.readPointer()).resolves.toEqual({
+      key: 'active', state: 'stable', revisionId: 'revision-b', commitToken: 'token-b',
+    })
+  })
+
+  it('compensates a first publishing revision without deleting its revision or token after reopen', async () => {
+    const database = new ProjectDatabaseV5(uniqueDatabaseName())
+    openDatabases.push(database)
+    const repository = createRepository(database)
+    const prepared = await repository.prepareRevision(project('revision-a'))
+    await repository.commitPreparedRevision(null, prepared, 'token-a')
+    await repository.compensatePublication('token-a')
+    await expect(repository.readPointer()).resolves.toBeNull()
+    await expect(database.projectRevisions.count()).resolves.toBe(1)
+    await expect(database.projectCommitTokens.count()).resolves.toBe(1)
+    database.close()
+    const reopenedDatabase = new ProjectDatabaseV5(database.name)
+    openDatabases.push(reopenedDatabase)
+    const reopened = createRepository(reopenedDatabase)
+    const replay = await reopened.prepareRevision(project('revision-a'))
+    await expectRepositoryError(
+      reopened.commitPreparedRevision(null, replay, 'token-a'),
+      'PROJECT_COMMIT_TOKEN_REUSED',
+    )
   })
 
   it('retains compensated token reservations permanently across a database reopen', async () => {
@@ -267,6 +367,24 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     })
     await expect(database.projectCommitTokens.count()).resolves.toBe(2)
     await expect(database.projectRevisions.count()).resolves.toBe(2)
+  })
+
+  it('rolls back token and revision writes when the publishing pointer write fails', async () => {
+    const database = new ProjectDatabaseV5(uniqueDatabaseName())
+    openDatabases.push(database)
+    const repository = createRepository(database)
+    const prepared = await repository.prepareRevision(project('revision-a'))
+    const originalPut = database.projectPointers.put.bind(database.projectPointers)
+    database.projectPointers.put = (async (pointer) => {
+      if (pointer.state === 'publishing') throw new Error('pointer write failed')
+      return originalPut(pointer)
+    }) as typeof database.projectPointers.put
+
+    await expect(repository.commitPreparedRevision(null, prepared, 'token-a')).rejects.toThrow('pointer write failed')
+    await expect(Promise.all([
+      database.projectRevisions.count(), database.projectPointers.count(), database.projectCommitTokens.count(),
+    ])).resolves.toEqual([0, 0, 0])
+    expect(() => repository.materializePreparedProject(prepared)).toThrow('PROJECT_PREPARED_REVISION_CONSUMED')
   })
 
   it('strictly decodes retained rows and never accepts noncanonical text, wrong identities, or hashes', async () => {

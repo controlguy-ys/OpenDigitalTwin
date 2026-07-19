@@ -31,6 +31,7 @@ describe('ProjectDatabaseV5', () => {
     await legacy.table('marker').put({ key: 'sentinel', value: 'unchanged' })
     const database = new ProjectDatabaseV5()
     openDatabases.push(database)
+    databaseNames.add(database.name)
 
     expect(database.name).toBe('robot-sim-project-v5')
     await database.open()
