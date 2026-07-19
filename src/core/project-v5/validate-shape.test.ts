@@ -1,0 +1,146 @@
+import { describe, expect, it } from 'vitest'
+
+import { ProjectV5Error } from './errors'
+import { validateLogicalSignalValueV1 } from './logical-signal'
+import {
+  cloneWorkcellProjectV5,
+  makeMinimalWorkcellProjectV5,
+} from './test-support'
+import { validateWorkcellProjectV5 } from './validate'
+
+describe('Project V5 aggregate shape validation', () => {
+  it.each([1, 2, 3, 4])('rejects schema V%i without conversion', (schemaVersion) => {
+    expect(() => validateWorkcellProjectV5({ schemaVersion })).toThrowError(
+      expect.objectContaining({ code: 'PROJECT_SCHEMA_UNSUPPORTED', path: '$.schemaVersion' }),
+    )
+  })
+
+  it('requires separate Robot and Controller identification', () => {
+    const project = makeMinimalWorkcellProjectV5()
+
+    expect(project.robotDefinitions[0]!.identification).toMatchObject({
+      manufacturer: 'ABB',
+      model: 'CRB15000-12/1.27',
+      productCode: 'CRB15000-12/1.27',
+      serialNumberTemplate: null,
+      motionDeviceCategory: 'ARTICULATED_ROBOT',
+    })
+    expect(project.controllers[0]!.identification.serialNumber).toBe('CTRL-SAMPLE-001')
+    expect(project.robots[0]!.serialNumber).toBe('ROBOT-SAMPLE-001')
+  })
+
+  it('rejects persisted Signal runtime fields', () => {
+    const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(project.logicalSignals[0] as unknown as Record<string, unknown>).quality = 'GOOD'
+
+    expect(() => validateWorkcellProjectV5(project)).toThrowError(
+      expect.objectContaining({ code: 'PROJECT_RECORD_NOT_CLOSED', path: '$.logicalSignals[0]' }),
+    )
+  })
+
+  it('rejects accessors, symbols, sparse arrays, and custom prototypes before reading them', () => {
+    const project = makeMinimalWorkcellProjectV5()
+    const accessorProject = cloneWorkcellProjectV5(project)
+    let accessorRead = false
+    Object.defineProperty(accessorProject.metadata, 'name', {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        accessorRead = true
+        return 'not read'
+      },
+    })
+    expect(() => validateWorkcellProjectV5(accessorProject)).toThrowError(
+      expect.objectContaining({ code: 'PROJECT_RECORD_NOT_CLOSED', path: '$.metadata' }),
+    )
+    expect(accessorRead).toBe(false)
+
+    const symbolProject = cloneWorkcellProjectV5(project)
+    Object.defineProperty(symbolProject.scene, Symbol('runtime'), {
+      configurable: true,
+      enumerable: true,
+      value: true,
+    })
+    expect(() => validateWorkcellProjectV5(symbolProject)).toThrow('PROJECT_RECORD_NOT_CLOSED')
+
+    const sparseProject = cloneWorkcellProjectV5(project)
+    const sparseSignals: unknown[] = []
+    sparseSignals.length = 1
+    ;(sparseProject as unknown as Record<string, unknown>).logicalSignals = sparseSignals
+    expect(() => validateWorkcellProjectV5(sparseProject)).toThrowError(
+      expect.objectContaining({ code: 'PROJECT_ARRAY_NOT_DENSE', path: '$.logicalSignals' }),
+    )
+
+    const prototypeProject = cloneWorkcellProjectV5(project)
+    Object.setPrototypeOf(prototypeProject.opcUa.endpoints, Object.create(Array.prototype))
+    expect(() => validateWorkcellProjectV5(prototypeProject)).toThrowError(
+      expect.objectContaining({ code: 'PROJECT_ARRAY_PROTOTYPE_INVALID', path: '$.opcUa.endpoints' }),
+    )
+  })
+
+  it('rejects unknown fields in every tagged instruction and target shape', () => {
+    const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    const instruction = project.jobs[0]!.instructions[0] as unknown as Record<string, unknown>
+    instruction.runtimeProgress = 50
+    expect(() => validateWorkcellProjectV5(project)).toThrowError(
+      expect.objectContaining({ code: 'PROJECT_RECORD_NOT_CLOSED', path: '$.jobs[0].instructions[0]' }),
+    )
+
+    const targetProject = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    const leaf = targetProject.opcUa.mappings[0]!.leaves[0]!
+    ;(leaf.projectTarget as unknown as Record<string, unknown>).sourceTimestamp = 'runtime-only'
+    expect(() => validateWorkcellProjectV5(targetProject)).toThrowError(
+      expect.objectContaining({
+        code: 'PROJECT_RECORD_NOT_CLOSED',
+        path: '$.opcUa.mappings[0].leaves[0].projectTarget',
+      }),
+    )
+  })
+
+  it('enforces logical scalar type, finite values, and scalar bounds', () => {
+    expect(validateLogicalSignalValueV1('Boolean', true, '$.value')).toBe(true)
+    expect(validateLogicalSignalValueV1('Int32', -2_147_483_648, '$.value')).toBe(-2_147_483_648)
+    expect(validateLogicalSignalValueV1('UInt32', 4_294_967_295, '$.value')).toBe(4_294_967_295)
+    expect(validateLogicalSignalValueV1('Double', 1.5, '$.value')).toBe(1.5)
+    expect(validateLogicalSignalValueV1('String', 'ok', '$.value')).toBe('ok')
+    expect(() => validateLogicalSignalValueV1('Int32', 2_147_483_648, '$.value')).toThrowError(
+      expect.objectContaining({ code: 'LOGICAL_SIGNAL_VALUE_TYPE_MISMATCH', path: '$.value' }),
+    )
+    expect(() => validateLogicalSignalValueV1('UInt32', -1, '$.value')).toThrow('LOGICAL_SIGNAL_VALUE_TYPE_MISMATCH')
+    expect(() => validateLogicalSignalValueV1('Double', Number.NaN, '$.value')).toThrow('LOGICAL_SIGNAL_VALUE_TYPE_MISMATCH')
+    expect(() => validateLogicalSignalValueV1('String', 'a'.repeat(4_097), '$.value')).toThrow(
+      'LOGICAL_SIGNAL_VALUE_TYPE_MISMATCH',
+    )
+
+    const nonFiniteProject = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(nonFiniteProject.opcUa.mappings[0]!.leaves[0] as unknown as Record<string, unknown>).scale = Number.POSITIVE_INFINITY
+    expect(() => validateWorkcellProjectV5(nonFiniteProject)).toThrowError(
+      expect.objectContaining({ code: 'PROJECT_NUMBER_NOT_FINITE', path: '$.opcUa.mappings[0].leaves[0].scale' }),
+    )
+  })
+
+  it('returns a deeply frozen clone without freezing or retaining caller data', () => {
+    const callerProject = makeMinimalWorkcellProjectV5()
+    const project = validateWorkcellProjectV5(callerProject)
+
+    expect(project).not.toBe(callerProject)
+    expect(project.metadata).not.toBe(callerProject.metadata)
+    expect(project.logicalSignals[0]).not.toBe(callerProject.logicalSignals[0])
+    expect(Object.isFrozen(project)).toBe(true)
+    expect(Object.isFrozen(project.opcUa.mappings[0]!.leaves[0]!.projectTarget)).toBe(true)
+    expect(Object.isFrozen(callerProject)).toBe(false)
+    expect(Object.isFrozen(callerProject.metadata)).toBe(false)
+  })
+
+  it('stops at closed shape validation without enforcing cross references or budgets', () => {
+    const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(project.robots[0] as unknown as Record<string, unknown>).controllerId = 'not-checked-yet'
+    ;(project.jobs[0] as unknown as Record<string, unknown>).robotId = 'not-checked-yet'
+
+    expect(() => validateWorkcellProjectV5(project)).not.toThrow()
+  })
+
+  it('always reports the shared ProjectV5Error contract', () => {
+    expect(() => validateWorkcellProjectV5(null)).toThrow(ProjectV5Error)
+  })
+})
