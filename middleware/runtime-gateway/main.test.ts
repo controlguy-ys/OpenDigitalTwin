@@ -28,6 +28,7 @@ import {
   MAX_RUNTIME_BATCH_BYTES_V1,
   type StateBatchV1,
 } from '../../src/core/runtime-protocol/v1.js'
+import { validateRuntimeGatewayStatusV1 } from '../../src/core/runtime-protocol/gateway-status-v1.js'
 
 async function importMain() {
   return import('./main.js')
@@ -82,6 +83,7 @@ async function listenOnEphemeralPort(): Promise<{
 function createTestConfig(httpPort: number): RuntimeGatewayDeploymentConfigV1 {
   return Object.freeze({
     gatewayId: 'test-gateway',
+    runtimeKind: 'native',
     host: '127.0.0.1',
     httpPort,
     opcUaAdvertisedHost: '127.0.0.1',
@@ -188,13 +190,29 @@ function fakeClientAdapter(): {
       stop,
       status: () => [{
         endpointId: 'endpoint-sample-server',
-        connected: false,
-        lastError: started ? 'OPC_UA_CLIENT_CONNECT_TIMEOUT' : null,
+        endpointUrl: 'opc.tcp://127.0.0.1:4840',
+        phase: started ? 'reconnecting' : 'disabled',
+        sessionActive: false,
+        subscriptionActive: false,
+        monitoredItemCount: 0,
+        mappingCount: 0,
+        lastValueQuality: null,
+        lastNotificationAtMs: null,
+        lastGoodValueAtMs: null,
+        reconnectAttempt: started ? 1 : 0,
+        nextRetryAtMs: started ? 9_100 : null,
+        lastError: started
+          ? { code: 'OPC_UA_CLIENT_CONNECT_TIMEOUT', message: 'OPC_UA_CLIENT_CONNECT_TIMEOUT', occurredAtMs: 9_000 }
+          : null,
       }],
     },
     start,
     stop,
   }
+}
+
+function gatewayStatus(value: unknown) {
+  return validateRuntimeGatewayStatusV1(value)
 }
 
 function singleMappingBatchAtExactEncodedSize(
@@ -304,15 +322,28 @@ describe('runtime Gateway entrypoint', () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const service = createRuntimeGatewayEntrypointService(createTestConfig(8081))
 
-    const status = service.status()
+    const status = gatewayStatus(service.status())
 
-    expect(status).toEqual({
-      mode: 'off',
-      activeProjectId: null,
-      activeConfigRevision: null,
-      ready: false,
-      readinessCode: 'NO_ACTIVE_REVISION',
-      opcUaStarted: false,
+    expect(status).toMatchObject({
+      type: 'runtime-gateway-status-v1',
+      protocolVersion: 1,
+      gateway: { gatewayId: 'test-gateway', phase: 'online', runtimeKind: 'native' },
+      deployment: {
+        http: { bindHost: '127.0.0.1', port: 8081 },
+        opcUaServer: {
+          bindHost: '127.0.0.1', port: 14840,
+          advertisedHost: '127.0.0.1', advertisedPort: 24840,
+        },
+      },
+      project: {
+        phase: 'not-applied', projectId: null, revisionId: null, configRevision: null,
+        readinessCode: 'NO_ACTIVE_REVISION',
+      },
+      opcUa: {
+        mode: 'off',
+        server: { phase: 'disabled', endpointUrl: null, lastError: null },
+        clientEndpoints: [],
+      },
     })
     expect(Object.isFrozen(status)).toBe(true)
   })
@@ -393,18 +424,20 @@ describe('runtime Gateway entrypoint', () => {
     try {
       const apply = await requestJson(port, 'PUT', '/runtime/project', project)
       expect(apply.status).toBe(200)
-      expect(await apply.json()).toMatchObject({
-        projectId: project.projectId,
-        revisionId: project.revisionId,
-        mode: 'client',
-        ready: true,
-        opcUaStarted: false,
-        endpointUrl: null,
-        opcUaClientEndpoints: [{
-          endpointId: 'endpoint-sample-server',
-          connected: false,
-          lastError: 'OPC_UA_CLIENT_CONNECT_TIMEOUT',
-        }],
+      expect(gatewayStatus(await apply.json())).toMatchObject({
+        project: {
+          phase: 'ready', projectId: project.projectId, revisionId: project.revisionId,
+          readinessCode: 'READY',
+        },
+        opcUa: {
+          mode: 'client',
+          server: { phase: 'disabled', endpointUrl: null, lastError: null },
+          clientEndpoints: [{
+            endpointId: 'endpoint-sample-server', phase: 'reconnecting',
+            sessionActive: false, subscriptionActive: false,
+            lastError: { code: 'OPC_UA_CLIENT_CONNECT_TIMEOUT' },
+          }],
+        },
       })
       expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(1)
       expect(suppliedConfigRevision).toBe(await configRevisionForProjectV4(project))
@@ -432,11 +465,16 @@ describe('runtime Gateway entrypoint', () => {
     try {
       const response = await requestJson(port, 'PUT', '/runtime/project', sampleProject('bridge'))
       expect(response.status).toBe(200)
-      expect(await response.json()).toMatchObject({
-        mode: 'bridge',
-        opcUaStarted: true,
-        endpointUrl: 'opc.tcp://127.0.0.1:14840',
-        opcUaClientEndpoints: [{ endpointId: 'endpoint-sample-server' }],
+      expect(gatewayStatus(await response.json())).toMatchObject({
+        project: { phase: 'ready', readinessCode: 'READY' },
+        opcUa: {
+          mode: 'bridge',
+          server: { phase: 'listening', endpointUrl: 'opc.tcp://127.0.0.1:14840', lastError: null },
+          clientEndpoints: [{
+            endpointId: 'endpoint-sample-server', phase: 'reconnecting',
+            lastError: { code: 'OPC_UA_CLIENT_CONNECT_TIMEOUT' },
+          }],
+        },
       })
       expect(server.start).toHaveBeenCalledTimes(1)
       expect(client.start).toHaveBeenCalledTimes(1)
@@ -854,9 +892,9 @@ describe('runtime Gateway entrypoint', () => {
       expect(prior.stop).toHaveBeenCalledTimes(1)
       expect(prior.start).toHaveBeenCalledTimes(2)
       expect(candidate.stop).toHaveBeenCalledTimes(1)
-      expect(service.status()).toMatchObject({
-        mode: 'client',
-        activeConfigRevision: firstProject.revisionId,
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: { phase: 'ready', revisionId: firstProject.revisionId },
+        opcUa: { mode: 'client' },
       })
     } finally {
       await service.stop()
@@ -993,36 +1031,28 @@ describe('runtime Gateway entrypoint', () => {
     try {
       const apply = await requestJson(port, 'PUT', '/runtime/project', project)
       expect(apply.status).toBe(200)
-      expect(await apply.json()).toEqual({
-        projectId: project.projectId,
-        revisionId: project.revisionId,
-        mode: 'off',
-        ready: true,
-        endpointUrl: null,
-        opcUaStarted: false,
+      expect(gatewayStatus(await apply.json())).toMatchObject({
+        project: { phase: 'ready', projectId: project.projectId, revisionId: project.revisionId },
+        opcUa: {
+          mode: 'off',
+          server: { phase: 'disabled', endpointUrl: null, lastError: null },
+          clientEndpoints: [],
+        },
       })
       expect(createOpcUaServerAdapter).not.toHaveBeenCalled()
 
       const readiness = await fetch(`http://127.0.0.1:${port}/readyz`)
       expect(readiness.status).toBe(200)
-      expect(await readiness.json()).toEqual({
-        projectId: project.projectId,
-        revisionId: project.revisionId,
-        mode: 'off',
-        ready: true,
-        endpointUrl: null,
-        opcUaStarted: false,
+      expect(gatewayStatus(await readiness.json())).toMatchObject({
+        project: { phase: 'ready', projectId: project.projectId, revisionId: project.revisionId },
+        opcUa: { mode: 'off', server: { phase: 'disabled', endpointUrl: null } },
       })
 
       const status = await fetch(`http://127.0.0.1:${port}/runtime/status`)
       expect(status.status).toBe(200)
-      expect(await status.json()).toEqual({
-        projectId: project.projectId,
-        revisionId: project.revisionId,
-        mode: 'off',
-        ready: true,
-        opcUaStarted: false,
-        endpointUrl: null,
+      expect(gatewayStatus(await status.json())).toMatchObject({
+        project: { phase: 'ready', projectId: project.projectId, revisionId: project.revisionId },
+        opcUa: { mode: 'off', server: { phase: 'disabled', endpointUrl: null } },
       })
     } finally {
       await service.stop()
@@ -1047,13 +1077,13 @@ describe('runtime Gateway entrypoint', () => {
     try {
       const apply = await requestJson(port, 'PUT', '/runtime/project', project)
       expect(apply.status).toBe(200)
-      expect(await apply.json()).toEqual({
-        projectId: project.projectId,
-        revisionId: project.revisionId,
-        mode: 'server',
-        ready: true,
-        endpointUrl: 'opc.tcp://127.0.0.1:14840',
-        opcUaStarted: true,
+      expect(gatewayStatus(await apply.json())).toMatchObject({
+        project: { phase: 'ready', projectId: project.projectId, revisionId: project.revisionId },
+        opcUa: {
+          mode: 'server',
+          server: { phase: 'listening', endpointUrl: 'opc.tcp://127.0.0.1:14840', lastError: null },
+          clientEndpoints: [],
+        },
       })
       expect(createOpcUaServerAdapter).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1082,13 +1112,9 @@ describe('runtime Gateway entrypoint', () => {
         ],
       })
       expect(publish.status).toBe(200)
-      expect(await publish.json()).toEqual({
-        projectId: project.projectId,
-        revisionId: project.revisionId,
-        mode: 'server',
-        ready: true,
-        opcUaStarted: true,
-        endpointUrl: 'opc.tcp://127.0.0.1:14840',
+      expect(gatewayStatus(await publish.json())).toMatchObject({
+        project: { phase: 'ready', projectId: project.projectId, revisionId: project.revisionId },
+        opcUa: { mode: 'server', server: { phase: 'listening', endpointUrl: 'opc.tcp://127.0.0.1:14840' } },
       })
       expect(fake.publishRobotJointState.mock.calls).toEqual([
         ['robot-sample-crb', { J1: 15, J2: -5 }],
@@ -1097,24 +1123,18 @@ describe('runtime Gateway entrypoint', () => {
 
       const readiness = await fetch(`http://127.0.0.1:${port}/readyz`)
       expect(readiness.status).toBe(200)
-      expect(await readiness.json()).toMatchObject({
-        mode: 'server',
-        ready: true,
-        endpointUrl: 'opc.tcp://127.0.0.1:14840',
-        opcUaStarted: true,
+      expect(gatewayStatus(await readiness.json())).toMatchObject({
+        project: { phase: 'ready' },
+        opcUa: { mode: 'server', server: { phase: 'listening', endpointUrl: 'opc.tcp://127.0.0.1:14840' } },
       })
     } finally {
       await service.stop()
     }
 
     expect(fake.stop).toHaveBeenCalledTimes(1)
-    expect(service.status()).toEqual({
-      mode: 'off',
-      activeProjectId: null,
-      activeConfigRevision: null,
-      ready: false,
-      readinessCode: 'NO_ACTIVE_REVISION',
-      opcUaStarted: false,
+    expect(gatewayStatus(service.status())).toMatchObject({
+      project: { phase: 'not-applied', readinessCode: 'NO_ACTIVE_REVISION' },
+      opcUa: { mode: 'off', server: { phase: 'disabled', endpointUrl: null } },
     })
   })
 
@@ -1215,10 +1235,8 @@ describe('runtime Gateway entrypoint', () => {
       expect(oversized.status).toBe(413)
       expect(await oversized.json()).toMatchObject({ code: 'REQUEST_BODY_TOO_LARGE' })
 
-      expect(service.status()).toMatchObject({
-        activeProjectId: project.projectId,
-        activeConfigRevision: project.revisionId,
-        ready: true,
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: { phase: 'ready', projectId: project.projectId, revisionId: project.revisionId },
       })
     } finally {
       await service.stop()
@@ -1268,13 +1286,12 @@ describe('runtime Gateway entrypoint', () => {
       expect(prior.start).toHaveBeenCalledTimes(2)
       expect(candidate.start).toHaveBeenCalledTimes(1)
       expect(candidate.stop).toHaveBeenCalledTimes(1)
-      expect(service.status()).toMatchObject({
-        mode: 'server',
-        activeProjectId: firstProject.projectId,
-        activeConfigRevision: firstProject.revisionId,
-        ready: true,
-        opcUaStarted: true,
-        endpointUrl: 'opc.tcp://127.0.0.1:14840',
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: { phase: 'ready', projectId: firstProject.projectId, revisionId: firstProject.revisionId },
+        opcUa: {
+          mode: 'server',
+          server: { phase: 'listening', endpointUrl: 'opc.tcp://127.0.0.1:14840' },
+        },
       })
     } finally {
       await service.stop()
@@ -1315,10 +1332,9 @@ describe('runtime Gateway entrypoint', () => {
       })
       expect(prior.start).toHaveBeenCalledTimes(2)
       expect(candidate.start).not.toHaveBeenCalled()
-      expect(service.status()).toMatchObject({
-        activeConfigRevision: firstProject.revisionId,
-        ready: true,
-        opcUaStarted: true,
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: { phase: 'ready', revisionId: firstProject.revisionId },
+        opcUa: { server: { phase: 'listening' } },
       })
     } finally {
       await service.stop()

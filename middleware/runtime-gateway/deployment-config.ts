@@ -1,5 +1,8 @@
+import type { RuntimeGatewayRuntimeKindV1 } from '../../src/core/runtime-protocol/gateway-status-v1.js'
+
 export interface RuntimeGatewayDeploymentConfigV1 {
   readonly gatewayId: string
+  readonly runtimeKind: RuntimeGatewayRuntimeKindV1
   readonly host: string
   readonly httpPort: number
   readonly opcUaAdvertisedHost: string
@@ -23,6 +26,7 @@ export class RuntimeGatewayDeploymentConfigError extends Error {
 }
 
 const DEFAULT_GATEWAY_ID = 'runtime-gateway'
+const DEFAULT_RUNTIME_KIND: RuntimeGatewayRuntimeKindV1 = 'native'
 const DEFAULT_HOST = '0.0.0.0'
 const DEFAULT_OPC_UA_ADVERTISED_HOST = 'localhost'
 const DEFAULT_HTTP_PORT = 8081
@@ -60,6 +64,17 @@ function readGatewayId(
   const value = recognizedValue(environment, name, DEFAULT_GATEWAY_ID)
   if (!GATEWAY_ID_PATTERN.test(value)) {
     invalid(name, 'must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+  }
+  return value
+}
+
+function readRuntimeKind(
+  environment: RuntimeGatewayDeploymentEnvironmentV1,
+): RuntimeGatewayRuntimeKindV1 {
+  const name = 'ROBOTSIM_RUNTIME_KIND'
+  const value = recognizedValue(environment, name, DEFAULT_RUNTIME_KIND)
+  if (value !== 'native' && value !== 'docker') {
+    invalid(name, 'must be native or docker')
   }
   return value
 }
@@ -107,6 +122,7 @@ export function readDeploymentConfig(
 ): RuntimeGatewayDeploymentConfigV1 {
   return Object.freeze({
     gatewayId: readGatewayId(environment),
+    runtimeKind: readRuntimeKind(environment),
     host: readHost(environment, 'ROBOTSIM_GATEWAY_HOST', DEFAULT_HOST),
     httpPort: readPort(environment, 'ROBOTSIM_GATEWAY_HTTP_PORT', DEFAULT_HTTP_PORT),
     opcUaAdvertisedHost: readHost(

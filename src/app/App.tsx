@@ -247,9 +247,9 @@ function readyGatewayPresentationV4(
 ): RuntimeGatewayPresentationV4 {
   return Object.freeze({
     phase: 'ready',
-    projectRevisionId: status.revisionId,
-    mode: status.mode,
-    endpointUrl: status.endpointUrl,
+    projectRevisionId: status.project.revisionId,
+    mode: status.opcUa.mode,
+    endpointUrl: status.opcUa.server.endpointUrl,
     message: null,
   })
 }
@@ -535,8 +535,10 @@ export function App({
     let stateChangedDuringRecovery = false
 
     const isCurrentStatus = (status: RuntimeGatewayStatusV4): boolean => (
-      status.projectId === project.projectId
-      && status.revisionId === projectRevisionId
+      status.project.phase === 'ready'
+      && status.project.projectId === project.projectId
+      && status.project.revisionId === projectRevisionId
+      && status.opcUa.mode === project.opcUa.mode
     )
     const publishFailure = (error: unknown): void => {
       if (!active) return

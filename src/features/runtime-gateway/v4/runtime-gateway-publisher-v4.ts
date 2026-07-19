@@ -1,19 +1,10 @@
 import type { WorkcellProjectV4 } from '../../../core/project-v4/index.js'
+import {
+  validateRuntimeGatewayStatusV1,
+  type RuntimeGatewayStatusV1,
+} from '../../../core/runtime-protocol/gateway-status-v1.js'
 
-export interface RuntimeGatewayStatusV4 {
-  readonly projectId: string | null
-  readonly revisionId: string | null
-  readonly mode: 'off' | 'server' | 'client' | 'bridge'
-  readonly ready: boolean
-  readonly opcUaStarted: boolean
-  readonly endpointUrl: string | null
-  readonly opcUaClientEndpoints?: readonly {
-    readonly endpointId: string
-    readonly connected: boolean
-    readonly lastError: string | null
-  }[]
-  readonly errorCode?: string
-}
+export type RuntimeGatewayStatusV4 = RuntimeGatewayStatusV1
 
 export interface RuntimeGatewayPresentationV4 {
   readonly phase: 'idle' | 'activating' | 'ready' | 'error'
@@ -115,98 +106,16 @@ function isRecordV4(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function nullableStringV4(
-  value: unknown,
-  field: string,
-): string | null {
-  if (value === null) return null
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    return gatewayFailureV4(
-      'RUNTIME_GATEWAY_RESPONSE_INVALID',
-      `Runtime Gateway ${field} must be a non-empty string or null.`,
-    )
-  }
-  return value
-}
-
 function decodeStatusV4(value: unknown): RuntimeGatewayStatusV4 {
-  if (!isRecordV4(value)) {
+  try {
+    return validateRuntimeGatewayStatusV1(value)
+  } catch (error) {
     return gatewayFailureV4(
       'RUNTIME_GATEWAY_RESPONSE_INVALID',
-      'Runtime Gateway response must be a JSON object.',
+      error instanceof Error ? error.message : 'Runtime Gateway status is invalid.',
+      { cause: error },
     )
   }
-  const projectId = nullableStringV4(value.projectId, 'projectId')
-  const revisionId = nullableStringV4(value.revisionId, 'revisionId')
-  if (
-    value.mode !== 'off'
-    && value.mode !== 'server'
-    && value.mode !== 'client'
-    && value.mode !== 'bridge'
-  ) {
-    return gatewayFailureV4(
-      'RUNTIME_GATEWAY_RESPONSE_INVALID',
-      'Runtime Gateway mode must be off, server, client, or bridge.',
-    )
-  }
-  if (
-    typeof value.ready !== 'boolean'
-    || typeof value.opcUaStarted !== 'boolean'
-  ) {
-    return gatewayFailureV4(
-      'RUNTIME_GATEWAY_RESPONSE_INVALID',
-      'Runtime Gateway readiness fields must be boolean.',
-    )
-  }
-  const endpointUrl = nullableStringV4(value.endpointUrl, 'endpointUrl')
-  let opcUaClientEndpoints: RuntimeGatewayStatusV4['opcUaClientEndpoints']
-  if (value.opcUaClientEndpoints !== undefined) {
-    if (!Array.isArray(value.opcUaClientEndpoints)) {
-      return gatewayFailureV4(
-        'RUNTIME_GATEWAY_RESPONSE_INVALID',
-        'Runtime Gateway opcUaClientEndpoints must be an array when present.',
-      )
-    }
-    opcUaClientEndpoints = Object.freeze(value.opcUaClientEndpoints.map((candidate, index) => {
-      if (
-        !isRecordV4(candidate)
-        || typeof candidate.endpointId !== 'string'
-        || candidate.endpointId.trim().length === 0
-        || typeof candidate.connected !== 'boolean'
-        || (candidate.lastError !== null && typeof candidate.lastError !== 'string')
-      ) {
-        return gatewayFailureV4(
-          'RUNTIME_GATEWAY_RESPONSE_INVALID',
-          `Runtime Gateway opcUaClientEndpoints[${index}] is invalid.`,
-        )
-      }
-      return Object.freeze({
-        endpointId: candidate.endpointId,
-        connected: candidate.connected,
-        lastError: candidate.lastError,
-      })
-    }))
-  }
-  const errorCode = value.errorCode
-  if (
-    errorCode !== undefined
-    && (typeof errorCode !== 'string' || errorCode.trim().length === 0)
-  ) {
-    return gatewayFailureV4(
-      'RUNTIME_GATEWAY_RESPONSE_INVALID',
-      'Runtime Gateway errorCode must be a non-empty string when present.',
-    )
-  }
-  return Object.freeze({
-    projectId,
-    revisionId,
-    mode: value.mode,
-    ready: value.ready,
-    opcUaStarted: value.opcUaStarted,
-    endpointUrl,
-    ...(opcUaClientEndpoints === undefined ? {} : { opcUaClientEndpoints }),
-    ...(errorCode === undefined ? {} : { errorCode }),
-  })
 }
 
 function abortErrorV4(): DOMException {
@@ -238,17 +147,17 @@ function assertExpectedRevisionV4(
   expected: Pick<RuntimeGatewayStatePayloadV4, 'projectId' | 'revisionId'>,
 ): RuntimeGatewayStatusV4 {
   if (
-    status.projectId !== expected.projectId
-    || status.revisionId !== expected.revisionId
+    status.project.projectId !== expected.projectId
+    || status.project.revisionId !== expected.revisionId
   ) {
     return gatewayFailureV4(
       'RUNTIME_GATEWAY_REVISION_MISMATCH',
-      `Runtime Gateway returned ${String(status.projectId)}/${String(status.revisionId)} for ${expected.projectId}/${expected.revisionId}.`,
+      `Runtime Gateway returned ${String(status.project.projectId)}/${String(status.project.revisionId)} for ${expected.projectId}/${expected.revisionId}.`,
     )
   }
-  if (!status.ready) {
+  if (status.project.phase !== 'ready') {
     return gatewayFailureV4(
-      status.errorCode ?? 'RUNTIME_GATEWAY_NOT_READY',
+      status.project.readinessCode,
       'Runtime Gateway did not activate the requested Project revision.',
     )
   }
@@ -397,10 +306,10 @@ export function createRuntimeGatewayPublisherV4(
       await requestStatus('PUT', '/project', project, signal),
       project,
     )
-    if (status.mode !== project.opcUa.mode) {
+    if (status.opcUa.mode !== project.opcUa.mode) {
       return gatewayFailureV4(
         'RUNTIME_GATEWAY_MODE_MISMATCH',
-        `Runtime Gateway returned ${status.mode} for requested ${project.opcUa.mode} mode.`,
+        `Runtime Gateway returned ${status.opcUa.mode} for requested ${project.opcUa.mode} mode.`,
       )
     }
     return status

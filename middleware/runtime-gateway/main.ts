@@ -38,43 +38,12 @@ import {
   type StateBatchHubV1,
 } from './state-batch-hub.js'
 import type { RuntimeMappedValueV1, StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
+import {
+  validateRuntimeGatewayStatusV1,
+  type RuntimeGatewayStatusV1,
+} from '../../src/core/runtime-protocol/gateway-status-v1.js'
 
 export const MAX_RUNTIME_PROJECT_BODY_BYTES_V1 = 1024 * 1024
-
-export interface RuntimeGatewayPreApplyStatusV1 {
-  readonly mode: 'off'
-  readonly activeProjectId: null
-  readonly activeConfigRevision: null
-  readonly ready: false
-  readonly readinessCode: 'NO_ACTIVE_REVISION'
-  readonly opcUaStarted: false
-}
-
-export interface RuntimeGatewayActiveStatusV1 {
-  readonly mode: 'off' | 'server'
-  readonly activeProjectId: string
-  readonly activeConfigRevision: string
-  readonly ready: true
-  readonly readinessCode: 'READY'
-  readonly opcUaStarted: boolean
-  readonly endpointUrl: string | null
-}
-
-export interface RuntimeGatewayActiveClientStatusV1 {
-  readonly mode: 'client' | 'bridge'
-  readonly activeProjectId: string
-  readonly activeConfigRevision: string
-  readonly ready: true
-  readonly readinessCode: 'READY'
-  readonly opcUaStarted: boolean
-  readonly endpointUrl: string | null
-  readonly opcUaClientEndpoints: ReturnType<OpcUaClientAdapterV1['status']>
-}
-
-export type RuntimeGatewayStatusV1 =
-  | RuntimeGatewayPreApplyStatusV1
-  | RuntimeGatewayActiveStatusV1
-  | RuntimeGatewayActiveClientStatusV1
 
 export interface RuntimeGatewayEntrypointServiceV1 {
   start(): Promise<void>
@@ -94,16 +63,8 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
   ) => OpcUaClientAdapterV1
   readonly createStateBatchHub?: () => StateBatchHubV1
   readonly pkiRootDir?: string
+  readonly nowMs?: () => number
 }
-
-const PRE_APPLY_STATUS: RuntimeGatewayPreApplyStatusV1 = Object.freeze({
-  mode: 'off',
-  activeProjectId: null,
-  activeConfigRevision: null,
-  ready: false,
-  readinessCode: 'NO_ACTIVE_REVISION',
-  opcUaStarted: false,
-})
 
 interface ActiveProjectRuntimeV1 {
   readonly project: WorkcellProjectV4
@@ -232,7 +193,7 @@ function createStagedClientBatchesV1(): StagedClientBatchesV1 {
 function writeJson(
   response: ServerResponse,
   statusCode: number,
-  payload: Readonly<Record<string, unknown>>,
+  payload: unknown,
 ): void {
   const body = JSON.stringify(payload)
   response.writeHead(statusCode, {
@@ -338,33 +299,6 @@ async function readJsonBody(
   }
 }
 
-function browserStatus(status: RuntimeGatewayStatusV1): Readonly<Record<string, unknown>> {
-  if (!status.ready) {
-    return Object.freeze({
-      projectId: null,
-      revisionId: null,
-      mode: status.mode,
-      ready: false,
-      opcUaStarted: false,
-      endpointUrl: null,
-      errorCode: status.readinessCode,
-    })
-  }
-  const base = {
-    projectId: status.activeProjectId,
-    revisionId: status.activeConfigRevision,
-    mode: status.mode,
-    ready: true,
-    opcUaStarted: status.opcUaStarted,
-    endpointUrl: status.endpointUrl,
-  }
-  return Object.freeze(
-    'opcUaClientEndpoints' in status
-      ? { ...base, opcUaClientEndpoints: status.opcUaClientEndpoints }
-      : base,
-  )
-}
-
 export function createRuntimeGatewayEntrypointService(
   config: RuntimeGatewayDeploymentConfigV1,
   dependencies: RuntimeGatewayEntrypointDependenciesV1 = {},
@@ -378,6 +312,7 @@ export function createRuntimeGatewayEntrypointService(
     ?? createStateBatchHubV1
   const pkiRootDir = dependencies.pkiRootDir
     ?? join(tmpdir(), 'web-digital-twin-runtime-gateway', config.gatewayId)
+  const nowMs = dependencies.nowMs ?? Date.now
   let server: Server | null = null
   let webSocketServer: WebSocketServer | null = null
   let stateBatchHub = createStateBatchHub()
@@ -387,44 +322,49 @@ export function createRuntimeGatewayEntrypointService(
 
   function status(): RuntimeGatewayStatusV1 {
     const active = activeRuntime
-    if (active === null) return PRE_APPLY_STATUS
-
-    if (active.project.opcUa.mode === 'off') {
-      return Object.freeze({
-        mode: 'off',
-        activeProjectId: active.project.projectId,
-        activeConfigRevision: active.project.revisionId,
-        ready: true,
-        readinessCode: 'READY',
-        opcUaStarted: false,
-        endpointUrl: null,
-      })
-    }
-
-    const adapterStatus = active.serverAdapter?.status()
-    if (
-      active.project.opcUa.mode === 'client'
-      || active.project.opcUa.mode === 'bridge'
-    ) {
-      return Object.freeze({
-        mode: active.project.opcUa.mode,
-        activeProjectId: active.project.projectId,
-        activeConfigRevision: active.project.revisionId,
-        ready: true,
-        readinessCode: 'READY',
-        opcUaStarted: adapterStatus?.started === true,
-        endpointUrl: adapterStatus?.endpointUrl ?? null,
-        opcUaClientEndpoints: active.clientAdapter?.status() ?? [],
-      })
-    }
-    return Object.freeze({
-      mode: 'server',
-      activeProjectId: active.project.projectId,
-      activeConfigRevision: active.project.revisionId,
-      ready: true,
-      readinessCode: 'READY',
-      opcUaStarted: adapterStatus?.started === true,
-      endpointUrl: adapterStatus?.endpointUrl ?? null,
+    const project = active === null
+      ? {
+          phase: 'not-applied' as const,
+          projectId: null,
+          revisionId: null,
+          configRevision: null,
+          readinessCode: 'NO_ACTIVE_REVISION' as const,
+        }
+      : {
+          phase: 'ready' as const,
+          projectId: active.project.projectId,
+          revisionId: active.project.revisionId,
+          configRevision: active.configRevision,
+          readinessCode: 'READY' as const,
+        }
+    const serverStatus = active?.serverAdapter?.status()
+    const server = serverStatus?.started === true
+      ? { phase: 'listening' as const, endpointUrl: serverStatus.endpointUrl, lastError: null }
+      : { phase: 'disabled' as const, endpointUrl: null, lastError: null }
+    return validateRuntimeGatewayStatusV1({
+      type: 'runtime-gateway-status-v1',
+      protocolVersion: 1,
+      observedAtMs: nowMs(),
+      gateway: {
+        gatewayId: config.gatewayId,
+        phase: 'online',
+        runtimeKind: config.runtimeKind,
+      },
+      deployment: {
+        http: { bindHost: config.host, port: config.httpPort },
+        opcUaServer: {
+          bindHost: config.host,
+          port: config.opcUaPort,
+          advertisedHost: config.opcUaAdvertisedHost,
+          advertisedPort: config.opcUaAdvertisedPort,
+        },
+      },
+      project,
+      opcUa: {
+        mode: active?.project.opcUa.mode ?? 'off',
+        server,
+        clientEndpoints: active?.clientAdapter?.status() ?? [],
+      },
     })
   }
 
@@ -664,7 +604,7 @@ export function createRuntimeGatewayEntrypointService(
     return Object.freeze(staged)
   }
 
-  async function applyProjectRequest(request: IncomingMessage): Promise<Readonly<Record<string, unknown>>> {
+  async function applyProjectRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
     const body = await readJsonBody(request, MAX_RUNTIME_PROJECT_BODY_BYTES_V1)
     let project: WorkcellProjectV4
     try {
@@ -677,10 +617,10 @@ export function createRuntimeGatewayEntrypointService(
       )
     }
     await enqueueRuntimeTransition(async () => replaceActiveProject(project))
-    return browserStatus(status())
+    return status()
   }
 
-  async function publishStateRequest(request: IncomingMessage): Promise<Readonly<Record<string, unknown>>> {
+  async function publishStateRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
     const body = await readJsonBody(request, MAX_RUNTIME_BATCH_BYTES_V4)
 
     await enqueueRuntimeTransition(async () => {
@@ -711,7 +651,7 @@ export function createRuntimeGatewayEntrypointService(
       }
     })
 
-    return browserStatus(status())
+    return status()
   }
 
   function writeRequestError(response: ServerResponse, error: unknown): void {
@@ -744,19 +684,19 @@ export function createRuntimeGatewayEntrypointService(
 
     if (request.method === 'GET' && request.url === '/readyz') {
       const currentStatus = status()
-      if (!currentStatus.ready) {
+      if (currentStatus.project.phase !== 'ready') {
         writeJson(response, 503, {
-          code: currentStatus.readinessCode,
-          mode: currentStatus.mode,
+          code: currentStatus.project.readinessCode,
+          mode: currentStatus.opcUa.mode,
         })
       } else {
-        writeJson(response, 200, browserStatus(currentStatus))
+        writeJson(response, 200, currentStatus)
       }
       return
     }
 
     if (request.method === 'GET' && request.url === '/runtime/status') {
-      writeJson(response, 200, browserStatus(status()))
+      writeJson(response, 200, status())
       return
     }
 

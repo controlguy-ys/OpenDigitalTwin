@@ -7,22 +7,44 @@ import {
   runtimeGatewayStatePublicationRequiresReactivationV4,
   type RuntimeGatewayStatusV4,
 } from './runtime-gateway-publisher-v4.js'
+import { validateRuntimeGatewayStatusV1 } from '../../../core/runtime-protocol/gateway-status-v1.js'
 
 function status(
   revisionId = 'revision-test-v4',
-  mode: RuntimeGatewayStatusV4['mode'] = 'server',
+  mode: RuntimeGatewayStatusV4['opcUa']['mode'] = 'server',
 ): RuntimeGatewayStatusV4 {
-  return {
-    projectId: 'project-test-v4',
-    revisionId,
-    mode,
-    ready: true,
-    opcUaStarted: mode !== 'off',
-    endpointUrl: mode === 'server' || mode === 'bridge' ? 'opc.tcp://127.0.0.1:4840' : null,
-    ...(mode === 'client' || mode === 'bridge'
-      ? { opcUaClientEndpoints: [{ endpointId: 'endpoint-client', connected: true, lastError: null }] }
-      : {}),
-  }
+  return validateRuntimeGatewayStatusV1({
+    type: 'runtime-gateway-status-v1',
+    protocolVersion: 1,
+    observedAtMs: 9_000,
+    gateway: { gatewayId: 'gateway-test', phase: 'online', runtimeKind: 'native' },
+    deployment: {
+      http: { bindHost: '127.0.0.1', port: 8081 },
+      opcUaServer: {
+        bindHost: '127.0.0.1', port: 4840,
+        advertisedHost: '127.0.0.1', advertisedPort: 4840,
+      },
+    },
+    project: {
+      phase: 'ready', projectId: 'project-test-v4', revisionId,
+      configRevision: 'a'.repeat(64), readinessCode: 'READY',
+    },
+    opcUa: {
+      mode,
+      server: mode === 'server' || mode === 'bridge'
+        ? { phase: 'listening', endpointUrl: 'opc.tcp://127.0.0.1:4840', lastError: null }
+        : { phase: 'disabled', endpointUrl: null, lastError: null },
+      clientEndpoints: mode === 'client' || mode === 'bridge'
+        ? [{
+            endpointId: 'endpoint-client', endpointUrl: 'opc.tcp://127.0.0.1:4841',
+            phase: 'connected', sessionActive: true, subscriptionActive: true,
+            monitoredItemCount: 1, mappingCount: 1, lastValueQuality: 'GOOD',
+            lastNotificationAtMs: 9_000, lastGoodValueAtMs: 9_000,
+            reconnectAttempt: 0, nextRetryAtMs: null, lastError: null,
+          }]
+        : [],
+    },
+  })
 }
 
 function jsonResponse(value: unknown, statusCode = 200): Response {
@@ -146,28 +168,51 @@ describe('RuntimeGatewayPublisherV4', () => {
   })
 
   it('GETs deterministic status from the configured base path', async () => {
-    const fetchV4 = vi.fn(async () => jsonResponse({
-      projectId: null,
-      revisionId: null,
-      mode: 'off',
-      ready: false,
-      opcUaStarted: false,
-      endpointUrl: null,
-      errorCode: 'NO_ACTIVE_REVISION',
-    }))
+    const fetchV4 = vi.fn(async () => jsonResponse(validateRuntimeGatewayStatusV1({
+      type: 'runtime-gateway-status-v1',
+      protocolVersion: 1,
+      observedAtMs: 9_000,
+      gateway: { gatewayId: 'gateway-test', phase: 'online', runtimeKind: 'native' },
+      deployment: {
+        http: { bindHost: '127.0.0.1', port: 8081 },
+        opcUaServer: {
+          bindHost: '127.0.0.1', port: 4840,
+          advertisedHost: '127.0.0.1', advertisedPort: 4840,
+        },
+      },
+      project: {
+        phase: 'not-applied', projectId: null, revisionId: null,
+        configRevision: null, readinessCode: 'NO_ACTIVE_REVISION',
+      },
+      opcUa: {
+        mode: 'off',
+        server: { phase: 'disabled', endpointUrl: null, lastError: null },
+        clientEndpoints: [],
+      },
+    })))
     const publisher = createRuntimeGatewayPublisherV4({
       fetch: fetchV4,
       basePath: '/custom-runtime',
     })
 
     await expect(publisher.readStatus()).resolves.toMatchObject({
-      ready: false,
-      errorCode: 'NO_ACTIVE_REVISION',
+      project: { phase: 'not-applied', readinessCode: 'NO_ACTIVE_REVISION' },
     })
     expect(fetchV4).toHaveBeenCalledWith(
       '/custom-runtime/status',
       expect.objectContaining({ method: 'GET' }),
     )
+  })
+
+  it('rejects malformed status JSON instead of accepting a partial transport shape', async () => {
+    const malformed = { ...status(), unexpected: true }
+    const publisher = createRuntimeGatewayPublisherV4({
+      fetch: vi.fn(async () => jsonResponse(malformed)),
+    })
+
+    await expect(publisher.readStatus()).rejects.toMatchObject({
+      code: 'RUNTIME_GATEWAY_RESPONSE_INVALID',
+    })
   })
 
   it('serializes POSTs and coalesces queued Robot state to the latest snapshot', async () => {

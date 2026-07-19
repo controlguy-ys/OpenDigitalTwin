@@ -9,6 +9,7 @@ import {
 
 const DEFAULT_CONFIG = {
   gatewayId: 'runtime-gateway',
+  runtimeKind: 'native',
   host: '0.0.0.0',
   httpPort: 8081,
   opcUaAdvertisedHost: 'localhost',
@@ -24,6 +25,7 @@ describe('readDeploymentConfig', () => {
     expect(config).not.toHaveProperty('mode')
     expect(Object.keys(config)).toEqual([
       'gatewayId',
+      'runtimeKind',
       'host',
       'httpPort',
       'opcUaAdvertisedHost',
@@ -32,9 +34,10 @@ describe('readDeploymentConfig', () => {
     ])
   })
 
-  it('trims and applies all six explicit deployment overrides', () => {
+  it('trims and applies all seven explicit deployment overrides', () => {
     expect(readDeploymentConfig({
       ROBOTSIM_GATEWAY_ID: ' gateway.a-1 ',
+      ROBOTSIM_RUNTIME_KIND: ' docker ',
       ROBOTSIM_GATEWAY_HOST: ' :: ',
       ROBOTSIM_GATEWAY_HTTP_PORT: ' 18081 ',
       ROBOTSIM_OPCUA_ADVERTISE_HOST: ' robot-sim.local ',
@@ -42,12 +45,18 @@ describe('readDeploymentConfig', () => {
       ROBOTSIM_OPCUA_PORT: ' 14840 ',
     })).toEqual({
       gatewayId: 'gateway.a-1',
+      runtimeKind: 'docker',
       host: '::',
       httpPort: 18081,
       opcUaAdvertisedHost: 'robot-sim.local',
       opcUaAdvertisedPort: 24840,
       opcUaPort: 14840,
     })
+  })
+
+  it.each(['', ' ', 'NATIVE', 'podman'])('rejects invalid runtime kind %j', (value) => {
+    expect(() => readDeploymentConfig({ ROBOTSIM_RUNTIME_KIND: value }))
+      .toThrow(RuntimeGatewayDeploymentConfigError)
   })
 
   it.each([
@@ -155,6 +164,7 @@ describe('readDeploymentConfig', () => {
   it('uses defaults only for undefined recognized values', () => {
     expect(readDeploymentConfig({
       ROBOTSIM_GATEWAY_ID: undefined,
+      ROBOTSIM_RUNTIME_KIND: undefined,
       ROBOTSIM_GATEWAY_HOST: undefined,
       ROBOTSIM_GATEWAY_HTTP_PORT: undefined,
       ROBOTSIM_OPCUA_ADVERTISE_HOST: undefined,

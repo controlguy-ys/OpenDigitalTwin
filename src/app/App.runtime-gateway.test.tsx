@@ -25,6 +25,7 @@ import type {
   RuntimeGatewayStatusV4,
 } from '../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
 import { RuntimeGatewayPublisherV4Error } from '../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
+import { validateRuntimeGatewayStatusV1 } from '../core/runtime-protocol/gateway-status-v1.js'
 import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selector.js'
 import { createSceneRuntimeStoreV4 } from '../features/scene/v4/scene-runtime-store.js'
 import { createViewportPreferenceStoreV4 } from '../features/viewport/v4/viewport-preference-store.js'
@@ -84,14 +85,28 @@ function status(
   source: WorkcellProjectV4,
   endpointUrl = 'opc.tcp://127.0.0.1:4840',
 ): RuntimeGatewayStatusV4 {
-  return {
-    projectId: source.projectId,
-    revisionId: source.revisionId,
-    mode: 'server',
-    ready: true,
-    opcUaStarted: true,
-    endpointUrl,
-  }
+  return validateRuntimeGatewayStatusV1({
+    type: 'runtime-gateway-status-v1',
+    protocolVersion: 1,
+    observedAtMs: 9_000,
+    gateway: { gatewayId: 'gateway-test', phase: 'online', runtimeKind: 'native' },
+    deployment: {
+      http: { bindHost: '127.0.0.1', port: 8081 },
+      opcUaServer: {
+        bindHost: '127.0.0.1', port: 4840,
+        advertisedHost: '127.0.0.1', advertisedPort: 4840,
+      },
+    },
+    project: {
+      phase: 'ready', projectId: source.projectId, revisionId: source.revisionId,
+      configRevision: 'a'.repeat(64), readinessCode: 'READY',
+    },
+    opcUa: {
+      mode: 'server',
+      server: { phase: 'listening', endpointUrl, lastError: null },
+      clientEndpoints: [],
+    },
+  })
 }
 
 function resourcesForProject(
@@ -333,17 +348,36 @@ describe('App Runtime Gateway V4 integration', () => {
       opcUa: { ...server.opcUa, mode: 'client' },
     })
     const resources = resourcesForProject(active, 'a'.repeat(64))
-    const activateClientProject = vi.fn(async (candidate: WorkcellProjectV4) => ({
-      ...status(candidate),
-      mode: 'client' as const,
-      opcUaStarted: true,
-      endpointUrl: null,
-      opcUaClientEndpoints: candidate.opcUa.endpoints.map(({ endpointId }) => ({
-        endpointId,
-        connected: false,
-        lastError: null,
-      })),
-    }))
+    const activateClientProject = vi.fn(async (candidate: WorkcellProjectV4) => {
+      const serverStatus = status(candidate)
+      return validateRuntimeGatewayStatusV1({
+        ...serverStatus,
+        opcUa: {
+          ...serverStatus.opcUa,
+          mode: 'client',
+          server: { phase: 'disabled', endpointUrl: null, lastError: null },
+          clientEndpoints: candidate.opcUa.endpoints.map(({ endpointId, endpointUrl }) => ({
+            endpointId,
+            endpointUrl,
+            phase: 'reconnecting',
+            sessionActive: false,
+            subscriptionActive: false,
+            monitoredItemCount: 0,
+            mappingCount: 0,
+            lastValueQuality: null,
+            lastNotificationAtMs: null,
+            lastGoodValueAtMs: null,
+            reconnectAttempt: 1,
+            nextRetryAtMs: 9_100,
+            lastError: {
+              code: 'OPC_UA_CONNECTION_LOST',
+              message: 'OPC_UA_CONNECTION_LOST',
+              occurredAtMs: 9_000,
+            },
+          })),
+        },
+      })
+    })
     const gateway = publisher({ activateProject: activateClientProject })
     const start = vi.fn()
     const stop = vi.fn()
