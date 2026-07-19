@@ -145,6 +145,33 @@ describe('StateBatchHubV1', () => {
     expect(hub.queueDepth(socket)).toBe(0)
   })
 
+  it('deactivates a revision by clearing cached replay, source fences, and pending socket state', () => {
+    const hub = createStateBatchHubV1()
+    const blocked = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(blocked)
+    hub.publish(batch(1))
+    hub.publish(batch(2))
+    expect(hub.queueDepth(blocked)).toBe(2)
+
+    const deactivateRevision = (hub as unknown as { readonly deactivateRevision: () => void }).deactivateRevision
+    expect(deactivateRevision).toBeTypeOf('function')
+    deactivateRevision()
+    blocked.complete()
+    expect(blocked.sentSequences()).toEqual([1])
+    expect(hub.queueDepth(blocked)).toBe(0)
+
+    const fresh = new ControlledSocket()
+    hub.attach(fresh)
+    expect(fresh.sent).toHaveLength(0)
+    hub.publish(batch(3))
+    expect(fresh.sent).toHaveLength(0)
+
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(1))
+    expect(fresh.sentSequences()).toEqual([1])
+  })
+
   it('detaches a failed or closed socket without retaining pending payloads', () => {
     const hub = createStateBatchHubV1()
     const failed = new ControlledSocket()

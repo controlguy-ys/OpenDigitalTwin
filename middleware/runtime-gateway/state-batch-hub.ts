@@ -16,6 +16,7 @@ export interface GatewayWebSocketV1 {
 export interface StateBatchHubV1 {
   attach(socket: GatewayWebSocketV1): () => void
   activateRevision(projectId: string, configRevision: string): void
+  deactivateRevision(): void
   publish(batch: StateBatchV1): void
   queueDepth(socket: GatewayWebSocketV1): number
   close(): Promise<void>
@@ -434,6 +435,17 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     }
   }
 
+  const deactivateRevision = (): void => {
+    activeRevision = null
+    lastSourceSequenceByEndpoint.clear()
+    wireSequenceByEndpoint.clear()
+    latestSnapshotsByEndpoint.clear()
+    for (const state of sockets.values()) {
+      state.pending = null
+      state.replay = []
+    }
+  }
+
   function encodeTransmission(
     endpointId: string,
     channelKey: string,
@@ -615,5 +627,5 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     }
   }
 
-  return Object.freeze({ attach, activateRevision, publish, queueDepth, close })
+  return Object.freeze({ attach, activateRevision, deactivateRevision, publish, queueDepth, close })
 }

@@ -295,6 +295,23 @@ async function nextWebSocketMessage(socket: WebSocket): Promise<string> {
   })
 }
 
+async function expectNoWebSocketMessage(socket: WebSocket, durationMs = 75): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const onMessage = () => settle(new Error('Unexpected stale State Batch replay.'))
+    const onError = (error: Error) => settle(error)
+    const timer = setTimeout(() => settle(), durationMs)
+    const settle = (error?: Error) => {
+      clearTimeout(timer)
+      socket.off('message', onMessage)
+      socket.off('error', onError)
+      if (error === undefined) resolve()
+      else reject(error)
+    }
+    socket.once('message', onMessage)
+    socket.once('error', onError)
+  })
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -949,6 +966,74 @@ describe('runtime Gateway entrypoint', () => {
       })
       expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(503)
     } finally {
+      await service.stop()
+    }
+  })
+
+  it('cleans a partially restarted prior Bridge and clears its cached runtime replay after double failure', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const firstProject = sampleProject('bridge', 'revision-bridge-prior')
+    const replacement = sampleProject('bridge', 'revision-bridge-candidate-fails')
+    const priorServer = fakeServerAdapter('opc.tcp://127.0.0.1:14840')
+    const candidateServer = fakeServerAdapter('opc.tcp://127.0.0.1:14841')
+    const priorClient = fakeClientAdapter()
+    const candidateClient = fakeClientAdapter()
+    let priorOptions: OpcUaClientAdapterOptionsV1 | null = null
+    priorClient.start.mockImplementationOnce(async () => {
+      priorOptions!.publish({
+        type: 'state-batch-v1', protocolVersion: 1, gatewayId: 'test-gateway',
+        projectId: firstProject.projectId, configRevision: priorOptions!.configRevision,
+        endpointId: 'endpoint-sample-server', sequence: 1, sourceTimestampMs: 1, publishedTimestampMs: 1,
+        originId: 'test-gateway:opcua-client',
+        values: [{
+          mappingId: 'mapping-bridge-stale', coherenceGroupId: null, value: 1,
+          unit: 'state', quality: 'GOOD', statusCode: 'Good',
+        }],
+      })
+    }).mockRejectedValueOnce(new Error('prior-bridge-client-restart-failure'))
+    candidateClient.start.mockRejectedValueOnce(new Error('candidate-bridge-client-start-failure'))
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      {
+        createOpcUaServerAdapter: (project) => (
+          project.revisionId === replacement.revisionId ? candidateServer.adapter : priorServer.adapter
+        ),
+        createOpcUaClientAdapter: (project, options) => {
+          if (project.revisionId === replacement.revisionId) return candidateClient.adapter
+          priorOptions = options
+          return priorClient.adapter
+        },
+      },
+    )
+
+    await service.start()
+    let socket: WebSocket | null = null
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', firstProject)).status).toBe(200)
+      const failed = await requestJson(port, 'PUT', '/runtime/project', replacement)
+
+      expect(failed.status).toBe(503)
+      expect(await failed.json()).toMatchObject({
+        code: 'PROJECT_ACTIVATION_FAILED',
+        recoveryError: 'prior-bridge-client-restart-failure',
+      })
+      expect(priorServer.stop).toHaveBeenCalledTimes(2)
+      expect(priorClient.stop).toHaveBeenCalledTimes(2)
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: { phase: 'not-applied', readinessCode: 'NO_ACTIVE_REVISION' },
+      })
+      expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(503)
+
+      socket = await openWebSocket(port)
+      await expectNoWebSocketMessage(socket)
+      const serverStopCount = priorServer.stop.mock.calls.length
+      const clientStopCount = priorClient.stop.mock.calls.length
+      await service.stop()
+      expect(priorServer.stop).toHaveBeenCalledTimes(serverStopCount)
+      expect(priorClient.stop).toHaveBeenCalledTimes(clientStopCount)
+    } finally {
+      socket?.close()
       await service.stop()
     }
   })

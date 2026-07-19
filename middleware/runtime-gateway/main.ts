@@ -462,7 +462,14 @@ export function createRuntimeGatewayEntrypointService(
         recovered = await recoverPreviousRuntime(previous, previousAdaptersStopped)
       } catch (caughtRecoveryError) {
         recoveryError = caughtRecoveryError
+        await Promise.all([
+          previous?.clientAdapter?.stop().catch(() => undefined),
+          previous?.serverAdapter?.stop().catch(() => undefined),
+        ])
+      }
+      if (!recovered) {
         activeRuntime = null
+        stateBatchHub.deactivateRevision()
       }
 
       throw new RuntimeGatewayHttpError(
