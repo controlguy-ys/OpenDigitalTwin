@@ -145,29 +145,49 @@ describe('StateBatchHubV1', () => {
     expect(hub.queueDepth(socket)).toBe(0)
   })
 
-  it('deactivates a revision by clearing cached replay, source fences, and pending socket state', () => {
+  it('closes and detaches attached browser sessions during deactivation so they cannot receive same-revision data', () => {
+    const hub = createStateBatchHubV1()
+    const existing = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(existing)
+
+    hub.deactivateRevision()
+
+    expect(existing.close).toHaveBeenCalledOnce()
+    expect(hub.queueDepth(existing)).toBe(0)
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.publish(batch(1))
+    expect(existing.sent).toHaveLength(0)
+  })
+
+  it('does not allow a blocked old multi-chunk callback to resume stale chunks after deactivate and reactivate', () => {
     const hub = createStateBatchHubV1()
     const blocked = new ControlledSocket()
     hub.activateRevision('project-test', 'a'.repeat(64))
     hub.attach(blocked)
-    hub.publish(batch(1))
-    hub.publish(batch(2))
-    expect(hub.queueDepth(blocked)).toBe(2)
-
-    const deactivateRevision = (hub as unknown as { readonly deactivateRevision: () => void }).deactivateRevision
-    expect(deactivateRevision).toBeTypeOf('function')
-    deactivateRevision()
-    blocked.complete()
+    hub.publish(batch(1, { values: Array.from({ length: 129 }, (_, index) => mappedValue(index)) }))
     expect(blocked.sentSequences()).toEqual([1])
-    expect(hub.queueDepth(blocked)).toBe(0)
+
+    hub.deactivateRevision()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    blocked.complete()
+
+    expect(blocked.close).toHaveBeenCalledOnce()
+    expect(blocked.sentSequences()).toEqual([1])
+  })
+
+  it('allows a fresh browser session after reactivation to receive new sequence one without stale replay', () => {
+    const hub = createStateBatchHubV1()
+    const prior = new ControlledSocket()
+    hub.activateRevision('project-test', 'a'.repeat(64))
+    hub.attach(prior)
+    hub.publish(batch(1))
+    hub.deactivateRevision()
+    hub.activateRevision('project-test', 'a'.repeat(64))
 
     const fresh = new ControlledSocket()
     hub.attach(fresh)
     expect(fresh.sent).toHaveLength(0)
-    hub.publish(batch(3))
-    expect(fresh.sent).toHaveLength(0)
-
-    hub.activateRevision('project-test', 'a'.repeat(64))
     hub.publish(batch(1))
     expect(fresh.sentSequences()).toEqual([1])
   })

@@ -440,10 +440,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     lastSourceSequenceByEndpoint.clear()
     wireSequenceByEndpoint.clear()
     latestSnapshotsByEndpoint.clear()
-    for (const state of sockets.values()) {
-      state.pending = null
-      state.replay = []
-    }
+    for (const state of sockets.values()) detachAndCloseState(state)
   }
 
   function encodeTransmission(
