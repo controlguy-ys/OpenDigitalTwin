@@ -65,7 +65,7 @@ port `8081`. `ROBOTSIM_OPCUA_PORT` is used for both the container listener and
 the host-side OPC UA port so endpoint discovery has one deterministic URL.
 `ROBOTSIM_OPCUA_ADVERTISE_HOST` is different: it must be the DNS name or IP that
 external OPC UA Clients use, because it is returned in endpoint discovery. The
-default `localhost` is suitable only for Clients running on the Docker host.
+default `127.0.0.1` is suitable only for Clients running on the Docker host.
 Compose advertises and listens on the same `ROBOTSIM_OPCUA_PORT`, so strict OPC
 UA endpoint discovery also works when the published port is changed.
 Changing listener or advertised endpoint environment values requires a container
