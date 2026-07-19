@@ -914,6 +914,52 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
+  it('keeps the prior Project publication visible while a replacement Client start is pending', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const prior = fakeClientAdapter()
+    const candidate = fakeClientAdapter()
+    let releaseCandidateStart: () => void = () => undefined
+    candidate.start.mockImplementationOnce(async () => new Promise<void>((resolve) => {
+      releaseCandidateStart = resolve
+    }))
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      {
+        createOpcUaClientAdapter: (project) => (
+          project.revisionId === 'revision-client-pending' ? candidate.adapter : prior.adapter
+        ),
+      },
+    )
+    const firstProject = sampleProject('client', 'revision-client-visible')
+    const replacement = sampleProject('client', 'revision-client-pending')
+
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', firstProject)).status).toBe(200)
+      const pendingReplacement = requestJson(port, 'PUT', '/runtime/project', replacement)
+      await expect.poll(() => candidate.start.mock.calls.length).toBe(1)
+
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: {
+          phase: 'ready',
+          projectId: firstProject.projectId,
+          revisionId: firstProject.revisionId,
+        },
+        opcUa: { mode: 'client' },
+      })
+
+      releaseCandidateStart()
+      expect((await pendingReplacement).status).toBe(200)
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: { phase: 'ready', revisionId: replacement.revisionId },
+      })
+    } finally {
+      releaseCandidateStart()
+      await service.stop()
+    }
+  })
+
   it('stops idempotently before and after starting', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()

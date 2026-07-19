@@ -384,10 +384,7 @@ export function createRuntimeGatewayEntrypointService(
     previous: ActiveProjectRuntimeV1 | null,
     restartAdapters: boolean,
   ): Promise<boolean> {
-    if (previous === null) {
-      activeRuntime = null
-      return false
-    }
+    if (previous === null) return false
     if (restartAdapters) {
       await previous.serverAdapter?.start()
       await previous.clientAdapter?.start()
@@ -434,7 +431,6 @@ export function createRuntimeGatewayEntrypointService(
         && (previous.serverAdapter !== null || previous.clientAdapter !== null)
       await previous?.serverAdapter?.stop()
       await previous?.clientAdapter?.stop()
-      activeRuntime = null
 
       if (candidateServerAdapter !== null) {
         await candidateServerAdapter.start()
@@ -466,7 +462,6 @@ export function createRuntimeGatewayEntrypointService(
         recovered = await recoverPreviousRuntime(previous, previousAdaptersStopped)
       } catch (caughtRecoveryError) {
         recoveryError = caughtRecoveryError
-        activeRuntime = null
       }
 
       throw new RuntimeGatewayHttpError(

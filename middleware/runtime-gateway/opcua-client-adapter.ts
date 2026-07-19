@@ -15,7 +15,6 @@ import {
   type WorkcellProjectV5,
 } from '../../src/core/project-v5/index.js'
 import {
-  validateStateBatchV1,
   type RuntimeMappedValueV1,
   type RuntimeValueQualityV1,
   type StateBatchV1,
@@ -33,6 +32,7 @@ import {
   type CompiledOpcUaClientEndpointReadPlanV1,
   type ResolvedOpcUaClientMonitoredRootV1,
 } from './opcua-client-read-plan.js'
+import { splitStateBatchesV1 } from './state-batch-hub.js'
 import {
   compileOpcUaClientWritePlanV1,
   createOpcUaClientWriteServiceV1,
@@ -161,7 +161,7 @@ export function createOpcUaClientSnapshotAssemblerV1(
     options.endpoint.monitoredRoots.map((root) => [root.rootKey, root.mappingIds]),
   )
   const retained = new Map<string, { readonly value: RuntimeMappedValueV1['value']; readonly unit: string }>()
-  let sequence = 0
+  let nextSequence = 1
 
   const reset = (): void => {
     retained.clear()
@@ -204,20 +204,22 @@ export function createOpcUaClientSnapshotAssemblerV1(
         }))
       }
       if (values.length === 0) return
-      sequence += 1
-      options.publish(validateStateBatchV1({
+      const source: StateBatchV1 = {
         type: 'state-batch-v1',
         protocolVersion: 1,
         gatewayId: options.gatewayId,
         projectId: project.projectId,
         configRevision: options.configRevision,
         endpointId: options.endpoint.endpointId,
-        sequence,
+        sequence: nextSequence,
         sourceTimestampMs,
         publishedTimestampMs: options.nowMs(),
         originId: options.originId,
         values,
-      }))
+      }
+      const batches = splitStateBatchesV1(source, nextSequence)
+      nextSequence += batches.length
+      for (const batch of batches) options.publish(batch)
     },
   })
 }
