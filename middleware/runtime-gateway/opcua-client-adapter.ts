@@ -24,6 +24,11 @@ import {
   type RuntimeValueQualityV1,
   type StateBatchV1,
 } from '../../src/core/runtime-protocol/v1.js'
+import type {
+  RuntimeGatewayDiagnosticErrorV1,
+  RuntimeGatewayOpcUaClientEndpointPhaseV1,
+  RuntimeGatewayOpcUaClientEndpointStatusV1,
+} from '../../src/core/runtime-protocol/gateway-status-v1.js'
 
 export interface CompiledOpcUaClientMappingV1 {
   readonly id: string
@@ -68,16 +73,10 @@ export interface OpcUaClientAdapterOptionsV1 {
   readonly createClient?: (endpoint: OpcUaEndpointV4) => OPCUAClient
 }
 
-export interface OpcUaClientEndpointStatusV1 {
-  readonly endpointId: string
-  readonly connected: boolean
-  readonly lastError: string | null
-}
-
 export interface OpcUaClientAdapterV1 {
   start(): Promise<void>
   stop(): Promise<void>
-  status(): readonly OpcUaClientEndpointStatusV1[]
+  status(): readonly RuntimeGatewayOpcUaClientEndpointStatusV1[]
 }
 
 interface LeafSampleV1 {
@@ -87,9 +86,19 @@ interface LeafSampleV1 {
   readonly sourceTimestampMs: number
 }
 
-interface EndpointRuntimeV1 {
-  readonly plan: CompiledOpcUaClientEndpointV1
-  readonly assembler: OpcUaClientSnapshotAssemblerV1
+interface EndpointRuntimeDiagnosticsV1 {
+  lastValueQuality: 'GOOD' | 'UNCERTAIN' | 'BAD' | null
+  lastNotificationAtMs: number | null
+  lastGoodValueAtMs: number | null
+  reconnectAttempt: number
+  nextRetryAtMs: number | null
+  lastError: RuntimeGatewayDiagnosticErrorV1 | null
+}
+
+interface EndpointRuntimeV1 extends EndpointRuntimeDiagnosticsV1 {
+  readonly endpoint: OpcUaEndpointV4
+  readonly plan: CompiledOpcUaClientEndpointV1 | null
+  readonly assembler: OpcUaClientSnapshotAssemblerV1 | null
   client: OPCUAClient | null
   session: ClientSession | null
   subscription: ClientSubscription | null
@@ -101,10 +110,22 @@ interface EndpointRuntimeV1 {
   stopped: boolean
   connecting: boolean
   connected: boolean
-  lastError: string | null
 }
 
 const CONNECT_TIMEOUT_MS = 5_000
+
+function endpointPhase(runtime: EndpointRuntimeV1): RuntimeGatewayOpcUaClientEndpointPhaseV1 {
+  if (runtime.stopped) return 'disabled'
+  if (runtime.connected) return 'connected'
+  if (runtime.connecting) return 'connecting'
+  if (runtime.recovery !== null || runtime.reconnectTimer !== null) return 'reconnecting'
+  return runtime.lastError === null ? 'connecting' : 'faulted'
+}
+
+function diagnosticError(error: unknown, occurredAtMs: number): RuntimeGatewayDiagnosticErrorV1 {
+  const message = error instanceof Error ? error.message : String(error)
+  return Object.freeze({ code: message, message, occurredAtMs })
+}
 
 function isReadDirection(direction: OpcUaMappingV4['direction']): boolean {
   return direction === 'read' || direction === 'readWrite'
@@ -363,18 +384,18 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
     runtime.reconnectTimer = null
   }
   const group = runtime.group
-  runtime.group = null
-  if (group !== null) await group.terminate().catch(() => undefined)
   const subscription = runtime.subscription
-  runtime.subscription = null
-  if (subscription !== null) await subscription.terminate().catch(() => undefined)
   const session = runtime.session
-  runtime.session = null
-  if (session !== null) await session.close().catch(() => undefined)
   const client = runtime.client
+  runtime.group = null
+  runtime.subscription = null
+  runtime.session = null
   runtime.client = null
-  if (client !== null) await client.disconnect().catch(() => undefined)
   runtime.connected = false
+  if (group !== null) await group.terminate().catch(() => undefined)
+  if (subscription !== null) await subscription.terminate().catch(() => undefined)
+  if (session !== null) await session.close().catch(() => undefined)
+  if (client !== null) await client.disconnect().catch(() => undefined)
 }
 
 async function closeDetachedConnection(
@@ -421,10 +442,13 @@ export function createOpcUaClientAdapterV1(
   const runtimes = new Map<string, EndpointRuntimeV1>()
   let lifecycleTail: Promise<void> = Promise.resolve()
 
-  for (const plan of plans) {
-    runtimes.set(plan.endpointId, {
+  const plansByEndpointId = new Map(plans.map((plan) => [plan.endpointId, plan]))
+  for (const endpoint of project.opcUa.endpoints) {
+    const plan = plansByEndpointId.get(endpoint.endpointId) ?? null
+    runtimes.set(endpoint.endpointId, {
+      endpoint,
       plan,
-      assembler: createOpcUaClientSnapshotAssemblerV1({ project, endpoint: plan, configRevision: options.configRevision, gatewayId: options.gatewayId, originId: options.originId, nowMs, publish: options.publish }),
+      assembler: plan === null ? null : createOpcUaClientSnapshotAssemblerV1({ project, endpoint: plan, configRevision: options.configRevision, gatewayId: options.gatewayId, originId: options.originId, nowMs, publish: options.publish }),
       client: null,
       session: null,
       subscription: null,
@@ -436,6 +460,11 @@ export function createOpcUaClientAdapterV1(
       stopped: true,
       connecting: false,
       connected: false,
+      lastValueQuality: null,
+      lastNotificationAtMs: null,
+      lastGoodValueAtMs: null,
+      reconnectAttempt: 0,
+      nextRetryAtMs: null,
       lastError: null,
     })
   }
@@ -448,10 +477,12 @@ export function createOpcUaClientAdapterV1(
       || runtime.connecting
       || runtime.connected
     ) return
+    runtime.nextRetryAtMs = nowMs() + runtime.plan!.reconnectDelayMs
     runtime.reconnectTimer = setTimeout(() => {
       runtime.reconnectTimer = null
+      runtime.nextRetryAtMs = null
       startConnect(runtime)
-    }, runtime.plan.reconnectDelayMs)
+    }, runtime.plan!.reconnectDelayMs)
   }
 
   function startConnect(runtime: EndpointRuntimeV1): void {
@@ -465,7 +496,9 @@ export function createOpcUaClientAdapterV1(
 
   function recover(runtime: EndpointRuntimeV1, error: unknown): void {
     if (runtime.stopped || runtime.recovery !== null) return
-    runtime.lastError = error instanceof Error ? error.message : String(error)
+    runtime.lastError = diagnosticError(error, nowMs())
+    runtime.reconnectAttempt += 1
+    runtime.nextRetryAtMs = nowMs() + runtime.plan!.reconnectDelayMs
     runtime.connected = false
     runtime.generation += 1
     const recovery = closeRuntime(runtime).catch(() => undefined)
@@ -484,15 +517,17 @@ export function createOpcUaClientAdapterV1(
       || runtime.connected
       || runtime.recovery !== null
     ) return
+    const plan = runtime.plan
+    if (plan === null || runtime.assembler === null) return
     runtime.connecting = true
     const generation = runtime.generation
     const candidate = createRuntimeClient({
-      endpointId: runtime.plan.endpointId,
-      name: runtime.plan.endpointId,
-      endpointUrl: runtime.plan.endpointUrl,
+      endpointId: plan.endpointId,
+      name: plan.endpointId,
+      endpointUrl: plan.endpointUrl,
       enabled: true,
-      publishingIntervalMs: runtime.plan.publishingIntervalMs,
-      reconnectDelayMs: runtime.plan.reconnectDelayMs,
+      publishingIntervalMs: plan.publishingIntervalMs,
+      reconnectDelayMs: plan.reconnectDelayMs,
     })
     runtime.client = candidate
     let session: ClientSession | null = null
@@ -504,13 +539,13 @@ export function createOpcUaClientAdapterV1(
       && runtime.client === candidate
     )
     try {
-      await withTimeout(candidate.connect(runtime.plan.endpointUrl), CONNECT_TIMEOUT_MS)
+      await withTimeout(candidate.connect(plan.endpointUrl), CONNECT_TIMEOUT_MS)
       if (!active()) return
       session = await candidate.createSession()
       if (!active()) return
       runtime.session = session
       subscription = await session.createSubscription2({
-        requestedPublishingInterval: runtime.plan.publishingIntervalMs,
+        requestedPublishingInterval: plan.publishingIntervalMs,
         requestedLifetimeCount: 60,
         requestedMaxKeepAliveCount: 10,
         maxNotificationsPerPublish: 0,
@@ -520,26 +555,31 @@ export function createOpcUaClientAdapterV1(
       if (!active()) return
       runtime.subscription = subscription
       group = await subscription.monitorItems(
-        runtime.plan.nodeIds.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value })),
-        { samplingInterval: runtime.plan.monitoringIntervalMs, queueSize: 1, discardOldest: true },
+        plan.nodeIds.map((nodeId) => ({ nodeId, attributeId: AttributeIds.Value })),
+        { samplingInterval: plan.monitoringIntervalMs, queueSize: 1, discardOldest: true },
         TimestampsToReturn.Both,
       )
       if (!active()) return
       runtime.group = group
       runtime.assembler.reset()
       group.on('changed', (_item, dataValue, index) => {
-        const nodeId = runtime.plan.nodeIds[index]
+        const nodeId = plan.nodeIds[index]
         if (nodeId === undefined || !active() || runtime.group !== group) return
         try {
+          const quality = runtimeQuality(dataValue.statusCode.toString())
+          const notificationAtMs = nowMs()
+          runtime.lastValueQuality = quality
+          runtime.lastNotificationAtMs = notificationAtMs
+          if (quality === 'GOOD') runtime.lastGoodValueAtMs = notificationAtMs
           const timestamp = dataValue.sourceTimestamp?.getTime()
             ?? dataValue.serverTimestamp?.getTime()
             ?? nowMs()
-          runtime.assembler.accept(nodeId, dataValue.value.value, dataValue.statusCode.toString(), timestamp)
+          runtime.assembler!.accept(nodeId, dataValue.value.value, dataValue.statusCode.toString(), timestamp)
         } catch (error) {
-          runtime.lastError = error instanceof Error ? error.message : String(error)
+          runtime.lastError = diagnosticError(error, nowMs())
         }
       })
-      group.on('err', (message) => { runtime.lastError = message })
+      group.on('err', (message) => { runtime.lastError = diagnosticError(message, nowMs()) })
       group.on('terminated', () => {
         if (active()) recover(runtime, new Error('OPC_UA_MONITORED_GROUP_TERMINATED'))
       })
@@ -547,6 +587,8 @@ export function createOpcUaClientAdapterV1(
         if (active()) recover(runtime, new Error('OPC_UA_CONNECTION_LOST'))
       })
       runtime.connected = true
+      runtime.reconnectAttempt = 0
+      runtime.nextRetryAtMs = null
       runtime.lastError = null
     } catch (error) {
       if (active()) recover(runtime, error)
@@ -573,8 +615,8 @@ export function createOpcUaClientAdapterV1(
   return Object.freeze({
     start: () => enqueue(async () => {
       for (const runtime of runtimes.values()) {
+        if (runtime.plan === null) continue
         runtime.stopped = false
-        runtime.lastError = null
         startConnect(runtime)
       }
     }),
@@ -589,8 +631,18 @@ export function createOpcUaClientAdapterV1(
       }))
     }),
     status: () => Object.freeze([...runtimes.values()].map((runtime) => Object.freeze({
-      endpointId: runtime.plan.endpointId,
-      connected: runtime.connected,
+      endpointId: runtime.endpoint.endpointId,
+      endpointUrl: runtime.endpoint.endpointUrl,
+      phase: endpointPhase(runtime),
+      sessionActive: runtime.session !== null,
+      subscriptionActive: runtime.subscription !== null,
+      monitoredItemCount: runtime.plan?.nodeIds.length ?? 0,
+      mappingCount: runtime.plan?.mappings.length ?? 0,
+      lastValueQuality: runtime.lastValueQuality,
+      lastNotificationAtMs: runtime.lastNotificationAtMs,
+      lastGoodValueAtMs: runtime.lastGoodValueAtMs,
+      reconnectAttempt: runtime.reconnectAttempt,
+      nextRetryAtMs: runtime.nextRetryAtMs,
       lastError: runtime.lastError,
     }))),
   })

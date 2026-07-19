@@ -376,6 +376,88 @@ describe('OPC UA client adapter V1', () => {
     expect(endpoint.monitoringIntervalMs).toBe(100)
   })
 
+  it('reports connected Session, Subscription, counts, timestamps, quality, and no retry', async () => {
+    const project = projectWithEntityPoseMapping()
+    const connection = fakeOpcUaClientConnection()
+    let now = 5_000
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client',
+      configRevision: REVISION, publish: () => undefined,
+      nowMs: () => now, createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    connection.group.emit('changed', {}, fakeDataValue(1), 0)
+
+    expect(adapter.status()[0]).toMatchObject({
+      endpointId: 'endpoint-live', endpointUrl: 'opc.tcp://127.0.0.1:4840',
+      phase: 'connected', sessionActive: true, subscriptionActive: true,
+      monitoredItemCount: 6, mappingCount: 1, lastValueQuality: 'GOOD',
+      lastNotificationAtMs: 5_000, lastGoodValueAtMs: 5_000,
+      reconnectAttempt: 0, nextRetryAtMs: null, lastError: null,
+    })
+    await adapter.stop()
+  })
+
+  it('retains a timed error and retry deadline after connection loss', async () => {
+    const project = projectWithEntityPoseMapping()
+    const connection = fakeOpcUaClientConnection()
+    let now = 8_000
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client',
+      configRevision: REVISION, publish: () => undefined,
+      nowMs: () => now, createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    connection.client.emit('connection_lost')
+    await eventually(() => adapter.status()[0]?.phase === 'reconnecting')
+
+    expect(adapter.status()[0]).toMatchObject({
+      phase: 'reconnecting', sessionActive: false, subscriptionActive: false,
+      reconnectAttempt: 1, nextRetryAtMs: 8_100,
+      lastError: {
+        code: 'OPC_UA_CONNECTION_LOST',
+        message: 'OPC_UA_CONNECTION_LOST',
+        occurredAtMs: 8_000,
+      },
+    })
+    await adapter.stop()
+  })
+
+  it('reports disabled and unmapped endpoints in configured endpoint order', () => {
+    const project = projectWithEntityPoseMapping()
+    const disabledEndpoint = {
+      ...project.opcUa.endpoints[0]!,
+      endpointId: 'endpoint-disabled',
+      enabled: false,
+    }
+    const unmappedEndpoint = {
+      ...project.opcUa.endpoints[0]!,
+      endpointId: 'endpoint-unmapped',
+      endpointUrl: 'opc.tcp://127.0.0.1:4841',
+    }
+    const adapter = createOpcUaClientAdapterV1({
+      ...project,
+      opcUa: {
+        ...project.opcUa,
+        endpoints: [project.opcUa.endpoints[0]!, disabledEndpoint, unmappedEndpoint],
+      },
+    }, {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client',
+      configRevision: REVISION, publish: () => undefined,
+    })
+
+    expect(adapter.status()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ endpointId: 'endpoint-live', mappingCount: 1 }),
+      expect.objectContaining({ endpointId: 'endpoint-disabled', phase: 'disabled', mappingCount: 0 }),
+      expect.objectContaining({ endpointId: 'endpoint-unmapped', phase: 'disabled', mappingCount: 0 }),
+    ]))
+    expect(adapter.status().map(({ endpointId }) => endpointId)).toEqual([
+      'endpoint-live', 'endpoint-disabled', 'endpoint-unmapped',
+    ])
+  })
+
   it('ignores a late changed callback from a terminated monitored group', async () => {
     const project = projectWithEntityPoseMapping()
     const first = fakeOpcUaClientConnection()
@@ -391,14 +473,14 @@ describe('OPC UA client adapter V1', () => {
     })
     const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
     await adapter.start()
-    await eventually(() => adapter.status()[0]?.connected === true)
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
     endpoint.nodeIds.forEach((_, index) => {
       first.group.emit('changed', {}, fakeDataValue(index), index)
     })
     await eventually(() => batches.length === 1)
 
     first.group.emit('terminated')
-    await eventually(() => adapter.status()[0]?.connected === true && connections.length === 0)
+    await eventually(() => adapter.status()[0]?.phase === 'connected' && connections.length === 0)
     const beforeLateCallback = batches.length
     second.group.emit('changed', {}, fakeDataValue(9000), 0)
     await new Promise<void>((resolve) => { setTimeout(resolve, 20) })
@@ -431,12 +513,12 @@ describe('OPC UA client adapter V1', () => {
     })
     const endpoint = compileOpcUaClientReadPlanV1(project)[0]!
     await adapter.start()
-    await eventually(() => adapter.status()[0]?.connected === true)
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
 
     expect(() => endpoint.nodeIds.forEach((_, index) => {
       connection.group.emit('changed', {}, fakeDataValue(index), index)
     })).not.toThrow()
-    expect(adapter.status()[0]?.lastError).toMatch(/RUNTIME_PROTOCOL_INVALID|publisher rejected batch/)
+    expect(adapter.status()[0]?.lastError?.message).toMatch(/RUNTIME_PROTOCOL_INVALID|publisher rejected batch/)
     await adapter.stop()
   })
 
@@ -545,7 +627,7 @@ describe('OPC UA client adapter V1', () => {
         publish: (batch) => { batches.push(batch) },
       })
       await adapter.start()
-      await eventually(() => adapter!.status()[0]?.connected === true)
+      await eventually(() => adapter!.status()[0]?.phase === 'connected')
       for (const [index, name] of ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw'].entries()) {
         variables.get(name)!.setValueFromSource(
           { dataType: DataType.Double, value: index === 0 ? 1000 : 0 },
