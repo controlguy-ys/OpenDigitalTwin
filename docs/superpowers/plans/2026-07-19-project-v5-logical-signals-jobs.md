@@ -417,7 +417,7 @@ export function validateLogicalSignalValueV1(
 }
 ```
 
-`validateWorkcellProjectV5` must preflight schema 5, clone plain data, validate exact root keys, run reference validation from Task 3, and deep-freeze the returned clone.
+For this task, `validateWorkcellProjectV5` must preflight schema 5, clone plain data, validate every exact closed shape/root key, validate logical scalar bounds, and deep-freeze the returned clone. Task 3 extends this same function with cross-reference, semantic, and budget validation; do not add those future rules or a placeholder no-op reference validator here.
 
 - [ ] **Step 5: Run GREEN and commit the aggregate**
 
