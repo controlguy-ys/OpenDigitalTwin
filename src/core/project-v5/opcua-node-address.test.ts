@@ -23,6 +23,14 @@ describe('OPC UA Node address V1', () => {
     expect(validateOpcUaNodeAddressV1(address, '$.nodeAddress')).toEqual(address)
   })
 
+  it.each(['AA==', 'AAA=', 'AQID'])('accepts canonical padded Base64 %s', (identifier) => {
+    const address = {
+      namespaceUri: 'urn:sample:plc', identifierType: 'byteString' as const, identifier,
+    }
+
+    expect(validateOpcUaNodeAddressV1(address, '$.nodeAddress')).toEqual(address)
+  })
+
   it.each(['ns=2', '2', ''])('rejects Namespace Index-like URI %j', (namespaceUri) => {
     expect(() => validateOpcUaNodeAddressV1({
       namespaceUri,
@@ -39,6 +47,8 @@ describe('OPC UA Node address V1', () => {
     ['numeric', '4294967296', 'OPCUA_NODE_IDENTIFIER_INVALID'],
     ['guid', '550E8400-E29B-41D4-A716-446655440000', 'OPCUA_NODE_IDENTIFIER_INVALID'],
     ['byteString', 'AQI', 'OPCUA_NODE_IDENTIFIER_INVALID'],
+    ['byteString', 'AB==', 'OPCUA_NODE_IDENTIFIER_INVALID'],
+    ['byteString', 'AAB=', 'OPCUA_NODE_IDENTIFIER_INVALID'],
     ['string', '', 'OPCUA_NODE_IDENTIFIER_INVALID'],
     ['opaque', 'ObjectPos.X', 'OPCUA_NODE_IDENTIFIER_TYPE_INVALID'],
   ])('rejects noncanonical %s identifiers', (identifierType, identifier, code) => {

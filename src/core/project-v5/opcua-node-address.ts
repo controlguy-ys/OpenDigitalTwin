@@ -15,6 +15,7 @@ const IDENTIFIER_TYPES = new Set<OpcUaNodeAddressV1['identifierType']>([
 const CANONICAL_UNSIGNED_INT32 = /^(?:0|[1-9][0-9]{0,9})$/
 const CANONICAL_GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -22,6 +23,13 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 
 function failInvalid(path: string, message: string, code: string): never {
   return failProjectV5(code, path, message)
+}
+
+function isCanonicalBase64(value: string): boolean {
+  if (!CANONICAL_BASE64.test(value)) return false
+  if (value.endsWith('==')) return (BASE64_ALPHABET.indexOf(value.at(-3) ?? '') & 0x0f) === 0
+  if (value.endsWith('=')) return (BASE64_ALPHABET.indexOf(value.at(-2) ?? '') & 0x03) === 0
+  return true
 }
 
 function validateNamespaceUri(value: unknown, path: string): string {
@@ -66,7 +74,7 @@ function validateIdentifier(
     }
   } else if (identifierType === 'guid' && !CANONICAL_GUID.test(value)) {
     return failInvalid(path, 'GUID identifier must use lowercase canonical UUID form.', 'OPCUA_NODE_IDENTIFIER_INVALID')
-  } else if (identifierType === 'byteString' && !CANONICAL_BASE64.test(value)) {
+  } else if (identifierType === 'byteString' && !isCanonicalBase64(value)) {
     return failInvalid(path, 'ByteString identifier must use canonical padded Base64.', 'OPCUA_NODE_IDENTIFIER_INVALID')
   }
 

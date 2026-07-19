@@ -20,6 +20,18 @@ function canonicalNumber(value: number): number {
   return value === 0 ? 0 : value
 }
 
+function canonicalPositionComponent(value: number, path: string): number {
+  if (!Number.isFinite(value)) {
+    failProjectV5(
+      'POSITION_COMPONENT_NOT_FINITE',
+      path,
+      'Position components must be finite numbers.',
+      'Provide a finite position in metres.',
+    )
+  }
+  return canonicalNumber(value)
+}
+
 function shouldFlipQuaternionSign([x, y, z, w]: QuaternionV5): boolean {
   if (w !== 0) return w < 0
   if (z !== 0) return z < 0
@@ -79,9 +91,9 @@ function rotateVectorV5(vector: Vector3V5, quaternion: QuaternionV5): Vector3V5 
 export function normalizeRigidTransformV5(value: RigidTransformV5, path: string): RigidTransformV5 {
   return {
     positionM: [
-      canonicalNumber(value.positionM[0]),
-      canonicalNumber(value.positionM[1]),
-      canonicalNumber(value.positionM[2]),
+      canonicalPositionComponent(value.positionM[0], `${path}.positionM[0]`),
+      canonicalPositionComponent(value.positionM[1], `${path}.positionM[1]`),
+      canonicalPositionComponent(value.positionM[2], `${path}.positionM[2]`),
     ],
     quaternion: normalizeQuaternionV5(value.quaternion, path),
   }
