@@ -5,16 +5,17 @@ import {
   connect,
   type Server as NetServer,
 } from 'node:net'
+import { readFile } from 'node:fs/promises'
 import WebSocket from 'ws'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  configRevisionForProjectV4,
-  validateWorkcellProjectV4,
-  type WorkcellProjectV4,
-} from '../../src/core/project-v4/index.js'
-import { createDualRobotSampleV4 } from '../../src/features/project/v4/dual-robot-sample-v4.js'
+  configRevisionForProjectV5,
+  validateWorkcellProjectV5,
+  type WorkcellProjectV5,
+} from '../../src/core/project-v5/index.js'
+import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
 import type { RuntimeGatewayDeploymentConfigV1 } from './deployment-config.js'
 import {
   ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
@@ -78,6 +79,7 @@ async function listenOnEphemeralPort(): Promise<{
   }
 
   return { server, port: address.port }
+
 }
 
 function createTestConfig(httpPort: number): RuntimeGatewayDeploymentConfigV1 {
@@ -95,19 +97,15 @@ function createTestConfig(httpPort: number): RuntimeGatewayDeploymentConfigV1 {
 function sampleProject(
   mode: 'off' | 'server' | 'client' | 'bridge',
   revisionId = `revision-main-${mode}`,
-): WorkcellProjectV4 {
-  const project = createDualRobotSampleV4({
-    projectId: 'project-main-http',
-    revisionId,
-    nowIso: '2026-07-17T00:00:00.000Z',
-    opcUaMode: mode === 'off' ? 'off' : 'server',
-  })
-  return mode === 'off' || mode === 'server'
-    ? project
-    : validateWorkcellProjectV4({ ...project, opcUa: { ...project.opcUa, mode } })
+): WorkcellProjectV5 {
+  const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+  ;(project as unknown as { projectId: string }).projectId = 'project-main-http'
+  ;(project as unknown as { revisionId: string }).revisionId = revisionId
+  ;(project.opcUa as unknown as { mode: WorkcellProjectV5['opcUa']['mode'] }).mode = mode
+  return validateWorkcellProjectV5(project)
 }
 
-function projectWithReservedJointId(): WorkcellProjectV4 {
+function projectWithReservedJointId(): WorkcellProjectV5 {
   const source = sampleProject('server')
   const sourceDefinition = source.robotDefinitions[0]!
   const previousJointId = sourceDefinition.joints[0]!.id
@@ -117,7 +115,7 @@ function projectWithReservedJointId(): WorkcellProjectV4 {
       index === 0 ? { ...joint, id: '__proto__' } : joint
     )),
   }
-  return validateWorkcellProjectV4({
+  return validateWorkcellProjectV5({
     ...source,
     robotDefinitions: source.robotDefinitions.map((candidate) => (
       candidate.id === definition.id ? definition : candidate
@@ -158,6 +156,7 @@ function fakeServerAdapter(
       stopErrorAfterShutdown = null
       throw error
     }
+
   })
   const publishRobotJointState = vi.fn(async () => undefined)
   const adapter: OpcUaServerAdapterV1 = {
@@ -188,6 +187,7 @@ function fakeClientAdapter(): {
     adapter: {
       start,
       stop,
+      write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
       status: () => [{
         endpointId: 'endpoint-sample-server',
         endpointUrl: 'opc.tcp://127.0.0.1:4840',
@@ -238,6 +238,7 @@ async function requestJson(
   body: unknown,
 ): Promise<Response> {
   return fetch(`http://127.0.0.1:${port}${path}`, {
+
     method,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -317,6 +318,7 @@ describe('runtime Gateway entrypoint', () => {
     expect(stdout).not.toHaveBeenCalled()
     expect(stderr).not.toHaveBeenCalled()
   })
+
 
   it('reports a frozen Off status before any active Project Revision exists', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
@@ -398,6 +400,7 @@ describe('runtime Gateway entrypoint', () => {
       expect(response).toMatch(/^HTTP\/1\.1 426 Upgrade Required\r\n/)
       expect(createOpcUaServerAdapter).not.toHaveBeenCalled()
     } finally {
+
       await service.stop()
     }
   })
@@ -408,7 +411,7 @@ describe('runtime Gateway entrypoint', () => {
     const fake = fakeClientAdapter()
     let suppliedConfigRevision: string | null = null
     const createOpcUaClientAdapter = vi.fn((
-      _project: WorkcellProjectV4,
+      _project: WorkcellProjectV5,
       options: OpcUaClientAdapterOptionsV1,
     ) => {
       suppliedConfigRevision = options.configRevision
@@ -440,7 +443,7 @@ describe('runtime Gateway entrypoint', () => {
         },
       })
       expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(1)
-      expect(suppliedConfigRevision).toBe(await configRevisionForProjectV4(project))
+      expect(suppliedConfigRevision).toBe(await configRevisionForProjectV5(project))
       expect(fake.start).toHaveBeenCalledTimes(1)
     } finally {
       await service.stop()
@@ -478,6 +481,7 @@ describe('runtime Gateway entrypoint', () => {
       })
       expect(server.start).toHaveBeenCalledTimes(1)
       expect(client.start).toHaveBeenCalledTimes(1)
+
     } finally {
       await service.stop()
     }
@@ -500,7 +504,7 @@ describe('runtime Gateway entrypoint', () => {
       },
     )
     const project = sampleProject('client', 'a'.repeat(64))
-    const configRevision = await configRevisionForProjectV4(project)
+    const configRevision = await configRevisionForProjectV5(project)
 
     await service.start()
     let socket: WebSocket | null = null
@@ -544,7 +548,7 @@ describe('runtime Gateway entrypoint', () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     let adapterIndex = 0
-    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV4, options) => {
+    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV5, options) => {
       const value = ++adapterIndex
       const adapter: OpcUaClientAdapterV1 = {
         start: async () => {
@@ -558,6 +562,7 @@ describe('runtime Gateway entrypoint', () => {
             sequence: 1,
             sourceTimestampMs: value,
             publishedTimestampMs: value,
+
             originId: 'test-gateway:opcua-client',
             values: [{
               mappingId: 'mapping-synchronous-start',
@@ -570,6 +575,7 @@ describe('runtime Gateway entrypoint', () => {
           })
         },
         stop: async () => undefined,
+        write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
         status: () => [],
       }
       return adapter
@@ -619,7 +625,7 @@ describe('runtime Gateway entrypoint', () => {
   it('keeps every channel from one synchronous Client source batch through activation', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
-    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV4, options) => {
+    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV5, options) => {
       const adapter: OpcUaClientAdapterV1 = {
         start: async () => {
           options.publish({
@@ -638,6 +644,7 @@ describe('runtime Gateway entrypoint', () => {
                 mappingId: 'mapping-object-box-x',
                 coherenceGroupId: null,
                 value: 1.5,
+
                 unit: 'meter',
                 quality: 'GOOD',
                 statusCode: 'Good',
@@ -654,6 +661,7 @@ describe('runtime Gateway entrypoint', () => {
           })
         },
         stop: async () => undefined,
+        write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
         status: () => [],
       }
       return adapter
@@ -690,7 +698,7 @@ describe('runtime Gateway entrypoint', () => {
   it('keeps an older independent Status snapshot while newer Pose snapshots arrive during activation', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
-    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV4, options) => {
+    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV5, options) => {
       const publish = (
         sequence: number,
         mappingId: string,
@@ -718,12 +726,14 @@ describe('runtime Gateway entrypoint', () => {
       })
       const adapter: OpcUaClientAdapterV1 = {
         start: async () => {
+
           publish(1, 'mapping-object-box-status', 91, 'status-code')
           for (let sequence = 2; sequence <= 130; sequence += 1) {
             publish(sequence, 'mapping-object-box-x', sequence, 'meter')
           }
         },
         stop: async () => undefined,
+        write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
         status: () => [],
       }
       return adapter
@@ -761,7 +771,7 @@ describe('runtime Gateway entrypoint', () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     let publishLive: ((batch: StateBatchV1) => void) | null = null
-    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV4, options) => {
+    const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV5, options) => {
       const batch = (sequence: number, value: number | string): StateBatchV1 => ({
         type: 'state-batch-v1',
         protocolVersion: 1,
@@ -792,12 +802,14 @@ describe('runtime Gateway entrypoint', () => {
           ))
         },
         stop: async () => undefined,
+        write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
         status: () => [],
       }
       return adapter
     })
     const service = createRuntimeGatewayEntrypointService(
       createTestConfig(port),
+
       { createOpcUaClientAdapter },
     )
     const project = sampleProject('client', 'revision-synchronous-last-streamable')
@@ -820,7 +832,7 @@ describe('runtime Gateway entrypoint', () => {
         protocolVersion: 1,
         gatewayId: 'test-gateway',
         projectId: project.projectId,
-        configRevision: await configRevisionForProjectV4(project),
+        configRevision: await configRevisionForProjectV5(project),
         endpointId: 'endpoint-sample-server',
         sequence: 3,
         sourceTimestampMs: 3,
@@ -878,6 +890,7 @@ describe('runtime Gateway entrypoint', () => {
       },
     )
     const firstProject = sampleProject('client', 'revision-client-prior')
+
     const replacement = sampleProject('client', 'revision-client-fails')
 
     await service.start()
@@ -958,6 +971,7 @@ describe('runtime Gateway entrypoint', () => {
       expect(results.map(({ status }) => status)).toEqual([
         'fulfilled',
         'fulfilled',
+
         'fulfilled',
       ])
 
@@ -1038,6 +1052,7 @@ describe('runtime Gateway entrypoint', () => {
           server: { phase: 'disabled', endpointUrl: null, lastError: null },
           clientEndpoints: [],
         },
+
       })
       expect(createOpcUaServerAdapter).not.toHaveBeenCalled()
 
@@ -1059,7 +1074,7 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
-  it('activates a Server Project, publishes a validated two-Robot state, and stops its adapter', async () => {
+  it('activates a Server Project, publishes validated Project V5 Robot state, and stops its adapter', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     const fake = fakeServerAdapter()
@@ -1103,13 +1118,7 @@ describe('runtime Gateway entrypoint', () => {
       const publish = await requestJson(port, 'POST', '/runtime/state', {
         projectId: project.projectId,
         revisionId: project.revisionId,
-        robots: [
-          { robotId: 'robot-sample-crb', jointValues: { J1: 15, J2: -5 } },
-          {
-            robotId: 'robot-sample-linear-slide',
-            jointValues: { SLIDE_X: 0.75 },
-          },
-        ],
+        robots: [{ robotId: 'robot-1', jointValues: { J1: 15 } }],
       })
       expect(publish.status).toBe(200)
       expect(gatewayStatus(await publish.json())).toMatchObject({
@@ -1117,8 +1126,7 @@ describe('runtime Gateway entrypoint', () => {
         opcUa: { mode: 'server', server: { phase: 'listening', endpointUrl: 'opc.tcp://127.0.0.1:14840' } },
       })
       expect(fake.publishRobotJointState.mock.calls).toEqual([
-        ['robot-sample-crb', { J1: 15, J2: -5 }],
-        ['robot-sample-linear-slide', { SLIDE_X: 0.75 }],
+        ['robot-1', { J1: 15 }],
       ])
 
       const readiness = await fetch(`http://127.0.0.1:${port}/readyz`)
@@ -1199,6 +1207,7 @@ describe('runtime Gateway entrypoint', () => {
         robots: [{ robotId: project.robots[0]!.id, jointValues }],
       })
 
+
       expect(response.status).toBe(200)
       expect(fake.publishRobotJointState).toHaveBeenCalledTimes(1)
       const published = fake.publishRobotJointState.mock.calls[0]![1]
@@ -1249,7 +1258,7 @@ describe('runtime Gateway entrypoint', () => {
     const prior = fakeServerAdapter('opc.tcp://127.0.0.1:14840')
     const candidate = fakeServerAdapter('opc.tcp://127.0.0.1:14841')
     candidate.start.mockRejectedValueOnce(new Error('candidate-port-conflict'))
-    const createOpcUaServerAdapter = vi.fn((project: WorkcellProjectV4) => (
+    const createOpcUaServerAdapter = vi.fn((project: WorkcellProjectV5) => (
       project.revisionId === 'revision-replacement-fails'
         ? candidate.adapter
         : prior.adapter
@@ -1278,6 +1287,7 @@ describe('runtime Gateway entrypoint', () => {
         replacement,
       )
       expect(failedApply.status).toBe(503)
+
       expect(await failedApply.json()).toMatchObject({
         code: 'PROJECT_ACTIVATION_FAILED',
         recoveredRevisionId: firstProject.revisionId,
@@ -1338,6 +1348,48 @@ describe('runtime Gateway entrypoint', () => {
       })
     } finally {
       await service.stop()
+    }
+  })
+
+  it('rejects a V4 Project before adapter preparation and retains the active V5 runtime', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const createOpcUaClientAdapter = vi.fn(() => fakeClientAdapter().adapter)
+    const createOpcUaServerAdapter = vi.fn(() => fakeServerAdapter().adapter)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter,
+      createOpcUaServerAdapter,
+      pkiRootDir: 'C:\\runtime-gateway-test-pki',
+    })
+    await service.start()
+    try {
+      const activeProject = sampleProject('off')
+      expect((await requestJson(port, 'PUT', '/runtime/project', activeProject)).status).toBe(200)
+      const before = gatewayStatus(service.status())
+      const clientCalls = createOpcUaClientAdapter.mock.calls.length
+      const serverCalls = createOpcUaServerAdapter.mock.calls.length
+
+      const rejected = await requestJson(port, 'PUT', '/runtime/project', { schemaVersion: 4 })
+
+      expect(rejected.status).toBe(400)
+      expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(clientCalls)
+      expect(createOpcUaServerAdapter).toHaveBeenCalledTimes(serverCalls)
+      expect(gatewayStatus(service.status())).toMatchObject({ project: before.project, opcUa: before.opcUa })
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('has no production Gateway dependency on project-v4', async () => {
+    const sources = await Promise.all([
+      'src/core/runtime-protocol/v1.ts',
+      'middleware/runtime-gateway/opcua-client-adapter.ts',
+      'middleware/runtime-gateway/opcua-server-adapter.ts',
+      'middleware/runtime-gateway/main.ts',
+    ].map(async (path) => readFile(path, 'utf8')))
+    for (const source of sources) {
+      expect(source).not.toContain('project-v4')
+      expect(source).not.toContain('WorkcellProjectV4')
     }
   })
 })

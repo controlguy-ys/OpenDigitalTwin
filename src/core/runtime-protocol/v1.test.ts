@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { makeMinimalWorkcellProjectV4 } from '../project-v4/test-support'
+import { makeMinimalWorkcellProjectV5 } from '../project-v5/test-support'
 import {
   MAX_RUNTIME_BATCH_BYTES_V1,
   MAX_RUNTIME_COMMANDS_V1,
@@ -132,7 +132,7 @@ function revisionStageRequest(overrides: Record<string, unknown> = {}): Record<s
     protocolVersion: 1,
     requestId: 'request-1',
     configRevision: CONFIG_REVISION,
-    project: makeMinimalWorkcellProjectV4(),
+    project: makeMinimalWorkcellProjectV5(),
     ...overrides,
   }
 }
@@ -925,6 +925,15 @@ describe('Runtime Protocol V1 Command, Result, and Lease records', () => {
 })
 
 describe('Runtime Protocol V1 Revision RPC and generic dispatch', () => {
+  it('accepts a staged Project V5 and rejects a staged Project V4', () => {
+    expect(validateRevisionStageRequestV1(revisionStageRequest({
+      project: makeMinimalWorkcellProjectV5(),
+    }))).toMatchObject({ project: { schemaVersion: 5 } })
+    expect(() => validateRevisionStageRequestV1(revisionStageRequest({
+      project: { schemaVersion: 4 },
+    }))).toThrowError(expect.objectContaining({ code: 'PROJECT_SCHEMA_UNSUPPORTED' }))
+  })
+
   it('validates Stage requests, deeply clones Project, and leaves a lexical hash mismatch to P4', () => {
     const request = revisionStageRequest({ configRevision: 'b'.repeat(64) })
     const result = validateRevisionStageRequestV1(request)
@@ -939,7 +948,7 @@ describe('Runtime Protocol V1 Revision RPC and generic dispatch', () => {
     )
     expectProtocolError(
       () => validateRevisionStageRequestV1(revisionStageRequest({ project: { schemaVersion: 3 } })),
-      'RUNTIME_PROTOCOL_INVALID',
+      'PROJECT_SCHEMA_UNSUPPORTED',
       '$.project.schemaVersion',
     )
   })
@@ -975,7 +984,7 @@ describe('Runtime Protocol V1 Revision RPC and generic dispatch', () => {
     expectProtocolError(
       () => validateRevisionActivateRequestV1({
         ...revisionActivateRequest(),
-        project: makeMinimalWorkcellProjectV4(),
+        project: makeMinimalWorkcellProjectV5(),
       }),
       'RUNTIME_PROTOCOL_INVALID',
       '$',

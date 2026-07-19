@@ -12,11 +12,11 @@ import {
 import { join } from 'node:path'
 
 import {
-  validateWorkcellProjectV4,
-  type WorkcellProjectV4,
-} from '../../src/core/project-v4/index.js'
+  validateWorkcellProjectV5,
+  type WorkcellProjectV5,
+} from '../../src/core/project-v5/index.js'
 
-export const ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1 = 'urn:web-digital-twin:robot-sim:v4'
+export const ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1 = 'urn:web-digital-twin:robot-sim:v5'
 
 export interface OpcUaServerAdapterOptionsV1 {
   readonly host: string
@@ -123,11 +123,11 @@ function keepAnonymousUserTokenOnly(server: OPCUAServer): void {
 }
 
 export function createOpcUaServerAdapterV1(
-  projectInput: WorkcellProjectV4,
+  projectInput: WorkcellProjectV5,
   options: OpcUaServerAdapterOptionsV1,
 ): OpcUaServerAdapterV1 {
   validateOptions(options)
-  const project = validateWorkcellProjectV4(projectInput)
+  const project = validateWorkcellProjectV5(projectInput)
   const serverEnabled = project.opcUa.mode === 'server' || project.opcUa.mode === 'bridge'
   const mode: OpcUaServerAdapterStatusV1['mode'] = serverEnabled ? 'server' : 'off'
   const definitionsById = new Map(

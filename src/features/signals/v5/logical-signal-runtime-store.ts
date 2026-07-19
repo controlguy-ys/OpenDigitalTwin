@@ -100,7 +100,6 @@ function compileContext(
       || (mapping.direction !== 'read' && mapping.direction !== 'readWrite')
       || target?.type !== 'logical-signal'
       || mapping.leaves.length !== 1
-      || mapping.leaves[0]!.leafPath.length !== 0
     ) continue
     const signal = signalsById.get(target.signalId)
     if (signal === undefined) continue

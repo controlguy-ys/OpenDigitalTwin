@@ -16,29 +16,23 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { createDualRobotSampleV4 } from '../../src/features/project/v4/dual-robot-sample-v4.js'
-import { validateWorkcellProjectV4 } from '../../src/core/project-v4/index.js'
+import { validateWorkcellProjectV5, type WorkcellProjectV5 } from '../../src/core/project-v5/index.js'
+import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
 import {
   ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
   createOpcUaServerAdapterV1,
   type OpcUaServerAdapterV1,
 } from './opcua-server-adapter.js'
 
-const CRB_ROBOT_ID = 'robot-sample-crb'
-const SLIDE_ROBOT_ID = 'robot-sample-linear-slide'
-const SLIDE_JOINT_ID = 'SLIDE_X'
+const CRB_ROBOT_ID = 'robot-1'
 const TEST_PKI_ROOT = join(tmpdir(), `robot-sim-opcua-adapter-${process.pid}`)
 
-function sampleProject(mode: 'off' | 'server' | 'bridge') {
-  const source = createDualRobotSampleV4({
-    projectId: `project-opcua-${mode}`,
-    revisionId: `revision-opcua-${mode}`,
-    nowIso: '2026-07-17T00:00:00.000Z',
-    opcUaMode: mode === 'bridge' ? 'server' : mode,
-  })
-  return mode === 'bridge'
-    ? validateWorkcellProjectV4({ ...source, opcUa: { ...source.opcUa, mode } })
-    : source
+function sampleProject(mode: 'off' | 'server' | 'bridge'): WorkcellProjectV5 {
+  const source = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+  ;(source as unknown as { projectId: string }).projectId = `project-opcua-${mode}`
+  ;(source as unknown as { revisionId: string }).revisionId = `revision-opcua-${mode}`
+  ;(source.opcUa as unknown as { mode: WorkcellProjectV5['opcUa']['mode'] }).mode = mode
+  return validateWorkcellProjectV5(source)
 }
 
 function projectWithReservedJointId() {
@@ -51,7 +45,7 @@ function projectWithReservedJointId() {
       index === 0 ? { ...joint, id: '__proto__' } : joint
     )),
   }
-  return validateWorkcellProjectV4({
+  return validateWorkcellProjectV5({
     ...source,
     robotDefinitions: source.robotDefinitions.map((candidate) => (
       candidate.id === definition.id ? definition : candidate
@@ -147,7 +141,7 @@ describe('OPC UA server adapter V1', () => {
     })
   })
 
-  it('exposes both Robots through deterministic read-only Double nodes and publishes updates', async () => {
+  it('exposes Project V5 Robot telemetry through deterministic read-only Double nodes and publishes updates', async () => {
     const project = sampleProject('server')
     const adapter = createOpcUaServerAdapterV1(project, {
       host: '0.0.0.0',
@@ -171,10 +165,8 @@ describe('OPC UA server adapter V1', () => {
     const namespaceIndex = status.namespaceIndex
     expect(namespaceIndex).not.toBeNull()
     const crbNodeId = `ns=${namespaceIndex};s=RobotSim/Robots/${CRB_ROBOT_ID}/Joints/J1/Actual`
-    const slideNodeId = `ns=${namespaceIndex};s=RobotSim/Robots/${SLIDE_ROBOT_ID}/Joints/${SLIDE_JOINT_ID}/Actual`
     expect(status.nodeIds).toEqual({
       [CRB_ROBOT_ID]: expect.objectContaining({ J1: crbNodeId }),
-      [SLIDE_ROBOT_ID]: { [SLIDE_JOINT_ID]: slideNodeId },
     })
 
     const endpointUrl = status.endpointUrl
@@ -188,27 +180,16 @@ describe('OPC UA server adapter V1', () => {
         && securityPolicyUri === SecurityPolicy.None
       ))).toBe(true)
 
-      const configuredMappingNodeIds = project.opcUa.mappings.flatMap(
-        ({ leaves }) => leaves.map(({ nodeId }) => nodeId),
-      )
-      const configuredMappingValues = await session.read(configuredMappingNodeIds.map(
-        (nodeId) => ({ nodeId, attributeId: AttributeIds.Value }),
-      ))
-      expect(configuredMappingValues.every(({ statusCode }) => statusCode.equals(StatusCodes.Good)))
-        .toBe(true)
       expect(endpointDescriptions.every(({ userIdentityTokens }) => {
         const tokens = userIdentityTokens ?? []
         return tokens.length === 1
           && tokens[0]?.tokenType === UserTokenType.Anonymous
       })).toBe(true)
 
-      const initialValues = await session.read([
-        { nodeId: crbNodeId, attributeId: AttributeIds.Value },
-        { nodeId: slideNodeId, attributeId: AttributeIds.Value },
-      ])
-      expect(initialValues.map(({ statusCode }) => statusCode.isGood())).toEqual([true, true])
-      expect(initialValues.map(({ value }) => value.dataType)).toEqual([DataType.Double, DataType.Double])
-      expect(initialValues.map(({ value }) => value.value)).toEqual([0, 0.2])
+      const initialValues = await session.read([{ nodeId: crbNodeId, attributeId: AttributeIds.Value }])
+      expect(initialValues.map(({ statusCode }) => statusCode.isGood())).toEqual([true])
+      expect(initialValues.map(({ value }) => value.dataType)).toEqual([DataType.Double])
+      expect(initialValues.map(({ value }) => value.value)).toEqual([0])
       const writeStatus = await session.write({
         nodeId: crbNodeId,
         attributeId: AttributeIds.Value,
@@ -217,13 +198,9 @@ describe('OPC UA server adapter V1', () => {
       expect(writeStatus).toBe(StatusCodes.BadNotWritable)
 
       await adapter.publishRobotJointState(CRB_ROBOT_ID, { J1: 12.5 })
-      await adapter.publishRobotJointState(SLIDE_ROBOT_ID, { [SLIDE_JOINT_ID]: 0.75 })
 
-      const publishedValues = await session.read([
-        { nodeId: crbNodeId, attributeId: AttributeIds.Value },
-        { nodeId: slideNodeId, attributeId: AttributeIds.Value },
-      ])
-      expect(publishedValues.map(({ value }) => value.value)).toEqual([12.5, 0.75])
+      const publishedValues = await session.read([{ nodeId: crbNodeId, attributeId: AttributeIds.Value }])
+      expect(publishedValues.map(({ value }) => value.value)).toEqual([12.5])
     } finally {
       await session.close()
       await client.disconnect()

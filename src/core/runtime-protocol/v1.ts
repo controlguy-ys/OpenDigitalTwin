@@ -1,7 +1,9 @@
-import { ProjectV4Error } from '../project-v4/errors.js'
-import { MAX_IDENTIFIER_UTF8_BYTES_V4 } from '../project-v4/limits.js'
-import type { WorkcellProjectV4 } from '../project-v4/types.js'
-import { validateWorkcellProjectV4 } from '../project-v4/validate.js'
+import {
+  MAX_IDENTIFIER_UTF8_BYTES_V5,
+  ProjectV5Error,
+  validateWorkcellProjectV5,
+  type WorkcellProjectV5,
+} from '../project-v5/index.js'
 
 export const RUNTIME_PROTOCOL_VERSION_V1 = 1 as const
 export const MAX_RUNTIME_STATE_VALUES_V1 = 128
@@ -109,7 +111,7 @@ export interface RevisionStageRequestV1 {
   readonly protocolVersion: 1
   readonly requestId: string
   readonly configRevision: string
-  readonly project: WorkcellProjectV4
+  readonly project: WorkcellProjectV5
 }
 
 export type RevisionStageResultV1 =
@@ -410,7 +412,7 @@ function validateNormalizedText(
 }
 
 function validateId(value: unknown, path: string): string {
-  const id = validateNormalizedText(value, path, MAX_IDENTIFIER_UTF8_BYTES_V4, false, true)
+  const id = validateNormalizedText(value, path, MAX_IDENTIFIER_UTF8_BYTES_V5, false, true)
   if (ID_FORBIDDEN_CHARACTER_PATTERN.test(id)) {
     invalid(path, 'Identifier must not contain slash, backslash, percent, query, or fragment characters.')
   }
@@ -654,14 +656,18 @@ function validateRuntimeFailureAt(value: unknown, path: string): RuntimeProtocol
   }
 }
 
-function validateEmbeddedProject(value: unknown, path: string): WorkcellProjectV4 {
+function validateEmbeddedProject(value: unknown, path: string): WorkcellProjectV5 {
   try {
-    return validateWorkcellProjectV4(value)
+    return validateWorkcellProjectV5(value)
   } catch (error) {
-    if (error instanceof ProjectV4Error) {
-      invalid(`${path}${error.path.slice(1)}`, `Embedded Project V4 is invalid (${error.code}).`)
+    if (error instanceof ProjectV5Error) {
+      invalid(
+        `${path}${error.path.slice(1)}`,
+        `Embedded Project V5 is invalid (${error.code}).`,
+        error.code,
+      )
     }
-    invalid(path, 'Embedded Project V4 validation failed.')
+    invalid(path, 'Embedded Project V5 validation failed.')
   }
 }
 

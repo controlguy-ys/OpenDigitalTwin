@@ -11,12 +11,12 @@ import { pathToFileURL } from 'node:url'
 import { WebSocketServer } from 'ws'
 
 import {
-  MAX_OPCUA_VALUES_PER_CALL_V4,
-  MAX_RUNTIME_BATCH_BYTES_V4,
-  configRevisionForProjectV4,
-  validateWorkcellProjectV4,
-  type WorkcellProjectV4,
-} from '../../src/core/project-v4/index.js'
+  MAX_OPC_UA_VALUES_PER_CALL_V5,
+  MAX_RUNTIME_BATCH_BYTES_V5,
+  configRevisionForProjectV5,
+  validateWorkcellProjectV5,
+  type WorkcellProjectV5,
+} from '../../src/core/project-v5/index.js'
 import {
   RuntimeGatewayDeploymentConfigError,
   readDeploymentConfig,
@@ -54,11 +54,11 @@ export interface RuntimeGatewayEntrypointServiceV1 {
 export interface RuntimeGatewayEntrypointDependenciesV1 {
   readonly createHttpServer?: (requestListener: RequestListener) => Server
   readonly createOpcUaServerAdapter?: (
-    project: WorkcellProjectV4,
+    project: WorkcellProjectV5,
     options: OpcUaServerAdapterOptionsV1,
   ) => OpcUaServerAdapterV1
   readonly createOpcUaClientAdapter?: (
-    project: WorkcellProjectV4,
+    project: WorkcellProjectV5,
     options: OpcUaClientAdapterOptionsV1,
   ) => OpcUaClientAdapterV1
   readonly createStateBatchHub?: () => StateBatchHubV1
@@ -67,7 +67,7 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
 }
 
 interface ActiveProjectRuntimeV1 {
-  readonly project: WorkcellProjectV4
+  readonly project: WorkcellProjectV5
   readonly configRevision: string
   readonly serverAdapter: OpcUaServerAdapterV1 | null
   readonly clientAdapter: OpcUaClientAdapterV1 | null
@@ -376,7 +376,7 @@ export function createRuntimeGatewayEntrypointService(
     return requestedTransition
   }
 
-  function validateProjectMode(project: WorkcellProjectV4): void {
+  function validateProjectMode(project: WorkcellProjectV5): void {
     void project
   }
 
@@ -396,9 +396,9 @@ export function createRuntimeGatewayEntrypointService(
     return true
   }
 
-  async function replaceActiveProject(project: WorkcellProjectV4): Promise<void> {
+  async function replaceActiveProject(project: WorkcellProjectV5): Promise<void> {
     validateProjectMode(project)
-    const configRevision = await configRevisionForProjectV4(project)
+    const configRevision = await configRevisionForProjectV5(project)
     const previous = activeRuntime
     let candidateServerAdapter: OpcUaServerAdapterV1 | null = null
     let candidateClientAdapter: OpcUaClientAdapterV1 | null = null
@@ -594,11 +594,11 @@ export function createRuntimeGatewayEntrypointService(
       }))
     }
 
-    if (jointValueCount > MAX_OPCUA_VALUES_PER_CALL_V4) {
+    if (jointValueCount > MAX_OPC_UA_VALUES_PER_CALL_V5) {
       throw new RuntimeGatewayHttpError(
         400,
         'RUNTIME_STATE_INVALID',
-        `Runtime state must not exceed ${MAX_OPCUA_VALUES_PER_CALL_V4} joint values.`,
+        `Runtime state must not exceed ${MAX_OPC_UA_VALUES_PER_CALL_V5} joint values.`,
       )
     }
     return Object.freeze(staged)
@@ -606,14 +606,14 @@ export function createRuntimeGatewayEntrypointService(
 
   async function applyProjectRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
     const body = await readJsonBody(request, MAX_RUNTIME_PROJECT_BODY_BYTES_V1)
-    let project: WorkcellProjectV4
+    let project: WorkcellProjectV5
     try {
-      project = validateWorkcellProjectV4(body)
+      project = validateWorkcellProjectV5(body)
     } catch (error) {
       throw new RuntimeGatewayHttpError(
         400,
         'PROJECT_INVALID',
-        `Project V4 validation failed: ${conciseError(error)}`,
+        `Project V5 validation failed: ${conciseError(error)}`,
       )
     }
     await enqueueRuntimeTransition(async () => replaceActiveProject(project))
@@ -621,7 +621,7 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   async function publishStateRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
-    const body = await readJsonBody(request, MAX_RUNTIME_BATCH_BYTES_V4)
+    const body = await readJsonBody(request, MAX_RUNTIME_BATCH_BYTES_V5)
 
     await enqueueRuntimeTransition(async () => {
       const active = activeRuntime

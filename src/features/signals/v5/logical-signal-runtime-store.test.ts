@@ -27,6 +27,7 @@ function signalMapping(
   id: string,
   endpointId: string,
   signalId: string,
+  leafPath: readonly (string | number)[] = [],
 ): OpcUaMappingV5 {
   return {
     id,
@@ -41,7 +42,7 @@ function signalMapping(
     interpolationMode: 'none',
     coordinateConvention: 'project-v5-z-up-metres-quaternion-xyzw',
     leaves: [{
-      leafPath: [],
+      leafPath,
       projectPath: [],
       projectTarget: { type: 'logical-signal', signalId },
       opcUaDataType: 'Boolean',
@@ -122,6 +123,17 @@ function signalBatch(overrides: {
 }
 
 describe('LogicalSignalRuntimeStoreV1', () => {
+  it('accepts a scalar Signal value assembled from a structured OPC UA root', () => {
+    const project = cloneWorkcellProjectV5(projectWithBooleanInput())
+    ;(project.opcUa.mappings as unknown as OpcUaMappingV5[]).splice(0, 1,
+      signalMapping('part-present-input', 'plc', 'part-present', ['payload', 'present']),
+    )
+    const runtime = createLogicalSignalRuntimeStoreV1(validateWorkcellProjectV5(project), REVISION)
+
+    expect(runtime.getState().ingest(signalBatch({ value: true }), 1_050)).toBe(true)
+    expect(runtime.getState().read('part-present')).toMatchObject({ value: true, quality: 'GOOD' })
+  })
+
   it('exposes the fixed revision and immutable Signal-ID contract without legacy fields', () => {
     const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
     const state = runtime.getState()
