@@ -50,6 +50,8 @@ interface LogicalSignalRuntimeContextV1 {
   readonly initialSignals: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
   readonly endpointSequences: Map<string, number>
   readonly endpointReceiptFences: Map<string, number>
+  readonly endpointSourceTimestampFences: Map<string, number>
+  readonly endpointPublishedTimestampFences: Map<string, number>
 }
 
 const CONFIG_REVISION_PATTERN = /^[0-9a-f]{64}$/u
@@ -136,6 +138,8 @@ function compileContext(
     initialSignals: frozenSignals(initialSignals),
     endpointSequences: new Map(),
     endpointReceiptFences: new Map(),
+    endpointSourceTimestampFences: new Map(),
+    endpointPublishedTimestampFences: new Map(),
   })
 }
 
@@ -163,9 +167,9 @@ function nextSignalValue(
     quality,
     statusCode,
     owner: `opcua:${channel.endpointId}`,
-    sourceTimestampMs: batch.sourceTimestampMs,
-    publishedTimestampMs: batch.publishedTimestampMs,
-    receivedTimestampMs,
+    sourceTimestampMs: Math.max(previous.sourceTimestampMs, batch.sourceTimestampMs),
+    publishedTimestampMs: Math.max(previous.publishedTimestampMs, batch.publishedTimestampMs),
+    receivedTimestampMs: Math.max(previous.receivedTimestampMs, receivedTimestampMs),
   })
 }
 
@@ -198,6 +202,8 @@ export function createLogicalSignalRuntimeStoreV1(
         || !context.channelIdsByEndpoint.has(batch.endpointId)
         || batch.sequence <= (context.endpointSequences.get(batch.endpointId) ?? 0)
         || receivedTimestampMs < (context.endpointReceiptFences.get(batch.endpointId) ?? 0)
+        || batch.sourceTimestampMs < (context.endpointSourceTimestampFences.get(batch.endpointId) ?? 0)
+        || batch.publishedTimestampMs < (context.endpointPublishedTimestampFences.get(batch.endpointId) ?? 0)
       ) return false
 
       const recognized = batch.values.flatMap((mapped) => {
@@ -214,6 +220,8 @@ export function createLogicalSignalRuntimeStoreV1(
       }
       context.endpointSequences.set(batch.endpointId, batch.sequence)
       context.endpointReceiptFences.set(batch.endpointId, receivedTimestampMs)
+      context.endpointSourceTimestampFences.set(batch.endpointId, batch.sourceTimestampMs)
+      context.endpointPublishedTimestampFences.set(batch.endpointId, batch.publishedTimestampMs)
       publish(context, nextSignals)
       return true
     }
@@ -253,6 +261,8 @@ export function createLogicalSignalRuntimeStoreV1(
       }
       context.endpointSequences.clear()
       context.endpointReceiptFences.clear()
+      context.endpointSourceTimestampFences.clear()
+      context.endpointPublishedTimestampFences.clear()
       publish(context, nextSignals)
     }
 

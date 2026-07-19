@@ -155,5 +155,22 @@ describe('RobotFrameStatusRuntimeStoreV5', () => {
     })
     expect(runtime.readNumericStatus('robot-a')).toMatchObject({ value: 2, quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
     expect(runtime.ingest(robotFrameStatusBatch({ sequence: 1, positionM: [2, 0, 0], status: 3 }), 1_001)).toBe(true)
+    expect(runtime.sampleFrame('robot-a', 'TCP', 1_001)).toMatchObject({
+      worldPose: { positionM: [2, 0, 0] }, quality: 'GOOD', statusCode: 'Good',
+    })
+    expect(runtime.readNumericStatus('robot-a')).toMatchObject({ value: 3, quality: 'GOOD', statusCode: 'Good' })
+  })
+
+  it('deeply freezes the retained Robot fallback pose after reset before a sample', () => {
+    const runtime = createRobotFrameStatusRuntimeStoreV5(projectWithMappedRobotTcpAndStatus(), REVISION)
+    runtime.ingest(robotFrameStatusBatch({ positionM: [1, 2, 3] }), 1_000)
+    runtime.resetGatewaySession(1_001)
+    const snapshot = runtime.sampleFrame('robot-a', 'TCP', 1_001)!
+
+    expect(Object.isFrozen(snapshot.worldPose)).toBe(true)
+    expect(Object.isFrozen(snapshot.worldPose!.positionM)).toBe(true)
+    expect(Object.isFrozen(snapshot.worldPose!.quaternion)).toBe(true)
+    expect(() => { (snapshot.worldPose!.positionM as unknown as number[])[0] = 99 }).toThrow()
+    expect(runtime.sampleFrame('robot-a', 'TCP', 1_001)?.worldPose?.positionM).toEqual([1, 2, 3])
   })
 })

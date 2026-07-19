@@ -229,6 +229,22 @@ describe('ObjectRuntimeStateV5', () => {
       statusCode: 'BadWaitingForInitialData', receivedTimestampMs: 1_100,
     })
     expect(runtime.ingest(objectPoseBatch({ sequence: 1, positionM: [3, 0, 0] }), 1_200)).toBe(true)
+    expect(runtime.sampleFrame('box', 'box-motion', 1_200)).toMatchObject({
+      worldPose: { positionM: [3, 0, 0] }, quality: 'GOOD', statusCode: 'Good',
+    })
+  })
+
+  it('deeply freezes the retained Object fallback pose after reset before a sample', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    runtime.ingest(objectPoseBatch({ positionM: [1, 2, 3] }), 1_000)
+    runtime.resetGatewaySession(1_001)
+    const snapshot = runtime.sampleFrame('box', 'box-motion', 1_001)!
+
+    expect(Object.isFrozen(snapshot.worldPose)).toBe(true)
+    expect(Object.isFrozen(snapshot.worldPose!.positionM)).toBe(true)
+    expect(Object.isFrozen(snapshot.worldPose!.quaternion)).toBe(true)
+    expect(() => { (snapshot.worldPose!.positionM as unknown as number[])[0] = 99 }).toThrow()
+    expect(runtime.sampleFrame('box', 'box-motion', 1_001)?.worldPose?.positionM).toEqual([1, 2, 3])
   })
 
   it('keeps displayed diagnostic source timestamps monotonic across a new gateway session', () => {

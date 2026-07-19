@@ -238,6 +238,31 @@ describe('LogicalSignalRuntimeStoreV1', () => {
     })
   })
 
+  it('rejects older Signal source and published clocks, then preserves visible clocks across reset', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    expect(runtime.getState().ingest(signalBatch({
+      sequence: 1, value: true, sourceTimestampMs: 1_000, publishedTimestampMs: 1_020,
+    }), 1_050)).toBe(true)
+    const accepted = runtime.getState().read('part-present')!
+
+    expect(runtime.getState().ingest(signalBatch({
+      sequence: 2, value: false, sourceTimestampMs: 999, publishedTimestampMs: 1_021,
+    }), 1_060)).toBe(false)
+    expect(runtime.getState().ingest(signalBatch({
+      sequence: 2, value: false, sourceTimestampMs: 1_001, publishedTimestampMs: 1_019,
+    }), 1_061)).toBe(false)
+    expect(runtime.getState().read('part-present')).toEqual(accepted)
+
+    runtime.getState().resetGatewaySession(1_070)
+    expect(runtime.getState().ingest(signalBatch({
+      sequence: 1, value: false, sourceTimestampMs: 1, publishedTimestampMs: 2,
+    }), 1_080)).toBe(true)
+    expect(runtime.getState().read('part-present')).toMatchObject({
+      value: false, quality: 'GOOD', sourceTimestampMs: 1_000,
+      publishedTimestampMs: 1_020, receivedTimestampMs: 1_080,
+    })
+  })
+
   it('keeps the active runtime snapshot when replaceProject validation fails', () => {
     const project = projectWithBooleanInput()
     const runtime = createLogicalSignalRuntimeStoreV1(project, REVISION)

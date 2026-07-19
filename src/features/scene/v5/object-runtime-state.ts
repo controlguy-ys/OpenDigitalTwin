@@ -191,10 +191,14 @@ function canonicalPose(value: RuntimeMappedValueV1['value']): RigidTransformV5 |
   if (!Array.isArray(record.positionM) || record.positionM.length !== 3 || !Array.isArray(record.quaternion) || record.quaternion.length !== 4) return null
   if (![...record.positionM, ...record.quaternion].every((component) => typeof component === 'number' && Number.isFinite(component))) return null
   try {
-    return normalizeRigidTransformV5({
+    const normalized = normalizeRigidTransformV5({
       positionM: [record.positionM[0] as number, record.positionM[1] as number, record.positionM[2] as number],
       quaternion: [record.quaternion[0] as number, record.quaternion[1] as number, record.quaternion[2] as number, record.quaternion[3] as number],
     }, '$.value')
+    return Object.freeze({
+      positionM: Object.freeze([...normalized.positionM]) as RigidTransformV5['positionM'],
+      quaternion: Object.freeze([...normalized.quaternion]) as RigidTransformV5['quaternion'],
+    })
   } catch {
     return null
   }
