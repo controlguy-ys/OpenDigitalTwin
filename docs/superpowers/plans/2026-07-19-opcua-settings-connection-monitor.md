@@ -185,7 +185,7 @@ export interface OpcUaConnectionTestPortV1 {
 - `src/app/AppShell.tsx` and test — mount the modeless Monitor without changing dock geometry or focus ownership.
 - `middleware/runtime-gateway/opcua-client-adapter.ts` and test — expose connected-Session Namespace resolution without persisting indexes.
 - `middleware/runtime-gateway/main.ts` and test — closed `/runtime/opcua/resolve-node-address` diagnostic route.
-- `src/features/project/v5/browser-project-runtime-v5.ts` and test — expose publication prepare/apply/commit/rollback over Milestone 3 resources.
+- `src/features/project/v5/browser-project-runtime-v5.ts` and test — consume the Milestone 3 local prepare/apply/commit/rollback lifecycle from the publication coordinator.
 - `middleware/runtime-gateway/main.ts` and test — mount the bounded connectivity diagnostics routes.
 - `src/main.tsx` — continue to render `App`, which now resolves only to `AppV5`.
 - `src/styles/global.css` — scoped Settings, Monitor, Binding, split status, and run-guide rules.
@@ -800,7 +800,7 @@ Expected: approved menu order, copy-only guide, responsive dialog, all Help topi
 - [ ] **Step 1: Write RED publication rollback and V5 Project-store tests**
 
 ```ts
-it.each(['runtime-prepare', 'gateway-activate', 'repository-commit', 'runtime-commit', 'finalize'] as const)(
+it.each(['runtime-prepare', 'runtime-apply', 'gateway-activate', 'repository-commit', 'runtime-commit', 'finalize'] as const)(
   'keeps the previous durable, browser, and Gateway revision when %s fails',
   async (failurePoint) => {
     const harness = projectV5PublicationHarness({ failurePoint })
@@ -840,7 +840,7 @@ Expected: FAIL because the active App still composes V4 Project/runtime resource
 
 - [ ] **Step 4: Implement one V5 publication and mutation authority**
 
-Port the proven prepare/apply/commit/rollback shape to V5 without importing V4. Sequence one replacement as: validate/canonicalize candidate; call `configRevisionForProjectV5(candidate)` exactly once; pass that hash to repository preparation, browser runtime preparation, and Gateway staging; repository `prepareRevision`; browser runtime `prepare`; Gateway prepare/activate; repository `commitPreparedRevision`; browser runtime commit; repository `finalizePublication`; cleanup previous resources. Assert the committed `PublishedProjectV5.configRevision`, `RuntimeGatewayStatusV1.project.configRevision`, staged Runtime Protocol request, and every Robot/Object/Signal/Job/Attachment store contain that same hash, while `project.revisionId` remains the human/project revision identifier. On every failure, compensate the publishing pointer, rollback browser resources, reactivate the previous Gateway revision when activation changed, and retain a recovery-required state only if compensation itself fails.
+Port the proven publication coordinator to V5 without importing V4. Sequence one replacement as: validate/canonicalize candidate; call `configRevisionForProjectV5(candidate)` exactly once; pass that hash to repository preparation, the Milestone 3 browser runtime `prepare`, and Gateway staging; repository `prepareRevision`; browser runtime `prepare`; Gateway prepare; browser runtime `apply`; Gateway activate; repository `commitPreparedRevision`; browser runtime `commit`; repository `finalizePublication`; cleanup previous resources. The runtime `apply` phase is still unpublished and must complete before Gateway activation can expose the candidate. Assert the committed `PublishedProjectV5.configRevision`, `RuntimeGatewayStatusV1.project.configRevision`, staged Runtime Protocol request, and every Robot/Object/Signal/Job/Attachment store contain that same hash, while `project.revisionId` remains the human/project revision identifier. On every failure, compensate the publishing pointer when needed, rollback an applied/prepared browser runtime, reactivate the previous Gateway revision when activation changed, and retain a recovery-required state only if compensation itself fails.
 
 The serialized mutation service generates revision/metadata once, enforces `expectedRevisionId`, and implements `ProjectV5AtomicMutationPort`. Settings, Binding, Scene, Job authoring, New, and Import all use this service. There is no direct `setState` Project mutation in React.
 
@@ -850,7 +850,7 @@ The serialized mutation service generates revision/metadata once, enforces `expe
 
 `browser-project-resources-v5.ts` composes the repository, publication/mutation/store, Milestone 3 browser runtime, Gateway activation/stream, status presentation store, Settings controller, and shared UI ports once. No production module constructs V4 resources or opens `robot-sim-project-v4`.
 
-Extend `browser-project-runtime-v5.ts` with the publication coordinator's prepare/apply/commit/rollback lifecycle while retaining Milestone 3 revision-aligned Robot, Job, Signal, and Attachment checkpoints. Implement `runtime-gateway-connectivity-client.ts` as the sole browser HTTP boundary for V5 activation, decoded status, diagnostic Test Connection, and connected-Session Namespace Index resolution. Add strictly validated Gateway routes for the latter two operations: Test Connection opens and closes a temporary diagnostic Client without changing active adapters; Namespace resolution accepts only an active Endpoint ID and live Session. Neither route writes Project state, and both return versioned, bounded JSON. Wire them in `middleware/runtime-gateway/main.ts`; do not expose arbitrary browse/write or security-setting endpoints.
+Consume the opaque `browser-project-runtime-v5.ts` prepare/apply/commit/rollback lifecycle delivered by Milestone 3; do not add a second lifecycle or ask that runtime to recompute `configRevision`. The Milestone 5 publication coordinator alone calls `configRevisionForProjectV5(candidate)` once, supplies that hash to repository preparation, the existing browser-runtime `prepare`, and Gateway staging, then sequences their commit/rollback. Implement `runtime-gateway-connectivity-client.ts` as the sole browser HTTP boundary for V5 activation, decoded status, diagnostic Test Connection, and connected-Session Namespace Index resolution. Add strictly validated Gateway routes for the latter two operations: Test Connection opens and closes a temporary diagnostic Client without changing active adapters; Namespace resolution accepts only an active Endpoint ID and live Session. Neither route writes Project state, and both return versioned, bounded JSON. Wire them in `middleware/runtime-gateway/main.ts`; do not expose arbitrary browse/write or security-setting endpoints.
 
 - [ ] **Step 6: Implement the active V5 App and workspaces**
 

@@ -51,7 +51,7 @@
 
 - `package.json` and lockfile - direct `node-opcua-nodesets@2.174.0` dependency and focused test script.
 - `src/core/runtime-protocol/v1.ts` and test - lease acquire/renew/release, raw Simulation publication, product command batch, and result envelopes using V5 IDs.
-- `middleware/runtime-gateway/opcua-server-adapter.ts` and test - V5 Project input, NodeSet loading, model composition, status, publication, and 16-Session cap.
+- `middleware/runtime-gateway/opcua-server-adapter.ts` and test - consume the Milestone 3 V5 Project input, then add NodeSet loading, model composition, status, publication, and the 16-Session cap.
 - `middleware/runtime-gateway/main.ts` and test - browser lease/routes/WebSocket wiring, staged Server activation, and command-result forwarding.
 - `src/features/runtime-gateway/v5/runtime-gateway-state-stream.ts` and test - lease lifecycle, outgoing raw state, incoming product commands, terminal results.
 - `src/features/project/v5/browser-project-runtime-v5.ts` and test - register exactly one V5 command owner and raw Simulation publisher.
@@ -260,7 +260,7 @@ export function instantiateOpcUaRoboticsModelV1(options: Readonly<{
 
 Resolve `MotionDeviceSystemType`, `MotionDeviceType`, `AxisType`, and `ControllerType` by the Robotics namespace URI. Instantiate under `Objects/DeviceSet`; create every instance NodeId through the instances namespace. Materialize mandatory children, Controllers, standard `Controls` references, Power Trains, and informational Safety State. Configure `ActualPosition` with `CurrentRead`, correct `EngineeringUnits`/`EURange`, and no setter. Build `EURange` only through `projectJointRangeForOpcUaV1`: revolute limits remain degrees and prismatic metre limits are multiplied by 1,000 exactly once.
 
-Create `OPCUAServer` with `nodeset_filename: ROBOTICS_NODESET_FILES_V1` and `maxConnectionsPerEndpoint: 16`. Replace the V4 adapter input with validated V5 and keep Bridge Server activation from M1.
+Create `OPCUAServer` with `nodeset_filename: ROBOTICS_NODESET_FILES_V1` and `maxConnectionsPerEndpoint: 16`. Consume the validated V5 Server adapter input already cut over in Milestone 3, replace its temporary custom telemetry tree with the official Robotics model, and keep Bridge Server activation from M1. Do not reintroduce a V4 adapter path or compatibility cast.
 
 - [ ] **Step 4: Run GREEN and commit**
 
@@ -436,6 +436,25 @@ it('publishes ACCEPTED/RUNNING before the deferred browser result becomes termin
   expect(results.read('request-running')).toMatchObject({
     acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED', completedAt: 1_250,
   })
+})
+
+it('rejects a Server command before browser dispatch when the shared dedupe budget is all in flight', async () => {
+  const send = vi.fn()
+  const results = createProductResultRecorder()
+  const diagnostics = createCommandDiagnosticsRecorder()
+  const dispatch = commandDispatchHarness({
+    send, publishResult: results.publish, publishDiagnostics: diagnostics.publish,
+    dedupe: fullInFlightSharedRegistry(4_096),
+  })
+  const result = await dispatch.execute(completeProductCommand({ requestId: 'overflow' }))
+  expect(validateCommandResultV1(result)).toBe(result)
+  expect(result).toMatchObject({
+    acknowledgement: 'REJECTED', executionState: 'FAILED',
+    failureCode: 'COMMAND_DEDUPE_CAPACITY_EXHAUSTED',
+  })
+  expect(results.read('overflow')).toEqual(result)
+  expect(diagnostics.lastCommand()).toEqual(result)
+  expect(send).not.toHaveBeenCalled()
 })
 ```
 

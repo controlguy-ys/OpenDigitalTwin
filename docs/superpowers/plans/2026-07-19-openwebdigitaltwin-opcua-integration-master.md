@@ -75,7 +75,7 @@ M5 Settings, Monitor, and V5 Browser Cutover
 M6 Two-Robot Technical Demo and Release Evidence
 ```
 
-M4 may prepare pure NodeSet/model tests while M3 is being completed, but its command dispatch integration waits for M3's lease-fenced command service. M5 may prepare isolated presentation components after M1, but the atomic V5 browser cutover waits for M2-M4. M6 adds no new domain semantics; a missing prerequisite returns to its owning milestone.
+M3 performs the narrow Project V5 input cutover for the existing OPC UA Server adapter so Server/Bridge activation remains type-correct when Gateway staging becomes V5-only; the temporary custom read-only telemetry remains until M4 replaces it with the official Robotics model. M4 may prepare pure NodeSet/model tests while M3 is being completed, but its command dispatch integration waits for M3's lease-fenced command service. M5 may prepare isolated presentation components after M1, but the atomic V5 browser cutover waits for M2-M4. M6 adds no new domain semantics; a missing prerequisite returns to its owning milestone.
 
 ## Executable Plan Index
 

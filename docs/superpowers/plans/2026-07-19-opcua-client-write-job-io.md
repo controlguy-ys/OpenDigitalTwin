@@ -15,13 +15,15 @@
 - Consume `RigidTransformV5`, `normalizeRigidTransformV5`, `composeRigidTransformV5`, and `relativeRigidTransformV5` from the standalone `src/core/project-v5/rigid-transform.ts` module delivered by Milestone 2; do not import Project V4 transform types.
 - Consume `RuntimeGatewayStatusV1` from `src/core/runtime-protocol/gateway-status-v1.ts` and `RuntimePublisherLeaseV1`, `CommandRequestV1`, `CommandResultV1`, `StateBatchV1`, and their validators from `src/core/runtime-protocol/v1.ts`.
 - Cut `src/core/runtime-protocol/v1.ts` atomically from its Project V4 imports to `WorkcellProjectV5` and `validateWorkcellProjectV5`. The wire envelope remains Runtime Protocol v1 for this closed deployment, but a staged Project payload is V5-only and V4 fails before adapter preparation.
+- In Task 3, cut the existing OPC UA Server adapter input to validated Project V5 before `main.ts` becomes V5-only. Preserve Off/Client/Server/Bridge activation and the temporary custom read-only telemetry tree; official Robotics NodeSets and model semantics remain Milestone 4 work. Never cast or translate V5 through Project V4.
 - Use `OpcUaMappingV5.id` as `CommandRequestV1.targetId`; Job instructions and runtime state continue to address stable `LogicalSignalV1.id` values.
 - `set-do` may target only a Boolean `output` or `bidirectional` Signal with exactly one enabled `write` or `readWrite` Mapping.
 - `wait-di` may observe only a Boolean `input` or `bidirectional` Signal and completes only from current `GOOD` quality. `BAD`, `UNCERTAIN`, and `STALE` retained values cannot satisfy it.
 - A disconnect retains the last display value, changes its quality to `STALE`, sets status to `BadNoCommunication`, and never transfers ownership to Manual.
 - One SetDO instruction issues one OPC UA `Session.write`; it advances only after a terminal `SUCCEEDED` result. Any rejection or failed write fails the Job with the returned stable code.
 - The Gateway rejects wrong Project, wrong Revision, stale lease generation, expired request, disconnected Endpoint, type mismatch, and direction mismatch before calling `Session.write`.
-- Retain at most 4,096 command deduplication records. An identical duplicate returns the retained terminal result; a reused Command ID with a different fingerprint fails as `COMMAND_ID_CONFLICT` without a second write.
+- Retain at most 4,096 command deduplication records. An identical duplicate of an admitted record returns the retained in-flight/terminal result even after the original request expiry; preflight-rejected records are not retained. A reused admitted Command ID with a different fingerprint fails as `COMMAND_ID_CONFLICT` without a second write. Temporal and target preflight applies only to a new record and runs before admission. Evict the oldest terminal record before admitting a new record; if all 4,096 records are in-flight, reject the new command before its operation starts as `COMMAND_DEDUPE_CAPACITY_EXHAUSTED`.
+- The Client-write command lease uses publisher ID `${gatewayId}:client-write`, a five-second TTL refreshed on every `GET /runtime/command-lease`, and the active activation generation. A command expiry must be no later than both the returned lease expiry and five seconds after command creation.
 - `attach` and `detach` use only the IDs in the instruction. Never search selection, collision candidates, names, or a nearest Object; gripper state does not imply attachment state.
 - Attach and Detach preserve Object World pose. An OPC UA-owned Object fails as `SOURCE_OWNERSHIP_CONFLICT`; an already attached Object fails as `ALREADY_ATTACHED`; an out-of-range attach fails as `OUT_OF_RANGE`.
 - `targetParentFrameId: null` on Detach means the Object's authored Project parent Frame. Runtime attachment and detached-pose overrides are absent from canonical Project JSON and revision hashing.
@@ -48,6 +50,7 @@
 - `src/features/jobs/v5/job-runtime-store.ts` and test — V5 per-Robot Job progress and terminal results.
 - `src/features/jobs/v5/job-executor.ts` and test — MoveJoint, SetDO, WaitDI, Delay, Attach, and Detach execution.
 - `src/features/jobs/v5/simulation-clock.ts` and test — one nondecreasing Simulation clock loop for V5 Jobs.
+- `src/core/action-runtime-v5/attachment-instruction-error.ts` and test — one closed stable error producer/validator shared by the Job executor and Attachment ports.
 - `src/core/action-runtime-v5/attachment-transition.ts` and test — pure pose-preserving Attach/Detach calculations.
 - `src/core/action-runtime-v5/index.ts` — public attachment transition exports.
 - `src/features/actions/v5/attachment-runtime-store.ts` and test — runtime-only attachment and detached-pose records.
@@ -62,6 +65,7 @@
 
 - `src/core/runtime-protocol/v1.ts` and test — remove all Project V4 imports and make revision staging V5-only.
 - `middleware/runtime-gateway/opcua-client-adapter.ts` and test — expose one write boundary on the active Endpoint Session.
+- `middleware/runtime-gateway/opcua-server-adapter.ts` and test — narrow compatibility cutover from V4 input to validated V5 while retaining temporary Server/Bridge telemetry until Milestone 4.
 - `middleware/runtime-gateway/main.ts` and test — active command generation, lease route, command route, and adapter wiring.
 - `middleware/runtime-gateway/opcua-client-adapter.ts` and test are converted from V4 Project input to the V5 Project/Mapping contract; no V4 browser runtime file is modified.
 - `package.json` — add a focused `test:job-io` verification script.
@@ -152,6 +156,27 @@ export interface AttachmentInstructionPortV1 {
   attach(instruction: Extract<RobotJobInstructionV1, { readonly kind: 'attach' }>, context: JobInstructionContextV1): Promise<void>
   detach(instruction: Extract<RobotJobInstructionV1, { readonly kind: 'detach' }>, context: JobInstructionContextV1): Promise<void>
 }
+
+export type AttachmentInstructionFailureCodeV1 =
+  | 'SOURCE_OWNERSHIP_CONFLICT'
+  | 'ALREADY_ATTACHED'
+  | 'NOT_ATTACHED'
+  | 'OUT_OF_RANGE'
+  | 'ATTACHMENT_TARGET_NOT_FOUND'
+  | 'ATTACHMENT_FRAME_UNAVAILABLE'
+
+export class AttachmentInstructionErrorV1 extends Error {
+  readonly code: AttachmentInstructionFailureCodeV1
+}
+
+export function createAttachmentInstructionErrorV1(
+  code: AttachmentInstructionFailureCodeV1,
+  message: string,
+): AttachmentInstructionErrorV1
+
+export function isAttachmentInstructionErrorV1(
+  value: unknown,
+): value is AttachmentInstructionErrorV1
 
 export interface JobInstructionContextV1 {
   readonly jobId: string
@@ -401,12 +426,14 @@ Expected: focused tests PASS and Gateway TypeScript compiles.
 - Test: `middleware/runtime-gateway/runtime-command-service.test.ts`
 - Modify: `src/core/runtime-protocol/v1.ts`
 - Test: `src/core/runtime-protocol/v1.test.ts`
+- Modify: `middleware/runtime-gateway/opcua-server-adapter.ts`
+- Test: `middleware/runtime-gateway/opcua-server-adapter.test.ts`
 - Modify: `middleware/runtime-gateway/main.ts`
 - Test: `middleware/runtime-gateway/main.test.ts`
 
 **Interfaces:**
 - Consumes: Task 2 `OpcUaClientAdapterV1.write`, `CommandRequestV1`, `CommandResultV1`, and active Gateway Project/Revision state.
-- Produces: V5-only `RevisionStageRequestV1`, `RuntimeCommandDedupeRegistryV1`, `RuntimeCommandServiceV1`, `GET /runtime/command-lease`, and `POST /runtime/command`.
+- Produces: V5-only `RevisionStageRequestV1`, `RuntimeCommandDedupeRegistryV1`, `RuntimeCommandDedupeAdmissionErrorV1`, `RuntimeCommandServiceV1`, `GET /runtime/command-lease`, and `POST /runtime/command`.
 
 - [ ] **Step 1: Write RED fencing and deduplication tests**
 
@@ -426,6 +453,7 @@ it.each([
   ['wrong revision', { configRevision: OTHER_REVISION }, 'REVISION_MISMATCH'],
   ['stale generation', { leaseGeneration: 6 }, 'COMMAND_LEASE_STALE'],
   ['expired', { expiresAt: 999 }, 'COMMAND_EXPIRED'],
+  ['too far in the future', { expiresAt: 6_001 }, 'COMMAND_EXPIRY_INVALID'],
   ['wrong type', { value: 1 }, 'COMMAND_TYPE_MISMATCH'],
 ])('%s rejects before write', async (_name, override, code) => {
   const write = vi.fn()
@@ -436,6 +464,40 @@ it.each([
   expect(write).not.toHaveBeenCalled()
 })
 
+it('accepts the exact five-second command-expiry boundary', async () => {
+  const write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))
+  const service = createRuntimeCommandServiceV1(activeContext({ write, nowMs: 1_000 }))
+  await expect(service.execute(commandRequest({ expiresAt: 6_000 }))).resolves.toMatchObject({
+    acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED',
+  })
+  expect(write).toHaveBeenCalledOnce()
+})
+
+it('renews the fixed client-write lease without changing publisher or generation', () => {
+  const clock = controlledClock(1_000)
+  const service = createRuntimeCommandServiceV1(activeContext({
+    publisherId: 'gateway-a:client-write', generation: 7, nowMs: clock.now,
+  }))
+  expect(service.lease()).toEqual(expect.objectContaining({
+    publisherId: 'gateway-a:client-write', generation: 7, expiresAt: 6_000,
+  }))
+  clock.set(1_250)
+  expect(service.lease()).toEqual(expect.objectContaining({
+    publisherId: 'gateway-a:client-write', generation: 7, expiresAt: 6_250,
+  }))
+})
+
+it('serves the Gateway-derived publisher ID and renewed expiry on consecutive lease GETs', async () => {
+  const harness = activeGatewayHarness({ gatewayId: 'gateway-a', generation: 7, nowMs: 1_000 })
+  await expect(harness.get('/runtime/command-lease')).resolves.toMatchObject({
+    publisherId: 'gateway-a:client-write', generation: 7, expiresAt: 6_000,
+  })
+  harness.clock.set(1_250)
+  await expect(harness.get('/runtime/command-lease')).resolves.toMatchObject({
+    publisherId: 'gateway-a:client-write', generation: 7, expiresAt: 6_250,
+  })
+})
+
 it('rejects a reused Command ID with a different payload', async () => {
   const service = createRuntimeCommandServiceV1(activeContext({ generation: 7, nowMs: 1_000 }))
   await service.execute(commandRequest({ commandId: 'same', value: false }))
@@ -443,12 +505,65 @@ it('rejects a reused Command ID with a different payload', async () => {
     .resolves.toMatchObject({ failureCode: 'COMMAND_ID_CONFLICT' })
 })
 
+it('rejects a registry fingerprint conflict before preflight or operation', async () => {
+  const registry = createRuntimeCommandDedupeRegistryV1({ maximumRecords: 4_096 })
+  await registry.execute(commandRecord('client-write', 'same', 'fingerprint-a'), {
+    preflight: () => null,
+    operation: async () => terminal('same'),
+  })
+  const preflight = vi.fn(() => null)
+  const operation = vi.fn(async () => terminal('same'))
+  await expect(registry.execute(commandRecord('client-write', 'same', 'fingerprint-b'), {
+    preflight, operation,
+  })).rejects.toMatchObject({ code: 'COMMAND_ID_CONFLICT' })
+  expect(preflight).not.toHaveBeenCalled()
+  expect(operation).not.toHaveBeenCalled()
+})
+
+it('returns the retained identical result after the original request expires', async () => {
+  const clock = controlledClock(1_000)
+  const write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))
+  const service = createRuntimeCommandServiceV1(activeContext({ write, nowMs: clock.now }))
+  const request = commandRequest({ commandId: 'same-after-expiry', expiresAt: 2_000 })
+  const first = await service.execute(request)
+  clock.set(2_001)
+  const duplicate = await service.execute(structuredClone(request))
+  expect(duplicate).toBe(first)
+  expect(write).toHaveBeenCalledOnce()
+})
+
 it('shares one exact 4096-record budget across command channels', async () => {
   const registry = createRuntimeCommandDedupeRegistryV1({ maximumRecords: 4_096 })
   await fillTerminalRecords(registry, 4_096, 'client-write')
-  await registry.execute(commandRecord('server-command', 'next'), async () => terminal('next'))
+  await registry.execute(commandRecord('server-command', 'next'), {
+    preflight: () => null,
+    operation: async () => terminal('next'),
+  })
   expect(registry.size()).toBe(4_096)
   expect(registry.has(oldestRecordKey())).toBe(false)
+})
+
+it('rejects registry admission for record 4097 before execution when every record is in flight', async () => {
+  const registry = createRuntimeCommandDedupeRegistryV1({ maximumRecords: 4_096 })
+  await fillInFlightRecordsWithoutSettling(registry, 4_096)
+  const operation = vi.fn(async () => terminal('overflow'))
+  await expect(registry.execute(commandRecord('client-write', 'overflow'), {
+    preflight: () => null, operation,
+  }))
+    .rejects.toMatchObject({ code: 'COMMAND_DEDUPE_CAPACITY_EXHAUSTED' })
+  expect(operation).not.toHaveBeenCalled()
+})
+
+it('converts dedupe capacity exhaustion into a valid rejected command result', async () => {
+  const write = vi.fn()
+  const service = createRuntimeCommandServiceV1(activeContext({
+    dedupe: fullInFlightRegistry(), write,
+  }))
+  await expect(service.execute(commandRequest({ commandId: 'overflow' }))).resolves.toMatchObject({
+    commandId: 'overflow', acknowledgement: 'REJECTED', executionState: 'FAILED',
+    failureCode: 'COMMAND_DEDUPE_CAPACITY_EXHAUSTED',
+  })
+  expect(write).not.toHaveBeenCalled()
 })
 ```
 
@@ -472,7 +587,7 @@ it('has no production dependency on project-v4', async () => {
 - [ ] **Step 2: Run RED**
 
 ```powershell
-npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.test.ts
+npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.test.ts
 ```
 
 Expected: FAIL because command execution routes and deduplication do not exist.
@@ -492,7 +607,7 @@ export function createRuntimeCommandServiceV1(options: {
   readonly configRevision: string
   readonly publisherId: string
   readonly generation: number
-  readonly leaseExpiresAt: number
+  readonly leaseTtlMs?: 5_000
   readonly nowMs: () => number
   readonly write: OpcUaClientAdapterV1['write']
   readonly dedupe: RuntimeCommandDedupeRegistryV1
@@ -503,14 +618,23 @@ export function createRuntimeCommandServiceV1(options: {
 export interface RuntimeCommandDedupeRegistryV1 {
   execute(
     record: Readonly<{ key: string; fingerprint: string; channel: 'client-write' | 'server-command' }>,
-    operation: () => Promise<CommandResultV1>,
+    callbacks: Readonly<{
+      preflight: () => CommandResultV1 | null
+      operation: () => Promise<CommandResultV1>
+    }>,
   ): Promise<CommandResultV1>
   size(): number
   clear(): void
 }
+
+export class RuntimeCommandDedupeAdmissionErrorV1 extends Error {
+  readonly code: 'COMMAND_ID_CONFLICT' | 'COMMAND_DEDUPE_CAPACITY_EXHAUSTED'
+}
 ```
 
-Validate with `validateCommandRequestV1`. Fingerprint the closed request fields with deterministic `JSON.stringify([projectId, configRevision, leaseGeneration, expiresAt, targetId, value])`. The shared registry inserts the in-flight Promise before awaiting the write so concurrent duplicates join it. It keeps terminal records in insertion order and evicts the oldest terminal record when total Client-write plus Server-command records would exceed 4,096; it never evicts an in-flight record. Return one terminal envelope with both acknowledgement and execution state: successful write is `ACCEPTED/SUCCEEDED`; a validated attempted write failure is `ACCEPTED/FAILED`; pre-execution validation is `REJECTED/FAILED`.
+`RuntimeCommandDedupeRegistryV1.execute` first checks the `(channel, key)` record synchronously. An identical fingerprint joins/returns the existing in-flight or terminal result without rerunning preflight, so an idempotent retry still receives the original result after expiry. A different fingerprint throws the typed `COMMAND_ID_CONFLICT` admission error. For a new key, invoke the caller's synchronous `preflight` before capacity admission; a non-null rejected result is returned but not retained. Only a null preflight result proceeds to capacity admission and operation insertion. The registry throws a typed `RuntimeCommandDedupeAdmissionErrorV1` with code `COMMAND_DEDUPE_CAPACITY_EXHAUSTED` when it cannot admit a new record; it does not manufacture a `CommandResultV1` because it does not own Project, generation, target, command, or completion-time context. Client-write and Milestone 4 Server-command callers convert admission errors into their own validated `REJECTED/FAILED` envelope without invoking the operation or browser dispatch.
+
+Validate command request shape before forming the key/fingerprint. Fingerprint the closed request fields with deterministic `JSON.stringify([projectId, configRevision, leaseGeneration, expiresAt, targetId, value])`. Put wrong Project/Revision/generation, `expiresAt < nowMs()` (`COMMAND_EXPIRED`), `expiresAt > nowMs() + 5_000` (`COMMAND_EXPIRY_INVALID`), target/type/direction, and disconnected-Endpoint checks in the synchronous new-record `preflight`; the exact future boundary is accepted. The shared registry inserts the in-flight Promise before awaiting the write so concurrent duplicates join it. It keeps terminal records in insertion order and evicts the oldest terminal record before admitting a new record when total Client-write plus Server-command records would exceed 4,096; it never evicts an in-flight record. If all 4,096 retained records are in-flight, reject admission with the typed error before calling the operation. Return one terminal envelope with both acknowledgement and execution state: successful write is `ACCEPTED/SUCCEEDED`; a validated attempted write failure is `ACCEPTED/FAILED`; preflight or admission failure is `REJECTED/FAILED`.
 
 - [ ] **Step 4: Wire activation generation and HTTP routes**
 
@@ -528,20 +652,22 @@ interface ActiveProjectRuntimeV1 {
 
 In `src/core/runtime-protocol/v1.ts`, replace `ProjectV4Error`, V4 limits, `WorkcellProjectV4`, and `validateWorkcellProjectV4` with the V5 error/limit/type/validator exports created in Milestone 2. `RevisionStageRequestV1.project` is exactly `WorkcellProjectV5`; `validateRevisionStageRequestV1` validates schema 5 before returning the closed request. Preserve the existing command/state envelope discriminants and protocol version so M1 status and existing transport framing do not fork.
 
-Increment a process-local safe integer for every successful candidate activation, including reactivation of the same Revision. Create one 4,096-record dedupe registry for every active Revision in all modes, inject it into the Client command service when Client role is active, and expose that same instance to Milestone 4 Server-command dispatch. Create `commandService` only after the Client adapter has started; it remains `null` in Off and Server-only modes while `commandDedupe` remains available. `GET /runtime/command-lease` returns `validateRuntimePublisherLeaseV1(active.commandService.lease())` only when the service exists and otherwise returns a closed `OPC_UA_CLIENT_NOT_ACTIVE` failure; `POST /runtime/command` reads at most `MAX_RUNTIME_BATCH_BYTES_V1`, executes once when available, and returns `validateCommandResultV1(result)`. With no Client adapter, return a valid `REJECTED/FAILED` result with `OPC_UA_CLIENT_NOT_ACTIVE`, not an untyped 500 response. Milestone 4's separate browser-publisher lease keeps Server-only product commands functional without manufacturing a Client write service.
+Increment a process-local safe integer for every successful candidate activation, including reactivation of the same Revision. Create one 4,096-record dedupe registry for every active Revision in all modes, inject it into the Client command service when Client role is active, and expose that same instance to Milestone 4 Server-command dispatch. Create `commandService` only after the Client adapter has started; it remains `null` in Off and Server-only modes while `commandDedupe` remains available. Build its publisher ID exactly as `${config.gatewayId}:client-write`; `lease()` returns the active generation and `expiresAt = nowMs() + 5_000` on each call. `GET /runtime/command-lease` returns `validateRuntimePublisherLeaseV1(active.commandService.lease())` only when the service exists and otherwise returns a closed `OPC_UA_CLIENT_NOT_ACTIVE` failure; `POST /runtime/command` reads at most `MAX_RUNTIME_BATCH_BYTES_V1`, executes once when available, and returns `validateCommandResultV1(result)`. With no Client adapter, return a valid `REJECTED/FAILED` result with `OPC_UA_CLIENT_NOT_ACTIVE`, not an untyped 500 response. Milestone 4's separate browser-publisher lease keeps Server-only product commands functional without manufacturing a Client write service.
+
+Before changing the active runtime and protocol staging payload to V5, change `OpcUaServerAdapterV1` to accept a validated `WorkcellProjectV5`. Preserve current Server/Bridge startup, endpoint diagnostics, and temporary read-only custom telemetry using V5 Robot Definition/Instance IDs. This is only a compatibility cutover: do not load Robotics NodeSets or claim the standard Robotics model here. Candidate activation must still prepare both requested adapters and publish the new generation only after both start successfully; on any failure, stop candidate adapters and retain the prior active runtime, generation, registry, and adapters.
 
 - [ ] **Step 5: Run GREEN and commit**
 
 ```powershell
-npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.test.ts
+npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.test.ts
 npm run build:gateway
 npm run lint
-git add src/core/runtime-protocol/v1.ts src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/main.ts middleware/runtime-gateway/main.test.ts
+git add src/core/runtime-protocol/v1.ts src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/opcua-server-adapter.ts middleware/runtime-gateway/opcua-server-adapter.test.ts middleware/runtime-gateway/main.ts middleware/runtime-gateway/main.test.ts
 git diff --cached --check
 git commit -m "feat: transport deduplicated runtime commands"
 ```
 
-Expected: exact fencing codes PASS, duplicate execution count remains one, and the Gateway build passes.
+Expected: exact fencing codes PASS, duplicate execution count remains one, V5 Server/Bridge activation remains available, and the Gateway build passes.
 
 ### Task 4: Add the Browser Command Client and Signal Write Port
 
@@ -573,6 +699,18 @@ it('obtains the current lease and posts one revision-qualified command', async (
       commandId: 'command-1', leaseGeneration: 9, targetId: 'map-start', value: true,
     })],
   ])
+})
+
+it.each([
+  ['request horizon', 10_000, 6_000],
+  ['shorter lease', 5_500, 5_500],
+] as const)('posts expiry bounded by %s', async (_name, leaseExpiresAt, expectedExpiresAt) => {
+  const fetch = commandFetchHarness({ generation: 9, leaseExpiresAt })
+  const client = createRuntimeGatewayCommandClientV1({
+    fetch: fetch.call, nowMs: () => 1_000, createCommandId: () => 'bounded-expiry',
+  })
+  await client.writeBoolean(writeRequest())
+  expect(fetch.postedCommands[0]?.expiresAt).toBe(expectedExpiresAt)
 })
 
 it('refreshes the lease once after COMMAND_LEASE_STALE and keeps one Command ID', async () => {
@@ -627,7 +765,7 @@ export function createGatewaySignalWritePortV1(options: {
 }): GatewaySignalWritePortV1
 ```
 
-The Signal port resolves exactly one enabled `write` or `readWrite` Mapping whose Leaf target is the requested Boolean output/bidirectional Signal. It fails locally as `SIGNAL_WRITE_MAPPING_NOT_FOUND` or `SIGNAL_WRITE_MAPPING_AMBIGUOUS` before network I/O. The command client uses a five-second expiry and AbortController timeout, validates lease/result envelopes, retries only `COMMAND_LEASE_STALE` once with the same Command ID, and exposes terminal failure codes unchanged.
+The Signal port resolves exactly one enabled `write` or `readWrite` Mapping whose Leaf target is the requested Boolean output/bidirectional Signal. It fails locally as `SIGNAL_WRITE_MAPPING_NOT_FOUND` or `SIGNAL_WRITE_MAPPING_AMBIGUOUS` before network I/O. The command client uses an expiry of `min(nowMs() + 5_000, lease.expiresAt)` and a five-second AbortController timeout, validates lease/result envelopes, retries only `COMMAND_LEASE_STALE` once with the same Command ID, and exposes terminal failure codes unchanged. An expired lease is refreshed before POST; an abort/timeout is terminal and never triggers an untracked retry write.
 
 Define `RuntimeGatewayStateStreamOptionsV5.consumers` as `readonly ((value: unknown, receivedTimestampMs: number) => boolean)[]`; each consumer is isolated with `try/catch`, and a malformed consumer cannot stop other consumers or reconnect logic. Reuse the same-origin `/runtime/ws` URL behavior without importing or modifying the V4 stream implementation.
 
@@ -647,6 +785,8 @@ Expected: focused tests, lint, and browser build PASS.
 ### Task 5: Execute SetDO, WaitDI, and Delay in Authored Order
 
 **Files:**
+- Create: `src/core/action-runtime-v5/attachment-instruction-error.ts`
+- Test: `src/core/action-runtime-v5/attachment-instruction-error.test.ts`
 - Create: `src/core/robot-runtime-v5/serial-kinematics.ts`
 - Test: `src/core/robot-runtime-v5/serial-kinematics.test.ts`
 - Create: `src/features/robot/v5/robot-joint-runtime-store.ts`
@@ -660,11 +800,18 @@ Expected: focused tests, lint, and browser build PASS.
 
 **Interfaces:**
 - Consumes: V5 Robot Definitions/Instances/rigid transforms, V5 Jobs, Robot Joint read Mappings/State Batches, existing version-neutral Joint interpolation formulas, Task 1 Signal and Robot Frame/status stores, Task 4 `GatewaySignalWritePortV1`, and `AttachmentInstructionPortV1`.
-- Produces: `SerialRobotPoseV5`, `computeSerialRobotPoseV5`, OPC UA-capable `RobotJointRuntimeStoreV5`, `JobRuntimeStoreV5`, `RobotJobExecutorV5`, `RobotJobPlaybackControllerV5`, and stable I/O failure propagation.
+- Produces: `AttachmentInstructionErrorV1` plus its creator/validator, `SerialRobotPoseV5`, `computeSerialRobotPoseV5`, OPC UA-capable `RobotJointRuntimeStoreV5`, `JobRuntimeStoreV5`, `RobotJobExecutorV5`, `RobotJobPlaybackControllerV5`, and stable I/O failure propagation.
 
 - [ ] **Step 1: Write RED authored-order and SetDO acknowledgement tests**
 
 ```ts
+it('creates and recognizes only a listed Attachment instruction failure code', () => {
+  const error = createAttachmentInstructionErrorV1('OUT_OF_RANGE', 'Object is outside the grasp range.')
+  expect(error).toMatchObject({ name: 'AttachmentInstructionErrorV1', code: 'OUT_OF_RANGE' })
+  expect(isAttachmentInstructionErrorV1(error)).toBe(true)
+  expect(isAttachmentInstructionErrorV1({ code: 'UNLISTED', message: 'spoof' })).toBe(false)
+})
+
 it('waits for SetDO terminal success before advancing', async () => {
   const pending = deferred<CommandResultV1>()
   const harness = jobHarness({
@@ -689,6 +836,36 @@ it('fails with the Gateway code after one failed SetDO', async () => {
   await harness.executor.advanceAll(0)
   expect(harness.state()).toMatchObject({ state: 'FAILED', failureCode: 'OPC_UA_WRITE_REJECTED' })
   expect(harness.writeBoolean).toHaveBeenCalledOnce()
+})
+
+it.each([
+  'SOURCE_OWNERSHIP_CONFLICT',
+  'ALREADY_ATTACHED',
+  'NOT_ATTACHED',
+  'OUT_OF_RANGE',
+  'ATTACHMENT_TARGET_NOT_FOUND',
+  'ATTACHMENT_FRAME_UNAVAILABLE',
+] as const)('preserves Attachment port failure %s after one call', async (code) => {
+  const attach = vi.fn(async () => {
+    throw createAttachmentInstructionErrorV1(code, `Attachment failed: ${code}`)
+  })
+  const harness = jobHarness({ instructions: [attachPart('attach')], attach })
+  harness.executor.startJob('job', 0)
+  await harness.executor.advanceAll(0)
+  expect(harness.state()).toMatchObject({ state: 'FAILED', failureCode: code })
+  expect(attach).toHaveBeenCalledOnce()
+})
+
+it('normalizes an unknown Attachment rejection and never retries it', async () => {
+  const detach = vi.fn(async () => { throw new Error('unexpected') })
+  const harness = jobHarness({ instructions: [detachPart('detach')], detach })
+  harness.executor.startJob('job', 0)
+  await harness.executor.advanceAll(0)
+  await harness.executor.advanceAll(1)
+  expect(harness.state()).toMatchObject({
+    state: 'FAILED', failureCode: 'ATTACHMENT_INSTRUCTION_FAILED',
+  })
+  expect(detach).toHaveBeenCalledOnce()
 })
 
 it('applies a subscribed Joint only to an OPC UA-owned Robot', () => {
@@ -753,7 +930,7 @@ it('fails WaitDI at its exact timeout and delays by Simulation time only', async
 - [ ] **Step 3: Run RED**
 
 ```powershell
-npm run test:run -- src/features/robot/v5/robot-joint-runtime-store.test.ts src/features/jobs/v5
+npm run test:run -- src/core/action-runtime-v5/attachment-instruction-error.test.ts src/features/robot/v5/robot-joint-runtime-store.test.ts src/features/jobs/v5
 ```
 
 Expected: FAIL because the V5 serial kinematics and Job runtime do not exist.
@@ -795,15 +972,15 @@ Port the proven serial-chain algorithm under V5 symbols into `src/core/robot-run
 
 Create `RobotJointRuntimeStoreV5` with separate `projectRevisionId` and `configRevision`, one exact Joint-ID record per Robot, `replaceProject(project, configRevision)`, `ingest(batch, receivedTimestampMs)`, `markEndpointDisconnected`, `resetGatewaySession`, `writeJointValues`, and `readRobotPose(robotId, worldBasePose?)`. `readRobotPose` calls `computeSerialRobotPoseV5` with the current values and the supplied mapped Base World pose when present, otherwise the Robot's authored `localBasePose`. Compile one enabled read/readWrite Mapping per Joint target; use the Mapping root/leaf extraction from Task 2, apply increasing endpoint sequences only when `robot.jointSource === opcua:<endpointId>` and the batch `configRevision` matches, and retain values with STALE quality across disconnect. Manual/Simulation writes against an OPC UA owner fail and no automatic takeover occurs. `JobRuntimeStoreV5` also retains both revision fields so an old run cannot survive a same-`revisionId` content replacement.
 
-Adapt the proven V4 one-chain-per-Robot executor without importing V4 Project or Action types. A Job starts only when its Robot's `jointSource === 'simulation'`. `move-joint` retains wrapped/limited interpolation. `set-do` stores one Promise before awaiting it and never reissues during repeated `advanceAll`. `wait-di` reads the store without network polling and checks `quality === 'GOOD'`, Boolean value equality, and `simulationMs >= entered + timeoutMs` in that order. `delay` advances at `entered + durationMs`. Attach/Detach call the injected port once and propagate its stable error code. Cancellation or disposal invalidates the session generation so late Promise settlement cannot advance a replacement run.
+Adapt the proven V4 one-chain-per-Robot executor without importing V4 Project or Action types. A Job starts only when its Robot's `jointSource === 'simulation'`. `move-joint` retains wrapped/limited interpolation. `set-do` stores one Promise before awaiting it and never reissues during repeated `advanceAll`. `wait-di` reads the store without network polling and checks `quality === 'GOOD'`, Boolean value equality, and `simulationMs >= entered + timeoutMs` in that order. `delay` advances at `entered + durationMs`. Attach/Detach call the injected port once. The port rejects with a structurally validated `AttachmentInstructionErrorV1`; the executor preserves its listed stable `code`, while an unknown rejection becomes `ATTACHMENT_INSTRUCTION_FAILED`. Cancellation or disposal invalidates the session generation so late SetDO or Attachment Promise settlement cannot advance a replacement run.
 
 - [ ] **Step 5: Run GREEN and commit**
 
 ```powershell
-npm run test:run -- src/core/robot-runtime-v5/serial-kinematics.test.ts src/features/robot/v5/robot-joint-runtime-store.test.ts src/features/jobs/v5
+npm run test:run -- src/core/action-runtime-v5/attachment-instruction-error.test.ts src/core/robot-runtime-v5/serial-kinematics.test.ts src/features/robot/v5/robot-joint-runtime-store.test.ts src/features/jobs/v5
 npm run lint
 npm run build
-git add src/core/robot-runtime-v5/serial-kinematics.ts src/core/robot-runtime-v5/serial-kinematics.test.ts src/features/robot/v5/robot-joint-runtime-store.ts src/features/robot/v5/robot-joint-runtime-store.test.ts src/features/jobs/v5/job-runtime-store.ts src/features/jobs/v5/job-runtime-store.test.ts src/features/jobs/v5/job-executor.ts src/features/jobs/v5/job-executor.test.ts src/features/jobs/v5/simulation-clock.ts src/features/jobs/v5/simulation-clock.test.ts
+git add src/core/action-runtime-v5/attachment-instruction-error.ts src/core/action-runtime-v5/attachment-instruction-error.test.ts src/core/robot-runtime-v5/serial-kinematics.ts src/core/robot-runtime-v5/serial-kinematics.test.ts src/features/robot/v5/robot-joint-runtime-store.ts src/features/robot/v5/robot-joint-runtime-store.test.ts src/features/jobs/v5/job-runtime-store.ts src/features/jobs/v5/job-runtime-store.test.ts src/features/jobs/v5/job-executor.ts src/features/jobs/v5/job-executor.test.ts src/features/jobs/v5/simulation-clock.ts src/features/jobs/v5/simulation-clock.test.ts
 git diff --cached --check
 git commit -m "feat: execute logical io job instructions"
 ```
@@ -851,7 +1028,7 @@ it.each([
   ['out of range', attachContext({ toolToGraspDistanceM: 0.050001 }), 'OUT_OF_RANGE'],
 ])('%s fails without a store commit', (_name, context, code) => {
   expect(() => prepareAttachTransitionV1(attachInstruction({ maximumDistanceM: 0.05 }), context))
-    .toThrow(code)
+    .toThrowError(expect.objectContaining({ name: 'AttachmentInstructionErrorV1', code }))
   expect(context.commitCount()).toBe(0)
 })
 
@@ -905,7 +1082,7 @@ export interface AttachmentRuntimeStoreV1 {
 }
 ```
 
-Calculate Tool-to-Grasp distance from `objectWorld * objectGraspLocal`; if no Object Grasp Frame is supplied, use the Object root. Attach stores `toolFromObject = relativeRigidTransformV5(toolWorld, objectWorld)`. Detach computes current Object World from the current Tool World and stores `relativeRigidTransformV5(targetParentWorld, objectWorld)`; a null target resolves to the Object's authored parent ID before commit. Normalize/freeze every pose with `normalizeRigidTransformV5` and verify continuity before mutating the store.
+Calculate Tool-to-Grasp distance from `objectWorld * objectGraspLocal`; if no Object Grasp Frame is supplied, use the Object root. Attach stores `toolFromObject = relativeRigidTransformV5(toolWorld, objectWorld)`. Detach computes current Object World from the current Tool World and stores `relativeRigidTransformV5(targetParentWorld, objectWorld)`; a null target resolves to the Object's authored parent ID before commit. Normalize/freeze every pose with `normalizeRigidTransformV5` and verify continuity before mutating the store. Every listed transition/lookup/ownership failure must be produced with Task 5 `createAttachmentInstructionErrorV1`; neither pure transitions nor `browser-attachment-instruction-port` may throw an ordinary string-only `Error` for a listed condition. Tests assert the real port rejection passes `isAttachmentInstructionErrorV1`.
 
 - [ ] **Step 4: Project attachment overrides through the existing render transform boundary**
 
@@ -946,15 +1123,17 @@ Expected: continuity, ownership, reset, renderer-follow, and no-duplicate-render
 - Modify: `package.json`
 
 **Interfaces:**
-- Consumes: Tasks 1-6 and the active Project V5 publication lifecycle.
-- Produces: one disposable V5 runtime graph and repeatable native integration evidence.
+- Consumes: Tasks 1-6, a validated Project V5, its caller-supplied canonical `configRevision`, and injected Gateway/test lifecycle ports.
+- Produces: one disposable revision-aligned V5 runtime graph and repeatable native integration evidence. It does not own repository publication or active-App/Gateway cutover; Milestone 5 owns that coordinator.
 
 - [ ] **Step 1: Write RED composition/reset tests**
 
 ```ts
 it('publishes one revision across Robot, Job, Signal, and Attachment runtimes', async () => {
   const resources = createBrowserProjectRuntimeV5(testOptions())
-  await resources.replaceProject(projectV5, CONFIG_REVISION)
+  const prepared = await resources.prepare(projectV5, CONFIG_REVISION)
+  await resources.apply(prepared)
+  resources.commit(prepared)
   expect(resources.robots.getState().projectRevisionId).toBe(projectV5.revisionId)
   expect(resources.robotFrames.projectRevisionId).toBe(projectV5.revisionId)
   expect(resources.objects.projectRevisionId).toBe(projectV5.revisionId)
@@ -978,6 +1157,16 @@ it('marks Signals stale on Gateway session reset without changing the Project', 
   expect(resources.signals.getState().read('ready')?.quality).toBe('STALE')
   expect(resources.bundle.getState().project).toBe(before)
 })
+
+it('rolls back every local runtime checkpoint when candidate apply fails', async () => {
+  const failingResources = createBrowserProjectRuntimeV5(testOptions({ failApplyAfter: 'objects' }))
+  const before = snapshotAllRuntimeStores(failingResources)
+  const prepared = await failingResources.prepare(projectV5B, CONFIG_REVISION_B)
+  await expect(failingResources.apply(prepared)).rejects.toThrow('TEST_APPLY_FAILURE')
+  failingResources.rollback(prepared)
+  expect(snapshotAllRuntimeStores(failingResources)).toEqual(before)
+  expect(() => failingResources.commit(prepared)).toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
+})
 ```
 
 - [ ] **Step 2: Compose lifecycle ownership and disposal**
@@ -985,6 +1174,11 @@ it('marks Signals stale on Gateway session reset without changing the Project', 
 ```ts
 export interface BrowserRuntimeBundleStateV5 {
   readonly project: WorkcellProjectV5
+  readonly projectRevisionId: string
+  readonly configRevision: string
+}
+
+export interface PreparedBrowserRuntimeCandidateV5 {
   readonly projectRevisionId: string
   readonly configRevision: string
 }
@@ -1000,14 +1194,17 @@ export interface BrowserProjectResourcesV5 {
   readonly signalWrites: GatewaySignalWritePortV1
   readonly jobExecutor: RobotJobExecutorV5
   readonly playback: RobotJobPlaybackControllerV5
-  replaceProject(project: WorkcellProjectV5, configRevision: string): Promise<void>
+  prepare(project: WorkcellProjectV5, configRevision: string): Promise<PreparedBrowserRuntimeCandidateV5>
+  apply(prepared: PreparedBrowserRuntimeCandidateV5): Promise<void>
+  commit(prepared: PreparedBrowserRuntimeCandidateV5): void
+  rollback(prepared: PreparedBrowserRuntimeCandidateV5): void
   startGatewayStream(): void
   stopGatewayStream(): void
   dispose(): void
 }
 ```
 
-Create these resources inside one V5 publication candidate. The publication coordinator computes `configRevisionForProjectV5(candidate)` exactly once and supplies the result to Gateway staging and every browser runtime; no store derives it from `revisionId`. On failed publication restore all checkpoints. On successful replacement dispose the prior playback/executor, clear the command Client lease, and reset runtime-only Robot Joint, Robot Frame/status, Object, Signal, and Attachment data. `BrowserProjectRuntimeV5.startGatewayStream()` constructs one V5 stream with the Robot Joint, Robot Frame/status, Object, and Signal consumers; on session start it calls all four reset functions. Endpoint status transitions from connected to reconnecting/faulted call all four `markEndpointDisconnected` methods exactly once per transition. Expose this runtime for the Milestone 5 V5 UI composition; do not import it into the V4 App.
+Create these resources as a V5 runtime candidate using a validated Project and a caller-supplied lowercase 64-hex `configRevision`; never recompute the hash and never substitute `revisionId`. Task 7 owns an opaque, single-use local `PreparedBrowserRuntimeCandidateV5` and atomic `prepare/apply/commit/rollback` only for the Robot, Job, Signal, Object, Frame/status, and Attachment resources. `prepare` validates and snapshots the Project plus supplied hash without mutating the active runtime; `apply` installs the candidate behind unpublished checkpoints; `commit` publishes it and disposes prior playback/executor; `rollback` restores every prior checkpoint and disposes the candidate. Its integration harness may stage a Gateway through an injected lifecycle port, but it does not open the Project repository, publish the active Project, compute a canonical hash, or become the production Gateway publication authority. Milestone 5 computes the canonical hash exactly once and coordinates repository, Gateway activation, and these existing runtime lifecycle methods. On successful local commit clear the command Client lease and reset runtime-only Robot Joint, Robot Frame/status, Object, Signal, and Attachment data. `BrowserProjectRuntimeV5.startGatewayStream()` constructs one V5 stream with the Robot Joint, Robot Frame/status, Object, and Signal consumers; on session start it calls all four reset functions. Endpoint status transitions from connected to reconnecting/faulted call all four `markEndpointDisconnected` methods exactly once per transition. Expose this runtime for the Milestone 5 V5 UI composition; do not import it into the V4 App.
 
 - [ ] **Step 3: Write the real local OPC UA write/dedupe/disconnect integration test**
 
@@ -1093,6 +1290,21 @@ it('executes MoveJoint, SetDO, WaitDI, Delay, Attach, and Detach in authored ord
   expect(harness.poseDiscontinuities.every(({ positionM, orientationDeg }) => (
     positionM <= 0.0005 && orientationDeg <= 0.1
   ))).toBe(true)
+})
+
+it('propagates a real Attachment port failure through the Job executor', async () => {
+  const harness = integratedJobHarness({
+    instructions: [attach('pick', 'box', 'tcp', 'box-grasp', 0.01)],
+    objectWorldPose: pose([1, 0, 0]),
+    toolWorldPose: pose([0, 0, 0]),
+    useRealBrowserAttachmentPort: true,
+  })
+  harness.start(0)
+  await harness.advance(0)
+  expect(harness.jobState()).toMatchObject({
+    state: 'FAILED', failureCode: 'OUT_OF_RANGE', stepIndex: 0,
+  })
+  expect(harness.attachmentCommitCount()).toBe(0)
 })
 ```
 
