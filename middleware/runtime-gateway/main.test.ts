@@ -245,6 +245,52 @@ async function requestJson(
   })
 }
 
+async function requestCommand(port: number, body: unknown): Promise<Response> {
+  return requestJson(port, 'POST', '/runtime/command', body)
+}
+
+async function requestLease(port: number): Promise<Response> {
+  return fetch(`http://127.0.0.1:${port}/runtime/command-lease`)
+}
+
+function writableClientProject(revisionId = 'revision-command-client'): WorkcellProjectV5 {
+  const project = cloneWorkcellProjectV5(sampleProject('client', revisionId))
+  ;(project.logicalSignals[0] as unknown as { direction: 'input' | 'output' | 'bidirectional' }).direction = 'output'
+  ;(project.opcUa.mappings[0] as unknown as { direction: 'read' | 'write' | 'readWrite' }).direction = 'write'
+  return validateWorkcellProjectV5(project)
+}
+
+function commandRequest(configRevision: string, overrides: Record<string, unknown> = {}) {
+  return {
+    type: 'command-request-v1', protocolVersion: 1, commandId: 'command-http-1',
+    projectId: 'project-main-http', configRevision, leaseGeneration: 1, expiresAt: 6_000,
+    targetId: 'mapping-1', value: true, ...overrides,
+  }
+}
+
+function connectedClientAdapter(write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))): {
+  readonly adapter: OpcUaClientAdapterV1
+  readonly write: typeof write
+  readonly stop: ReturnType<typeof vi.fn>
+} {
+  const stop = vi.fn(async () => undefined)
+  return {
+    write,
+    stop,
+    adapter: {
+      start: async () => undefined,
+      stop,
+      write,
+      status: () => [{
+        endpointId: 'endpoint-1', endpointUrl: 'opc.tcp://localhost:4840', phase: 'connected' as const,
+        sessionActive: true, subscriptionActive: true, monitoredItemCount: 0, mappingCount: 1,
+        lastValueQuality: null, lastNotificationAtMs: null, lastGoodValueAtMs: null,
+        reconnectAttempt: 0, nextRetryAtMs: null, lastError: null,
+      }],
+    },
+  }
+}
+
 async function requestUpgrade(port: number, path: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const socket = connect({ host: '127.0.0.1', port })
@@ -317,6 +363,143 @@ afterEach(() => {
 })
 
 describe('runtime Gateway entrypoint', () => {
+  it('publishes a Client write lease and transports an exact terminal command envelope', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+      nowMs: () => 1_000,
+    })
+    const project = writableClientProject()
+    const revision = await configRevisionForProjectV5(project)
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      await expect((await requestLease(port)).json()).resolves.toEqual({
+        projectId: project.projectId, configRevision: revision,
+        publisherId: 'test-gateway:client-write', generation: 1, expiresAt: 6_000,
+      })
+      const response = await requestCommand(port, commandRequest(revision))
+      expect(response.status).toBe(200)
+      const body = await response.json() as Record<string, unknown>
+      expect(Object.keys(body)).toHaveLength(13)
+      expect(body).toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED', failureCode: null })
+      expect(body).not.toHaveProperty('statusCode')
+      expect(client.write).toHaveBeenCalledOnce()
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      await expect((await requestLease(port)).json()).resolves.toMatchObject({ generation: 2 })
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('returns exact Client-not-active and invalid-request HTTP errors without executing an adapter', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+    })
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', sampleProject('off'))).status).toBe(200)
+      const lease = await requestLease(port)
+      expect(lease.status).toBe(409)
+      expect(await lease.json()).toMatchObject({ code: 'OPC_UA_CLIENT_NOT_ACTIVE' })
+      const revision = await configRevisionForProjectV5(sampleProject('off'))
+      const noClient = await requestCommand(port, commandRequest(revision))
+      expect(noClient.status).toBe(200)
+      expect(await noClient.json()).toMatchObject({
+        acknowledgement: 'REJECTED', executionState: 'FAILED', failureCode: 'OPC_UA_CLIENT_NOT_ACTIVE',
+      })
+      const invalid = await requestCommand(port, { type: 'wrong' })
+      expect(invalid.status).toBe(400)
+      expect(await invalid.json()).toMatchObject({ code: 'COMMAND_REQUEST_INVALID' })
+      const unsupported = await fetch(`http://127.0.0.1:${port}/runtime/command`, {
+        method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}',
+      })
+      expect(unsupported.status).toBe(415)
+      expect(await unsupported.json()).toMatchObject({ code: 'CONTENT_TYPE_UNSUPPORTED' })
+      expect(client.write).not.toHaveBeenCalled()
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('advances the command generation for a same-Revision activation and refuses overflow before stopping the active Client', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+      initialCommittedCommandGeneration: Number.MAX_SAFE_INTEGER - 1,
+    })
+    const project = writableClientProject()
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      expect((await (await requestLease(port)).json() as { generation: number }).generation)
+        .toBe(Number.MAX_SAFE_INTEGER)
+      const replacement = await requestJson(port, 'PUT', '/runtime/project', project)
+      expect(replacement.status).toBe(503)
+      expect(client.stop).toHaveBeenCalledTimes(0)
+      expect((await (await requestLease(port)).json() as { generation: number }).generation)
+        .toBe(Number.MAX_SAFE_INTEGER)
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('settles a never-ending command during stop without letting the write block shutdown', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const write = vi.fn(() => new Promise<never>(() => undefined))
+    const client = connectedClientAdapter(write)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+      nowMs: () => 1_000,
+    })
+    const project = writableClientProject()
+    const revision = await configRevisionForProjectV5(project)
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const pending = requestCommand(port, commandRequest(revision))
+      await vi.waitFor(() => expect(write).toHaveBeenCalledOnce())
+      await service.stop()
+      await expect(pending).resolves.toMatchObject({ status: 200 })
+      await expect((await pending).json()).resolves.toMatchObject({ failureCode: 'COMMAND_SERVICE_CLOSED' })
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('admits a command before a replacement transition without waiting for its write completion', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const write = vi.fn(() => new Promise<never>(() => undefined))
+    const client = connectedClientAdapter(write)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+      nowMs: () => 1_000,
+    })
+    const project = writableClientProject()
+    const revision = await configRevisionForProjectV5(project)
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const pending = requestCommand(port, commandRequest(revision))
+      await vi.waitFor(() => expect(write).toHaveBeenCalledOnce())
+      await expect(requestJson(port, 'PUT', '/runtime/project', sampleProject('off'))).resolves.toMatchObject({ status: 200 })
+      await expect((await pending).json()).resolves.toMatchObject({
+        acknowledgement: 'ACCEPTED', failureCode: 'COMMAND_SERVICE_CLOSED',
+      })
+    } finally {
+      await service.stop()
+    }
+  })
+
   it('has no import-time signals, logging, or exit-code side effects', async () => {
     vi.resetModules()
     const signalCounts = {
@@ -1555,6 +1738,8 @@ describe('runtime Gateway entrypoint', () => {
       'src/core/runtime-protocol/v1.ts',
       'middleware/runtime-gateway/opcua-client-adapter.ts',
       'middleware/runtime-gateway/opcua-server-adapter.ts',
+      'middleware/runtime-gateway/runtime-command-dedupe-registry.ts',
+      'middleware/runtime-gateway/runtime-command-service.ts',
       'middleware/runtime-gateway/main.ts',
     ].map(async (path) => readFile(path, 'utf8')))
     for (const source of sources) {

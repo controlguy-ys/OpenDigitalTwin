@@ -129,6 +129,13 @@ describe('readDeploymentConfig', () => {
     })).toThrow(RuntimeGatewayDeploymentConfigError)
   })
 
+  it('accepts the 115-byte Gateway ID bound and rejects the next byte', () => {
+    expect(readDeploymentConfig({ ROBOTSIM_GATEWAY_ID: 'g'.repeat(115) }).gatewayId)
+      .toHaveLength(115)
+    expect(() => readDeploymentConfig({ ROBOTSIM_GATEWAY_ID: 'g'.repeat(116) }))
+      .toThrow(RuntimeGatewayDeploymentConfigError)
+  })
+
   it.each([
     '',
     ' ',

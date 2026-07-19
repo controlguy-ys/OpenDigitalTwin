@@ -32,7 +32,7 @@ const DEFAULT_OPC_UA_ADVERTISED_HOST = 'localhost'
 const DEFAULT_HTTP_PORT = 8081
 const DEFAULT_OPC_UA_PORT = 4841
 
-const GATEWAY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const GATEWAY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,114}$/
 const PORT_PATTERN = /^[1-9][0-9]{0,4}$/
 const HOST_FORBIDDEN_PATTERN = /[\p{Cc}\s/\\?#]/u
 
@@ -63,7 +63,7 @@ function readGatewayId(
   const name = 'ROBOTSIM_GATEWAY_ID'
   const value = recognizedValue(environment, name, DEFAULT_GATEWAY_ID)
   if (!GATEWAY_ID_PATTERN.test(value)) {
-    invalid(name, 'must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+    invalid(name, 'must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,114}$')
   }
   return value
 }

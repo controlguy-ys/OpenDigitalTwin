@@ -18,6 +18,13 @@ import {
   type WorkcellProjectV5,
 } from '../../src/core/project-v5/index.js'
 import {
+  MAX_RUNTIME_BATCH_BYTES_V1,
+  validateCommandRequestV1,
+  validateCommandResultV1,
+  type CommandRequestV1,
+  type CommandResultV1,
+} from '../../src/core/runtime-protocol/v1.js'
+import {
   RuntimeGatewayDeploymentConfigError,
   readDeploymentConfig,
   type RuntimeGatewayDeploymentConfigV1,
@@ -37,6 +44,14 @@ import {
   isStreamableStateSnapshotV1,
   type StateBatchHubV1,
 } from './state-batch-hub.js'
+import {
+  createRuntimeCommandDedupeRegistryV1,
+  type RuntimeCommandDedupeRegistryV1,
+} from './runtime-command-dedupe-registry.js'
+import {
+  createRuntimeCommandServiceV1,
+  type RuntimeCommandServiceV1,
+} from './runtime-command-service.js'
 import type { RuntimeMappedValueV1, StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
 import {
   validateRuntimeGatewayStatusV1,
@@ -64,11 +79,15 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
   readonly createStateBatchHub?: () => StateBatchHubV1
   readonly pkiRootDir?: string
   readonly nowMs?: () => number
+  readonly initialCommittedCommandGeneration?: number
 }
 
 interface ActiveProjectRuntimeV1 {
   readonly project: WorkcellProjectV5
   readonly configRevision: string
+  readonly generation: number
+  readonly commandDedupe: RuntimeCommandDedupeRegistryV1
+  readonly commandService: RuntimeCommandServiceV1 | null
   readonly serverAdapter: OpcUaServerAdapterV1 | null
   readonly clientAdapter: OpcUaClientAdapterV1 | null
 }
@@ -313,12 +332,17 @@ export function createRuntimeGatewayEntrypointService(
   const pkiRootDir = dependencies.pkiRootDir
     ?? join(tmpdir(), 'web-digital-twin-runtime-gateway', config.gatewayId)
   const nowMs = dependencies.nowMs ?? Date.now
+  const initialCommittedCommandGeneration = dependencies.initialCommittedCommandGeneration ?? 0
+  if (!Number.isSafeInteger(initialCommittedCommandGeneration) || initialCommittedCommandGeneration < 0) {
+    throw new Error('INITIAL_COMMITTED_COMMAND_GENERATION_INVALID')
+  }
   let server: Server | null = null
   let webSocketServer: WebSocketServer | null = null
   let stateBatchHub = createStateBatchHub()
   let activeRuntime: ActiveProjectRuntimeV1 | null = null
   let lifecycleTail: Promise<void> = Promise.resolve()
   let runtimeTail: Promise<void> = Promise.resolve()
+  let committedCommandGeneration = initialCommittedCommandGeneration
 
   function status(): RuntimeGatewayStatusV1 {
     const active = activeRuntime
@@ -368,11 +392,11 @@ export function createRuntimeGatewayEntrypointService(
     })
   }
 
-  function enqueueRuntimeTransition(
-    transition: () => Promise<void>,
-  ): Promise<void> {
+  function enqueueRuntimeTransition<T>(
+    transition: () => Promise<T>,
+  ): Promise<T> {
     const requestedTransition = runtimeTail.then(transition)
-    runtimeTail = requestedTransition.catch(() => undefined)
+    runtimeTail = requestedTransition.then(() => undefined, () => undefined)
     return requestedTransition
   }
 
@@ -397,8 +421,18 @@ export function createRuntimeGatewayEntrypointService(
     validateProjectMode(project)
     const configRevision = await configRevisionForProjectV5(project)
     const previous = activeRuntime
+    const candidateGeneration = committedCommandGeneration + 1
+    if (!Number.isSafeInteger(candidateGeneration)) {
+      throw new RuntimeGatewayHttpError(
+        503,
+        'PROJECT_ACTIVATION_FAILED',
+        'Project activation failed: COMMAND_GENERATION_EXHAUSTED',
+      )
+    }
     let candidateServerAdapter: OpcUaServerAdapterV1 | null = null
     let candidateClientAdapter: OpcUaClientAdapterV1 | null = null
+    let candidateCommandDedupe: RuntimeCommandDedupeRegistryV1 | null = null
+    let candidateCommandService: RuntimeCommandServiceV1 | null = null
     const stagedClientBatches = createStagedClientBatchesV1()
     let clientBatchPublisherLive = false
     let previousAdaptersStopped = false
@@ -446,14 +480,34 @@ export function createRuntimeGatewayEntrypointService(
       stateBatchHub.activateRevision(project.projectId, configRevision)
       stagedClientBatches.flushTo(stateBatchHub)
       clientBatchPublisherLive = true
+      candidateCommandDedupe = createRuntimeCommandDedupeRegistryV1()
+      if (candidateClientAdapter !== null) {
+        candidateCommandService = createRuntimeCommandServiceV1({
+          project,
+          configRevision,
+          publisherId: `${config.gatewayId}:client-write`,
+          generation: candidateGeneration,
+          nowMs,
+          clientAdapter: candidateClientAdapter,
+          dedupe: candidateCommandDedupe,
+        })
+      }
       activeRuntime = Object.freeze({
         project,
         configRevision,
+        generation: candidateGeneration,
+        commandDedupe: candidateCommandDedupe,
+        commandService: candidateCommandService,
         serverAdapter: candidateServerAdapter,
         clientAdapter: candidateClientAdapter,
       })
+      committedCommandGeneration = candidateGeneration
+      previous?.commandService?.close()
+      previous?.commandDedupe.clear()
     } catch (error) {
       stagedClientBatches.clear()
+      candidateCommandService?.close()
+      candidateCommandDedupe?.clear()
       await candidateClientAdapter?.stop().catch(() => undefined)
       await candidateServerAdapter?.stop().catch(() => undefined)
       let recovered = false
@@ -466,6 +520,8 @@ export function createRuntimeGatewayEntrypointService(
           previous?.clientAdapter?.stop().catch(() => undefined),
           previous?.serverAdapter?.stop().catch(() => undefined),
         ])
+        previous?.commandService?.close()
+        previous?.commandDedupe.clear()
       }
       if (!recovered) {
         activeRuntime = null
@@ -657,6 +713,60 @@ export function createRuntimeGatewayEntrypointService(
     return status()
   }
 
+  function noClientCommandResult(request: CommandRequestV1): CommandResultV1 {
+    return validateCommandResultV1({
+      type: 'command-result-v1',
+      protocolVersion: 1,
+      projectId: request.projectId,
+      configRevision: request.configRevision,
+      leaseGeneration: request.leaseGeneration,
+      targetId: request.targetId,
+      commandId: request.commandId,
+      acknowledgement: 'REJECTED',
+      executionState: 'FAILED',
+      failureCode: 'OPC_UA_CLIENT_NOT_ACTIVE',
+      message: 'Runtime command requires an active OPC UA Client Project.',
+      attachedObjectId: null,
+      completedAt: nowMs(),
+    })
+  }
+
+  async function commandLeaseRequest(): Promise<unknown> {
+    return enqueueRuntimeTransition(async () => {
+      const commandService = activeRuntime?.commandService
+      if (commandService === null || commandService === undefined) {
+        throw new RuntimeGatewayHttpError(
+          409,
+          'OPC_UA_CLIENT_NOT_ACTIVE',
+          'Runtime command lease requires an active OPC UA Client Project.',
+        )
+      }
+      return commandService.lease()
+    })
+  }
+
+  async function commandRequest(request: IncomingMessage): Promise<CommandResultV1> {
+    const body = await readJsonBody(request, MAX_RUNTIME_BATCH_BYTES_V1)
+    let command: CommandRequestV1
+    try {
+      command = validateCommandRequestV1(body)
+    } catch (error) {
+      throw new RuntimeGatewayHttpError(
+        400,
+        'COMMAND_REQUEST_INVALID',
+        `Command Request validation failed: ${conciseError(error)}`,
+      )
+    }
+    let result: Promise<CommandResultV1> | null = null
+    await enqueueRuntimeTransition(async () => {
+      const commandService = activeRuntime?.commandService
+      result = commandService === null || commandService === undefined
+        ? Promise.resolve(noClientCommandResult(command))
+        : commandService.execute(command)
+    })
+    return result!
+  }
+
   function writeRequestError(response: ServerResponse, error: unknown): void {
     if (response.headersSent || response.writableEnded) return
     if (error instanceof RuntimeGatewayHttpError) {
@@ -703,6 +813,11 @@ export function createRuntimeGatewayEntrypointService(
       return
     }
 
+    if (request.method === 'GET' && request.url === '/runtime/command-lease') {
+      writeJson(response, 200, await commandLeaseRequest())
+      return
+    }
+
     if (request.method === 'PUT' && request.url === '/runtime/project') {
       writeJson(response, 200, await applyProjectRequest(request))
       return
@@ -710,6 +825,11 @@ export function createRuntimeGatewayEntrypointService(
 
     if (request.method === 'POST' && request.url === '/runtime/state') {
       writeJson(response, 200, await publishStateRequest(request))
+      return
+    }
+
+    if (request.method === 'POST' && request.url === '/runtime/command') {
+      writeJson(response, 200, await commandRequest(request))
       return
     }
 
@@ -794,15 +914,17 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   async function closeService(): Promise<void> {
-    await stateBatchHub.close()
-    await closeWebSocketServer()
-    await closeHttpServer()
     await enqueueRuntimeTransition(async () => {
       const active = activeRuntime
       activeRuntime = null
+      active?.commandService?.close()
+      active?.commandDedupe.clear()
       await active?.clientAdapter?.stop()
       await active?.serverAdapter?.stop()
     })
+    await stateBatchHub.close()
+    await closeWebSocketServer()
+    await closeHttpServer()
     stateBatchHub = createStateBatchHub()
   }
 
