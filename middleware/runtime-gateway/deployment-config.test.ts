@@ -13,8 +13,8 @@ const DEFAULT_CONFIG = {
   host: '0.0.0.0',
   httpPort: 8081,
   opcUaAdvertisedHost: 'localhost',
-  opcUaAdvertisedPort: 4840,
-  opcUaPort: 4840,
+  opcUaAdvertisedPort: 4841,
+  opcUaPort: 4841,
 }
 
 describe('readDeploymentConfig', () => {

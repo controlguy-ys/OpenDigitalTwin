@@ -42,6 +42,7 @@ describe('deployment smoke orchestration', () => {
 
   it('can run a supplied two-Robot OPC UA Server probe after the Gateway is live', async () => {
     const commands: string[] = []
+    const environments: Array<Record<string, string> | undefined> = []
     const probeOpcUaServer = vi.fn().mockResolvedValue(undefined)
 
     await smokeDeployment({
@@ -53,15 +54,21 @@ describe('deployment smoke orchestration', () => {
         : new Response('ok'),
       probeOpcUaServer,
       projectName: 'robotsim-smoke-opcua',
-      run: async (command) => { commands.push(command.join(' ')) },
+      run: async (command, options) => {
+        commands.push(command.join(' '))
+        environments.push(options?.env)
+      },
       sleep: async () => undefined,
     })
 
     expect(commands.some((command) => /up -d --wait --wait-timeout 90/.test(command))).toBe(true)
     expect(commands.some((command) => /--profile opcua/.test(command))).toBe(false)
     expect(commands.some((command) => /opcua-connector/.test(command))).toBe(false)
+    expect(environments).toContainEqual(expect.objectContaining({
+      ROBOTSIM_OPCUA_PORT: '4841',
+    }))
     expect(probeOpcUaServer).toHaveBeenCalledWith({
-      endpointUrl: 'opc.tcp://127.0.0.1:4840',
+      endpointUrl: 'opc.tcp://127.0.0.1:4841',
       gatewayBaseUrl: 'http://127.0.0.1:18080/runtime',
       webBaseUrl: 'http://127.0.0.1:18080',
     })

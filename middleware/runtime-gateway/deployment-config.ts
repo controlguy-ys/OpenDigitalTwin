@@ -30,7 +30,7 @@ const DEFAULT_RUNTIME_KIND: RuntimeGatewayRuntimeKindV1 = 'native'
 const DEFAULT_HOST = '0.0.0.0'
 const DEFAULT_OPC_UA_ADVERTISED_HOST = 'localhost'
 const DEFAULT_HTTP_PORT = 8081
-const DEFAULT_OPC_UA_PORT = 4840
+const DEFAULT_OPC_UA_PORT = 4841
 
 const GATEWAY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const PORT_PATTERN = /^[1-9][0-9]{0,4}$/

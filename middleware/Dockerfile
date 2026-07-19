@@ -19,5 +19,5 @@ RUN npm install --global npm@11.4.2 \
     && npm cache clean --force
 COPY --from=gateway-build --chown=node:node /app/dist-gateway ./dist-gateway
 USER node
-EXPOSE 8081 4840
+EXPOSE 8081 4841
 CMD ["node", "dist-gateway/middleware/runtime-gateway/main.js"]

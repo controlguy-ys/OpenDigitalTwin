@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
@@ -8,6 +9,15 @@ import {
 describe('deployment contract', () => {
   it('validates the checked-in hardened Compose deployment', async () => {
     await expect(validateDeploymentFiles(resolve('.'))).resolves.toEqual([])
+  })
+
+  it('requires a Docker runtime kind and the independent 4841 Gateway Server port', async () => {
+    await expect(validateDeploymentFiles(resolve('.'))).resolves.toEqual([])
+    const compose = await readFile(resolve('compose.yaml'), 'utf8')
+    expect(compose).toContain('ROBOTSIM_RUNTIME_KIND: "docker"')
+    expect(compose).toContain('${ROBOTSIM_OPCUA_PORT:-4841}:${ROBOTSIM_OPCUA_PORT:-4841}')
+    const legacyPortFallback = '${ROBOTSIM_OPCUA_PORT:-484' + '0}'
+    expect(compose).not.toContain(legacyPortFallback)
   })
 
   it('requires the production proxy to preserve the Runtime Gateway WebSocket upgrade', () => {
@@ -37,10 +47,11 @@ describe('deployment contract', () => {
         '    mem_limit: 512m',
         '    cpus: 1.0',
         '    environment:',
-        '      ROBOTSIM_OPCUA_PORT: "${ROBOTSIM_OPCUA_PORT:-4840}"',
+        '      ROBOTSIM_RUNTIME_KIND: "docker"',
+        '      ROBOTSIM_OPCUA_PORT: "${ROBOTSIM_OPCUA_PORT:-4841}"',
         '      ROBOTSIM_OPCUA_ADVERTISE_HOST: localhost',
-        '      ROBOTSIM_OPCUA_ADVERTISE_PORT: "${ROBOTSIM_OPCUA_PORT:-4840}"',
-        '    ports: ["${ROBOTSIM_OPCUA_PORT:-4840}:${ROBOTSIM_OPCUA_PORT:-4840}"]',
+        '      ROBOTSIM_OPCUA_ADVERTISE_PORT: "${ROBOTSIM_OPCUA_PORT:-4841}"',
+        '    ports: ["${ROBOTSIM_OPCUA_PORT:-4841}:${ROBOTSIM_OPCUA_PORT:-4841}"]',
         '    tmpfs: [- /tmp:size=16m,mode=1777]',
         '  web:',
         '    read_only: true',

@@ -37,7 +37,7 @@ or safety-rated system.
 - The standard Docker topology starts both the Nginx web service and the Runtime
   Gateway. Nginx serves the SPA and proxies same-origin `/runtime/` requests;
   the Gateway owns HTTP activation/state endpoints and optional OPC UA port
-  `4840`.
+  `4841`.
 
 Project V4 is a clean break. There is no Legacy Adoption or automatic Project
 migration.
@@ -64,7 +64,7 @@ npm run runtime:gateway
 ```
 
 The direct Gateway defaults are HTTP `http://127.0.0.1:8081` and OPC UA
-`opc.tcp://127.0.0.1:4840`. The browser expects a same-origin `/runtime` route,
+`opc.tcp://127.0.0.1:4841`. The browser expects a same-origin `/runtime` route,
 so Docker Compose is the supported full browser-plus-Gateway topology.
 
 ## Two-Robot Technical Demo flow
@@ -111,22 +111,35 @@ batch budget. Unknown Robots/Joints, duplicate Robots, non-finite values, and
 stale revisions are rejected before publication.
 
 The OPC UA namespace URI is `urn:web-digital-twin:robot-sim:v4`. Actual Joint
-variables are read-only; Client writes return `BadNotWritable`.
-The current Server namespace is derived from Robot Definitions; object bindings
-do not author arbitrary Server nodes. In Client or Bridge mode, an Object
-Inspector can subscribe six external `Double` nodes (`X`, `Y`, `Z`, `Roll`,
-`Pitch`, `Yaw`) and an optional numeric `Status` node. See
-[Object OPC UA live binding](docs/operator/opcua-object-binding.md).
+variables are read-only and the Server namespace is derived from Robot
+Definitions.
 
 ## Docker deployment
 
 ```powershell
+$env:ROBOTSIM_OPCUA_PORT = '4841'
+$env:ROBOTSIM_OPCUA_ADVERTISE_HOST = '127.0.0.1'
 docker compose up -d --build --wait
 docker compose ps
+Invoke-WebRequest http://127.0.0.1:8080/healthz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/healthz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/readyz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/status
 ```
 
 Open [http://127.0.0.1:8080/](http://127.0.0.1:8080/). The default published OPC
-UA endpoint is `opc.tcp://127.0.0.1:4840`. Override host ports when required:
+UA endpoint is `opc.tcp://127.0.0.1:4841`. Docker uses independent endpoints:
+
+```text
+Browser                    http://127.0.0.1:8080
+Gateway HTTP               runtime-gateway:8081
+Gateway OPC UA Client  --> opc.tcp://host.docker.internal:4840  (host PLC Server)
+Gateway OPC UA Server  <-- opc.tcp://127.0.0.1:4841             (external PLC Client)
+```
+
+Inside the Gateway container, `opc.tcp://127.0.0.1:4840` points back to that
+container, not to the Windows PLC. Docker Project Endpoints must use
+`opc.tcp://host.docker.internal:4840`. Override host ports when required:
 
 ```powershell
 $env:WEB_PORT = '9080'
@@ -140,6 +153,8 @@ Clients actually use. The Gateway still binds to all container interfaces while
 advertising this reachable host in endpoint discovery. Compose automatically
 uses the same `ROBOTSIM_OPCUA_PORT` for the container listener, host publication,
 and endpoint discovery, avoiding duplicate internal and external endpoint URLs.
+Changing listener or advertised endpoint environment values requires a container
+restart.
 
 Both containers run with read-only filesystems, dropped Linux capabilities,
 bounded process/memory/CPU settings, and temporary writable storage. These

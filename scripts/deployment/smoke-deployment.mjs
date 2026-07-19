@@ -48,7 +48,7 @@ export async function smokeDeployment({
   probeOpcUaServer,
   sleep = delay,
   port = 18080,
-  opcUaPort = 4840,
+  opcUaPort = 4841,
   projectName = createSmokeProjectName(),
   maxAttempts = 90,
 } = {}) {
@@ -128,7 +128,7 @@ export async function smokeDeployment({
 const invokedPath = process.argv[1] === undefined ? '' : resolve(process.argv[1])
 if (invokedPath === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.SMOKE_WEB_PORT ?? 18080)
-  const opcUaPort = Number(process.env.SMOKE_OPCUA_PORT ?? 4840)
+  const opcUaPort = Number(process.env.SMOKE_OPCUA_PORT ?? 4841)
   try {
     if (!Number.isSafeInteger(opcUaPort) || opcUaPort < 1 || opcUaPort > 65_535) {
       throw new Error('SMOKE_OPCUA_PORT must be an integer from 1 through 65535.')

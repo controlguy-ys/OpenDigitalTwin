@@ -12,9 +12,29 @@ npm run runtime:gateway
 ```
 
 The HTTP service listens on port `8081` and the OPC UA Server listener uses port
-`4840` by default. Runtime mode is owned by the applied Project, not an
+`4841` by default. Runtime mode is owned by the applied Project, not an
 environment flag. Client connections are outbound to the endpoint URLs stored in
 the applied Project.
+
+For Docker deployment, the Gateway Client reaches a Windows-host PLC through
+`opc.tcp://host.docker.internal:4840`; the Gateway Server is independently
+published at `opc.tcp://127.0.0.1:4841` for an external PLC Client. Do not use
+`opc.tcp://127.0.0.1:4840` as a Docker Project Endpoint: inside the container it
+points back to the Gateway. Listener and advertised endpoint environment changes
+take effect after a container restart.
+
+## Docker quick check
+
+```powershell
+$env:ROBOTSIM_OPCUA_PORT = '4841'
+$env:ROBOTSIM_OPCUA_ADVERTISE_HOST = '127.0.0.1'
+docker compose up -d --build --wait
+docker compose ps
+Invoke-WebRequest http://127.0.0.1:8080/healthz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/healthz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/readyz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/status
+```
 
 ## HTTP contract
 

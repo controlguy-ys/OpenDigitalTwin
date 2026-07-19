@@ -23,10 +23,11 @@ export function validateDeploymentContract(files) {
   requirePattern(errors, files.nginx, /immutable/, 'Nginx must cache hashed assets as immutable.')
   requirePattern(errors, files.nginx, /resolver\s+127\.0\.0\.11/, 'Nginx must resolve the Runtime Gateway through Docker DNS.')
   requirePattern(errors, files.compose, /^\s{2}runtime-gateway:\s*$/m, 'Compose must define the runtime-gateway service.')
-  requirePattern(errors, files.compose, /ROBOTSIM_OPCUA_PORT:\s*["']?\$\{ROBOTSIM_OPCUA_PORT:-4840\}/, 'Compose must configure the container OPC UA port from the published port.')
+  requirePattern(errors, files.compose, /ROBOTSIM_RUNTIME_KIND:\s*["']?docker["']?/, 'Compose must configure the Runtime Gateway for Docker.')
+  requirePattern(errors, files.compose, /ROBOTSIM_OPCUA_PORT:\s*["']?\$\{ROBOTSIM_OPCUA_PORT:-4841\}/, 'Compose must configure the independent 4841 Gateway Server OPC UA port from the published port.')
   requirePattern(errors, files.compose, /ROBOTSIM_OPCUA_ADVERTISE_HOST:/, 'Compose must configure the advertised OPC UA host separately from the bind host.')
-  requirePattern(errors, files.compose, /ROBOTSIM_OPCUA_ADVERTISE_PORT:\s*["']?\$\{ROBOTSIM_OPCUA_PORT:-4840\}/, 'Compose must advertise the externally published OPC UA port.')
-  requirePattern(errors, files.compose, /\$\{ROBOTSIM_OPCUA_PORT:-4840\}:\$\{ROBOTSIM_OPCUA_PORT:-4840\}/, 'Compose must publish the same configurable OPC UA port used by the container listener.')
+  requirePattern(errors, files.compose, /ROBOTSIM_OPCUA_ADVERTISE_PORT:\s*["']?\$\{ROBOTSIM_OPCUA_PORT:-4841\}/, 'Compose must advertise the independent 4841 Gateway Server OPC UA port.')
+  requirePattern(errors, files.compose, /\$\{ROBOTSIM_OPCUA_PORT:-4841\}:\$\{ROBOTSIM_OPCUA_PORT:-4841\}/, 'Compose must publish the same configurable 4841 Gateway Server OPC UA port used by the container listener.')
   if (/\bopcua-connector\b/i.test(files.compose) || /\/opcua\b/i.test(files.nginx)) {
     errors.push('Deployment must not contain the legacy opcua-connector service or /opcua proxy.')
   }

@@ -14,13 +14,10 @@ OPC UA signing/encryption, certificate trust, or public-internet protection.
 The default Compose project always starts two services:
 
 ```text
-Browser -> web:8080 (Nginx SPA)
-             |
-             +-- /runtime/* -> runtime-gateway:8081
-
-OPC UA Client -> host:4840 -> runtime-gateway:4840 (Server or Bridge mode)
-
-runtime-gateway -- outbound OPC UA Client connection --> external OPC UA Server
+Browser                    http://127.0.0.1:8080
+Gateway HTTP               runtime-gateway:8081
+Gateway OPC UA Client  --> opc.tcp://host.docker.internal:4840  (host PLC Server)
+Gateway OPC UA Server  <-- opc.tcp://127.0.0.1:4841             (external PLC Client)
 ```
 
 The Gateway process is always available, but the applied Project owns the OPC UA
@@ -32,15 +29,22 @@ separate Connector profile or configuration file.
 
 The Compose network permits the Gateway's outbound Client connections; operators
 must still allow routing and firewall access from the container to each external
-OPC UA Server. Port `4840` is published only for the Gateway Server listener;
-it is not required for Client-only mode.
+OPC UA Server. Port `4841` is published only for the Gateway Server listener;
+it is not required for Client-only mode. Inside the Gateway container,
+`opc.tcp://127.0.0.1:4840` points back to that container, not to the Windows
+PLC. Docker Project Endpoints must use `opc.tcp://host.docker.internal:4840`.
 
 ## Start
 
 ```powershell
+$env:ROBOTSIM_OPCUA_PORT = '4841'
+$env:ROBOTSIM_OPCUA_ADVERTISE_HOST = '127.0.0.1'
 docker compose up -d --build --wait
 docker compose ps
 Invoke-WebRequest http://127.0.0.1:8080/healthz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/healthz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/readyz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/status
 ```
 
 Open `http://<docker-host>:8080/`. Load or create a Project in the browser. The
@@ -64,6 +68,8 @@ external OPC UA Clients use, because it is returned in endpoint discovery. The
 default `localhost` is suitable only for Clients running on the Docker host.
 Compose advertises and listens on the same `ROBOTSIM_OPCUA_PORT`, so strict OPC
 UA endpoint discovery also works when the published port is changed.
+Changing listener or advertised endpoint environment values requires a container
+restart.
 
 ## Select an OPC UA mode
 
@@ -73,7 +79,7 @@ UA endpoint discovery also works when the published port is changed.
    **Bridge** to do both.
 3. Wait for **Gateway ready**. For Server/Bridge, inspect the reported endpoint.
 4. In Server/Bridge mode, connect an external OPC UA Client to
-   `opc.tcp://<docker-host>:${ROBOTSIM_OPCUA_PORT:-4840}`.
+   `opc.tcp://<docker-host>:${ROBOTSIM_OPCUA_PORT:-4841}`.
 
 The namespace URI is `urn:web-digital-twin:robot-sim:v4`. Each configured Robot
 Joint is exposed as a read-only `Double`:
@@ -89,15 +95,14 @@ unknown Joints, duplicate Robots, non-finite values, and oversized batches are
 rejected before publication.
 
 The Server namespace is derived from Robot Definitions. Client/Bridge mappings
-are read-only subscriptions, not Server-node authoring. An Object Inspector can
-configure six external `Double` nodes for `X/Y/Z/Roll/Pitch/Yaw` and an optional
-numeric Status node; see [Object OPC UA live binding](opcua-object-binding.md).
+are read-only subscriptions, not Server-node authoring.
 
 ## Health and diagnostics
 
 ```powershell
 Invoke-WebRequest http://127.0.0.1:8080/healthz
 Invoke-WebRequest http://127.0.0.1:8080/runtime/healthz
+Invoke-WebRequest http://127.0.0.1:8080/runtime/readyz
 Invoke-WebRequest http://127.0.0.1:8080/runtime/status
 docker compose logs --tail 200 web
 docker compose logs --tail 200 runtime-gateway
@@ -155,9 +160,9 @@ npm run deploy:smoke
 ```
 
 The Server release gate uses a real `node-opcua` Client to read both sample
-Robots, confirms that Client writes return `BadNotWritable`, and exercises the
-two-Robot Project in the browser. Client/Bridge deployment should additionally
-be checked against the intended external OPC UA Server and Object binding.
+Robots and exercises the two-Robot Project in the browser. Client/Bridge
+deployment should additionally be checked against the intended external OPC UA
+Server.
 
 ## Persistence, update, and rollback
 
