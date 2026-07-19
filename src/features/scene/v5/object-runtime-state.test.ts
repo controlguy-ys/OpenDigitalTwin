@@ -115,9 +115,13 @@ function objectPoseBatch(overrides: {
   readonly statusCode?: string
 } = {}): StateBatchV1 {
   const positionM = overrides.positionM ?? [0, 0, 0]
+  const halfYawRadians = (overrides.yaw ?? 0) * Math.PI / 360
   return batch(overrides.endpointId ?? 'plc', overrides.sequence ?? 1, [{
     mappingId: 'box-pose', coherenceGroupId: 'box-pose',
-    value: [...positionM, 0, 0, overrides.yaw ?? 0], unit: 'project-v5-z-up-metres-quaternion-xyzw',
+    value: {
+      positionM: [...positionM],
+      quaternion: [0, 0, Math.sin(halfYawRadians), Math.cos(halfYawRadians)],
+    }, unit: 'project-v5-z-up-metres-quaternion-xyzw',
     quality: overrides.quality ?? 'GOOD', statusCode: overrides.statusCode ?? 'Good',
   }], overrides.sourceTimestampMs ?? 1_000)
 }
@@ -135,6 +139,19 @@ function objectStatusBatch(overrides: {
 }
 
 describe('ObjectRuntimeStateV5', () => {
+  it('exposes the fixed revision contract and nullable configured channels before GOOD data', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithMappedBoxFrameAndStatusOnSeparateEndpoints(), REVISION)
+
+    expect(runtime.projectRevisionId).toBe('revision-1')
+    expect(runtime.configRevision).toBe(REVISION)
+    expect(runtime.sampleFrame('box', 'box-motion', 1_000)).toMatchObject({
+      worldPose: null, quality: 'BAD', statusCode: 'BadWaitingForInitialData', owner: 'opcua:motion-plc',
+    })
+    expect(runtime.readNumericStatus('box')).toMatchObject({
+      value: null, quality: 'BAD', statusCode: 'BadWaitingForInitialData', owner: 'opcua:status-plc',
+    })
+  })
+
   it('samples a coherent OPC UA-owned Object Frame two publishing cycles behind', () => {
     const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox({ publishingIntervalMs: 100 }), REVISION)
     runtime.ingest(objectPoseBatch({ sequence: 1, sourceTimestampMs: 1_000, positionM: [0, 0, 0], yaw: 0 }), 1_000)
@@ -172,12 +189,56 @@ describe('ObjectRuntimeStateV5', () => {
     runtime.ingest(objectPoseBatch({ sequence: 1, positionM: [0, 0, 0] }), 1_000)
     runtime.ingest(objectPoseBatch({ sequence: 2, sourceTimestampMs: 1_100, positionM: [1, 0, 0] }), 1_100)
     expect(runtime.sampleFrame('box', 'box-motion', 1_250)).toMatchObject({ sourceTimestampMs: 1_050 })
-    expect(runtime.ingest(objectPoseBatch({ sequence: 3, sourceTimestampMs: 50_000, positionM: [99, 0, 0] }), 1_260)).toBe(false)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 3, sourceTimestampMs: 1_301, positionM: [99, 0, 0] }), 1_300)).toBe(false)
     expect(runtime.ingest(objectPoseBatch({ sequence: 4, sourceTimestampMs: 1_200, positionM: [2, 0, 0], quality: 'BAD', statusCode: 'BadNoData' }), 1_300)).toBe(true)
 
     expect(runtime.sampleFrame('box', 'box-motion', 1_300)).toMatchObject({
       worldPose: { positionM: [1, 0, 0] }, quality: 'BAD', statusCode: 'BadNoData', owner: 'opcua:plc',
     })
+  })
+
+  it('keeps recent UNCERTAIN quality ahead of a stale retained-GOOD pose buffer', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    runtime.ingest(objectPoseBatch({ sequence: 1 }), 1_000)
+    runtime.ingest(objectPoseBatch({
+      sequence: 2, sourceTimestampMs: 1_100, quality: 'UNCERTAIN', statusCode: 'UncertainLastUsableValue',
+    }), 1_600)
+
+    expect(runtime.sampleFrame('box', 'box-motion', 1_600)).toMatchObject({
+      worldPose: { positionM: [0, 0, 0] }, quality: 'UNCERTAIN', statusCode: 'UncertainLastUsableValue',
+    })
+  })
+
+  it('rejects an older receipt without advancing the Endpoint session fence', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 1, sourceTimestampMs: 1_000 }), 2_000)).toBe(true)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 2, sourceTimestampMs: 1_001, positionM: [1, 0, 0] }), 1_999)).toBe(false)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 2, sourceTimestampMs: 1_001, positionM: [1, 0, 0] }), 2_001)).toBe(true)
+  })
+
+  it('marks pre-GOOD channels stale and resets pose-buffer sequence fences without rewinding diagnostics', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    runtime.markEndpointDisconnected('plc', 1_000)
+    expect(runtime.sampleFrame('box', 'box-motion', 1_000)).toMatchObject({
+      worldPose: null, quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: 1_000,
+    })
+    runtime.ingest(objectPoseBatch({ sequence: 10, positionM: [2, 0, 0] }), 1_100)
+    runtime.resetGatewaySession(900)
+    expect(runtime.sampleFrame('box', 'box-motion', 1_100)).toMatchObject({
+      worldPose: { positionM: [2, 0, 0] }, quality: 'BAD',
+      statusCode: 'BadWaitingForInitialData', receivedTimestampMs: 1_100,
+    })
+    expect(runtime.ingest(objectPoseBatch({ sequence: 1, positionM: [3, 0, 0] }), 1_200)).toBe(true)
+  })
+
+  it('keeps displayed diagnostic source timestamps monotonic across a new gateway session', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    runtime.ingest(objectPoseBatch({ sequence: 10, sourceTimestampMs: 1_000, positionM: [1, 0, 0] }), 1_000)
+    runtime.sampleFrame('box', 'box-motion', 1_000)
+    runtime.resetGatewaySession(1_001)
+
+    expect(runtime.ingest(objectPoseBatch({ sequence: 1, sourceTimestampMs: 1, positionM: [2, 0, 0] }), 1_002)).toBe(true)
+    expect(runtime.sampleFrame('box', 'box-motion', 1_002)).toMatchObject({ sourceTimestampMs: 1_000 })
   })
 
   it('keeps the active Object runtime snapshot when replacement has a partial frame Mapping', () => {

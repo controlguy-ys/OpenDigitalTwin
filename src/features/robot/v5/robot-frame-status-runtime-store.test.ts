@@ -67,13 +67,16 @@ function robotFrameStatusBatch(overrides: {
 } = {}): StateBatchV1 {
   const positionM = overrides.positionM ?? [0, 0, 0]
   const quality = overrides.quality ?? 'GOOD'
+  const halfYawRadians = (overrides.yaw ?? 0) * Math.PI / 360
   return {
     type: 'state-batch-v1', protocolVersion: 1, gatewayId: 'gateway-test', projectId: 'project-v5',
     configRevision: REVISION, endpointId: 'plc', sequence: overrides.sequence ?? 1,
     sourceTimestampMs: 1_000, publishedTimestampMs: 1_020, originId: 'gateway-test:client',
     values: [
       {
-        mappingId: 'robot-tcp', coherenceGroupId: 'robot-tcp', value: [...positionM, 0, 0, overrides.yaw ?? 0],
+        mappingId: 'robot-tcp', coherenceGroupId: 'robot-tcp', value: {
+          positionM: [...positionM], quaternion: [0, 0, Math.sin(halfYawRadians), Math.cos(halfYawRadians)],
+        },
         unit: 'project-v5-z-up-metres-quaternion-xyzw', quality, statusCode: quality === 'GOOD' ? 'Good' : 'BadNoData',
       },
       {
@@ -85,6 +88,19 @@ function robotFrameStatusBatch(overrides: {
 }
 
 describe('RobotFrameStatusRuntimeStoreV5', () => {
+  it('exposes the fixed revision contract and nullable configured Frame and Status values', () => {
+    const runtime = createRobotFrameStatusRuntimeStoreV5(projectWithMappedRobotTcpAndStatus(), REVISION)
+
+    expect(runtime.projectRevisionId).toBe('revision-1')
+    expect(runtime.configRevision).toBe(REVISION)
+    expect(runtime.sampleFrame('robot-a', 'TCP', 1_000)).toMatchObject({
+      worldPose: null, quality: 'BAD', statusCode: 'BadWaitingForInitialData', owner: 'opcua:plc',
+    })
+    expect(runtime.readNumericStatus('robot-a')).toMatchObject({
+      value: null, quality: 'BAD', statusCode: 'BadWaitingForInitialData', owner: 'opcua:plc',
+    })
+  })
+
   it('ingests a coherent Robot Frame and numeric Status, then retains both STALE', () => {
     const runtime = createRobotFrameStatusRuntimeStoreV5(projectWithMappedRobotTcpAndStatus(), REVISION)
     runtime.ingest(robotFrameStatusBatch({ sequence: 1, positionM: [0.4, 0.1, 0.8], yaw: 30, status: 7 }), 1_000)
@@ -127,5 +143,17 @@ describe('RobotFrameStatusRuntimeStoreV5', () => {
 
     expect(() => runtime.replaceProject(invalid, REVISION)).toThrow('OPCUA_READ_OWNER_DUPLICATE')
     expect(runtime.sampleFrame('robot-a', 'TCP', 1_000)).toMatchObject({ worldPose: { positionM: [1, 0, 0] } })
+  })
+
+  it('resets a gateway session to accept sequence one while retaining display values', () => {
+    const runtime = createRobotFrameStatusRuntimeStoreV5(projectWithMappedRobotTcpAndStatus(), REVISION)
+    runtime.ingest(robotFrameStatusBatch({ sequence: 10, positionM: [1, 0, 0], status: 2 }), 1_000)
+
+    runtime.resetGatewaySession(900)
+    expect(runtime.sampleFrame('robot-a', 'TCP', 1_000)).toMatchObject({
+      worldPose: { positionM: [1, 0, 0] }, quality: 'BAD', statusCode: 'BadWaitingForInitialData',
+    })
+    expect(runtime.readNumericStatus('robot-a')).toMatchObject({ value: 2, quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
+    expect(runtime.ingest(robotFrameStatusBatch({ sequence: 1, positionM: [2, 0, 0], status: 3 }), 1_001)).toBe(true)
   })
 })

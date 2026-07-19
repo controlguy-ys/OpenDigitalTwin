@@ -1,48 +1,52 @@
 import {
+  normalizeRigidTransformV5,
   validateWorkcellProjectV5,
-  type OpcUaMappingLeafV5,
+  type RigidTransformV5,
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
 import {
   createRuntimePoseBufferV1,
-  rpyDegreesToRuntimeQuaternionV1,
   type RuntimePoseBufferV1,
-  type RuntimeRigidTransformV1,
 } from '../../../core/runtime-interpolation/v1.js'
-import type { RuntimeMappedValueV1, RuntimeValueQualityV1, StateBatchV1 } from '../../../core/runtime-protocol/v1.js'
+import {
+  validateStateBatchV1,
+  type RuntimeMappedValueV1,
+  type RuntimeValueQualityV1,
+  type StateBatchV1,
+} from '../../../core/runtime-protocol/v1.js'
 
-export type ObjectRuntimeQualityV5 = RuntimeValueQualityV1 | 'STALE'
-export type ObjectRuntimeOwnerV5 = `opcua:${string}`
+export type LogicalSignalRuntimeQualityV1 = RuntimeValueQualityV1 | 'STALE'
 
-export interface ObjectRuntimeFrameV5 {
+export interface ObjectFrameRuntimeValueV5 {
   readonly entityId: string
   readonly frameId: string
-  readonly worldPose: RuntimeRigidTransformV1
-  readonly sourceTimestampMs: number
-  readonly publishedTimestampMs: number
-  readonly receivedTimestampMs: number
-  readonly quality: ObjectRuntimeQualityV5
+  readonly worldPose: RigidTransformV5 | null
+  readonly quality: LogicalSignalRuntimeQualityV1
   readonly statusCode: string
-  readonly owner: ObjectRuntimeOwnerV5
+  readonly owner: 'manual' | 'simulation' | `opcua:${string}` | 'attachment'
+  readonly sourceTimestampMs: number
+  readonly receivedTimestampMs: number
 }
 
-export interface ObjectRuntimeNumericStatusV5 {
+export interface ObjectNumericStatusRuntimeValueV5 {
   readonly entityId: string
-  readonly value: number
-  readonly sourceTimestampMs: number
-  readonly publishedTimestampMs: number
-  readonly receivedTimestampMs: number
-  readonly quality: ObjectRuntimeQualityV5
+  readonly value: number | null
+  readonly quality: LogicalSignalRuntimeQualityV1
   readonly statusCode: string
-  readonly owner: ObjectRuntimeOwnerV5
+  readonly owner: 'manual' | 'simulation' | `opcua:${string}`
+  readonly sourceTimestampMs: number
+  readonly receivedTimestampMs: number
 }
 
 export interface ObjectRuntimeStateV5 {
-  ingest(value: unknown, receivedTimestampMs?: number): boolean
-  markEndpointDisconnected(endpointId: string, receivedTimestampMs?: number): void
-  replaceProject(projectInput: WorkcellProjectV5, configRevision: string): void
-  sampleFrame(entityId: string, frameId: string, nowMs?: number): ObjectRuntimeFrameV5 | null
-  readNumericStatus(entityId: string): ObjectRuntimeNumericStatusV5 | null
+  readonly projectRevisionId: string | null
+  readonly configRevision: string | null
+  replaceProject(project: WorkcellProjectV5, configRevision: string): void
+  ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  sampleFrame(entityId: string, frameId: string, renderTimestampMs: number): ObjectFrameRuntimeValueV5 | null
+  readNumericStatus(entityId: string): ObjectNumericStatusRuntimeValueV5 | null
+  markEndpointDisconnected(endpointId: string, atMs: number): void
+  resetGatewaySession(atMs: number): void
 }
 
 interface FrameChannelV5 {
@@ -51,13 +55,14 @@ interface FrameChannelV5 {
   readonly entityId: string
   readonly frameId: string
   readonly publishingIntervalMs: number
-  readonly leaves: readonly OpcUaMappingLeafV5[]
-  readonly buffer: RuntimePoseBufferV1
-  heldPose: RuntimeRigidTransformV1 | null
+  buffer: RuntimePoseBufferV1
+  heldPose: RigidTransformV5 | null
+  displayPose: RigidTransformV5 | null
+  displaySourceTimestampMs: number
   sourceTimestampMs: number
-  publishedTimestampMs: number
+  sourceFenceTimestampMs: number
   receivedTimestampMs: number
-  quality: ObjectRuntimeQualityV5
+  quality: LogicalSignalRuntimeQualityV1
   statusCode: string
 }
 
@@ -67,9 +72,9 @@ interface StatusChannelV5 {
   readonly entityId: string
   value: number | null
   sourceTimestampMs: number
-  publishedTimestampMs: number
+  sourceFenceTimestampMs: number
   receivedTimestampMs: number
-  quality: ObjectRuntimeQualityV5
+  quality: LogicalSignalRuntimeQualityV1
   statusCode: string
 }
 
@@ -83,6 +88,7 @@ interface ObjectRuntimeContextV5 {
   readonly frameChannelsByEndpoint: ReadonlyMap<string, readonly FrameChannelV5[]>
   readonly statusChannelsByEndpoint: ReadonlyMap<string, readonly StatusChannelV5[]>
   readonly endpointSequences: Map<string, number>
+  readonly endpointReceiptFences: Map<string, number>
 }
 
 const CONFIG_REVISION_PATTERN = /^[0-9a-f]{64}$/u
@@ -103,42 +109,7 @@ function requireTimestamp(value: number, label: string): number {
   return value
 }
 
-function isRuntimeMappedValue(value: unknown): value is RuntimeMappedValueV1 {
-  if (value === null || typeof value !== 'object') return false
-  const record = value as Record<string, unknown>
-  return typeof record.mappingId === 'string'
-    && (typeof record.coherenceGroupId === 'string' || record.coherenceGroupId === null)
-    && typeof record.unit === 'string'
-    && (record.quality === 'GOOD' || record.quality === 'UNCERTAIN' || record.quality === 'BAD')
-    && typeof record.statusCode === 'string'
-    && Object.hasOwn(record, 'value')
-}
-
-function asStateBatch(value: unknown): StateBatchV1 | null {
-  if (value === null || typeof value !== 'object') return null
-  const record = value as Record<string, unknown>
-  if (
-    record.type !== 'state-batch-v1'
-    || record.protocolVersion !== 1
-    || typeof record.projectId !== 'string'
-    || typeof record.configRevision !== 'string'
-    || typeof record.endpointId !== 'string'
-    || !Number.isSafeInteger(record.sequence)
-    || (record.sequence as number) <= 0
-    || !Number.isSafeInteger(record.sourceTimestampMs)
-    || (record.sourceTimestampMs as number) < 0
-    || !Number.isSafeInteger(record.publishedTimestampMs)
-    || (record.publishedTimestampMs as number) < 0
-    || !Array.isArray(record.values)
-    || !record.values.every(isRuntimeMappedValue)
-  ) return null
-  return record as unknown as StateBatchV1
-}
-
-function appendByEndpoint<T extends { readonly endpointId: string }>(
-  channelsByEndpoint: Map<string, T[]>,
-  channel: T,
-): void {
+function appendByEndpoint<T extends { readonly endpointId: string }>(channelsByEndpoint: Map<string, T[]>, channel: T): void {
   const channels = channelsByEndpoint.get(channel.endpointId) ?? []
   channels.push(channel)
   channelsByEndpoint.set(channel.endpointId, channels)
@@ -161,19 +132,20 @@ function compileContext(projectInput: WorkcellProjectV5, configRevision: string)
     const endpoint = enabledEndpoints.get(mapping.endpointId)
     const target = mapping.leaves[0]?.projectTarget
     if (endpoint === undefined || (mapping.direction !== 'read' && mapping.direction !== 'readWrite') || target === undefined) continue
-    const publishingIntervalMs = mapping.publishingIntervalMs ?? endpoint.publishingIntervalMs
     if (target.type === 'entity-frame') {
+      const publishingIntervalMs = mapping.publishingIntervalMs ?? endpoint.publishingIntervalMs
       const channel: FrameChannelV5 = {
         mappingId: mapping.id,
         endpointId: mapping.endpointId,
         entityId: target.entityId,
         frameId: target.frameId,
         publishingIntervalMs,
-        leaves: mapping.leaves,
         buffer: createRuntimePoseBufferV1(frameKey(target.entityId, target.frameId), publishingIntervalMs),
         heldPose: null,
+        displayPose: null,
+        displaySourceTimestampMs: 0,
         sourceTimestampMs: 0,
-        publishedTimestampMs: 0,
+        sourceFenceTimestampMs: 0,
         receivedTimestampMs: 0,
         quality: 'BAD',
         statusCode: 'BadWaitingForInitialData',
@@ -188,7 +160,7 @@ function compileContext(projectInput: WorkcellProjectV5, configRevision: string)
         entityId: target.entityId,
         value: null,
         sourceTimestampMs: 0,
-        publishedTimestampMs: 0,
+        sourceFenceTimestampMs: 0,
         receivedTimestampMs: 0,
         quality: 'BAD',
         statusCode: 'BadWaitingForInitialData',
@@ -209,120 +181,72 @@ function compileContext(projectInput: WorkcellProjectV5, configRevision: string)
     frameChannelsByEndpoint: new Map([...frameChannelsByEndpoint].map(([key, value]) => [key, Object.freeze(value)])),
     statusChannelsByEndpoint: new Map([...statusChannelsByEndpoint].map(([key, value]) => [key, Object.freeze(value)])),
     endpointSequences: new Map(),
+    endpointReceiptFences: new Map(),
   })
 }
 
-function leafValue(value: unknown, path: readonly (string | number)[]): unknown {
-  let current = value
-  for (const segment of path) {
-    if (typeof segment === 'number' && Array.isArray(current)) {
-      current = current[segment]
-    } else if (typeof segment === 'string' && current !== null && typeof current === 'object' && !Array.isArray(current)) {
-      current = (current as Record<string, unknown>)[segment]
-    } else {
-      return undefined
-    }
+function canonicalPose(value: RuntimeMappedValueV1['value']): RigidTransformV5 | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  if (!Array.isArray(record.positionM) || record.positionM.length !== 3 || !Array.isArray(record.quaternion) || record.quaternion.length !== 4) return null
+  if (![...record.positionM, ...record.quaternion].every((component) => typeof component === 'number' && Number.isFinite(component))) return null
+  try {
+    return normalizeRigidTransformV5({
+      positionM: [record.positionM[0] as number, record.positionM[1] as number, record.positionM[2] as number],
+      quaternion: [record.quaternion[0] as number, record.quaternion[1] as number, record.quaternion[2] as number, record.quaternion[3] as number],
+    }, '$.value')
+  } catch {
+    return null
   }
-  return current
 }
 
-function poseFromMappedValue(mapped: RuntimeMappedValueV1, leaves: readonly OpcUaMappingLeafV5[]): RuntimeRigidTransformV1 | null {
-  const positionM: number[] = []
-  const rpyDegrees: number[] = []
-  for (const leaf of leaves) {
-    const raw = leafValue(mapped.value, leaf.leafPath)
-    if (typeof raw !== 'number' || !Number.isFinite(raw)) return null
-    const scaled = raw * leaf.scale + leaf.offset
-    if (!Number.isFinite(scaled)) return null
-    const [property, index] = leaf.projectPath
-    if (property === 'positionM' && typeof index === 'number') positionM[index] = scaled
-    else if (property === 'rpyDegrees' && typeof index === 'number') rpyDegrees[index] = scaled
-    else return null
-  }
-  if (positionM.length !== 3 || rpyDegrees.length !== 3 || positionM.some((value) => !Number.isFinite(value)) || rpyDegrees.some((value) => !Number.isFinite(value))) return null
-  return Object.freeze({
-    positionM: Object.freeze([positionM[0]!, positionM[1]!, positionM[2]!]) as RuntimeRigidTransformV1['positionM'],
-    quaternion: Object.freeze(rpyDegreesToRuntimeQuaternionV1([rpyDegrees[0]!, rpyDegrees[1]!, rpyDegrees[2]!])) as RuntimeRigidTransformV1['quaternion'],
-  })
-}
-
-function updateFrameChannel(
-  channel: FrameChannelV5,
-  mapped: RuntimeMappedValueV1,
-  batch: StateBatchV1,
-  receivedTimestampMs: number,
-): boolean {
-  let quality: ObjectRuntimeQualityV5 = mapped.quality
+function updateFrameChannel(channel: FrameChannelV5, mapped: RuntimeMappedValueV1, batch: StateBatchV1, receivedTimestampMs: number): void {
+  let quality: LogicalSignalRuntimeQualityV1 = mapped.quality
   let statusCode = mapped.statusCode
   if (mapped.quality === 'GOOD') {
-    const pose = poseFromMappedValue(mapped, channel.leaves)
-    if (pose === null || !channel.buffer.push({
-      sequence: batch.sequence,
-      sourceTimestampMs: batch.sourceTimestampMs,
-      receivedTimestampMs,
-      pose,
-    })) {
+    const pose = canonicalPose(mapped.value)
+    if (pose === null || !channel.buffer.push({ sequence: batch.sequence, sourceTimestampMs: batch.sourceTimestampMs, receivedTimestampMs, pose })) {
       quality = 'BAD'
       statusCode = 'BadTypeMismatch'
     } else {
       channel.heldPose = pose
+      channel.displayPose = pose
     }
   }
-  channel.sourceTimestampMs = batch.sourceTimestampMs
-  channel.publishedTimestampMs = batch.publishedTimestampMs
-  channel.receivedTimestampMs = receivedTimestampMs
+  channel.sourceFenceTimestampMs = batch.sourceTimestampMs
+  channel.sourceTimestampMs = Math.max(channel.sourceTimestampMs, batch.sourceTimestampMs)
+  channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, receivedTimestampMs)
   channel.quality = quality
   channel.statusCode = statusCode
-  return true
 }
 
-function updateStatusChannel(
-  channel: StatusChannelV5,
-  mapped: RuntimeMappedValueV1,
-  batch: StateBatchV1,
-  receivedTimestampMs: number,
-): boolean {
-  let quality: ObjectRuntimeQualityV5 = mapped.quality
+function updateStatusChannel(channel: StatusChannelV5, mapped: RuntimeMappedValueV1, batch: StateBatchV1, receivedTimestampMs: number): void {
+  let quality: LogicalSignalRuntimeQualityV1 = mapped.quality
   let statusCode = mapped.statusCode
   if (mapped.quality === 'GOOD') {
     if (typeof mapped.value !== 'number' || !Number.isFinite(mapped.value)) {
       quality = 'BAD'
       statusCode = 'BadTypeMismatch'
-    } else {
-      channel.value = mapped.value
-    }
+    } else channel.value = mapped.value
   }
-  channel.sourceTimestampMs = batch.sourceTimestampMs
-  channel.publishedTimestampMs = batch.publishedTimestampMs
-  channel.receivedTimestampMs = receivedTimestampMs
+  channel.sourceFenceTimestampMs = batch.sourceTimestampMs
+  channel.sourceTimestampMs = Math.max(channel.sourceTimestampMs, batch.sourceTimestampMs)
+  channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, receivedTimestampMs)
   channel.quality = quality
   channel.statusCode = statusCode
-  return true
 }
 
-function wouldBreakFrameClock(channel: FrameChannelV5, batch: StateBatchV1, receivedTimestampMs: number): boolean {
-  return batch.sourceTimestampMs < channel.sourceTimestampMs
-    || batch.sourceTimestampMs > receivedTimestampMs + Math.max(500, 5 * channel.publishingIntervalMs)
-}
-
-function wouldRewindStatusClock(channel: StatusChannelV5, batch: StateBatchV1): boolean {
-  return batch.sourceTimestampMs < channel.sourceTimestampMs
-}
-
-export function createObjectRuntimeStateV5(
-  projectInput: WorkcellProjectV5,
-  configRevision: string,
-): ObjectRuntimeStateV5 {
+export function createObjectRuntimeStateV5(projectInput: WorkcellProjectV5, configRevision: string): ObjectRuntimeStateV5 {
   let context = compileContext(projectInput, configRevision)
 
-  const ingest = (value: unknown, receiptCandidate = Date.now()): boolean => {
-    const batch = asStateBatch(value)
-    if (batch === null) return false
+  const ingest = (batchInput: StateBatchV1, receiptCandidate: number): boolean => {
+    const batch = validateStateBatchV1(batchInput)
     const receivedTimestampMs = requireTimestamp(receiptCandidate, 'Receipt timestamp')
     if (
       batch.projectId !== context.project.projectId
       || batch.configRevision !== context.configRevision
       || batch.sequence <= (context.endpointSequences.get(batch.endpointId) ?? 0)
+      || receivedTimestampMs < (context.endpointReceiptFences.get(batch.endpointId) ?? 0)
     ) return false
     const frames = batch.values.flatMap((mapped) => {
       const channel = context.frameChannelsByMappingId.get(mapped.mappingId)
@@ -334,71 +258,96 @@ export function createObjectRuntimeStateV5(
     })
     if (frames.length === 0 && statuses.length === 0) return false
     if (
-      frames.some(([channel]) => wouldBreakFrameClock(channel, batch, receivedTimestampMs))
-      || statuses.some(([channel]) => wouldRewindStatusClock(channel, batch))
+      frames.some(([channel]) => batch.sourceTimestampMs < channel.sourceFenceTimestampMs || batch.sourceTimestampMs > receivedTimestampMs)
+      || statuses.some(([channel]) => batch.sourceTimestampMs < channel.sourceFenceTimestampMs)
     ) return false
 
-    context.endpointSequences.set(batch.endpointId, batch.sequence)
     frames.forEach(([channel, mapped]) => updateFrameChannel(channel, mapped, batch, receivedTimestampMs))
     statuses.forEach(([channel, mapped]) => updateStatusChannel(channel, mapped, batch, receivedTimestampMs))
+    context.endpointSequences.set(batch.endpointId, batch.sequence)
+    context.endpointReceiptFences.set(batch.endpointId, receivedTimestampMs)
     return true
   }
 
-  const markEndpointDisconnected = (endpointId: string, receiptCandidate = Date.now()): void => {
-    const receivedTimestampMs = requireTimestamp(receiptCandidate, 'Receipt timestamp')
+  const markEndpointDisconnected = (endpointId: string, atCandidate: number): void => {
+    const atMs = requireTimestamp(atCandidate, 'Disconnect timestamp')
     for (const channel of context.frameChannelsByEndpoint.get(endpointId) ?? []) {
-      if (channel.heldPose === null) continue
       channel.quality = 'STALE'
       channel.statusCode = 'BadNoCommunication'
-      channel.receivedTimestampMs = receivedTimestampMs
+      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
     }
     for (const channel of context.statusChannelsByEndpoint.get(endpointId) ?? []) {
-      if (channel.value === null) continue
       channel.quality = 'STALE'
       channel.statusCode = 'BadNoCommunication'
-      channel.receivedTimestampMs = receivedTimestampMs
+      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
     }
   }
 
-  const sampleFrame = (entityId: string, frameId: string, nowCandidate = Date.now()): ObjectRuntimeFrameV5 | null => {
-    const nowMs = requireTimestamp(nowCandidate, 'Current time')
+  const resetGatewaySession = (atCandidate: number): void => {
+    const atMs = requireTimestamp(atCandidate, 'Reset timestamp')
+    for (const channel of context.frameChannelsByMappingId.values()) {
+      channel.heldPose = channel.displayPose ?? channel.heldPose
+      channel.buffer = createRuntimePoseBufferV1(frameKey(channel.entityId, channel.frameId), channel.publishingIntervalMs)
+      channel.sourceFenceTimestampMs = 0
+      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+      channel.quality = 'BAD'
+      channel.statusCode = 'BadWaitingForInitialData'
+    }
+    for (const channel of context.statusChannelsByMappingId.values()) {
+      channel.sourceFenceTimestampMs = 0
+      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+      channel.quality = 'BAD'
+      channel.statusCode = 'BadWaitingForInitialData'
+    }
+    context.endpointSequences.clear()
+    context.endpointReceiptFences.clear()
+  }
+
+  const sampleFrame = (entityId: string, frameId: string, renderCandidate: number): ObjectFrameRuntimeValueV5 | null => {
+    const renderTimestampMs = requireTimestamp(renderCandidate, 'Render timestamp')
     const channel = context.frameChannelsByKey.get(frameKey(entityId, frameId))
-    if (channel === undefined || channel.heldPose === null) return null
-    const sample = channel.buffer.sample(nowMs)
-    const stale = channel.quality === 'STALE' || sample?.quality === 'STALE'
+    if (channel === undefined) return null
+    const sample = channel.heldPose === null ? null : channel.buffer.sample(renderTimestampMs)
+    if (sample !== null) {
+      channel.displayPose = sample.pose
+      channel.displaySourceTimestampMs = Math.max(channel.displaySourceTimestampMs, sample.sourceTimestampMs)
+    }
+    const bufferIsStale = sample?.quality === 'STALE'
+    const quality = channel.quality === 'GOOD' && bufferIsStale ? 'STALE' : channel.quality
     return Object.freeze({
       entityId,
       frameId,
-      worldPose: sample?.pose ?? channel.heldPose,
-      sourceTimestampMs: channel.quality === 'GOOD' && sample?.quality === 'GOOD'
-        ? sample.sourceTimestampMs
-        : channel.sourceTimestampMs,
-      publishedTimestampMs: channel.publishedTimestampMs,
-      receivedTimestampMs: channel.receivedTimestampMs,
-      quality: stale ? 'STALE' : channel.quality,
-      statusCode: stale ? 'BadNoCommunication' : channel.statusCode,
+      worldPose: sample?.pose ?? channel.displayPose ?? channel.heldPose,
+      quality,
+      statusCode: quality === 'STALE' && channel.quality === 'GOOD' ? 'BadNoCommunication' : channel.statusCode,
       owner: `opcua:${channel.endpointId}`,
+      sourceTimestampMs: channel.quality === 'GOOD' && sample?.quality === 'GOOD'
+        ? channel.displaySourceTimestampMs
+        : channel.sourceTimestampMs,
+      receivedTimestampMs: channel.receivedTimestampMs,
     })
   }
 
-  const readNumericStatus = (entityId: string): ObjectRuntimeNumericStatusV5 | null => {
+  const readNumericStatus = (entityId: string): ObjectNumericStatusRuntimeValueV5 | null => {
     const channel = context.statusChannelsByEntityId.get(entityId)
-    if (channel === undefined || channel.value === null) return null
+    if (channel === undefined) return null
     return Object.freeze({
       entityId,
       value: channel.value,
-      sourceTimestampMs: channel.sourceTimestampMs,
-      publishedTimestampMs: channel.publishedTimestampMs,
-      receivedTimestampMs: channel.receivedTimestampMs,
       quality: channel.quality,
       statusCode: channel.statusCode,
       owner: `opcua:${channel.endpointId}`,
+      sourceTimestampMs: channel.sourceTimestampMs,
+      receivedTimestampMs: channel.receivedTimestampMs,
     })
   }
 
   return Object.freeze({
+    get projectRevisionId() { return context.project.revisionId },
+    get configRevision() { return context.configRevision },
     ingest,
     markEndpointDisconnected,
+    resetGatewaySession,
     replaceProject: (nextProjectInput: WorkcellProjectV5, nextConfigRevision: string) => {
       const nextContext = compileContext(nextProjectInput, nextConfigRevision)
       context = nextContext

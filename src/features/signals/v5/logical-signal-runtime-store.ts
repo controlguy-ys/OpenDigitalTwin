@@ -1,34 +1,38 @@
 import {
   validateLogicalSignalValueV1,
   validateWorkcellProjectV5,
-  type LogicalSignalValueV1,
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
-import type { RuntimeMappedValueV1, RuntimeValueQualityV1, StateBatchV1 } from '../../../core/runtime-protocol/v1.js'
+import {
+  validateStateBatchV1,
+  type RuntimeMappedValueV1,
+  type RuntimeValueQualityV1,
+  type StateBatchV1,
+} from '../../../core/runtime-protocol/v1.js'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 
 export type LogicalSignalRuntimeQualityV1 = RuntimeValueQualityV1 | 'STALE'
-export type LogicalSignalRuntimeOwnerV1 = 'initial' | `opcua:${string}`
 
 export interface LogicalSignalRuntimeValueV1 {
   readonly signalId: string
-  readonly value: LogicalSignalValueV1
+  readonly value: boolean | number | string
   readonly quality: LogicalSignalRuntimeQualityV1
   readonly statusCode: string
-  readonly owner: LogicalSignalRuntimeOwnerV1
   readonly sourceTimestampMs: number
   readonly publishedTimestampMs: number
   readonly receivedTimestampMs: number
+  readonly owner: 'initial' | 'simulation' | `opcua:${string}`
 }
 
 export interface LogicalSignalRuntimeStoreV1 {
-  readonly projectId: string
-  readonly configRevision: string
-  readonly signals: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
+  readonly projectRevisionId: string | null
+  readonly configRevision: string | null
+  readonly bySignalId: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
+  replaceProject(project: WorkcellProjectV5, configRevision: string): void
+  ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  markEndpointDisconnected(endpointId: string, atMs: number): void
+  resetGatewaySession(atMs: number): void
   read(signalId: string): LogicalSignalRuntimeValueV1 | null
-  ingest(value: unknown, receivedTimestampMs?: number): boolean
-  markEndpointDisconnected(endpointId: string, receivedTimestampMs?: number): void
-  replaceProject(projectInput: WorkcellProjectV5, configRevision: string): void
 }
 
 interface SignalChannelV1 {
@@ -45,6 +49,7 @@ interface LogicalSignalRuntimeContextV1 {
   readonly channelIdsByEndpoint: ReadonlyMap<string, readonly string[]>
   readonly initialSignals: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
   readonly endpointSequences: Map<string, number>
+  readonly endpointReceiptFences: Map<string, number>
 }
 
 const CONFIG_REVISION_PATTERN = /^[0-9a-f]{64}$/u
@@ -73,38 +78,6 @@ function frozenSignals(
   return Object.freeze({ ...values })
 }
 
-function isRuntimeMappedValue(value: unknown): value is RuntimeMappedValueV1 {
-  if (value === null || typeof value !== 'object') return false
-  const record = value as Record<string, unknown>
-  return typeof record.mappingId === 'string'
-    && (typeof record.coherenceGroupId === 'string' || record.coherenceGroupId === null)
-    && typeof record.unit === 'string'
-    && (record.quality === 'GOOD' || record.quality === 'UNCERTAIN' || record.quality === 'BAD')
-    && typeof record.statusCode === 'string'
-    && Object.hasOwn(record, 'value')
-}
-
-function asStateBatch(value: unknown): StateBatchV1 | null {
-  if (value === null || typeof value !== 'object') return null
-  const record = value as Record<string, unknown>
-  if (
-    record.type !== 'state-batch-v1'
-    || record.protocolVersion !== 1
-    || typeof record.projectId !== 'string'
-    || typeof record.configRevision !== 'string'
-    || typeof record.endpointId !== 'string'
-    || !Number.isSafeInteger(record.sequence)
-    || (record.sequence as number) <= 0
-    || !Number.isSafeInteger(record.sourceTimestampMs)
-    || (record.sourceTimestampMs as number) < 0
-    || !Number.isSafeInteger(record.publishedTimestampMs)
-    || (record.publishedTimestampMs as number) < 0
-    || !Array.isArray(record.values)
-    || !record.values.every(isRuntimeMappedValue)
-  ) return null
-  return record as unknown as StateBatchV1
-}
-
 function compileContext(
   projectInput: WorkcellProjectV5,
   configRevision: string,
@@ -129,12 +102,12 @@ function compileContext(
     ) continue
     const signal = signalsById.get(target.signalId)
     if (signal === undefined) continue
-    const channel: SignalChannelV1 = Object.freeze({
+    const channel = Object.freeze({
       mappingId: mapping.id,
       endpointId: mapping.endpointId,
       signalId: signal.id,
       dataType: signal.dataType,
-    })
+    }) satisfies SignalChannelV1
     channelsByMappingId.set(mapping.id, channel)
     const ids = channelIdsByEndpoint.get(mapping.endpointId) ?? []
     ids.push(signal.id)
@@ -162,6 +135,7 @@ function compileContext(
     channelIdsByEndpoint: new Map([...channelIdsByEndpoint].map(([endpointId, ids]) => [endpointId, Object.freeze([...new Set(ids)])])),
     initialSignals: frozenSignals(initialSignals),
     endpointSequences: new Map(),
+    endpointReceiptFences: new Map(),
   })
 }
 
@@ -202,68 +176,94 @@ export function createLogicalSignalRuntimeStoreV1(
   let context = compileContext(projectInput, configRevision)
 
   return createStore<LogicalSignalRuntimeStoreV1>()((set, get) => {
-    const publish = (nextContext: LogicalSignalRuntimeContextV1, signals: Readonly<Record<string, LogicalSignalRuntimeValueV1>>): void => {
+    const publish = (
+      nextContext: LogicalSignalRuntimeContextV1,
+      bySignalId: Readonly<Record<string, LogicalSignalRuntimeValueV1>>,
+    ): void => {
       context = nextContext
       set({
         ...get(),
-        projectId: nextContext.project.projectId,
+        projectRevisionId: nextContext.project.revisionId,
         configRevision: nextContext.configRevision,
-        signals: frozenSignals(signals),
+        bySignalId: frozenSignals(bySignalId),
       }, true)
     }
 
-    const ingest = (value: unknown, receiptCandidate = Date.now()): boolean => {
-      const batch = asStateBatch(value)
-      if (batch === null) return false
+    const ingest = (batchInput: StateBatchV1, receiptCandidate: number): boolean => {
+      const batch = validateStateBatchV1(batchInput)
       const receivedTimestampMs = requireTimestamp(receiptCandidate, 'Receipt timestamp')
       if (
         batch.projectId !== context.project.projectId
         || batch.configRevision !== context.configRevision
         || !context.channelIdsByEndpoint.has(batch.endpointId)
         || batch.sequence <= (context.endpointSequences.get(batch.endpointId) ?? 0)
+        || receivedTimestampMs < (context.endpointReceiptFences.get(batch.endpointId) ?? 0)
       ) return false
 
-      context.endpointSequences.set(batch.endpointId, batch.sequence)
-      const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().signals }
-      let changed = false
-      for (const mapped of batch.values) {
+      const recognized = batch.values.flatMap((mapped) => {
         const channel = context.channelsByMappingId.get(mapped.mappingId)
-        if (channel === undefined || channel.endpointId !== batch.endpointId) continue
+        return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
+      })
+      if (recognized.length === 0) return false
+
+      const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+      for (const [channel, mapped] of recognized) {
         const previous = nextSignals[channel.signalId]
         if (previous === undefined) continue
         nextSignals[channel.signalId] = nextSignalValue(previous, channel, mapped, batch, receivedTimestampMs)
-        changed = true
       }
-      if (!changed) return false
+      context.endpointSequences.set(batch.endpointId, batch.sequence)
+      context.endpointReceiptFences.set(batch.endpointId, receivedTimestampMs)
       publish(context, nextSignals)
       return true
     }
 
-    const markEndpointDisconnected = (endpointId: string, receiptCandidate = Date.now()): void => {
-      const receivedTimestampMs = requireTimestamp(receiptCandidate, 'Receipt timestamp')
-      const ids = context.channelIdsByEndpoint.get(endpointId)
-      if (ids === undefined) return
-      const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().signals }
-      for (const signalId of ids) {
+    const markEndpointDisconnected = (endpointId: string, atCandidate: number): void => {
+      const atMs = requireTimestamp(atCandidate, 'Disconnect timestamp')
+      const signalIds = context.channelIdsByEndpoint.get(endpointId)
+      if (signalIds === undefined) return
+      const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+      for (const signalId of signalIds) {
         const previous = nextSignals[signalId]
-        if (previous === undefined || previous.owner === 'initial') continue
+        if (previous === undefined) continue
         nextSignals[signalId] = frozenSignalValue({
           ...previous,
           quality: 'STALE',
           statusCode: 'BadNoCommunication',
-          receivedTimestampMs,
+          receivedTimestampMs: Math.max(previous.receivedTimestampMs, atMs),
         })
       }
       publish(context, nextSignals)
     }
 
+    const resetGatewaySession = (atCandidate: number): void => {
+      const atMs = requireTimestamp(atCandidate, 'Reset timestamp')
+      const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+      for (const signalIds of context.channelIdsByEndpoint.values()) {
+        for (const signalId of signalIds) {
+          const previous = nextSignals[signalId]
+          if (previous === undefined) continue
+          nextSignals[signalId] = frozenSignalValue({
+            ...previous,
+            quality: 'BAD',
+            statusCode: 'BadWaitingForInitialData',
+            receivedTimestampMs: Math.max(previous.receivedTimestampMs, atMs),
+          })
+        }
+      }
+      context.endpointSequences.clear()
+      context.endpointReceiptFences.clear()
+      publish(context, nextSignals)
+    }
+
     return {
-      projectId: context.project.projectId,
+      projectRevisionId: context.project.revisionId,
       configRevision: context.configRevision,
-      signals: context.initialSignals,
-      read: (signalId) => get().signals[signalId] ?? null,
+      bySignalId: context.initialSignals,
+      read: (signalId) => get().bySignalId[signalId] ?? null,
       ingest,
       markEndpointDisconnected,
+      resetGatewaySession,
       replaceProject: (nextProjectInput, nextConfigRevision) => {
         const nextContext = compileContext(nextProjectInput, nextConfigRevision)
         publish(nextContext, nextContext.initialSignals)

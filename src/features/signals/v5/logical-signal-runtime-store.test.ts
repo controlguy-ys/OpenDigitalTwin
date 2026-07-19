@@ -122,6 +122,17 @@ function signalBatch(overrides: {
 }
 
 describe('LogicalSignalRuntimeStoreV1', () => {
+  it('exposes the fixed revision and immutable Signal-ID contract without legacy fields', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    const state = runtime.getState()
+
+    expect(state.projectRevisionId).toBe('revision-1')
+    expect(state.configRevision).toBe(REVISION)
+    expect(state.bySignalId['part-present']).toMatchObject({ value: false, owner: 'initial' })
+    expect('projectId' in state).toBe(false)
+    expect('signals' in state).toBe(false)
+  })
+
   it('initializes every signal from its authored value while awaiting the first OPC UA receipt', () => {
     const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
 
@@ -195,11 +206,36 @@ describe('LogicalSignalRuntimeStoreV1', () => {
     expect(runtime.getState().read('guard-closed')).toMatchObject({ value: true, quality: 'GOOD', owner: 'opcua:safety' })
   })
 
-  it('does not let an unknown Mapping ID mutate another Signal', () => {
+  it('does not let an irrelevant Mapping ID poison the Endpoint sequence fence', () => {
     const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
 
-    expect(runtime.getState().ingest(signalBatch({ mappingId: 'wrong-target', value: true }), 1_000)).toBe(false)
-    expect(runtime.getState().read('part-present')).toMatchObject({ value: false, owner: 'initial' })
+    expect(runtime.getState().ingest(signalBatch({ mappingId: 'wrong-target', sequence: 100, value: true }), 1_000)).toBe(false)
+    expect(runtime.getState().ingest(signalBatch({ sequence: 1, value: true }), 1_001)).toBe(true)
+    expect(runtime.getState().read('part-present')).toMatchObject({ value: true, quality: 'GOOD', owner: 'opcua:plc' })
+  })
+
+  it('resets the gateway session without rewinding retained diagnostics and accepts sequence one again', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    runtime.getState().ingest(signalBatch({ sequence: 10, value: true }), 1_000)
+
+    runtime.getState().resetGatewaySession(900)
+    expect(runtime.getState().read('part-present')).toMatchObject({
+      value: true, quality: 'BAD', statusCode: 'BadWaitingForInitialData',
+      owner: 'opcua:plc', receivedTimestampMs: 1_000,
+    })
+    expect(runtime.getState().ingest(signalBatch({ sequence: 1, value: false }), 1_001)).toBe(true)
+    expect(runtime.getState().read('part-present')).toMatchObject({ value: false, quality: 'GOOD' })
+  })
+
+  it('does not rewind received timestamps on an earlier disconnect notification', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    runtime.getState().ingest(signalBatch({ value: true }), 1_000)
+
+    runtime.getState().markEndpointDisconnected('plc', 900)
+
+    expect(runtime.getState().read('part-present')).toMatchObject({
+      quality: 'STALE', receivedTimestampMs: 1_000,
+    })
   })
 
   it('keeps the active runtime snapshot when replaceProject validation fails', () => {
