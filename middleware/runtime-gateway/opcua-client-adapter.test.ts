@@ -170,10 +170,10 @@ function fakeOpcUaClientConnection() {
   return { client, group }
 }
 
-function fakeDataValue(value: number) {
+function fakeDataValue(value: number, statusCode = 'Good') {
   return {
     value: { value },
-    statusCode: { toString: () => 'Good' },
+    statusCode: { toString: () => statusCode },
     sourceTimestamp: new Date(1000),
     serverTimestamp: null,
   }
@@ -421,6 +421,61 @@ describe('OPC UA client adapter V1', () => {
         message: 'OPC_UA_CONNECTION_LOST',
         occurredAtMs: 8_000,
       },
+    })
+    await adapter.stop()
+  })
+
+  it('clears pending retry state on stop while retaining the timed error and sample facts', async () => {
+    const project = projectWithEntityPoseMapping()
+    const connection = fakeOpcUaClientConnection()
+    let now = 7_900
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client',
+      configRevision: REVISION, publish: () => undefined,
+      nowMs: () => now, createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    connection.group.emit('changed', {}, fakeDataValue(1), 0)
+    now = 8_000
+    connection.client.emit('connection_lost')
+    await eventually(() => adapter.status()[0]?.phase === 'reconnecting')
+
+    await adapter.stop()
+
+    expect(adapter.status()[0]).toMatchObject({
+      phase: 'disabled', reconnectAttempt: 0, nextRetryAtMs: null,
+      lastNotificationAtMs: 7_900, lastGoodValueAtMs: 7_900,
+      lastError: {
+        code: 'OPC_UA_CONNECTION_LOST',
+        message: 'OPC_UA_CONNECTION_LOST',
+        occurredAtMs: 8_000,
+      },
+    })
+  })
+
+  it('records UNCERTAIN and BAD notifications without replacing the last GOOD timestamp', async () => {
+    const project = projectWithEntityPoseMapping()
+    const connection = fakeOpcUaClientConnection()
+    let now = 5_000
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client',
+      configRevision: REVISION, publish: () => undefined,
+      nowMs: () => now, createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    connection.group.emit('changed', {}, fakeDataValue(1), 0)
+    now = 6_000
+    connection.group.emit('changed', {}, fakeDataValue(2, 'UncertainInitialValue'), 0)
+    expect(adapter.status()[0]).toMatchObject({
+      lastValueQuality: 'UNCERTAIN', lastNotificationAtMs: 6_000, lastGoodValueAtMs: 5_000,
+    })
+    now = 7_000
+    connection.group.emit('changed', {}, fakeDataValue(3, 'BadNoCommunication'), 0)
+
+    expect(adapter.status()[0]).toMatchObject({
+      lastValueQuality: 'BAD', lastNotificationAtMs: 7_000, lastGoodValueAtMs: 5_000,
     })
     await adapter.stop()
   })

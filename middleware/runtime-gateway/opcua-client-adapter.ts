@@ -624,6 +624,8 @@ export function createOpcUaClientAdapterV1(
       await Promise.all([...runtimes.values()].map(async (runtime) => {
         runtime.stopped = true
         runtime.generation += 1
+        runtime.reconnectAttempt = 0
+        runtime.nextRetryAtMs = null
         await closeRuntime(runtime)
         await runtime.recovery
         await runtime.connectTask
