@@ -355,13 +355,18 @@ export function createRuntimeGatewayEntrypointService(
   }
   let server: Server | null = null
   let webSocketServer: WebSocketServer | null = null
-  let stateBatchHub = createStateBatchHub()
+  let stateBatchHub: StateBatchHubV1 | null = createStateBatchHub()
   const incompleteBodyRequests = new Set<IncomingMessage>()
   let activeRuntime: ActiveProjectRuntimeV1 | null = null
   let lifecycleTail: Promise<void> = Promise.resolve()
   let runtimeTail: Promise<void> = Promise.resolve()
   let committedCommandGeneration = initialCommittedCommandGeneration
   let shutdownRequested = false
+
+  function requireStateBatchHub(): StateBatchHubV1 {
+    if (stateBatchHub === null) throw new Error('STATE_BATCH_HUB_UNAVAILABLE')
+    return stateBatchHub
+  }
 
   function status(): RuntimeGatewayStatusV1 {
     const active = activeRuntime
@@ -473,7 +478,7 @@ export function createRuntimeGatewayEntrypointService(
           configRevision,
           publish: (batch) => {
             if (clientBatchPublisherLive) {
-              stateBatchHub.publish(batch)
+              requireStateBatchHub().publish(batch)
             } else {
               stagedClientBatches.publish(batch)
             }
@@ -496,8 +501,9 @@ export function createRuntimeGatewayEntrypointService(
       // Candidate adapters can synchronously emit their first monitored value
       // from start().  Do not let it race the revision fence or old source
       // sequence; stage it until the candidate has started successfully.
-      stateBatchHub.activateRevision(project.projectId, configRevision)
-      stagedClientBatches.flushTo(stateBatchHub)
+      const activeHub = requireStateBatchHub()
+      activeHub.activateRevision(project.projectId, configRevision)
+      stagedClientBatches.flushTo(activeHub)
       clientBatchPublisherLive = true
       candidateCommandDedupe = createRuntimeCommandDedupeRegistryV1()
       if (candidateClientAdapter !== null) {
@@ -544,7 +550,7 @@ export function createRuntimeGatewayEntrypointService(
       }
       if (!recovered) {
         activeRuntime = null
-        stateBatchHub.deactivateRevision()
+        requireStateBatchHub().deactivateRevision()
       }
 
       throw new RuntimeGatewayHttpError(
@@ -883,7 +889,7 @@ export function createRuntimeGatewayEntrypointService(
     candidate.on('upgrade', (request, socket, head) => {
       if (request.url === '/runtime/ws') {
         candidateWebSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
-          stateBatchHub.attach(webSocket)
+          requireStateBatchHub().attach(webSocket)
         })
         return
       }
@@ -917,7 +923,11 @@ export function createRuntimeGatewayEntrypointService(
   }
 
   async function startTransition(): Promise<void> {
-    if (server?.listening === true) return
+    if (stateBatchHub === null) stateBatchHub = createStateBatchHub()
+    if (server?.listening === true) {
+      shutdownRequested = false
+      return
+    }
     server = null
     await startListening()
     shutdownRequested = false
@@ -989,8 +999,10 @@ export function createRuntimeGatewayEntrypointService(
     } catch (error) {
       retainFirstFailure(error)
     }
+    const closingHub = stateBatchHub
+    stateBatchHub = null
     try {
-      await stateBatchHub.close()
+      await closingHub?.close()
     } catch (error) {
       retainFirstFailure(error)
     }
@@ -1004,7 +1016,11 @@ export function createRuntimeGatewayEntrypointService(
     } catch (error) {
       retainFirstFailure(error)
     }
-    stateBatchHub = createStateBatchHub()
+    try {
+      stateBatchHub = createStateBatchHub()
+    } catch (error) {
+      retainFirstFailure(error)
+    }
     if (hasFailure) throw firstFailure
   }
 

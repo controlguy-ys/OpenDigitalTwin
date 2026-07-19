@@ -30,6 +30,7 @@ import {
   type StateBatchV1,
 } from '../../src/core/runtime-protocol/v1.js'
 import { validateRuntimeGatewayStatusV1 } from '../../src/core/runtime-protocol/gateway-status-v1.js'
+import { createStateBatchHubV1 } from './state-batch-hub.js'
 
 async function importMain() {
   return import('./main.js')
@@ -437,6 +438,87 @@ afterEach(() => {
 })
 
 describe('runtime Gateway entrypoint', () => {
+  it('preserves the Client stop error when Hub reset fails and retries a fresh Hub on usable restart', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = fakeClientAdapter()
+    const clientFailure = new Error('client-stop-before-hub-reset')
+    const resetFailure = new Error('hub-reset-failure')
+    client.stop.mockRejectedValueOnce(clientFailure)
+    let clientOptions: OpcUaClientAdapterOptionsV1 | null = null
+    let hubFactoryCall = 0
+    const createStateBatchHub = vi.fn(() => {
+      hubFactoryCall += 1
+      if (hubFactoryCall === 2) throw resetFailure
+      return createStateBatchHubV1()
+    })
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createStateBatchHub,
+      createOpcUaClientAdapter: (_project, options) => {
+        clientOptions = options
+        return client.adapter
+      },
+    })
+    await service.start()
+    let restartedSocket: WebSocket | null = null
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', sampleProject('client', 'revision-hub-reset-prior'))).status)
+        .toBe(200)
+      let caught: unknown
+      try {
+        await service.stop()
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBe(clientFailure)
+      expect(createStateBatchHub).toHaveBeenCalledTimes(2)
+
+      await service.start()
+      expect(createStateBatchHub).toHaveBeenCalledTimes(3)
+      restartedSocket = await openWebSocket(port)
+      const project = sampleProject('client', 'revision-hub-reset-restarted')
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const nextMessage = nextWebSocketMessage(restartedSocket)
+      clientOptions!.publish({
+        type: 'state-batch-v1', protocolVersion: 1, gatewayId: 'test-gateway',
+        projectId: project.projectId, configRevision: clientOptions!.configRevision,
+        endpointId: 'endpoint-1', sequence: 1, sourceTimestampMs: 1, publishedTimestampMs: 1,
+        originId: 'test-gateway:opcua-client',
+        values: [{
+          mappingId: 'mapping-1', coherenceGroupId: null, value: true, unit: '',
+          quality: 'GOOD', statusCode: 'Good',
+        }],
+      })
+      await expect(nextMessage).resolves.toContain('"mappingId":"mapping-1"')
+      expect(restartedSocket.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      restartedSocket?.close()
+      await service.stop().catch(() => undefined)
+    }
+  })
+
+  it('rethrows a reset-only Hub factory failure by exact identity', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const resetFailure = new Error('reset-only-hub-failure')
+    let hubFactoryCall = 0
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createStateBatchHub: () => {
+        hubFactoryCall += 1
+        if (hubFactoryCall === 2) throw resetFailure
+        return createStateBatchHubV1()
+      },
+    })
+    await service.start()
+    let caught: unknown
+    try {
+      await service.stop()
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBe(resetFailure)
+  })
+
   it('runs every shutdown cleanup and rethrows the exact first Client stop failure', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
