@@ -768,7 +768,8 @@ Expected: a disconnected or reconnecting Client never changes Project readiness,
 ```powershell
 git status --short
 git diff --stat
-git log -6 --oneline
+$mergeBase = git merge-base origin/main HEAD
+git log --oneline --reverse "$mergeBase..HEAD"
 ```
 
-Expected: the five implementation-task commits are visible and Task 6 is recorded as a verification-only ledger entry; unrelated CAD, backup, store, and artifact paths are not staged.
+Expected: the plan commit plus every Task 1-5 implementation and review-fix commit are visible in the merge-base range, without relying on a fixed history count. Task 6 is recorded as a verification-only ledger entry without an empty implementation commit; unrelated CAD, backup, store, and artifact paths are not staged.
