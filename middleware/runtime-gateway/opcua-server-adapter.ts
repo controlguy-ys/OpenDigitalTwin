@@ -128,7 +128,8 @@ export function createOpcUaServerAdapterV1(
 ): OpcUaServerAdapterV1 {
   validateOptions(options)
   const project = validateWorkcellProjectV4(projectInput)
-  const mode = project.opcUa.mode === 'server' ? 'server' : 'off'
+  const serverEnabled = project.opcUa.mode === 'server' || project.opcUa.mode === 'bridge'
+  const mode: OpcUaServerAdapterStatusV1['mode'] = serverEnabled ? 'server' : 'off'
   const definitionsById = new Map(
     project.robotDefinitions.map((definition) => [definition.id, definition]),
   )

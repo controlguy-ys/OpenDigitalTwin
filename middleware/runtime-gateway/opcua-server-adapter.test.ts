@@ -29,13 +29,16 @@ const SLIDE_ROBOT_ID = 'robot-sample-linear-slide'
 const SLIDE_JOINT_ID = 'SLIDE_X'
 const TEST_PKI_ROOT = join(tmpdir(), `robot-sim-opcua-adapter-${process.pid}`)
 
-function sampleProject(mode: 'off' | 'server') {
-  return createDualRobotSampleV4({
+function sampleProject(mode: 'off' | 'server' | 'bridge') {
+  const source = createDualRobotSampleV4({
     projectId: `project-opcua-${mode}`,
     revisionId: `revision-opcua-${mode}`,
     nowIso: '2026-07-17T00:00:00.000Z',
-    opcUaMode: mode,
+    opcUaMode: mode === 'bridge' ? 'server' : mode,
   })
+  return mode === 'bridge'
+    ? validateWorkcellProjectV4({ ...source, opcUa: { ...source.opcUa, mode } })
+    : source
 }
 
 function projectWithReservedJointId() {
@@ -123,6 +126,25 @@ describe('OPC UA server adapter V1', () => {
       .rejects.toThrow('OPC_UA_SERVER_MODE_OFF')
     await adapter.stop()
     await adapter.stop()
+  })
+
+  it('starts the Server role for a validated Bridge Project', async () => {
+    const adapter = createOpcUaServerAdapterV1(sampleProject('bridge'), {
+      host: '127.0.0.1',
+      advertisedHost: '127.0.0.1',
+      advertisedPort: 0,
+      port: 0,
+      pkiRootDir: TEST_PKI_ROOT,
+    })
+    adapters.push(adapter)
+
+    await adapter.start()
+
+    expect(adapter.status()).toMatchObject({
+      mode: 'server',
+      started: true,
+      endpointUrl: expect.stringMatching(/^opc\.tcp:\/\/127\.0\.0\.1:\d+$/u),
+    })
   })
 
   it('exposes both Robots through deterministic read-only Double nodes and publishes updates', async () => {
