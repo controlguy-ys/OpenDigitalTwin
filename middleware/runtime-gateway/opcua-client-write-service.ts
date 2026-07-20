@@ -6,7 +6,7 @@ import {
 } from 'node-opcua'
 
 import {
-  validateWorkcellProjectV5,
+  compileWritableBooleanSignalMappingsV5,
   type OpcUaNodeAddressV1,
   type WorkcellProjectV5,
 } from '../../src/core/project-v5/index.js'
@@ -48,10 +48,6 @@ export interface OpcUaClientWriteServiceV1 {
   write(request: OpcUaClientWriteRequestV1): Promise<OpcUaClientWriteResultV1>
 }
 
-function isWriteDirection(direction: WorkcellProjectV5['opcUa']['mappings'][number]['direction']): boolean {
-  return direction === 'write' || direction === 'readWrite'
-}
-
 function failed(
   failureCode: Extract<OpcUaClientWriteResultV1, { readonly ok: false }>['failureCode'],
   statusCode: string,
@@ -67,42 +63,7 @@ function statusName(statusCode: { readonly name?: string }): string {
 export function compileOpcUaClientWritePlanV1(
   projectInput: WorkcellProjectV5,
 ): readonly CompiledOpcUaClientWriteV1[] {
-  const project = validateWorkcellProjectV5(projectInput)
-  const endpointsById = new Map(project.opcUa.endpoints.map((endpoint) => [endpoint.endpointId, endpoint]))
-  const signalsById = new Map(project.logicalSignals.map((signal) => [signal.id, signal]))
-  const writes: CompiledOpcUaClientWriteV1[] = []
-
-  for (const mapping of project.opcUa.mappings) {
-    if (!isWriteDirection(mapping.direction)) continue
-    const endpoint = endpointsById.get(mapping.endpointId)
-    const leaf = mapping.leaves[0]
-    const target = leaf?.projectTarget
-    if (
-      endpoint === undefined
-      || !endpoint.enabled
-      || mapping.leaves.length !== 1
-      || leaf === undefined
-      || !leaf.required
-      || leaf.leafPath.length !== 0
-      || leaf.projectPath.length !== 0
-      || leaf.opcUaDataType !== 'Boolean'
-      || target?.type !== 'logical-signal'
-    ) continue
-    const signal = signalsById.get(target.signalId)
-    if (
-      signal === undefined
-      || signal.dataType !== 'Boolean'
-      || (signal.direction !== 'output' && signal.direction !== 'bidirectional')
-    ) continue
-    writes.push(Object.freeze({
-      mappingId: mapping.id,
-      endpointId: mapping.endpointId,
-      signalId: signal.id,
-      nodeAddress: mapping.nodeAddress,
-      dataType: 'Boolean',
-    }))
-  }
-  return Object.freeze(writes)
+  return compileWritableBooleanSignalMappingsV5(projectInput)
 }
 
 export function createOpcUaClientWriteServiceV1(

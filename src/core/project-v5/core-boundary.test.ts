@@ -151,6 +151,7 @@ describe('Project V5 Core boundary', () => {
         'src/core/project-v5/index.ts',
         'src/core/project-v5/limits.ts',
         'src/core/project-v5/logical-signal.ts',
+        'src/core/project-v5/opcua-boolean-write-targets.ts',
         'src/core/project-v5/opcua-node-address.ts',
         'src/core/project-v5/rigid-transform.ts',
         'src/core/project-v5/types.ts',

@@ -2,8 +2,15 @@ import { AttributeIds, DataType, StatusCodes } from 'node-opcua'
 import { describe, expect, it, vi } from 'vitest'
 
 import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
-import { validateWorkcellProjectV5, type WorkcellProjectV5 } from '../../src/core/project-v5/index.js'
-import { createOpcUaClientWriteServiceV1 } from './opcua-client-write-service.js'
+import {
+  compileWritableBooleanSignalMappingsV5,
+  validateWorkcellProjectV5,
+  type WorkcellProjectV5,
+} from '../../src/core/project-v5/index.js'
+import {
+  compileOpcUaClientWritePlanV1,
+  createOpcUaClientWriteServiceV1,
+} from './opcua-client-write-service.js'
 
 function projectWithBooleanOutput(): WorkcellProjectV5 {
   const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
@@ -20,6 +27,13 @@ function projectWithBooleanOutput(): WorkcellProjectV5 {
 }
 
 describe('OPC UA Client Write Service V1', () => {
+  it('uses the browser-safe compiler as the exact ordered Gateway write plan', () => {
+    const project = projectWithBooleanOutput()
+    expect(compileOpcUaClientWritePlanV1(project)).toEqual(
+      compileWritableBooleanSignalMappingsV5(project),
+    )
+  })
+
   it('writes one Boolean Value through the still-current live Session', async () => {
     const session = {
       readNamespaceArray: vi.fn(async () => ['http://opcfoundation.org/UA/', 'urn:virtual-plc']),
