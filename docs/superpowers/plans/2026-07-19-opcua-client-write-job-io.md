@@ -77,6 +77,11 @@ These signatures are fixed for this plan. Later tasks consume them verbatim.
 ```ts
 export type LogicalSignalRuntimeQualityV1 = 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE'
 
+export interface EndpointCatchupGuardV5 {
+  commit(): void
+  abort(): void
+}
+
 export interface LogicalSignalRuntimeValueV1 {
   readonly signalId: string
   readonly value: boolean | number | string
@@ -94,7 +99,10 @@ export interface LogicalSignalRuntimeStoreV1 {
   readonly bySignalId: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
   replaceProject(project: WorkcellProjectV5, configRevision: string): void
   ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  restoreReplayPrefix(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  beginEndpointCatchup(endpointId: string, atMs: number): EndpointCatchupGuardV5
   markEndpointDisconnected(endpointId: string, atMs: number): void
+  resetEndpointSession(endpointId: string, atMs: number): void
   resetGatewaySession(atMs: number): void
   read(signalId: string): LogicalSignalRuntimeValueV1 | null
 }
@@ -125,9 +133,12 @@ export interface ObjectRuntimeStateV5 {
   readonly configRevision: string | null
   replaceProject(project: WorkcellProjectV5, configRevision: string): void
   ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  restoreReplayPrefix(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  beginEndpointCatchup(endpointId: string, atMs: number): EndpointCatchupGuardV5
   sampleFrame(entityId: string, frameId: string, renderTimestampMs: number): ObjectFrameRuntimeValueV5 | null
   readNumericStatus(entityId: string): ObjectNumericStatusRuntimeValueV5 | null
   markEndpointDisconnected(endpointId: string, atMs: number): void
+  resetEndpointSession(endpointId: string, atMs: number): void
   resetGatewaySession(atMs: number): void
 }
 
@@ -147,6 +158,8 @@ export interface RobotFrameStatusRuntimeStoreV5 {
   readonly configRevision: string | null
   replaceProject(project: WorkcellProjectV5, configRevision: string): void
   ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  restoreReplayPrefix(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  beginEndpointCatchup(endpointId: string, atMs: number): EndpointCatchupGuardV5
   sampleFrame(robotId: string, frameId: string, renderTimestampMs: number): RobotFrameRuntimeValueV5 | null
   readNumericStatus(robotId: string): Readonly<{
     value: number | null
@@ -155,11 +168,12 @@ export interface RobotFrameStatusRuntimeStoreV5 {
     owner: 'manual' | 'simulation' | `opcua:${string}`
   }> | null
   markEndpointDisconnected(endpointId: string, atMs: number): void
+  resetEndpointSession(endpointId: string, atMs: number): void
   resetGatewaySession(atMs: number): void
 }
 
 export interface GatewaySignalWritePortV1 {
-  writeBoolean(signalId: string, value: boolean): Promise<CommandResultV1>
+  writeBoolean(signalId: string, value: boolean, signal?: AbortSignal): Promise<CommandResultV1>
 }
 
 export interface AttachmentInstructionPortV1 {
@@ -195,6 +209,8 @@ export interface JobInstructionContextV1 {
   readonly simulationMs: number
 }
 ```
+
+`EndpointCatchupGuardV5` is a structural contract, not a reason for Signal/Scene/Robot stores to import the runtime-gateway feature. Define the exported stream-side name in the V5 stream module and use the same readonly `{ commit(): void; abort(): void }` shape locally at store boundaries.
 
 ### Task 1: Build Quality-Aware Signal and Smoothed Object Runtime State
 
@@ -345,7 +361,7 @@ For Objects, key Frame channels by `(entityId, frameId)` and Status channels ind
 
 For Robots, compile exactly one enabled read/readWrite Mapping per robot-frame and robot-status target after Project V5 validation has rejected partial or duplicate Frame destinations. A Frame requires the same six unique `projectPath` destinations and `robot.frameSources[frameId] === opcua:<endpointId>`; Status requires `projectPath: []` and matching `robot.numericStatus.sourceOwnership`. Interpret the completed mapped Frame pose as a Project World pose. Smooth it with the same pose buffer, hold Status without interpolation, and preserve OPC UA ownership through BAD/UNCERTAIN/STALE/disconnect. BAD, UNCERTAIN, and type-mismatched updates retain the last GOOD Frame/Status payload while updating quality, status code, and timestamps. A mapped Base Frame becomes the V5 kinematic world-base input; another mapped Robot Frame overrides only that Frame's Actual marker/readout/attachment lookup, not the link chain or Joint state.
 
-Sequence acceptance is independent per Endpoint. Tests must ingest two Endpoints, reject only a non-increasing sequence for the affected Endpoint, and prove that disconnecting one Endpoint marks only its owned Signal/Frame/Status channels STALE. Also prove that a value carrying an unknown or wrong-target Mapping ID cannot mutate another store, that older source timestamps and future source timestamps cannot rewind or snap an emitted pose, that duplicate or partial six-path Frames are rejected with the existing Project V5 validation codes (`OPCUA_READ_OWNER_DUPLICATE` or `OPCUA_PROJECT_PATH_INVALID`) without replacing an active runtime snapshot, and that numeric Status is held rather than interpolated.
+Sequence acceptance is independent per Endpoint. Tests must ingest two Endpoints, reject only a non-increasing sequence for the affected Endpoint, and prove that disconnecting one Endpoint marks only its owned Signal/Frame/Status channels STALE. Also prove that a value carrying an unknown or wrong-target Mapping ID cannot mutate another store, that older source timestamps and an immutable future envelope (`sourceTimestampMs > publishedTimestampMs`) cannot rewind or snap an emitted pose regardless of browser receipt time, that duplicate or partial six-path Frames are rejected with the existing Project V5 validation codes (`OPCUA_READ_OWNER_DUPLICATE` or `OPCUA_PROJECT_PATH_INVALID`) without replacing an active runtime snapshot, and that numeric Status is held rather than interpolated.
 
 - [ ] **Step 4: Run GREEN and commit**
 
@@ -919,19 +935,294 @@ git commit -m "feat: transport deduplicated runtime commands"
 
 Expected: exact fencing/result/HTTP codes PASS; simultaneous duplicates execute once; mixed/all-in-flight capacity remains exactly 4,096; successful activation alone advances generation; recovered rollback retains prior dedupe; stop is bounded; Task 2 Client/Server/Bridge, Hub, and write lifecycle regressions remain green.
 
-### Task 4: Add the Browser Command Client and Signal Write Port
+### Task 4: Stream Endpoint Lifecycle and Add the Browser Command Client
 
 **Files:**
+- Modify: `src/core/runtime-protocol/v1.ts`
+- Test: `src/core/runtime-protocol/v1.test.ts`
+- Modify: `middleware/runtime-gateway/state-batch-hub.ts`
+- Test: `middleware/runtime-gateway/state-batch-hub.test.ts`
+- Create: `middleware/runtime-gateway/runtime-stream-timeline.ts`
+- Test: `middleware/runtime-gateway/runtime-stream-timeline.test.ts`
+- Modify: `middleware/runtime-gateway/main.ts`
+- Test: `middleware/runtime-gateway/main.test.ts`
+- Modify: `src/features/signals/v5/logical-signal-runtime-store.ts`
+- Test: `src/features/signals/v5/logical-signal-runtime-store.test.ts`
+- Modify: `src/features/scene/v5/object-runtime-state.ts`
+- Test: `src/features/scene/v5/object-runtime-state.test.ts`
+- Modify: `src/features/robot/v5/robot-frame-status-runtime-store.ts`
+- Test: `src/features/robot/v5/robot-frame-status-runtime-store.test.ts`
+- Create: `src/core/project-v5/opcua-boolean-write-targets.ts`
+- Test: `src/core/project-v5/opcua-boolean-write-targets.test.ts`
+- Modify: `src/core/project-v5/index.ts`
+- Modify: `middleware/runtime-gateway/opcua-client-write-service.ts`
+- Test: `middleware/runtime-gateway/opcua-client-write-service.test.ts`
+- Modify: `middleware/runtime-gateway/opcua-client-adapter.ts`
+- Test: `middleware/runtime-gateway/opcua-client-adapter.test.ts`
 - Create: `src/features/runtime-gateway/v5/runtime-gateway-command-client.ts`
 - Test: `src/features/runtime-gateway/v5/runtime-gateway-command-client.test.ts`
 - Create: `src/features/runtime-gateway/v5/runtime-gateway-state-stream.ts`
 - Test: `src/features/runtime-gateway/v5/runtime-gateway-state-stream.test.ts`
+- Create: `src/features/runtime-gateway/v5/endpoint-lifecycle-router.ts`
+- Test: `src/features/runtime-gateway/v5/endpoint-lifecycle-router.test.ts`
 
 **Interfaces:**
 - Consumes: Task 3 HTTP routes, `RuntimePublisherLeaseV1`, `CommandRequestV1`, and `CommandResultV1`.
-- Produces: `RuntimeGatewayCommandClientV1`, `GatewaySignalWritePortV1`, and multi-consumer State Batch routing.
+- Produces: validated `EndpointLifecycleV1` messages, a bounded non-coalescible Hub barrier and replay timeline, Endpoint-local browser session reset/stale routing, one browser-safe writable-Boolean Mapping compiler shared with the Gateway, `RuntimeGatewayCommandClientV1`, `GatewaySignalWritePortV1`, and a discriminated multi-consumer Runtime stream.
 
-- [ ] **Step 1: Write RED lease, terminal result, and reconnect tests**
+- [ ] **Step 1: Write RED lifecycle, Hub replay, and Endpoint reset tests**
+
+```ts
+it('publishes connected before data and one zero-retained disconnect barrier', async () => {
+  const published: RuntimeStreamMessageV1[] = []
+  const adapter = clientAdapterHarness({
+    publisherGeneration: 7,
+    publish: (value) => published.push(readNormalizedOpcUaClientPublicationV1(value)),
+  })
+  await adapter.startEndpoint('plc-a')
+  expect(published).toEqual([
+    lifecycle({ endpointId: 'plc-a', sequence: 1, publisherGeneration: 7, sessionGeneration: 1, phase: 'connected' }),
+  ])
+  await adapter.loseSessionTwice('plc-a')
+  expect(published).toEqual([
+    expect.objectContaining({ type: 'endpoint-lifecycle-v1', phase: 'connected', sequence: 1 }),
+    expect.objectContaining({ type: 'endpoint-lifecycle-v1', phase: 'disconnected', sequence: 2 }),
+  ])
+})
+
+it('keeps a lifecycle barrier between coalesced snapshots for a blocked peer', () => {
+  const socket = blockedSocketHarness()
+  const hub = activeHub(['plc-a'])
+  const publication = opcUaAdapterPublicationHarness()
+  hub.attach(socket)
+  hub.publish(publication.lifecycle({ endpointId: 'plc-a', sequence: 1, sessionGeneration: 1, phase: 'connected' }))
+  hub.publish(publication.stateBatch({ endpointId: 'plc-a', sequence: 2, mappingId: 'a', value: 1 }))
+  hub.publish(publication.stateBatch({ endpointId: 'plc-a', sequence: 3, mappingId: 'a', value: 2 }))
+  hub.publish(publication.lifecycle({ endpointId: 'plc-a', sequence: 4, sessionGeneration: 1, phase: 'disconnected' }))
+  hub.publish(publication.lifecycle({ endpointId: 'plc-a', sequence: 5, sessionGeneration: 2, phase: 'connected' }))
+  hub.publish(publication.stateBatch({ endpointId: 'plc-a', sequence: 6, mappingId: 'a', value: 4 }))
+  socket.releaseAll()
+  expect(socket.messages.map(messageKindAndValue)).toEqual([
+    ['lifecycle', 'connected'],
+    ['catchup', 'start', 4],
+    ['state', 2], ['lifecycle', 'disconnected'], ['lifecycle', 'connected'], ['state', 4],
+    ['catchup', 'end', 4],
+  ])
+  expectExactBoundaryBytes(socket.messages, 'catchup')
+})
+
+it('resets only the connected Endpoint session and accepts its restarted source clock', () => {
+  const stores = endpointStoreHarness(['plc-a', 'plc-b'])
+  const router = createEndpointLifecycleRouterV5({
+    readActiveContext: stores.readActiveContext,
+    targets: stores.targets,
+  })
+  stores.ingest(goodState('plc-a', { sequence: 10, sourceTimestampMs: 80_000 }))
+  stores.ingest(goodState('plc-b', { sequence: 12, sourceTimestampMs: 90_000 }))
+  router.ingest(lifecycle({ endpointId: 'plc-a', sequence: 11, sessionGeneration: 2, phase: 'disconnected' }), 100_000)
+  expect(stores.quality('plc-a')).toBe('STALE')
+  expect(stores.quality('plc-b')).toBe('GOOD')
+  router.ingest(lifecycle({ endpointId: 'plc-a', sequence: 12, sessionGeneration: 3, phase: 'connected' }), 100_100)
+  expect(stores.quality('plc-a')).toBe('BAD')
+  expect(stores.ingest(goodState('plc-a', { sequence: 13, sourceTimestampMs: 1_000 }))).toBe(true)
+  expect(stores.quality('plc-a')).toBe('GOOD')
+})
+```
+
+`opcUaAdapterPublicationHarness` must obtain wrappers through the real adapter normalization/construction path; it is not a public brand escape hatch. Keep separate compile/runtime RED cases proving `hub.publish(rawMessage)` is rejected and a forged `{ message }` wrapper fails the WeakSet reader without changing Hub state.
+
+Add protocol tables for exact keys, discriminators, identifier bounds, non-negative safe integers, the only valid `connected/Good` and `disconnected/BadNoCommunication` pairs, deterministic Event IDs, and exact replay/catch-up boundary ID/phase/count/byte fields. Add adapter tests for connected-before-data ordering across multiple monitored groups, early-root coalescing and encoded-byte overflow, shared state/lifecycle source sequence, nondecreasing published/occurred timestamps under `nowMs: 1000 -> 900`, disconnect with zero retained values, repeated recovery idempotence, rejection of late lost-generation notifications, reconnect generation, and one disconnect for intentional live-session stop/replacement. Add Hub and candidate-staging tests for wrong Revision/Endpoint rejection, publisher rejection of either Hub-only boundary, same-Revision replacement, split/coherence batches, blocked-send ordering, bounded barrier overflow, framed chronological replay/catch-up, and two-Endpoint partial recovery with both lexicographic Endpoint orders. An ordinary connected-session `StateBatchV1` containing `BAD/BadNoCommunication` remains ordinary data and must not trigger Endpoint lifecycle behavior.
+
+Add router/store tests for wrong Project, config Revision, Gateway, disabled/unknown Endpoint, malformed/deterministically wrong Event ID, duplicate/equal-conflict/older lifecycle tuples, two Endpoints carrying the same Endpoint-scoped Event ID, clock skew/reset, per-effective-channel source/published clock fences, and Endpoint-local interpolation reset. Rejected events must not consume dedupe or ordering state. Reopening the browser socket resets only the router's socket-session dedupe/order state; replay then reconstructs the retained lifecycle state.
+
+- [ ] **Step 2: Run RED**
+
+```powershell
+npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-stream-timeline.test.ts middleware/runtime-gateway/state-batch-hub.test.ts middleware/runtime-gateway/main.test.ts middleware/runtime-gateway/opcua-client-adapter.test.ts src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts src/features/runtime-gateway/v5/endpoint-lifecycle-router.test.ts
+```
+
+Expected: FAIL because the lifecycle/replay envelopes, Hub/staging timeline, Endpoint reset methods, and lifecycle router do not exist.
+
+- [ ] **Step 3: Define the closed Endpoint lifecycle envelope**
+
+```ts
+export type EndpointLifecyclePhaseV1 = 'connected' | 'disconnected'
+
+export interface EndpointLifecycleV1 {
+  readonly type: 'endpoint-lifecycle-v1'
+  readonly protocolVersion: 1
+  readonly gatewayId: string
+  readonly projectId: string
+  readonly configRevision: string
+  readonly endpointId: string
+  readonly sequence: number
+  readonly originId: string
+  readonly eventId: string
+  readonly publisherGeneration: number
+  readonly sessionGeneration: number
+  readonly phase: EndpointLifecyclePhaseV1
+  readonly statusCode: 'Good' | 'BadNoCommunication'
+  readonly occurredAtMs: number
+}
+
+export interface EndpointReplayBoundaryV1 {
+  readonly type: 'endpoint-replay-boundary-v1'
+  readonly protocolVersion: 1
+  readonly gatewayId: string
+  readonly projectId: string
+  readonly configRevision: string
+  readonly endpointId: string
+  readonly sequence: number
+  readonly replayId: string
+  readonly messageCount: number
+  readonly encodedBytes: number
+  readonly phase: 'start' | 'end'
+}
+
+export interface EndpointCatchupBoundaryV1 {
+  readonly type: 'endpoint-catchup-boundary-v1'
+  readonly protocolVersion: 1
+  readonly gatewayId: string
+  readonly projectId: string
+  readonly configRevision: string
+  readonly endpointId: string
+  readonly sequence: number
+  readonly catchupId: string
+  readonly messageCount: number
+  readonly encodedBytes: number
+  readonly phase: 'start' | 'end'
+}
+
+export type RuntimePublisherMessageV1 = StateBatchV1 | EndpointLifecycleV1
+export type RuntimeStreamMessageV1 =
+  | RuntimePublisherMessageV1
+  | EndpointReplayBoundaryV1
+  | EndpointCatchupBoundaryV1
+
+export function endpointLifecycleEventIdV1(input: Pick<
+  EndpointLifecycleV1,
+  'publisherGeneration' | 'sessionGeneration' | 'phase'
+>): string
+
+export function validateEndpointLifecycleV1(value: unknown): EndpointLifecycleV1
+export function validateEndpointReplayBoundaryV1(value: unknown): EndpointReplayBoundaryV1
+export function validateEndpointCatchupBoundaryV1(value: unknown): EndpointCatchupBoundaryV1
+export function validateRuntimeStreamMessageV1(value: unknown): RuntimeStreamMessageV1
+```
+
+Use exact closed objects. `publisherGeneration` is the committed candidate generation from Task 3 and must be a positive safe integer. `sessionGeneration` and `sequence` are positive safe integers. `occurredAtMs` is a non-negative Gateway-clock timestamp used only for diagnostics; it is never substituted for `StateBatchV1.sourceTimestampMs` and never advances a PLC source-time fence. The only valid phase/status pairs are `connected/Good` and `disconnected/BadNoCommunication`. `eventId` is the exact deterministic ASCII value `lifecycle:<publisherGeneration>:<sessionGeneration>:<phase>` and is explicitly Endpoint-scoped: identical strings on two Endpoints are valid because Project, Revision, Gateway, Origin, and Endpoint remain part of semantic identity.
+
+Both boundary kinds are Hub-only; adapters and candidate staging cannot publish them. `EndpointReplayBoundaryV1` wraps attach-time cached replay, while `EndpointCatchupBoundaryV1` wraps one frozen Endpoint-local State/lifecycle timeline cut drained after socket backpressure or candidate staging. One unique bounded ID pairs exactly one start/end: replay uses `replay:<counter>` and a socket-local catch-up counter uses `catchup:<counter>`. Both boundary copies carry the exact positive enclosed `messageCount` and positive `encodedBytes` sum of the enclosed UTF-8 JSON frames. Boundary wire sequences are assigned by the Hub from the same per-Endpoint wire counter as their enclosed frames. Apply existing identifier/config-Revision bounds to every identifier and add all envelopes to `RuntimeProtocolV1Message`; `validateRuntimeStreamMessageV1` accepts all four wire kinds while Hub `publish` accepts only the adapter's opaque normalized publication wrapper whose message is a `RuntimePublisherMessageV1`. Replay-counter exhaustion rejects only the newly attaching peer; catch-up-counter exhaustion closes only that slow peer.
+
+- [ ] **Step 4: Publish lifecycle and State data through one Endpoint source sequencer**
+
+```ts
+declare const NORMALIZED_OPCUA_CLIENT_PUBLICATION_V1: unique symbol
+declare const SEALED_RUNTIME_TIMELINE_V1: unique symbol
+
+export interface NormalizedOpcUaClientPublicationV1 {
+  readonly message: RuntimePublisherMessageV1
+  readonly [NORMALIZED_OPCUA_CLIENT_PUBLICATION_V1]: true
+}
+
+export function readNormalizedOpcUaClientPublicationV1(
+  publication: NormalizedOpcUaClientPublicationV1,
+): RuntimePublisherMessageV1
+
+export interface SealedRuntimeTimelineV1 {
+  readonly [SEALED_RUNTIME_TIMELINE_V1]: true
+}
+```
+
+Make the adapter-to-staging/Hub boundary opaque and producer-normalized. Only `opcua-client-adapter.ts` can construct a `NormalizedOpcUaClientPublicationV1`; retain every constructed frozen wrapper in a module-private `WeakSet`, and make the exported reader throw exact `TypeError('Normalized OPC UA Client publication is invalid.')` for a raw or forged wrapper before returning its frozen wire message. `OpcUaClientAdapterOptionsV1.publish`, detached candidate staging, and `StateBatchHubV1.publish` accept only this opaque type; Hub live publish catches that exact validation failure and returns false without mutation, while candidate staging records its existing sticky health failure without throwing through the adapter callback. To keep the runtime module graph acyclic, move the neutral `splitStateBatchesV1` implementation from `state-batch-hub.ts` into `runtime-stream-timeline.ts`, update adapter/Hub imports, and do not retain a Hub re-export: the adapter may import the timeline but not the Hub, while the Hub may import the adapter's opaque reader. The adapter constructs State publications only from `assembleMappingValueV1`: every emitted `quality: 'GOOD'` has passed the target Mapping's scalar/range or canonical Frame-pose assembly, while invalid/BAD/UNCERTAIN observations carry the retained last complete payload as non-GOOD or publish nothing before one exists. Lifecycle construction must likewise pass the closed lifecycle validator before branding. This is the closed invariant that lets timeline/replay coalescing classify a declared GOOD as a payload basis; the Hub does not accept arbitrary protocol-valid State from another publisher. Tests prove the import graph has no adapter/Hub cycle, raw/forged wrappers are rejected without sequence/cache/socket mutation, and a target-invalid later notification becomes non-GOOD while retaining the earlier valid payload in blocked and fresh replay.
+
+The Hub module owns a detached `createRuntimeTimelineStagingV1()` builder and the separate opaque `SealedRuntimeTimelineV1` WeakSet. The builder unwraps only valid normalized adapter publications, applies the same split/coalescing/barrier/acceptance/bounds rules, and may rebuild frozen State Batches containing selected retained values. `seal()` is single-use and returns an opaque handle to that derived raw timeline; it does not try to re-brand derived batches as adapter publications. `prepareRevisionActivation` is the only consumer of the sealed handle, verifies/consumes its WeakSet membership, and remains side-effect-free with respect to active Hub state. Calling the staging publisher after `seal()` is a deterministic programmer error and records sticky failure, but the activation algorithm must make that state unreachable: there is literally no `await`, user callback, socket send/close, disposal, injected callout, or other reentrant operation from the final pre-seal health check until the live publisher is enabled. Add the exact staging regression `P1(A1,B1) -> P2(A2) => sealed(B1,A2)` with A1 absent and encoded-byte accounting based only on the derived cut.
+
+Give every eligible OPC UA Client Endpoint one adapter-owned `nextSourceSequence`, starting at one for the candidate adapter and shared by `StateBatchV1` chunks and `EndpointLifecycleV1`. The same Endpoint publisher owns a nondecreasing Gateway clock: validate each `nowMs()` sample and use `max(lastGatewayTimestampMs, sample)` for State `publishedTimestampMs` and lifecycle `occurredAtMs`, so a host clock rollback cannot make an otherwise valid publication fail the immutable admission rule. Remove the Snapshot assembler's private sequence ownership: it returns or delegates unsequenced mapped values, while the Endpoint publisher first computes the split count and atomically reserves that entire consecutive range before publishing any chunk. Lifecycle consumes exactly one sequence. Never wrap or partially publish: State/connected reservation must leave one final sequence available for a possible disconnected event. If no full range plus that reserve remains, publish one terminal disconnected at the reserved sequence for a live session, set exact diagnostic `OPC_UA_SOURCE_SEQUENCE_EXHAUSTED`, close it, and do not reconnect until a new adapter activation resets the source range. Check `sessionGeneration + 1` before mutation; `OPC_UA_SESSION_GENERATION_EXHAUSTED` fails the connection attempt without lifecycle/data or wrap.
+
+Pass Task 3's `candidateGeneration` into `OpcUaClientAdapterOptionsV1.publisherGeneration`. For each Endpoint, increment `sessionGeneration` only when a newly created OPC UA Session/subscription is fully ready. While monitored groups are still being constructed, assemble but do not sequence/publish notifications: retain only the latest complete mapped snapshot per monitored root together with its arrival ordinal, bounded by the compiled root count and a combined `8 * MAX_RUNTIME_BATCH_BYTES_V1` encoded bytes. Overflow fails that connection attempt as `OPC_UA_EARLY_NOTIFICATION_CAPACITY_EXCEEDED` before any `connected` event. Once every group is ready, publish `connected`, drain buffered roots by arrival ordinal through the shared sequencer without an `await`, and only then mark the session live; callbacks that occur reentrantly during the drain remain in the same bounded buffer until it is empty. Thus no value for that session can precede its barrier. A write-only eligible Endpoint still publishes `connected` even though it has no retained read value.
+
+On the first recovery transition from a live session, first invalidate the monitored-notification connection generation, then synchronously reserve and publish exactly one `disconnected` event for that same `sessionGeneration` before clearing the session/assembler and scheduling reconnect. Late notifications from the lost generation are dropped, so no State data may appear after `disconnected` until a later `connected` barrier. Repeated close/error/recovery signals for that session are idempotent. A failed connection attempt that never published `connected` publishes no `disconnected`.
+
+Intentional `stop()` also publishes that same idempotent `disconnected/BadNoCommunication` event for every currently live session after notification-generation invalidation and before resource close. This includes same-Revision replacement, failed-candidate rollback, and final Gateway shutdown; the reason is diagnostic-only and does not alter the closed lifecycle envelope. Consequently old GOOD values become STALE before a nonblocking replacement begins, stay non-consumable if the candidate never connects, and remain STALE if a rollback-restarted prior adapter never reconnects. A successful new or restarted session publishes `connected` with the candidate's publisher generation and the next session generation, then accepts lower or restarted PLC source timestamps because the browser Endpoint fences are reset by that barrier. Stopping a never-connected attempt emits nothing.
+
+- [ ] **Step 5: Make lifecycle a bounded, non-coalescible Hub barrier**
+
+Change `StateBatchHubV1.publish` to accept only `NormalizedOpcUaClientPublicationV1` and unwrap it through the WeakSet-backed reader before any mutation. Replace direct activation with a fallible, side-effect-free `prepareRevisionActivation({ projectId, configRevision, gatewayId, originId, publisherGeneration, endpointIds, stagedTimeline })` that returns an opaque single-use prepared handle; `stagedTimeline` is the consumed `SealedRuntimeTimelineV1`, never an array of normalized wrappers. The handle exposes a no-throw, pure `installPrepared()` operation that synchronously installs the prepared activation/cache/socket queues and returns or enables a no-throw `flushPrepared()` operation. `installPrepared()` performs no socket send/close, disposal, timer, callback, or other external callout; only `flushPrepared()` may perform the isolated sends/closes after the live publisher has been enabled. In Client/Bridge mode, `main.ts` passes its Gateway ID, exact `${gatewayId}:opcua-client` Origin, the candidate command generation, and the unique IDs of every enabled Project OPC UA Endpoint; Server/off mode passes the same identity with an empty Endpoint list. Validate and freeze that activation during prepare. Ignore a live publication unless its unwrapped Project, config Revision, Gateway, Origin, and Endpoint all match. Lifecycle additionally requires the exact active publisher generation. Each activated Endpoint begins `awaiting-connected`; accept State only after that generation's validated `connected` and reject it after `disconnected` until a newer valid connected session. This, plus adapter notification-generation fencing, prevents a late prior adapter from repopulating replay after same-Revision cutover.
+
+Maintain one incoming source-sequence fence per Endpoint across State and lifecycle. Internally tag every accepted snapshot/barrier with the Hub activation epoch and lifecycle publisher/session tuple; source sequence may restart only when a prepared activation commit installs a new adapter activation, never merely on OPC UA reconnect. Drain by Endpoint, then activation epoch, publisher/session tuple, original source sequence, and finally channel key only as an equal-sequence tie-breaker. Hub-assigned outgoing wire sequences are common to State, lifecycle, and both Hub-only boundary kinds; splitting one State Batch reserves consecutive wire sequences and the next wire frame follows them.
+
+Use one deterministic Endpoint-local timeline representation in both the Hub's blocked-socket queue and `main.ts` candidate staging. Cross-Endpoint arrival order has no lifecycle semantics; store timelines independently and drain non-empty Endpoint timelines by Endpoint ID:
+
+1. Split each incoming State Batch into effective channel/coherence groups before publication. For the active lifecycle session, keep Hub-side source/published-time acceptance fences per effective channel and reset them on `connected`. Reject a group when either PLC timestamp regresses or `sourceTimestampMs > publishedTimestampMs`, before live delivery, pending/coalescing, and replay caching, so live and fresh consumers see the same accepted history. This immutable envelope check replaces every browser-receipt wall-clock comparison. A snapshot segment then contains one bounded reconstruction record per effective channel and may coalesce only with accepted State data in that same Endpoint segment. The record retains the most recent observation declared `GOOD` plus the latest quality observation when those differ; target-specific type validation remains the consumer's responsibility. A later accepted `GOOD` replaces both; a later accepted non-`GOOD` replaces only the quality observation. If no `GOOD` has occurred, retain only the latest observation. Preserve validation, acceptance, and eviction for every coherence group atomically, and rebuild emitted Batches with only the retained values/coherence siblings.
+2. An Endpoint lifecycle event is an immutable barrier in only that Endpoint's timeline. Append it after the current segment and begin a new segment; no later State update may replace, cross, or erase it. A lifecycle event for Endpoint A does not split Endpoint B's segment.
+3. When a blocked socket becomes writable, freeze its whole currently pending per-Endpoint timeline cut, including every snapshot segment and lifecycle barrier, then drain Endpoint cuts by Endpoint ID. A prepared activation commit treats every non-empty staged Endpoint timeline as the same kind of frozen cut even when the existing socket is writable; coalesced candidate history is never emitted as unrelated live frames. Within a segment, order retained snapshots by original source sequence and channel key and rejoin siblings that share one source sequence. Wrap the complete non-empty Endpoint cut in one `EndpointCatchupBoundaryV1` pair and preserve all intervening barriers; do not expose one segment before a known following disconnect. Direct, non-backpressured, non-staged live messages remain unframed. Messages arriving after the frozen cut queue behind its matching end. Thus `connected -> GOOD(true) -> disconnected` already pending at flush becomes one atomic catch-up whose final observable state is STALE, and no Job tick can consume its historical GOOD.
+4. Preserve the existing bounds of eight Endpoints and 128 effective cached channels per Endpoint. One effective channel still counts once when its reconstruction record contains two State snapshots. Bound both each Endpoint replay and the whole pending socket/candidate timeline, including predicted boundary overhead, to `8 * MAX_RUNTIME_BATCH_BYTES_V1` encoded bytes, and permit at most 32 pending lifecycle barriers. On either slow-socket pending overflow, detach and close only that peer. Active replay-cache pressure never drops the current lifecycle barriers: remove the least-recently-updated effective reconstruction record, atomically across its coherence group and from both prefix/current copies, until both channel and byte bounds hold. If the newly published channel alone cannot fit, remove any older cached copy and leave that channel uncached while still delivering it live; an attached peer is unaffected and a fresh peer never receives an older value falsely presented as latest. Candidate staging never throws through an adapter notification callback: it records one sticky `RUNTIME_STREAM_BARRIER_CAPACITY_EXCEEDED` failure, ignores later candidate publications, and exposes `assertHealthy()` for the activation transition.
+5. `queueDepth` counts an in-flight transmission, every replay/catch-up item, every non-empty pending snapshot segment, and every pending barrier.
+
+The replay cache is Endpoint-local and retains four chronological parts:
+
+1. `prefixRecords`: one reconstruction record per effective channel accumulated from sessions completed before the current session;
+2. the current session's required `connected` barrier;
+3. `currentRecords`: one reconstruction record per effective channel published after that `connected`;
+4. an optional matching `disconnected` barrier for the same publisher/session.
+
+On a newer `connected`, merge prior prefix/current reconstruction records by channel into the new prefix, install the new connected barrier, clear the current source/published acceptance fences, and clear current/disconnected. The merge retains the latest already-accepted observation declared `GOOD` as payload basis and the latest already-accepted observation for each channel using the internal activation/lifecycle/source order. It never re-evaluates or resurrects an observation rejected for a regressing PLC clock. State data after connected passes the same per-channel acceptance function exactly once before updating current records and any peer. A matching disconnected appends after current and never replaces connected; reject later State data until a newer connected arrives. State before the active generation's first connected is rejected rather than cached.
+
+`prefixRecords` may combine sparse updates from arbitrarily many completed PLC clock epochs, so they are not ordinary live State. During an atomically framed replay, the browser sends only the State frames before the retained current `connected` barrier to every consumer's required `restoreReplayPrefix` method. That method validates active Project/Revision/Endpoint/mapping and applies the reconstruction observations in Hub chronological order, but bypasses and never advances Endpoint sequence, receipt, source-time, published-time, and interpolation fences. A type-valid `GOOD` observation replaces the held/display payload and its diagnostic timestamps exactly; a non-`GOOD` observation retains that payload and changes only quality/status/timestamps. The immediately following retained `connected` event then calls `resetEndpointSession`, retains the restored payload, marks it `BAD/BadWaitingForInitialData`, and clears the normal live fences before `currentRecords` use ordinary `ingest`. This preserves both clock reset and display state without treating an old value as currently GOOD.
+
+For example, session 1 publishes only `B@90k`, session 2 publishes only `A@1k`, and session 3 connects then disconnects without data. Fresh replay is `prefix(B@90k,A@1k) -> connected(session 3) -> disconnected(session 3)`: both prefix values restore despite their opposite clock order, the connected barrier resets live fences, and the final values are both STALE. Separately, `connected -> A GOOD(true) -> A BAD -> disconnected` retains a two-observation reconstruction record, so a fresh browser finishes with payload `true` and `STALE/BadNoCommunication`, never the Project initial payload.
+
+For a new socket, replay Endpoints in sorted order. Reserve one Hub-lifetime positive safe-integer replay counter per Endpoint replay and use exact `replay:<counter>` as the paired Replay ID; counter exhaustion isolates the newly attached peer without mutating Hub/cache state. Surround each non-empty Endpoint replay with a Hub-generated `EndpointReplayBoundaryV1(start/end)` pair, then transmit prefix records by internal activation epoch/lifecycle tuple/original source sequence/channel, each payload basis before its distinct latest observation, followed by connected, current records in the same deterministic order, and optional disconnected. Require exactly one retained `connected` in the framed replay and at most one matching terminal `disconnected`; no lifecycle event may occur in the prefix. The start/end and every enclosed frame receive consecutive Hub wire sequences. Live publications for that socket remain queued after the matching end. A lifecycle event remains replayable with zero snapshots.
+
+Before encoding any logical live/replay/catch-up transmission, compute its complete split/boundary frame count and atomically reserve the full Hub wire-sequence range; never mutate the counter or send a prefix on failure. If the shared Endpoint wire range is exhausted, synchronously detach every socket, reset that wire counter only after all old socket states are detached, and close them so fresh sockets restart at one and reconstruct from replay. Tests inject counters at the last safe values for State splitting, connected/disconnected reserve, session generation, replay IDs, catch-up IDs, and Hub wire ranges; every case proves no partial frame, wrap, or stale open peer.
+
+Same-Revision activation retains replay and socket connections; the old adapter's stop-time disconnected is already in the timeline before the candidate can connect. For a different Revision, synchronously detach every old socket state, install the new active Revision/membership and clear source/wire/replay/pending state, then close the detached sockets. Even a reentrant reconnect therefore attaches only to the new empty activation before new-Revision wire sequence one. Deactivation uses the same detach -> clear -> close order.
+
+`main.ts` must stage mixed normalized publications through the same barrier semantics; the prior State-only coalescer is insufficient. Construct every candidate adapter, command registry, and command service, run every fallible validation and the explicit failure-injection hook, then call the final `staged.assertHealthy()` and synchronously `seal()` the detached timeline before Hub activation or `committedCommandGeneration` changes. The injection hook is allowed to synchronously trigger a candidate publication and the final health check/seal must either include that publication or fail; there is no injection hook after seal. From that final health check through live-publisher enablement, no `await`, user callback, socket send/close, disposal, timer, or other reentrant callout is allowed. A sticky staging failure contributes no candidate message to active replay and does not advance generation; if the prior live adapter was already stopped, only its own required disconnected barrier remains and rollback reconnects from that truthful STALE state.
+
+After seal, pass the opaque sealed timeline handle into `prepareRevisionActivation`; this is the last fallible operation and consumes the handle without mutating active Hub/replay. Then execute one synchronous no-fail tail in this exact order: assign the prepared `activeRuntime` and `committedCommandGeneration`; call the prepared Hub handle's pure `installPrepared()`; enable the candidate adapter's live publisher; and call `flushPrepared()` to perform isolated sends/closes. Close prior command resources afterward. Different-Revision install still detaches old socket state and installs the new activation before `flushPrepared()` closes detached sockets. A synchronous send/close callback during `flushPrepared()` may reenter candidate publication, but it now reaches the installed live Hub and is queued exactly once after the staged catch-up cut. Because no candidate frame is sent before runtime/generation assignment, every fallible operation precedes this tail, and there is literally no external callout between seal and live enablement, browsers cannot observe an uncommitted higher generation and a sequenced candidate publication cannot fall into a sealed-but-not-live gap. The pre-seal injection test triggers a candidate publication and proves it is either present in the sealed cut or causes activation failure; a separate reentrant send/close test publishes during `flushPrepared()` and proves the frame appears exactly once after staged data. There is intentionally no failure seam inside the no-fail tail.
+
+Required regression cases are: ordinary `BAD/BadNoCommunication` State data is not a lifecycle barrier; zero-retained disconnect; split and coherence batches around a barrier; a blocked send cannot coalesce across a barrier; blocked/staged `connected -> GOOD(true) -> BAD/disconnected` catch-up attempts a Job advance after every physical frame but never exposes actionable GOOD; `GOOD(true) -> BAD -> disconnected` fresh replay retains `true`; accepted `GOOD(true, source=100) -> rejected GOOD(false, source=50)` stays `true` both live and after fresh replay; a pose with `sourceTimestampMs > publishedTimestampMs` is rejected both live and on fresh replay regardless of later browser receipt time; pending barrier-count/byte overflow isolates a slow peer; active cache channel/byte pressure evicts deterministic LRU reconstruction records but never the current lifecycle or substitutes an older copy; sticky candidate overflow and pre-commit failure injection leave generation unchanged, add no candidate replay, and retain only the prior adapter's truthful stop-time disconnect; the three-session sparse A/B clock-reset replay above; replay and catch-up start/end framing under blocked send; same-Revision online replacement, never-connecting replacement, and rollback whose prior never reconnects, each on an existing socket and fresh replay; different-Revision activation closes the old socket and accepts sequence one on its replacement; and two Endpoints where A disconnects while B stays GOOD, tested with Endpoint IDs in both key orders.
+
+- [ ] **Step 6: Add Endpoint-local reset/stale stores and the lifecycle router**
+
+Add `resetEndpointSession(endpointId, atMs)`, `restoreReplayPrefix(batch, receivedTimestampMs)`, and `beginEndpointCatchup(endpointId, atMs)` beside each existing `markEndpointDisconnected` and `resetGatewaySession` method in the Signal, Object, and Robot Frame/status stores. Task 5's Robot Joint store must implement the same operations. Normal live ingestion keeps the wire sequence/receipt fence per Endpoint but keeps source and published PLC-clock fences per effective channel, never per Endpoint, so unrelated sparse channels cannot reject each other. All stores defensively apply the Hub's same immutable admission rule: reject an effective group if its source or published time regresses in the active lifecycle session or `sourceTimestampMs > publishedTimestampMs`; never compare PLC source time with browser receipt time. Endpoint reset preserves the last display payload, changes only channels owned by that Endpoint to `BAD/BadWaitingForInitialData`, clears only that Endpoint's sequence/receipt fences and every owned channel's source/published-time fences, and recreates only that Endpoint's interpolation buffers while retaining the held/display pose. The first accepted live observation after reset replaces that channel's reported source/published timestamp even when the restarted PLC clock is lower; subsequent observations remain monotonic within that channel/session. Endpoint disconnect preserves values/poses, marks only that Endpoint `STALE/BadNoCommunication`, and does not advance or clear PLC clock fences.
+
+`beginEndpointCatchup` creates one opaque single-use, idempotent no-throw `EndpointCatchupGuardV5` for that Endpoint. It snapshots each owned channel's exposed quality/status/receipt metadata plus a touched bit, then overlays `STALE/BadNoCommunication` for reads/samples without changing payloads, PLC fences, or interpolation buffers. Accepted State ingestion marks only its recognized channels touched; Endpoint connected/disconnected transitions mark all owned channels touched. `guard.commit()` restores the snapshotted metadata only for untouched channels and reveals final catch-up state for touched channels, then clears the overlay. `guard.abort()` keeps the overlay as durable Endpoint STALE and clears its bookkeeping. A duplicate-only or sparse A-only catch-up therefore restores untouched B exactly, while a body ending in disconnected leaves all channels STALE. A second active guard for the same Endpoint is rejected before mutation. Project replacement, global session reset/disconnect, stream stop, and store disposal deterministically abort/invalidate outstanding guards. Tests cover sparse A/B, duplicate-only, rejected State, valid lifecycle, abort, and single-use cleanup.
+
+`restoreReplayPrefix` is callable only by the framed V5 stream consumer adapter. It performs the same closed protocol/context/mapping/type validation and immutable `sourceTimestampMs <= publishedTimestampMs` check as `ingest`, but intentionally neither checks nor mutates any normal sequence/receipt/regression/interpolation fence. It applies the prefix record in supplied order: a valid `GOOD` restores held/display payload directly without interpolating, while non-`GOOD` retains that payload and updates only quality/status/diagnostic timestamps. An irrelevant or invalid mapping returns false without mutation. A replay frame cannot select this path unless it occurs before the exactly one retained `connected` inside a fully validated boundary pair.
+
+```ts
+export interface EndpointLifecycleTargetV5 {
+  markEndpointDisconnected(endpointId: string, atMs: number): void
+  resetEndpointSession(endpointId: string, atMs: number): void
+}
+
+export interface EndpointLifecycleRouterV5 {
+  ingest(event: EndpointLifecycleV1, receivedTimestampMs: number): boolean
+  resetSocketSession(): void
+}
+```
+
+The router reads one atomic `{ project, configRevision, gatewayId }` context for each event. It accepts only the exact active Project/Revision/Gateway and an enabled Endpoint belonging to a Client/Bridge Project. It validates the deterministic Event ID before updating state. Keep exactly one last accepted record per enabled Endpoint, so router memory is bounded by the Project's eight-Endpoint limit. Its semantic key is `(projectId, configRevision, gatewayId, endpointId, originId, eventId)` and explicitly excludes Hub-rewritten `sequence` plus diagnostic `occurredAtMs`; its order tuple is `(publisherGeneration, sessionGeneration, phaseOrdinal)`, where `connected` is zero and `disconnected` is one. A greater tuple replaces the record. An equal tuple with the same semantic key is a duplicate; an equal tuple with another key is a conflict; a lower tuple is stale. All three return false and make no target calls. A replay may begin with either phase. Wrong-context, unknown-Endpoint, and malformed events also make no target calls and do not consume a record. `resetSocketSession()` clears only these per-Endpoint records. Apply accepted `connected` to every target's Endpoint reset and accepted `disconnected` to every target's Endpoint stale transition, always using the browser receipt time rather than `occurredAtMs`.
+
+- [ ] **Step 7: Run lifecycle GREEN and commit**
+
+```powershell
+npm run test:run -- src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-stream-timeline.test.ts middleware/runtime-gateway/state-batch-hub.test.ts middleware/runtime-gateway/main.test.ts middleware/runtime-gateway/opcua-client-adapter.test.ts src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts src/features/runtime-gateway/v5/endpoint-lifecycle-router.test.ts
+npm run test:run
+npm run build:gateway
+npm run lint
+npm run build
+git add src/core/runtime-protocol/v1.ts src/core/runtime-protocol/v1.test.ts middleware/runtime-gateway/runtime-stream-timeline.ts middleware/runtime-gateway/runtime-stream-timeline.test.ts middleware/runtime-gateway/state-batch-hub.ts middleware/runtime-gateway/state-batch-hub.test.ts middleware/runtime-gateway/main.ts middleware/runtime-gateway/main.test.ts middleware/runtime-gateway/opcua-client-adapter.ts middleware/runtime-gateway/opcua-client-adapter.test.ts src/features/signals/v5/logical-signal-runtime-store.ts src/features/signals/v5/logical-signal-runtime-store.test.ts src/features/scene/v5/object-runtime-state.ts src/features/scene/v5/object-runtime-state.test.ts src/features/robot/v5/robot-frame-status-runtime-store.ts src/features/robot/v5/robot-frame-status-runtime-store.test.ts src/features/runtime-gateway/v5/endpoint-lifecycle-router.ts src/features/runtime-gateway/v5/endpoint-lifecycle-router.test.ts
+git diff --cached --check
+git commit -m "feat: stream opc ua endpoint lifecycle"
+```
+
+Expected: lifecycle envelopes, common source/wire ordering, bounded barriers, deterministic replay, same-Revision staging, and Endpoint-local browser transitions PASS before command-client work begins.
+
+- [ ] **Step 8: Write RED Mapping, command-client, and discriminated-stream tests**
 
 ```ts
 it('obtains the current lease and posts one revision-qualified command', async () => {
@@ -951,18 +1242,6 @@ it('obtains the current lease and posts one revision-qualified command', async (
   ])
 })
 
-it.each([
-  ['request horizon', 10_000, 6_000],
-  ['shorter lease', 5_500, 5_500],
-] as const)('posts expiry bounded by %s', async (_name, leaseExpiresAt, expectedExpiresAt) => {
-  const fetch = commandFetchHarness({ generation: 9, leaseExpiresAt })
-  const client = createRuntimeGatewayCommandClientV1({
-    fetch: fetch.call, nowMs: () => 1_000, createCommandId: () => 'bounded-expiry',
-  })
-  await client.writeBoolean(writeRequest())
-  expect(fetch.postedCommands[0]?.expiresAt).toBe(expectedExpiresAt)
-})
-
 it('refreshes the lease once after COMMAND_LEASE_STALE and keeps one Command ID', async () => {
   const fetch = staleThenCurrentLeaseHarness()
   const client = createRuntimeGatewayCommandClientV1({ fetch: fetch.call, createCommandId: () => 'stable-id' })
@@ -971,34 +1250,93 @@ it('refreshes the lease once after COMMAND_LEASE_STALE and keeps one Command ID'
   expect(fetch.writeExecutionCount).toBe(1)
 })
 
-it('fans one State Batch to Object and Signal consumers and resets both on socket reopen', () => {
-  const objectIngest = vi.fn(() => true)
-  const signalIngest = vi.fn(() => true)
-  const resetObject = vi.fn()
-  const resetSignals = vi.fn()
-  const stream = createRuntimeGatewayStateStreamV5({
-    consumers: [objectIngest, signalIngest], onSessionStart: () => { resetObject(); resetSignals() },
-    createWebSocket: () => socket,
+it('reads one atomic Project/config snapshot and resolves the same writable Mapping as the Gateway', async () => {
+  const readActiveContext = vi.fn(() => ({ project, configRevision: REVISION }))
+  const writeBoolean = vi.fn(async () => succeededCommandResult())
+  const port = createGatewaySignalWritePortV1({
+    readActiveContext,
+    commandClient: { writeBoolean, clearLease: vi.fn() },
   })
-  stream.start(); socket.open(); socket.message(JSON.stringify(signalBatch()))
-  expect(objectIngest).toHaveBeenCalledOnce()
-  expect(signalIngest).toHaveBeenCalledOnce()
-  expect(resetObject).toHaveBeenCalledOnce()
-  expect(resetSignals).toHaveBeenCalledOnce()
+  await port.writeBoolean('start-output', true)
+  expect(readActiveContext).toHaveBeenCalledOnce()
+  expect(writeBoolean).toHaveBeenCalledWith({
+    projectId: project.projectId,
+    configRevision: REVISION,
+    targetId: 'mapping-start-output',
+    value: true,
+  }, undefined)
+  expect(REVISION).not.toBe(project.revisionId)
+})
+
+it('does not expose replay GOOD before the retained disconnect is applied', () => {
+  const harness = framedReplayJobHarness()
+  harness.open()
+  harness.message(replayStart({ messageCount: 4 }))
+  harness.message(prefixState({ value: true }))
+  harness.message(connectedLifecycle())
+  harness.message(currentState({ value: true }))
+  harness.message(disconnectedLifecycle())
+  expect(harness.jobAdvanceCount()).toBe(0)
+  harness.message(replayEnd({ messageCount: 4 }))
+  expect(harness.signal()).toMatchObject({ value: true, quality: 'STALE' })
+  expect(harness.jobAdvanceCount()).toBe(0)
 })
 ```
 
-- [ ] **Step 2: Run RED**
+Add command-client tables for cache reuse, expiry refresh, Project/Revision change, explicit `clearLease()`, an in-flight clear that cannot repopulate the cache, stale invalidation that cannot discard a concurrently newer lease, and exactly one stale retry with the same Command ID. Add expiry-horizon cases for `min(nowMs() + 5_000, lease.expiresAt)`. Add invalid-result tables for every mismatched identity field, `IDLE`, `RUNNING`, non-null `attachedObjectId`, malformed JSON, and `ACCEPTED/FAILED COMMAND_LEASE_STALE`; none may retry. Cover already-aborted, mid-GET, mid-POST, and mid-retry caller aborts, one whole-operation timeout, network failures, exact/non-exact error bodies, non-200 responses, and a fresh but already-expired lease. Also cover default/trailing-slash/outer-whitespace/whitespace-only base paths, `redirect: 'error'` on both requests, a defensive `response.redirected` rejection, and closed error guards rejecting spoof objects.
+
+Add Mapping parity tests for a valid Mapping among decoys, disabled Endpoint, `read`, optional Leaf, non-root/structured Leaf, non-Boolean OPC UA type, non-logical target, wrong Signal type/direction, zero candidates, and two candidates. The two local resolver errors must make zero command-client calls. Keep the existing middleware write-plan tests green against the extracted compiler and prove a non-undefined Signal-port `AbortSignal` is forwarded by identity.
+
+For the stream, add a real close -> timer -> second socket -> open sequence; duplicate open; close plus error producing one disconnect callback and one timer; stop cancellation/idempotence; same-origin `ws:`/`wss:` URLs; bounded UTF-8 JSON; malformed/binary input; common per-Endpoint sequence ordering across all four wire kinds; one clamped timestamp and the same validated frozen message for all matching consumers; an injected `nowMs` regression `1000 -> 900` producing `1000` for live, catch-up, and later fresh-replay parity; a throwing first consumer not blocking later consumers; and session-start/disconnect callback failures. Add exact start/count/bytes/end replay and catch-up cases; nested/cross-kind/mismatched/over-budget boundaries; missing end followed by close; partial-buffer disposal; queued live-after-end ordering; State-only catch-up beginning from an already connected phase; full `connected -> GOOD -> disconnected` catch-up; two sorted Endpoint catch-up cuts; and the no-Job-advance assertions above. Test `refreshActiveTarget()` during an active catch-up: the guard aborts once, every handler is detached before close, delayed old message/close/error events are ignored, neither target's disconnect callback runs, and the immediate replacement captures only the new target. An active-context or boundary-protocol failure synchronously runs the one opened-candidate failure path and makes all Endpoint values non-consumable before a queued Job tick or delayed native close; it reconnects without accepting later messages from that socket. Test a different-Revision Gateway replay arriving before a delayed browser Project commit: every early socket/frame is rejected without advancing payload, lifecycle, or wire fences for that mismatched frame (the normal transport open/disconnect callbacks may still reset or stale the old stores), and the first socket opened after the atomic browser commit accepts its first received (possibly higher) Hub wire sequence and restores State.
 
 ```powershell
-npm run test:run -- src/features/runtime-gateway/v5/runtime-gateway-command-client.test.ts src/features/runtime-gateway/v5/runtime-gateway-state-stream.test.ts
+npm run test:run -- src/core/project-v5/opcua-boolean-write-targets.test.ts middleware/runtime-gateway/opcua-client-write-service.test.ts src/features/runtime-gateway/v4/runtime-gateway-stream-v4.test.ts src/features/runtime-gateway/v5/runtime-gateway-command-client.test.ts src/features/runtime-gateway/v5/runtime-gateway-state-stream.test.ts
 ```
 
-Expected: FAIL because browser command transport and multiple stream consumers do not exist.
+Expected: FAIL because the shared Mapping compiler, browser command transport, and discriminated V5 stream do not exist.
 
-- [ ] **Step 3: Implement the browser command client and stable Mapping resolver**
+- [ ] **Step 9: Extract the browser-safe Mapping compiler**
 
 ```ts
+export interface WritableBooleanSignalMappingV5 {
+  readonly mappingId: string
+  readonly endpointId: string
+  readonly signalId: string
+  readonly nodeAddress: OpcUaNodeAddressV1
+  readonly dataType: 'Boolean'
+}
+
+export function compileWritableBooleanSignalMappingsV5(
+  project: WorkcellProjectV5,
+): readonly WritableBooleanSignalMappingV5[]
+```
+
+Use this one pure compiler from both `compileOpcUaClientWritePlanV1` and the browser Signal port. It first calls `validateWorkcellProjectV5` and does not mutate caller data. It accepts only a Mapping whose referenced Endpoint is enabled, direction is `write` or `readWrite`, and which has exactly one required Leaf with empty `leafPath` and `projectPath`, Boolean OPC UA type, an exact `logical-signal` target, and a referenced Boolean `output` or `bidirectional` Signal. Preserve Mapping order and return frozen records/array. The shared source imports no middleware, `node-opcua`, Node builtin, V4 module, `process`, or `Buffer`.
+
+- [ ] **Step 10: Implement the browser command client and stable Signal resolver**
+
+```ts
+export class RuntimeGatewayCommandClientV1Error extends Error {
+  readonly code: string
+  readonly statusCode: number | null
+  readonly cause?: unknown
+  constructor(code: string, message: string, options?: {
+    readonly statusCode?: number
+    readonly cause?: unknown
+  })
+}
+
+export function isRuntimeGatewayCommandClientV1Error(
+  value: unknown,
+): value is RuntimeGatewayCommandClientV1Error
+
+export interface RuntimeGatewayCommandClientOptionsV1 {
+  readonly createCommandId: () => string
+  readonly fetch?: (input: string, init: RequestInit) => Promise<Response>
+  readonly nowMs?: () => number
+  readonly basePath?: string
+}
+
 export interface RuntimeGatewayCommandClientV1 {
   writeBoolean(request: {
     readonly projectId: string
@@ -1009,28 +1347,118 @@ export interface RuntimeGatewayCommandClientV1 {
   clearLease(): void
 }
 
+export interface ActiveRuntimeContextV5 {
+  readonly project: WorkcellProjectV5
+  readonly configRevision: string
+}
+
+export class GatewaySignalWriteErrorV1 extends Error {
+  readonly code: 'SIGNAL_WRITE_MAPPING_NOT_FOUND' | 'SIGNAL_WRITE_MAPPING_AMBIGUOUS'
+  constructor(
+    code: 'SIGNAL_WRITE_MAPPING_NOT_FOUND' | 'SIGNAL_WRITE_MAPPING_AMBIGUOUS',
+    message: string,
+  )
+}
+
+export function isGatewaySignalWriteErrorV1(
+  value: unknown,
+): value is GatewaySignalWriteErrorV1
+
 export function createGatewaySignalWritePortV1(options: {
-  readonly readProject: () => WorkcellProjectV5
+  readonly readActiveContext: () => ActiveRuntimeContextV5
   readonly commandClient: RuntimeGatewayCommandClientV1
 }): GatewaySignalWritePortV1
 ```
 
-The Signal port resolves exactly one enabled `write` or `readWrite` Mapping whose Leaf target is the requested Boolean output/bidirectional Signal. It fails locally as `SIGNAL_WRITE_MAPPING_NOT_FOUND` or `SIGNAL_WRITE_MAPPING_AMBIGUOUS` before network I/O. The command client uses an expiry of `min(nowMs() + 5_000, lease.expiresAt)` and a five-second AbortController timeout, validates lease/result envelopes, retries only `COMMAND_LEASE_STALE` once with the same Command ID, and exposes terminal failure codes unchanged. An expired lease is refreshed before POST; an abort/timeout is terminal and never triggers an untracked retry write.
+`createRuntimeGatewayCommandClientV1(options: RuntimeGatewayCommandClientOptionsV1)` requires an explicitly injected `createCommandId`; it may default `fetch`, `nowMs`, and `basePath`, but must not silently require a secure-context-only UUID API. Default `basePath` to `/runtime`, trim outer whitespace and trailing slashes, and reject an empty result, including whitespace-only input, with `RUNTIME_GATEWAY_BASE_PATH_INVALID` before any request. The Signal port reads `readActiveContext()` exactly once per call, uses its supplied canonical `configRevision` unchanged, never substitutes `project.revisionId` or recomputes the hash, filters the shared compiler result by `signalId`, and requires exactly one match. It calls `commandClient.writeBoolean(request, signal)` exactly once, including an explicit `undefined` second argument when no signal is supplied and the exact non-undefined caller `AbortSignal` otherwise. Zero or multiple matches throw the exact typed local errors before command-client/network I/O. Both error guards accept only their actual class plus the class's closed code/status invariants; a plain spoof object is false.
 
-Define `RuntimeGatewayStateStreamOptionsV5.consumers` as `readonly ((value: unknown, receivedTimestampMs: number) => boolean)[]`; each consumer is isolated with `try/catch`, and a malformed consumer cannot stop other consumers or reconnect logic. Reuse the same-origin `/runtime/ws` URL behavior without importing or modifying the V4 stream implementation.
+The command client keeps one validated lease cache associated with an active `(projectId, configRevision)` key plus a monotonically increasing cache epoch. Switching context or `clearLease()` invalidates the cached value and epoch so an older in-flight GET cannot repopulate it. Discard a cached lease when `expiresAt < nowMs()`. Cache a concurrent candidate only if its epoch/key is still current and it is not older than the current lease: higher generation wins, then later expiry for equal generation. A stale response invalidates only the exact lease instance used; it must not erase a concurrently cached newer lease. A no-store forced refresh is still performed for the sole stale retry. A newly fetched lease that is already expired is `RUNTIME_GATEWAY_RESPONSE_INVALID`, not a loop.
 
-- [ ] **Step 4: Run GREEN and commit**
+Use this exact logical operation order:
+
+1. If the caller signal is already aborted, throw `AbortError` before fetch or Command ID creation.
+2. Create one Command ID and one internal five-second `AbortController` deadline covering GET, POST, and the optional retry. Compose the caller signal with ordinary browser event listeners and remove listeners/timer in `finally`.
+3. GET `${basePath}/command-lease` with `Accept: application/json`, `cache: 'no-store'`, and `redirect: 'error'`. Require HTTP 200, reject any `response.redirected`, validate `RuntimePublisherLeaseV1`, require the requested Project/Revision, and require a publisher ending `:client-write`.
+4. Set `expiresAt = min(nowMs() + 5_000, lease.expiresAt)`, build the exact value, and pass it through `validateCommandRequestV1` before POST.
+5. POST `${basePath}/command` with HTTP 200 required, `Accept: application/json`, `Content-Type: application/json`, `redirect: 'error'`, and the composed signal; reject any `response.redirected`.
+6. Validate `CommandResultV1`, then require exact Project/Revision/generation/target/Command identity echo, `attachedObjectId === null`, and exactly one terminal pair: `ACCEPTED/SUCCEEDED`, `ACCEPTED/FAILED`, or `REJECTED/FAILED`. Any mismatch is `RUNTIME_GATEWAY_RESPONSE_INVALID` before retry classification.
+7. Retry only exact `REJECTED/FAILED COMMAND_LEASE_STALE`: invalidate only the lease used, recheck abort/deadline, force one no-store lease GET, and POST once more with the same Command ID. Return a second stale result unchanged and never retry any other failure, including `ACCEPTED/FAILED COMMAND_SERVICE_CLOSED`.
+
+Return every valid terminal `CommandResultV1`, including failures, unchanged. Propagate caller cancellation as `AbortError`; map the internal deadline to `RUNTIME_GATEWAY_TIMEOUT`; map fetch/network failure to `RUNTIME_GATEWAY_UNAVAILABLE`; map malformed 200 JSON/envelopes/correlation to `RUNTIME_GATEWAY_RESPONSE_INVALID`. For non-200, preserve an exact closed `{ code, message }` body plus HTTP status in `RuntimeGatewayCommandClientV1Error`; otherwise use `RUNTIME_GATEWAY_HTTP_<status>`. Abort/timeout/network/HTTP/validation failures never trigger an untracked write retry.
+
+- [ ] **Step 11: Implement the isolated discriminated V5 Runtime stream**
+
+```ts
+export interface RuntimeGatewayStateConsumerV5 {
+  ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  restoreReplayPrefix(batch: StateBatchV1, receivedTimestampMs: number): boolean
+}
+
+export type RuntimeGatewayLifecycleConsumerV5 = (
+  event: EndpointLifecycleV1,
+  receivedTimestampMs: number,
+) => boolean
+
+export interface RuntimeGatewayStreamContextV5 {
+  readonly projectId: string
+  readonly configRevision: string
+  readonly gatewayId: string
+}
+
+export interface RuntimeGatewayStreamTargetV5 extends RuntimeGatewayStreamContextV5 {
+  readonly stateConsumers: readonly RuntimeGatewayStateConsumerV5[]
+  readonly lifecycleConsumers: readonly RuntimeGatewayLifecycleConsumerV5[]
+  readonly onEndpointCatchupStart: (
+    endpointId: string,
+    receivedTimestampMs: number,
+  ) => EndpointCatchupGuardV5
+  readonly onSessionStart?: (receivedTimestampMs: number) => void
+  readonly onSessionDisconnect?: (receivedTimestampMs: number) => void
+}
+
+export interface RuntimeGatewayStateStreamOptionsV5 {
+  readonly url?: string
+  readonly location?: BrowserLocationV5
+  readonly createWebSocket?: (url: string) => BrowserWebSocketV5
+  readonly readActiveTarget: () => RuntimeGatewayStreamTargetV5
+  readonly nowMs?: () => number
+  readonly reconnectDelayMs?: number
+}
+
+export interface RuntimeGatewayStateStreamV5 {
+  start(): void
+  refreshActiveTarget(): void
+  stop(): void
+}
+```
+
+Build this independently of V4 while preserving its same-origin `/runtime/ws`, lifecycle, and reconnect behavior. Accept only string frames whose UTF-8 byte count is at most `MAX_RUNTIME_BATCH_BYTES_V1`; parse and call `validateRuntimeStreamMessageV1` once. On socket open, call `readActiveTarget()` once, retain that immutable object as the socket's `openedTarget`, and invoke only its session-start callback. Before advancing a wire fence or buffering/delivering each live frame, call `readActiveTarget()` exactly once and require object identity with `openedTarget`; a browser graph swap therefore fails/reconnects the old socket before any new-graph delivery, even if a frame happens to carry the new context. The target contains the Project/config Revision/Gateway context and all consumers/callbacks for one published browser runtime graph. Require the frame's exact context; a mismatch closes that candidate and schedules reconnect without consuming the frame. All delivery caused by that physical frame uses only the captured target, never another active-graph lookup. At either boundary start, capture that target object and require every enclosed/end frame to match its context. Immediately before either drain, read the active target again and require object identity with the captured/opened target; any browser Project graph swap discards the buffer and closes/reconnects before invoking a consumer. Maintain one strictly increasing wire-sequence fence per Endpoint across State, lifecycle, and both boundary kinds for the current socket session. Reset one socket-local receipt clock on open; for every open/message/close sample use `max(lastReceiptMs, requireTimestamp(nowMs()))`, store it, and give every matching consumer of that physical frame the same clamped timestamp. A regressing injected browser clock therefore cannot make live stores reject a Hub-accepted frame or diverge from later replay. Pass a live State Batch only to each captured `stateConsumer.ingest` and live lifecycle only to the captured `lifecycleConsumers`. Isolate every consumer exception.
+
+Maintain one socket-local delivered lifecycle record and replay-eligibility bit per Endpoint. Clear all records on every socket open before `onSessionStart`, and reject the candidate before allocating a ninth distinct Endpoint record/fence. Replay is attach-time privileged hydration: only an unseen Endpoint's very first frame may be `EndpointReplayBoundaryV1(start)`, and starting it permanently consumes that Endpoint's eligibility. Any ordinary lifecycle or catch-up first frame also permanently closes eligibility; a completed replay, failed replay, second replay, or replay after live/catch-up is never allowed to reopen it. Use the same deterministic Event-ID and tuple rules as the lifecycle router, plus legal transitions: outside the explicitly recognized first replay-prefix region, State requires a connected record; disconnected must match the current connected publisher/session; a later connected must have a greater publisher/session tuple. Validate against a provisional copy while buffering. Commit the record only after a valid replay/catch-up end; update it for an accepted ordinary live lifecycle before isolated consumer callbacks. An exact semantic duplicate is an idempotent counted no-op and reaches no consumer. A stale, equal-tuple conflict, transition-invalid lifecycle, State while unknown/disconnected, second/later replay, or replay after ordinary traffic routes through `failOpenedCandidate` without partially changing the record. A completed replay ending in connected/disconnected therefore seeds the following catch-up correctly, and an ordinary live connected seeds a later State-only catch-up. Tests cover replay-after-live, second replay, both valid first-frame paths, the eight-Endpoint bound, and prove socket reopen clears the record/eligibility.
+
+An `EndpointReplayBoundaryV1(start)` opens exactly one socket-local replay buffer. Reject and reconnect on nesting, a different Endpoint/context, non-increasing sequence, declared count/bytes above the fixed `8 * MAX_RUNTIME_BATCH_BYTES_V1` limit, more frames/bytes than declared, a non-matching end, any live frame after the declared count but before end, or a body that is not exactly `zero-or-more prefix State -> one connected -> zero-or-more current State -> optional matching disconnected`. Buffer the already validated/frozen enclosed State/lifecycle values and each frame's one receipt timestamp without invoking consumers. A matching end must have the same semantic fields/count/bytes and exact observed totals; then drain the complete buffer synchronously in one JavaScript call stack. Prefix State calls each isolated consumer's `restoreReplayPrefix`; the retained connected and later frames use ordinary lifecycle/`ingest` consumers. No timer, Job advance, render sample, or live frame may interleave this drain. Boundaries themselves are transport-only and never reach State/lifecycle consumers. Discard a partial replay on close, error, stop, or reconnect. A socket that closes after start without end is a failed candidate and follows the one reconnect path.
+
+An `EndpointCatchupBoundaryV1(start)` is mutually exclusive with a replay buffer and opens exactly one socket-local Endpoint catch-up buffer. Apply the same context, Endpoint, strictly increasing per-Endpoint wire sequence, positive declared count/bytes, fixed byte limit, observed count/bytes, matching-end, overflow, partial-close, and single reconnect checks. After validating the start but before retaining the buffer, synchronously call the captured target's required `onEndpointCatchupStart(endpointId, atMs)` and retain its guard; Task 7 composes the four stores' transient Endpoint guards, so a Job tick between physical WebSocket frames cannot consume an old GOOD value without destructively changing untouched channels. A callback failure rejects/closes the candidate. Its body must contain one or more publisher State/lifecycle messages for exactly that Endpoint and no boundary or outside live frame. Validate the body against a provisional copy of the stream's delivered lifecycle record: State is allowed only while connected; disconnected forbids State until a strictly newer valid connected; exact duplicates are counted no-ops, while stale or conflicting lifecycle rejects without mutating delivered state. The first body event may be State only if that Endpoint was already connected before the boundary. At a valid end, recheck that `readActiveTarget()` returns the captured/opened target by identity, then call its ordinary `stateConsumer.ingest` and lifecycle consumers synchronously in wire order, skipping duplicate lifecycle, commit the provisional record, and call `guard.commit()` in the same call stack. Never call `restoreReplayPrefix` for catch-up. Any invalid frame, context or target change, close, error, reconnect, or stop calls `guard.abort()` exactly once before cleanup. Messages received after the Hub's frozen pending cut stay queued after the end and cannot interleave. Regression tests cover malformed/nested/missing-end bodies, callback failure, duplicate-only and sparse A-only/B-unchanged cuts, guard abort/single-use cleanup, two Endpoint cuts emitted in sorted Endpoint order, and invoke a Job/timer callback after every physically received event of `connected -> GOOD(payload) -> BAD/disconnected`; every pre-end tick sees the transient quarantine as non-GOOD, while valid end restores untouched channels and exposes only final touched-channel state.
+
+Centralize every validation/context/target/boundary failure after a socket has opened in one synchronous `failOpenedCandidate(atMs)` path. Before the failing message handler returns, atomically mark the candidate failed, detach/ignore all later events, abort an active catch-up guard, discard buffers, and call the retained `openedTarget.onSessionDisconnect(atMs)` exactly once so the graph that owned that socket becomes STALE. If the published graph was atomically replaced, the callback still cannot mutate the new graph; its detached candidate already begins non-GOOD. Only then request socket close and schedule one reconnect; a later native close/error is a deduplicated no-op. This safety callback also runs for catch-up-start failure and replay/catch-up protocol failure. A connecting socket that never opened has no established values and does not call it. Tests queue a Job tick immediately after malformed input and active-context mismatch and prove every Endpoint is already non-consumable before the native close event; a target-swap test proves the old graph alone receives disconnect while the new graph remains at its initial BAD state.
+
+On each new socket `open`, clear the stream's Endpoint sequence fences, lifecycle records, receipt clock, and replay/catch-up buffers, sample once, capture `openedTarget`, and call only `openedTarget.onSessionStart(atMs)` before changing to open/accepting messages. If it throws, reject/close that candidate and schedule one reconnect; Task 7's callback is constructed no-throw after its own validation. For an unexpected close/error after a successful open, route through `failOpenedCandidate`. Connecting failures do not report an established-session disconnect. `refreshActiveTarget()` is the intentional graph-handoff path: synchronously detach and ignore old socket handlers, abort any catch-up guard, discard buffers/fences, cancel its timer, close the detached socket, and request an immediate replacement that will capture the newly published target; it does not invoke either graph's disconnect callback, and later native close/error is ignored. Intentional `stop()` performs the same bounded cleanup but does not reconnect and remains idempotent. Task 7 uses unexpected disconnect to mark every Endpoint-owned channel in the socket's owning graph `STALE/BadNoCommunication`; reopen globally resets the newly captured graph's stores to `BAD/BadWaitingForInitialData` and calls its `EndpointLifecycleRouterV5.resetSocketSession()` before replay is accepted. Atomic framed replay then restores each Endpoint's retained payload and final connected/disconnected truth without a timer or Job-advance opportunity between frames.
+
+- [ ] **Step 12: Run command/stream GREEN and commit**
 
 ```powershell
-npm run test:run -- src/features/runtime-gateway/v5/runtime-gateway-command-client.test.ts src/features/runtime-gateway/v5/runtime-gateway-state-stream.test.ts
+npm run test:run -- src/core/project-v5/opcua-boolean-write-targets.test.ts middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/opcua-client-adapter.test.ts src/features/runtime-gateway/v4/runtime-gateway-stream-v4.test.ts src/features/runtime-gateway/v5/runtime-gateway-command-client.test.ts src/features/runtime-gateway/v5/runtime-gateway-state-stream.test.ts
+npm run test:run
+npm run build:gateway
 npm run lint
 npm run build
-git add src/features/runtime-gateway/v5/runtime-gateway-command-client.ts src/features/runtime-gateway/v5/runtime-gateway-command-client.test.ts src/features/runtime-gateway/v5/runtime-gateway-state-stream.ts src/features/runtime-gateway/v5/runtime-gateway-state-stream.test.ts
+git diff --exit-code -- src/features/runtime-gateway/v4
+git add src/core/project-v5/opcua-boolean-write-targets.ts src/core/project-v5/opcua-boolean-write-targets.test.ts src/core/project-v5/index.ts middleware/runtime-gateway/opcua-client-write-service.ts middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/opcua-client-adapter.ts middleware/runtime-gateway/opcua-client-adapter.test.ts src/features/runtime-gateway/v5/runtime-gateway-command-client.ts src/features/runtime-gateway/v5/runtime-gateway-command-client.test.ts src/features/runtime-gateway/v5/runtime-gateway-state-stream.ts src/features/runtime-gateway/v5/runtime-gateway-state-stream.test.ts
 git diff --cached --check
 git commit -m "feat: add browser signal command client"
 ```
 
-Expected: focused tests, lint, and browser build PASS.
+Add a static browser-boundary assertion for all three new V5 runtime-gateway files and the shared compiler: no `project-v4`, `runtime-gateway/v4`, middleware or `node-opcua` import, Node builtin, `process`, or `Buffer`. Expected: Mapping parity, V4/V5 stream lifecycle, command correlation/cache/abort tests, full suite, Gateway/browser builds, and lint PASS; the V4 directory remains byte-for-byte unchanged.
 
 ### Task 5: Execute SetDO, WaitDI, and Delay in Authored Order
 
@@ -1086,6 +1514,45 @@ it('fails with the Gateway code after one failed SetDO', async () => {
   await harness.executor.advanceAll(0)
   expect(harness.state()).toMatchObject({ state: 'FAILED', failureCode: 'OPC_UA_WRITE_REJECTED' })
   expect(harness.writeBoolean).toHaveBeenCalledOnce()
+})
+
+it.each([
+  new GatewaySignalWriteErrorV1('SIGNAL_WRITE_MAPPING_NOT_FOUND', 'Missing Mapping.'),
+  new GatewaySignalWriteErrorV1('SIGNAL_WRITE_MAPPING_AMBIGUOUS', 'Ambiguous Mapping.'),
+  new RuntimeGatewayCommandClientV1Error('RUNTIME_GATEWAY_TIMEOUT', 'Timed out.'),
+  new RuntimeGatewayCommandClientV1Error('RUNTIME_GATEWAY_UNAVAILABLE', 'Offline.'),
+] as const)('preserves a recognized SetDO rejection once', async (error) => {
+  const writeBoolean = vi.fn(async () => { throw error })
+  const harness = jobHarness({ instructions: [setDo('set', 'start', true)], writeBoolean })
+  harness.executor.startJob('job', 0)
+  await harness.executor.advanceAll(0)
+  expect(harness.state()).toMatchObject({ state: 'FAILED', failureCode: error.code })
+  await harness.executor.advanceAll(1)
+  expect(writeBoolean).toHaveBeenCalledOnce()
+})
+
+it('normalizes an unknown SetDO rejection without reissuing it', async () => {
+  const writeBoolean = vi.fn(async () => { throw new Error('unexpected') })
+  const harness = jobHarness({ instructions: [setDo('set', 'start', true)], writeBoolean })
+  harness.executor.startJob('job', 0)
+  await harness.executor.advanceAll(0)
+  await harness.executor.advanceAll(1)
+  expect(harness.state()).toMatchObject({ state: 'FAILED', failureCode: 'SIGNAL_WRITE_FAILED' })
+  expect(writeBoolean).toHaveBeenCalledOnce()
+})
+
+it('aborts a pending SetDO on cancellation and ignores its late settlement', async () => {
+  const pending = abortableDeferredCommand()
+  const writeBoolean = vi.fn((_signalId, _value, signal) => pending.promise(signal))
+  const harness = jobHarness({ instructions: [setDo('set', 'start', true)], writeBoolean })
+  harness.executor.startJob('job', 0)
+  const advance = harness.executor.advanceAll(0)
+  harness.executor.cancelJob()
+  expect(pending.signal.aborted).toBe(true)
+  pending.reject(new Error('unexpected'))
+  await advance
+  expect(harness.cancelledState()).toBeUnchanged()
+  expect(writeBoolean).toHaveBeenCalledOnce()
 })
 
 it.each([
@@ -1220,9 +1687,9 @@ export interface RobotJobExecutorDependenciesV5 {
 
 Port the proven serial-chain algorithm under V5 symbols into `src/core/robot-runtime-v5/serial-kinematics.ts`. Import only `src/core/project-v5` types, transforms, limits, and errors; do not import or re-export a V4 module. Preserve revolute commands in degrees, prismatic commands in metres, exact Joint-ID validation, serial-chain/cycle checks, normalized axes/quaternions, world-base composition, and Definition Frame resolution. This module is the only Forward Kinematics implementation used by the active V5 Workcell and by deterministic demo grasp placement.
 
-Create `RobotJointRuntimeStoreV5` with separate `projectRevisionId` and `configRevision`, one exact Joint-ID record per Robot, `replaceProject(project, configRevision)`, `ingest(batch, receivedTimestampMs)`, `markEndpointDisconnected`, `resetGatewaySession`, `writeJointValues`, and `readRobotPose(robotId, worldBasePose?)`. `readRobotPose` calls `computeSerialRobotPoseV5` with the current values and the supplied mapped Base World pose when present, otherwise the Robot's authored `localBasePose`. Compile one enabled read/readWrite Mapping per Joint target; use the Mapping root/leaf extraction from Task 2, apply increasing endpoint sequences only when `robot.jointSource === opcua:<endpointId>` and the batch `configRevision` matches, and retain values with STALE quality across disconnect. Manual/Simulation writes against an OPC UA owner fail and no automatic takeover occurs. `JobRuntimeStoreV5` also retains both revision fields so an old run cannot survive a same-`revisionId` content replacement.
+Create `RobotJointRuntimeStoreV5` with separate `projectRevisionId` and `configRevision`, one exact Joint-ID record per Robot, `replaceProject(project, configRevision)`, `ingest(batch, receivedTimestampMs)`, `restoreReplayPrefix(batch, receivedTimestampMs)`, `beginEndpointCatchup(endpointId, atMs)`, `markEndpointDisconnected`, `resetEndpointSession`, `resetGatewaySession`, `writeJointValues`, and `readRobotPose(robotId, worldBasePose?)`. `readRobotPose` calls `computeSerialRobotPoseV5` with the current values and the supplied mapped Base World pose when present, otherwise the Robot's authored `localBasePose`. Compile one enabled read/readWrite Mapping per Joint target; use the Mapping root/leaf extraction from Task 2, apply increasing endpoint wire/receipt sequences only when `robot.jointSource === opcua:<endpointId>` and the batch `configRevision` matches, keep PLC source/published-time fences per mapped Robot/Joint channel rather than per Endpoint, apply Task 4's immutable `sourceTimestampMs <= publishedTimestampMs` admission, and retain values with STALE quality across disconnect. `restoreReplayPrefix` follows Task 4's fence-free, non-interpolating framed-prefix contract, and `beginEndpointCatchup` follows its transient touched-channel guard contract. `resetEndpointSession` preserves Joint values, marks only Robots owned by that Endpoint `BAD/BadWaitingForInitialData`, and clears only that Endpoint's wire/receipt fences plus its owned channel-clock fences so a reindexed or restarted PLC may resume from a lower source clock. Manual/Simulation writes against an OPC UA owner fail and no automatic takeover occurs. `JobRuntimeStoreV5` also retains both revision fields so an old run cannot survive a same-`revisionId` content replacement.
 
-Adapt the proven V4 one-chain-per-Robot executor without importing V4 Project or Action types. A Job starts only when its Robot's `jointSource === 'simulation'`. `move-joint` retains wrapped/limited interpolation. `set-do` stores one Promise before awaiting it and never reissues during repeated `advanceAll`. `wait-di` reads the store without network polling and checks `quality === 'GOOD'`, Boolean value equality, and `simulationMs >= entered + timeoutMs` in that order. `delay` advances at `entered + durationMs`. Attach/Detach call the injected port once. The port rejects with a structurally validated `AttachmentInstructionErrorV1`; the executor preserves its listed stable `code`, while an unknown rejection becomes `ATTACHMENT_INSTRUCTION_FAILED`. Cancellation or disposal invalidates the session generation so late SetDO or Attachment Promise settlement cannot advance a replacement run.
+Adapt the proven V4 one-chain-per-Robot executor without importing V4 Project or Action types. A Job starts only when its Robot's `jointSource === 'simulation'`. `move-joint` retains wrapped/limited interpolation. `set-do` creates one per-instruction `AbortController`, stores one Promise before awaiting it, forwards the signal through `GatewaySignalWritePortV1`, and never reissues during repeated `advanceAll`. Preserve the code from a recognized `GatewaySignalWriteErrorV1` or `RuntimeGatewayCommandClientV1Error`; normalize any other SetDO rejection to `SIGNAL_WRITE_FAILED`. A terminal failed `CommandResultV1` still preserves its Gateway failure code. `wait-di` reads the store without network polling and checks `quality === 'GOOD'`, Boolean value equality, and `simulationMs >= entered + timeoutMs` in that order. `delay` advances at `entered + durationMs`. Attach/Detach call the injected port once. The port rejects with a structurally validated `AttachmentInstructionErrorV1`; the executor preserves its listed stable `code`, while an unknown rejection becomes `ATTACHMENT_INSTRUCTION_FAILED`. Cancellation, failure, replacement, or disposal aborts the active SetDO controller and invalidates the session generation so late SetDO or Attachment Promise settlement cannot advance a replacement run. Abort is control flow for an already-cancelled run, not a new failure overwrite.
 
 - [ ] **Step 5: Run GREEN and commit**
 
@@ -1384,28 +1851,58 @@ it('publishes one revision across Robot, Job, Signal, and Attachment runtimes', 
   const prepared = await resources.prepare(projectV5, CONFIG_REVISION)
   await resources.apply(prepared)
   resources.commit(prepared)
-  expect(resources.robots.getState().projectRevisionId).toBe(projectV5.revisionId)
-  expect(resources.robotFrames.projectRevisionId).toBe(projectV5.revisionId)
-  expect(resources.objects.projectRevisionId).toBe(projectV5.revisionId)
-  expect(resources.jobs.getState().projectRevisionId).toBe(projectV5.revisionId)
-  expect(resources.signals.getState().projectRevisionId).toBe(projectV5.revisionId)
-  expect(resources.attachments.getState().projectRevisionId).toBe(projectV5.revisionId)
+  const graph = resources.bundle.getState().runtimeGraph
+  expect(graph.robots.getState().projectRevisionId).toBe(projectV5.revisionId)
+  expect(graph.robotFrames.projectRevisionId).toBe(projectV5.revisionId)
+  expect(graph.objects.projectRevisionId).toBe(projectV5.revisionId)
+  expect(graph.jobs.getState().projectRevisionId).toBe(projectV5.revisionId)
+  expect(graph.signals.getState().projectRevisionId).toBe(projectV5.revisionId)
+  expect(graph.attachments.getState().projectRevisionId).toBe(projectV5.revisionId)
   expect([
-    resources.robots.getState().configRevision,
-    resources.robotFrames.configRevision,
-    resources.objects.configRevision,
-    resources.jobs.getState().configRevision,
-    resources.signals.getState().configRevision,
-    resources.attachments.getState().configRevision,
+    graph.robots.getState().configRevision,
+    graph.robotFrames.configRevision,
+    graph.objects.configRevision,
+    graph.jobs.getState().configRevision,
+    graph.signals.getState().configRevision,
+    graph.attachments.getState().configRevision,
     resources.bundle.getState().configRevision,
   ]).toEqual(Array(7).fill(CONFIG_REVISION))
 })
 
-it('marks Signals stale on Gateway session reset without changing the Project', () => {
+it('distinguishes disconnect retention from reopened-session reset and accepts a fresh sequence', () => {
   const before = resources.bundle.getState().project
-  gatewaySocket.close(); gatewaySocket.reopen()
-  expect(resources.signals.getState().read('ready')?.quality).toBe('STALE')
+  const signals = () => resources.bundle.getState().runtimeGraph.signals.getState()
+  gatewaySocket.message(JSON.stringify(signalBatch({ sequence: 10, value: true })))
+  gatewaySocket.close()
+  expect(signals().read('ready')?.quality).toBe('STALE')
+  expect(signals().read('ready')?.statusCode).toBe('BadNoCommunication')
+  gatewaySocket.reopen()
+  expect(signals().read('ready')?.quality).toBe('BAD')
+  expect(signals().read('ready')?.statusCode).toBe('BadWaitingForInitialData')
+  gatewaySocket.message(JSON.stringify(signalBatch({ sequence: 1, value: false })))
+  expect(signals().read('ready')).toMatchObject({
+    value: false, quality: 'GOOD',
+  })
   expect(resources.bundle.getState().project).toBe(before)
+})
+
+it('marks only the failed OPC UA Endpoint stale while the browser socket stays open', async () => {
+  const graph = () => resources.bundle.getState().runtimeGraph
+  gatewaySocket.message(JSON.stringify(goodBatchForEndpoint('plc-a')))
+  gatewaySocket.message(JSON.stringify(goodBatchForEndpoint('plc-b')))
+  await plcA.disconnectSession()
+  expect(gatewaySocket.readyState).toBe(OPEN)
+  await waitFor(() => expect(graph().signals.getState().read('ready-a')).toMatchObject({
+    quality: 'STALE', statusCode: 'BadNoCommunication',
+  }))
+  expect(graph().signals.getState().read('ready-b')?.quality).toBe('GOOD')
+  expect(graph().jobs.getState().waitConditionSatisfied('ready-a', true)).toBe(false)
+  await plcA.emitRepeatedDisconnectSignal()
+  expect(resources.endpointDisconnectCount('plc-a')).toBe(1)
+  await plcA.reconnectAndPublish(false)
+  await waitFor(() => expect(graph().signals.getState().read('ready-a')).toMatchObject({
+    value: false, quality: 'GOOD',
+  }))
 })
 
 it('rolls back every local runtime checkpoint when candidate apply fails', async () => {
@@ -1413,28 +1910,158 @@ it('rolls back every local runtime checkpoint when candidate apply fails', async
   const before = snapshotAllRuntimeStores(failingResources)
   const prepared = await failingResources.prepare(projectV5B, CONFIG_REVISION_B)
   await expect(failingResources.apply(prepared)).rejects.toThrow('TEST_APPLY_FAILURE')
-  failingResources.rollback(prepared)
+  expect(() => failingResources.commit(prepared)).toThrow('BROWSER_RUNTIME_CANDIDATE_APPLY_FAILED')
+  await failingResources.rollback(prepared)
   expect(snapshotAllRuntimeStores(failingResources)).toEqual(before)
   expect(() => failingResources.commit(prepared)).toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
+})
+
+it.each(['robots', 'frames', 'objects', 'signals', 'jobs', 'attachments'] as const)(
+  'keeps the published graph live while detached apply passes %s',
+  async (afterStep) => {
+    const raceResources = createBrowserProjectRuntimeV5(testOptions({
+      afterDetachedApplyStep: (step) => {
+        if (step !== afterStep) return
+        gatewaySocket.message(JSON.stringify(oldRevisionSignalBatch({ value: true })))
+        expect(raceResources.bundle.getState().runtimeGraph.signals.getState().read('ready')?.value).toBe(true)
+      },
+    }))
+    const prepared = await raceResources.prepare(projectV5B, CONFIG_REVISION_B)
+    await raceResources.apply(prepared)
+    expect(snapshotPreparedCandidate(prepared).signals.ready).not.toBe(true)
+    await raceResources.rollback(prepared)
+    expect(raceResources.bundle.getState().runtimeGraph.signals.getState().read('ready')?.value).toBe(true)
+  },
+)
+
+it('atomically swaps context and graph only at commit', async () => {
+  const raceResources = createBrowserProjectRuntimeV5(testOptions({
+    afterDetachedApplyStep: () => {
+      gatewaySocket.message(JSON.stringify(oldRevisionSignalBatch({ value: true })))
+    },
+  }))
+  const prepared = await raceResources.prepare(projectV5B, CONFIG_REVISION_B)
+  await raceResources.apply(prepared)
+  expect(readPublishedGraph(raceResources)).toMatchObject({
+    projectRevisionId: projectV5.revisionId,
+    ready: true,
+  })
+  raceResources.commit(prepared)
+  expect(readPublishedGraph(raceResources)).toMatchObject({
+    projectRevisionId: projectV5B.revisionId,
+    ready: projectV5BInitialReady,
+  })
+})
+
+it('rolls the sole bundle subscription to the new graph and exposes no stable old-store facade', async () => {
+  const mounted = mountBundleConsumerHarness(resources.bundle)
+  const oldGraph = mounted.graph()
+  expect('signals' in resources).toBe(false)
+  const prepared = await resources.prepare(projectV5B, CONFIG_REVISION_B)
+  await resources.apply(prepared)
+  resources.commit(prepared)
+  expect(mounted.epochs()).toEqual([1, 2])
+  expect(mounted.graph()).toBe(resources.bundle.getState().runtimeGraph)
+  expect(mounted.graph()).not.toBe(oldGraph)
+  expect(mounted.graphSubscriptionCount()).toBe(1)
+})
+
+it('finishes publication, rotation, cleanup, and notification despite throwing/reentrant listeners', async () => {
+  let nestedPrepare: Promise<PreparedBrowserRuntimeCandidateV5> | undefined
+  resources.bundle.subscribe(() => {
+    const published = resources.bundle.getState()
+    expect(published.runtimeGraph.streamTarget.configRevision).toBe(published.configRevision)
+    nestedPrepare = resources.prepare(projectV5C, CONFIG_REVISION_C)
+    throw new Error('TEST_SUBSCRIBER_FAILURE')
+  })
+  const observed: number[] = []
+  resources.bundle.subscribe(() => observed.push(resources.bundle.getState().runtimeEpoch))
+  const prepared = await resources.prepare(projectV5B, CONFIG_REVISION_B)
+  await resources.apply(prepared)
+  expect(() => resources.commit(prepared)).not.toThrow()
+  expect(observed).toEqual([2])
+  expect(streamHarness.rotationCount()).toBe(1)
+  expect(oldGraphHarness.disposeCount()).toBe(1)
+  expect(diagnostics()).toContain('TEST_SUBSCRIBER_FAILURE')
+  const nested = await nestedPrepare!
+  expect(preparedBaseEpoch(nested)).toBe(2)
+  await resources.rollback(nested)
+})
+
+it('synchronously detaches an active catch-up before disposing the old graph', async () => {
+  const oldGraph = resources.bundle.getState().runtimeGraph
+  oldSocket.message(JSON.stringify(catchupStart('plc')))
+  expect(catchupHarness(oldGraph).active()).toBe(true)
+  const prepared = await resources.prepare(projectV5B, CONFIG_REVISION_B)
+  await resources.apply(prepared)
+  resources.commit(prepared)
+  expect(catchupHarness(oldGraph).abortCount()).toBe(1)
+  expect(oldSocket.handlersDetached()).toBe(true)
+  oldSocket.delayedMessage(JSON.stringify(goodStateForOldRevision()))
+  oldSocket.delayedClose()
+  expect(resources.bundle.getState().runtimeGraph.signals.getState().read('ready')?.quality).toBe('BAD')
+  expect(newGraphCallbackCount()).toBe(0)
+})
+
+it('enforces candidate state, cancellation/join, and base-epoch ordering', async () => {
+  const beforeApply = await resources.prepare(projectV5B, CONFIG_REVISION_B)
+  expect(() => resources.commit(beforeApply)).toThrow('BROWSER_RUNTIME_CANDIDATE_NOT_APPLIED')
+  await resources.rollback(beforeApply)
+
+  const gate = deferred<void>()
+  const busyResources = createBrowserProjectRuntimeV5(testOptions({ detachedApplyGate: gate }))
+  const busy = await busyResources.prepare(projectV5B, CONFIG_REVISION_B)
+  const applying = busyResources.apply(busy)
+  expect(() => busyResources.commit(busy)).toThrow('BROWSER_RUNTIME_CANDIDATE_BUSY')
+  await expect(busyResources.apply(busy)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_BUSY')
+  const rollingBack = busyResources.rollback(busy)
+  gate.resolve()
+  await expect(applying).rejects.toThrow('AbortError')
+  await rollingBack
+  await expect(busyResources.apply(busy)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
+
+  const a = await resources.prepare(projectV5B, CONFIG_REVISION_B)
+  const b = await resources.prepare(projectV5C, CONFIG_REVISION_C)
+  await Promise.all([resources.apply(a), resources.apply(b)])
+  resources.commit(b)
+  expect(() => resources.commit(a)).toThrow('BROWSER_RUNTIME_CANDIDATE_STALE')
+  expect(disposeCount(a)).toBe(1)
+})
+
+it('disposes the owner by detaching transport, aborting/joining candidates, and closing once', async () => {
+  const gate = deferred<void>()
+  const owned = createBrowserProjectRuntimeV5(testOptions({ detachedApplyGate: gate }))
+  owned.startGatewayStream()
+  oldSocket.message(JSON.stringify(catchupStart('plc')))
+  const applyingCandidate = await owned.prepare(projectV5B, CONFIG_REVISION_B)
+  const applying = owned.apply(applyingCandidate)
+  const preparedCandidate = await owned.prepare(projectV5C, CONFIG_REVISION_C)
+
+  const firstDispose = owned.dispose()
+  const secondDispose = owned.dispose()
+  expect(secondDispose).toBe(firstDispose)
+  expect(oldSocket.handlersDetached()).toBe(true)
+  expect(catchupHarness(owned.bundle.getState().runtimeGraph).abortCount()).toBe(1)
+  gate.resolve()
+  await expect(applying).rejects.toThrow('AbortError')
+  await firstDispose
+  expect(disposeCount(applyingCandidate)).toBe(1)
+  expect(disposeCount(preparedCandidate)).toBe(1)
+  expect(activeGraphDisposeCount()).toBe(1)
+  await expect(owned.prepare(projectV5, CONFIG_REVISION)).rejects.toThrow('BROWSER_RUNTIME_DISPOSED')
+  await expect(owned.apply(applyingCandidate)).rejects.toThrow('BROWSER_RUNTIME_DISPOSED')
+  expect(() => owned.commit(applyingCandidate)).toThrow('BROWSER_RUNTIME_DISPOSED')
+  await expect(owned.rollback(applyingCandidate)).rejects.toThrow('BROWSER_RUNTIME_DISPOSED')
+  expect(() => owned.startGatewayStream()).toThrow('BROWSER_RUNTIME_DISPOSED')
+  expect(() => owned.stopGatewayStream()).not.toThrow()
+  await expect(owned.dispose()).resolves.toBeUndefined()
 })
 ```
 
 - [ ] **Step 2: Compose lifecycle ownership and disposal**
 
 ```ts
-export interface BrowserRuntimeBundleStateV5 {
-  readonly project: WorkcellProjectV5
-  readonly projectRevisionId: string
-  readonly configRevision: string
-}
-
-export interface PreparedBrowserRuntimeCandidateV5 {
-  readonly projectRevisionId: string
-  readonly configRevision: string
-}
-
-export interface BrowserProjectResourcesV5 {
-  readonly bundle: StoreApi<BrowserRuntimeBundleStateV5>
+export interface PublishedBrowserRuntimeGraphV5 {
   readonly robots: StoreApi<RobotJointRuntimeStoreV5>
   readonly robotFrames: RobotFrameStatusRuntimeStoreV5
   readonly signals: StoreApi<LogicalSignalRuntimeStoreV1>
@@ -1444,17 +2071,53 @@ export interface BrowserProjectResourcesV5 {
   readonly signalWrites: GatewaySignalWritePortV1
   readonly jobExecutor: RobotJobExecutorV5
   readonly playback: RobotJobPlaybackControllerV5
+  readonly streamTarget: RuntimeGatewayStreamTargetV5
+}
+
+export interface BrowserRuntimeBundleStateV5 {
+  readonly runtimeEpoch: number
+  readonly project: WorkcellProjectV5
+  readonly projectRevisionId: string
+  readonly configRevision: string
+  readonly gatewayId: string
+  readonly runtimeGraph: PublishedBrowserRuntimeGraphV5
+}
+
+export interface BrowserRuntimeBundleCellV5 {
+  getState(): BrowserRuntimeBundleStateV5
+  subscribe(listener: () => void): () => void
+}
+
+export interface PreparedBrowserRuntimeCandidateV5 {
+  readonly projectRevisionId: string
+  readonly configRevision: string
+}
+
+export interface BrowserProjectResourcesV5 {
+  readonly bundle: BrowserRuntimeBundleCellV5
   prepare(project: WorkcellProjectV5, configRevision: string): Promise<PreparedBrowserRuntimeCandidateV5>
   apply(prepared: PreparedBrowserRuntimeCandidateV5): Promise<void>
   commit(prepared: PreparedBrowserRuntimeCandidateV5): void
-  rollback(prepared: PreparedBrowserRuntimeCandidateV5): void
+  rollback(prepared: PreparedBrowserRuntimeCandidateV5): Promise<void>
   startGatewayStream(): void
   stopGatewayStream(): void
-  dispose(): void
+  dispose(): Promise<void>
 }
 ```
 
-Create these resources as a V5 runtime candidate using a validated Project and a caller-supplied lowercase 64-hex `configRevision`; never recompute the hash and never substitute `revisionId`. Task 7 owns an opaque, single-use local `PreparedBrowserRuntimeCandidateV5` and atomic `prepare/apply/commit/rollback` only for the Robot, Job, Signal, Object, Frame/status, and Attachment resources. `prepare` validates and snapshots the Project plus supplied hash without mutating the active runtime; `apply` installs the candidate behind unpublished checkpoints; `commit` publishes it and disposes prior playback/executor; `rollback` restores every prior checkpoint and disposes the candidate. Its integration harness may stage a Gateway through an injected lifecycle port, but it does not open the Project repository, publish the active Project, compute a canonical hash, or become the production Gateway publication authority. Milestone 5 computes the canonical hash exactly once and coordinates repository, Gateway activation, and these existing runtime lifecycle methods. On successful local commit clear the command Client lease and reset runtime-only Robot Joint, Robot Frame/status, Object, Signal, and Attachment data. `BrowserProjectRuntimeV5.startGatewayStream()` constructs one V5 stream with the Robot Joint, Robot Frame/status, Object, and Signal consumers; on session start it calls all four reset functions. Endpoint status transitions from connected to reconnecting/faulted call all four `markEndpointDisconnected` methods exactly once per transition. Expose this runtime for the Milestone 5 V5 UI composition; do not import it into the V4 App.
+Create these resources as a V5 runtime candidate using a validated Project, a caller-supplied lowercase 64-hex `configRevision`, and the configured Gateway ID; never recompute the hash and never substitute `revisionId`. Task 7 owns an opaque, single-use local `PreparedBrowserRuntimeCandidateV5` and atomic `prepare/apply/commit/rollback` only for the Robot, Job, Signal, Object, Frame/status, and Attachment resources. `prepare` validates the Project/hash, captures the current bundle object and positive safe-integer `runtimeEpoch`, rejects epoch exhaustion, and constructs a completely detached candidate graph. `apply` may await and perform every fallible per-store initialization, but mutates only that detached graph; the published bundle, old graph, and stream target remain untouched. An injected constructor-only test hook may observe each named detached apply step, but it is not part of the production resource interface.
+
+The prepared handle has an internal closed state machine: `prepared -> applying -> applied -> consumed`, plus `failed` for a rejected apply. Only one `apply` may start; a second/concurrent apply rejects `BROWSER_RUNTIME_CANDIDATE_BUSY`, commit while applying rejects the same code, commit before apply rejects `BROWSER_RUNTIME_CANDIDATE_NOT_APPLIED`, and commit after failure rejects `BROWSER_RUNTIME_CANDIDATE_APPLY_FAILED`. `rollback` is async: from `applying` its first caller marks cancellation, aborts the detached apply through its private signal, joins the one apply Promise, then atomically consumes and disposes the candidate; another rollback while that cancellation is pending returns the same rollback Promise rather than disposing twice. From `prepared`, `applied`, or `failed`, rollback consumes/disposes directly. Any new operation after consumption rejects exact `BROWSER_RUNTIME_CANDIDATE_CONSUMED`. Apply checks cancellation between every detached step and performs no active-cell mutation even when a constructor/test callback reenters. At commit, require the bundle object and `runtimeEpoch` still equal the captured base; an out-of-order candidate becomes consumed/disposed and throws `BROWSER_RUNTIME_CANDIDATE_STALE` without publication.
+
+Do not use Zustand `setState` as the publication primitive because it invokes subscribers synchronously. Back `BrowserRuntimeBundleCellV5` with a module-private split-phase cell. Its fallible, side-effect-free `prepareInstall(next, expectedBaseBundle, expectedEpoch)` validates the exact base identity/Epoch, freezes the complete next bundle, captures the prior graph and listener snapshot, and returns an opaque single-use install token. After that succeeds, commit marks the candidate handle consumed and calls token `installPure()`, which performs only one no-throw/no-callout pointer assignment. A mandatory no-throw finalization tail then calls the stable stream's synchronous `refreshActiveTarget()`; it must detach the old socket, abort/discard old buffers/guards, and prevent every future old-target callback before returning. In `finally`, isolate old playback/executor/graph disposal and call token `flushIsolatedNotifications()`, which invokes the captured listeners individually, catches every exception, and records diagnostics without throwing. The tail must attempt rotation, cleanup, and notification exactly once even if an injected implementation throws despite its no-throw contract; commit never reports failure after `installPure()`. Thus a throwing or reentrant subscriber can neither make a published commit report failure nor skip stream rotation/cleanup. Reentrant preparation observes only the new complete bundle.
+
+The bundle/runtime graph is the only long-lived consumer contract. Do not expose per-store getters or stable-looking `signals`, `robots`, `signalWrites`, `jobExecutor`, or `playback` fields on `BrowserProjectResourcesV5`: an ES getter cannot migrate an existing Zustand/React subscription. React uses `useSyncExternalStore(resources.bundle.subscribe, resources.bundle.getState)` and keys/remounts the graph-owned subtree by `runtimeEpoch`; imperative code reads one bundle snapshot and keeps its graph only for that operation. Cached graph-owned services must not cross an Epoch. The stream reads the published graph's prebuilt `RuntimeGatewayStreamTargetV5`, so no observer can pair old context with candidate stores. `rollback` disposes only the detached candidate and never restores or rewrites the still-published old graph. Its integration harness may stage a Gateway through an injected lifecycle port, but it does not open the Project repository, publish the active Project, compute a canonical hash, or become the production Gateway publication authority. Milestone 5 computes the canonical hash exactly once and coordinates repository, Gateway activation, and these existing runtime lifecycle methods. The detached candidate begins with reset runtime-only Robot Joint, Robot Frame/status, Object, Signal, and Attachment data; the atomic install also advances the command Client lease epoch, so a pre-commit lease cannot survive. An old-context frame injected after every detached apply step must update only the old published graph and remain present after rollback. On successful commit it remains observable until the exact pointer install, then is intentionally replaced by the new Revision's reset candidate state; it is never silently rolled back before commit and never leaks into the candidate.
+
+The owner has its own `ACTIVE -> DISPOSING -> DISPOSED` state and tracks every unconsumed prepared handle in an enumerable private Set in addition to the authenticity WeakMap. The first `dispose()` atomically enters DISPOSING, synchronously calls the stream's idempotent `stop()` so handlers are detached and any catch-up guard is aborted before returning control, marks every applying candidate cancelled and aborts its private signal, joins every apply/rollback Promise, consumes and disposes every prepared/applied/failed candidate exactly once, then disposes the active graph and enters DISPOSED. It returns one shared Promise; concurrent and later `dispose()` calls return/resolve through that same completed operation, while `stopGatewayStream()` remains an idempotent no-op after disposal. From the instant DISPOSING begins, `prepare`, `apply`, `commit`, `rollback`, and `startGatewayStream` reject exact `BROWSER_RUNTIME_DISPOSED` (synchronous methods throw; Promise methods reject), and no gated apply continuation may mutate or publish after its abort. Cleanup failures are isolated/diagnosed while all remaining candidates and the active graph are still attempted; disposal resolves only after all joins and cleanup attempts complete.
+
+`BrowserProjectRuntimeV5.startGatewayStream()` constructs one V5 stream whose required `readActiveTarget` reads the published bundle exactly once and returns that bundle's prebuilt immutable stream target: Project ID, canonical config Revision, Gateway ID, Robot Joint/Frame, Object, and Signal State consumers, plus the same graph's Endpoint lifecycle router and callbacks. A Gateway replay for a not-yet-committed browser Revision is rejected/reconnected rather than consumed, and a physical frame already admitted against an old target can call only that captured old graph even if a reentrant commit swaps the active cell. Its required `onEndpointCatchupStart` begins one transient guard in each of the four stores and returns a composite no-throw guard; partial construction aborts already-created guards before throwing. This makes `WaitDI` non-consumable during buffering, commits final touched-channel state at valid end, and restores untouched channels such as a sparse Endpoint's B channel. An accepted `disconnected` lifecycle event performs a durable Endpoint-local STALE transition while the browser WebSocket remains open. An accepted `connected` event resets only that Endpoint to `BAD/BadWaitingForInitialData` and clears only its sequence/source/interpolation session fences before the first new State data. Ordinary `BAD/BadNoCommunication` State values do not invoke the lifecycle router. Duplicate lifecycle Event IDs are idempotent.
+
+Separately, each graph's stream-target `onSessionDisconnect(atMs)` aborts any active catch-up guard, then marks every Endpoint-owned channel in that graph's four stores `STALE/BadNoCommunication` once for a browser transport gap. Its `onSessionStart(atMs)` calls that graph's four global `resetGatewaySession` functions and `EndpointLifecycleRouterV5.resetSocketSession()` before accepting replay, producing `BAD/BadWaitingForInitialData` with cleared socket-session fences. The framed Hub replay `start -> prefix -> connected -> current -> optional disconnected -> end` is buffered and applied synchronously at end, so WaitDI cannot observe a prefix/current GOOD value before a retained disconnect is applied. A live catch-up overlays transient non-GOOD at start and applies the full pending State/lifecycle cut plus guard commit synchronously at end. Both paths reconstruct the affected Endpoint correctly if the PLC is still down or has reconnected. Expose this runtime for the Milestone 5 V5 UI composition; do not import it into the V4 App.
 
 - [ ] **Step 3: Write the real local OPC UA write/dedupe/disconnect integration test**
 
@@ -1487,20 +2150,25 @@ it('re-resolves a persisted Namespace URI after the Server changes its Namespace
   const gateway = await startGatewayWithProjectAndBrowserRuntime(project, first.endpointUrl)
   try {
     expect(await first.namespaceIndex(namespaceUri)).toBe(2)
-    await first.publish({ signal: true, objectX: 0.2, jointJ1: 10 })
+    await first.publish({ signal: true, objectX: 0.2, jointJ1: 10, sourceTimestampMs: 80_000 })
     await waitFor(() => expect(gateway.runtime.snapshot()).toMatchObject({
       signal: { value: true, quality: 'GOOD' },
       object: { x: 0.2, quality: 'GOOD' },
       joint: { value: 10, quality: 'GOOD' },
     }))
     await first.stop()
+    await waitFor(() => expect(gateway.runtime.snapshot()).toMatchObject({
+      signal: { value: true, quality: 'STALE', statusCode: 'BadNoCommunication' },
+      object: { x: 0.2, quality: 'STALE', statusCode: 'BadNoCommunication' },
+      joint: { value: 10, quality: 'STALE', statusCode: 'BadNoCommunication' },
+    }))
     const second = await startReindexableOpcUaServer({
       endpointUrl: first.endpointUrl,
       namespaceUri,
       namespacesBeforeTarget: 1,
     })
     expect(await second.namespaceIndex(namespaceUri)).toBe(3)
-    await second.publish({ signal: false, objectX: 0.4, jointJ1: 20 })
+    await second.publish({ signal: false, objectX: 0.4, jointJ1: 20, sourceTimestampMs: 1_000 })
     await waitFor(() => expect(gateway.runtime.snapshot()).toMatchObject({
       signal: { value: false, quality: 'GOOD' },
       object: { x: 0.4, quality: 'GOOD' },
@@ -1597,6 +2265,7 @@ git commit -m "feat: integrate opc ua job io runtime"
 - [ ] OPC UA-owned Robot Base/other Frames and numeric Status ingest coherently; Base moves the kinematic chain, other Frame Actuals drive markers/readout/attachment lookup, and disconnect retains stale ownership.
 - [ ] Reconnect re-resolves the persisted Namespace URI when the Server changes its Namespace Index, with Signal/Object/Joint updates resuming and canonical Project JSON unchanged.
 - [ ] Disconnect retains the value as STALE, and STALE cannot satisfy WaitDI.
+- [ ] OPC UA Session lifecycle uses an explicit zero-value-capable Endpoint barrier, never a mapped-value quality heuristic; replay and reconnect affect only the failed Endpoint while ordinary `BAD/BadNoCommunication` data remains channel-local.
 - [ ] SetDO resolves one write Mapping, performs one Session.write, and waits for success.
 - [ ] Wrong Revision, stale generation, expiry, type, direction, and disconnect fail before write.
 - [ ] Identical duplicate Command IDs return one retained result; conflicting reuse does not execute.
@@ -1604,5 +2273,5 @@ git commit -m "feat: integrate opc ua job io runtime"
 - [ ] Delay and WaitDI use nondecreasing Simulation time and exact boundary comparisons.
 - [ ] Attach and Detach use explicit IDs, preserve World pose, and never infer from the gripper.
 - [ ] Runtime-only Signal quality and attachment state do not change canonical Project V5 JSON.
-- [ ] Project replacement and Gateway reconnect reset runtime ownership deterministically.
+- [ ] Project replacement, browser WebSocket reconnect, and OPC UA Endpoint reconnect reset their distinct runtime fences deterministically.
 - [ ] Local OPC UA integration, full tests, lint, Gateway build, and browser build pass.
