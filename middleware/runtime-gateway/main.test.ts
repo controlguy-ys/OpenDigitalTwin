@@ -1147,7 +1147,7 @@ describe('runtime Gateway entrypoint', () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     const client = fakeClientAdapter()
-    let publish: ((batch: StateBatchV1) => void) | null = null
+    let publish: OpcUaClientAdapterOptionsV1['publish'] | null = null
     const service = createRuntimeGatewayEntrypointService(
       createTestConfig(port),
       {

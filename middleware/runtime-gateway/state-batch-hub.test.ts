@@ -6,9 +6,9 @@ import {
 } from '../../src/core/runtime-protocol/v1.js'
 import {
   createStateBatchHubV1,
-  splitStateBatchesV1,
   type GatewayWebSocketV1,
 } from './state-batch-hub.js'
+import { splitStateBatchesV1 } from './runtime-stream-timeline.js'
 
 function mappedValue(index: number, coherenceGroupId: string | null = null) {
   return {
@@ -106,6 +106,16 @@ class ControlledSocket implements GatewayWebSocketV1 {
 }
 
 describe('StateBatchHubV1', () => {
+  it('rejects an unnormalized raw State Batch without mutating a socket queue', () => {
+    const hub = createStateBatchHubV1()
+    const socket = new ControlledSocket()
+    hub.attach(socket)
+
+    expect(hub.publish(batch(1) as never)).toBe(false)
+    expect(socket.sent).toEqual([])
+    expect(hub.queueDepth(socket)).toBe(0)
+  })
+
   it('keeps one in-flight Batch and replaces its single pending Batch with the newest', () => {
     const hub = createStateBatchHubV1()
     const socket = new ControlledSocket()

@@ -45,6 +45,59 @@ export interface StateBatchV1 {
   readonly values: readonly RuntimeMappedValueV1[]
 }
 
+export type EndpointLifecyclePhaseV1 = 'connected' | 'disconnected'
+
+export interface EndpointLifecycleV1 {
+  readonly type: 'endpoint-lifecycle-v1'
+  readonly protocolVersion: 1
+  readonly gatewayId: string
+  readonly projectId: string
+  readonly configRevision: string
+  readonly endpointId: string
+  readonly sequence: number
+  readonly originId: string
+  readonly eventId: string
+  readonly publisherGeneration: number
+  readonly sessionGeneration: number
+  readonly phase: EndpointLifecyclePhaseV1
+  readonly statusCode: 'Good' | 'BadNoCommunication'
+  readonly occurredAtMs: number
+}
+
+export interface EndpointReplayBoundaryV1 {
+  readonly type: 'endpoint-replay-boundary-v1'
+  readonly protocolVersion: 1
+  readonly gatewayId: string
+  readonly projectId: string
+  readonly configRevision: string
+  readonly endpointId: string
+  readonly sequence: number
+  readonly replayId: string
+  readonly messageCount: number
+  readonly encodedBytes: number
+  readonly phase: 'start' | 'end'
+}
+
+export interface EndpointCatchupBoundaryV1 {
+  readonly type: 'endpoint-catchup-boundary-v1'
+  readonly protocolVersion: 1
+  readonly gatewayId: string
+  readonly projectId: string
+  readonly configRevision: string
+  readonly endpointId: string
+  readonly sequence: number
+  readonly catchupId: string
+  readonly messageCount: number
+  readonly encodedBytes: number
+  readonly phase: 'start' | 'end'
+}
+
+export type RuntimePublisherMessageV1 = StateBatchV1 | EndpointLifecycleV1
+export type RuntimeStreamMessageV1 =
+  | RuntimePublisherMessageV1
+  | EndpointReplayBoundaryV1
+  | EndpointCatchupBoundaryV1
+
 export interface RuntimePublisherLeaseV1 {
   readonly projectId: string
   readonly configRevision: string
@@ -181,6 +234,9 @@ export type RevisionRollbackResultV1 =
 
 export type RuntimeProtocolV1Message =
   | StateBatchV1
+  | EndpointLifecycleV1
+  | EndpointReplayBoundaryV1
+  | EndpointCatchupBoundaryV1
   | CommandRequestV1
   | CommandBatchV1
   | CommandResultV1
@@ -747,6 +803,162 @@ export function validateStateBatchV1(value: unknown): StateBatchV1 {
   return deepFreeze(clone)
 }
 
+export function endpointLifecycleEventIdV1(input: Pick<
+  EndpointLifecycleV1,
+  'publisherGeneration' | 'sessionGeneration' | 'phase'
+>): string {
+  const publisherGeneration = expectSafeInteger(input.publisherGeneration, '$.publisherGeneration', 1)
+  const sessionGeneration = expectSafeInteger(input.sessionGeneration, '$.sessionGeneration', 1)
+  const phase = expectEnum(input.phase, '$.phase', ['connected', 'disconnected'] as const)
+  return `lifecycle:${publisherGeneration}:${sessionGeneration}:${phase}`
+}
+
+export function validateEndpointLifecycleV1(value: unknown): EndpointLifecycleV1 {
+  const record = expectClosedRecord(value, '$', [
+    'type',
+    'protocolVersion',
+    'gatewayId',
+    'projectId',
+    'configRevision',
+    'endpointId',
+    'sequence',
+    'originId',
+    'eventId',
+    'publisherGeneration',
+    'sessionGeneration',
+    'phase',
+    'statusCode',
+    'occurredAtMs',
+  ])
+  const type = expectLiteral(record.type, '$.type', 'endpoint-lifecycle-v1')
+  const protocolVersion = expectLiteral(record.protocolVersion, '$.protocolVersion', 1)
+  const gatewayId = validateId(record.gatewayId, '$.gatewayId')
+  const projectId = validateId(record.projectId, '$.projectId')
+  const configRevision = validateConfigRevision(record.configRevision, '$.configRevision')
+  const endpointId = validateId(record.endpointId, '$.endpointId')
+  const sequence = expectSafeInteger(record.sequence, '$.sequence', 1)
+  const originId = validateId(record.originId, '$.originId')
+  const publisherGeneration = expectSafeInteger(record.publisherGeneration, '$.publisherGeneration', 1)
+  const sessionGeneration = expectSafeInteger(record.sessionGeneration, '$.sessionGeneration', 1)
+  const phase = expectEnum(record.phase, '$.phase', ['connected', 'disconnected'] as const)
+  const eventId = validateId(record.eventId, '$.eventId')
+  if (eventId !== endpointLifecycleEventIdV1({ publisherGeneration, sessionGeneration, phase })) {
+    invalid('$.eventId', 'Endpoint lifecycle event ID is not deterministic.')
+  }
+  const statusCode = expectEnum(record.statusCode, '$.statusCode', ['Good', 'BadNoCommunication'] as const)
+  if (
+    (phase === 'connected' && statusCode !== 'Good')
+    || (phase === 'disconnected' && statusCode !== 'BadNoCommunication')
+  ) {
+    invalid('$.statusCode', 'Endpoint lifecycle phase and status code do not match.')
+  }
+  const occurredAtMs = expectSafeInteger(record.occurredAtMs, '$.occurredAtMs', 0)
+  return deepFreeze({
+    type,
+    protocolVersion,
+    gatewayId,
+    projectId,
+    configRevision,
+    endpointId,
+    sequence,
+    originId,
+    eventId,
+    publisherGeneration,
+    sessionGeneration,
+    phase,
+    statusCode,
+    occurredAtMs,
+  })
+}
+
+function validateEndpointBoundaryV1(
+  value: unknown,
+  expectedType: EndpointReplayBoundaryV1['type'] | EndpointCatchupBoundaryV1['type'],
+): EndpointReplayBoundaryV1 | EndpointCatchupBoundaryV1 {
+  const idKey = expectedType === 'endpoint-replay-boundary-v1' ? 'replayId' : 'catchupId'
+  const prefix = expectedType === 'endpoint-replay-boundary-v1' ? 'replay' : 'catchup'
+  const record = expectClosedRecord(value, '$', [
+    'type',
+    'protocolVersion',
+    'gatewayId',
+    'projectId',
+    'configRevision',
+    'endpointId',
+    'sequence',
+    idKey,
+    'messageCount',
+    'encodedBytes',
+    'phase',
+  ])
+  expectLiteral(record.type, '$.type', expectedType)
+  const protocolVersion = expectLiteral(record.protocolVersion, '$.protocolVersion', 1)
+  const gatewayId = validateId(record.gatewayId, '$.gatewayId')
+  const projectId = validateId(record.projectId, '$.projectId')
+  const configRevision = validateConfigRevision(record.configRevision, '$.configRevision')
+  const endpointId = validateId(record.endpointId, '$.endpointId')
+  const sequence = expectSafeInteger(record.sequence, '$.sequence', 1)
+  const id = validateId(record[idKey], `$.${idKey}`)
+  const counterText = id.slice(prefix.length + 1)
+  if (!id.startsWith(`${prefix}:`) || !/^[1-9][0-9]*$/u.test(counterText) || !Number.isSafeInteger(Number(counterText))) {
+    invalid(`$.${idKey}`, `Endpoint boundary ID must be ${prefix}:<positive-safe-integer>.`)
+  }
+  const messageCount = expectSafeInteger(record.messageCount, '$.messageCount', 1)
+  const encodedBytes = expectSafeInteger(record.encodedBytes, '$.encodedBytes', 1)
+  const phase = expectEnum(record.phase, '$.phase', ['start', 'end'] as const)
+  return expectedType === 'endpoint-replay-boundary-v1'
+    ? deepFreeze({
+        type: 'endpoint-replay-boundary-v1' as const,
+        protocolVersion,
+        gatewayId,
+        projectId,
+        configRevision,
+        endpointId,
+        sequence,
+        replayId: id,
+        messageCount,
+        encodedBytes,
+        phase,
+      })
+    : deepFreeze({
+        type: 'endpoint-catchup-boundary-v1' as const,
+        protocolVersion,
+        gatewayId,
+        projectId,
+        configRevision,
+        endpointId,
+        sequence,
+        catchupId: id,
+        messageCount,
+        encodedBytes,
+        phase,
+      })
+}
+
+export function validateEndpointReplayBoundaryV1(value: unknown): EndpointReplayBoundaryV1 {
+  return validateEndpointBoundaryV1(value, 'endpoint-replay-boundary-v1') as EndpointReplayBoundaryV1
+}
+
+export function validateEndpointCatchupBoundaryV1(value: unknown): EndpointCatchupBoundaryV1 {
+  return validateEndpointBoundaryV1(value, 'endpoint-catchup-boundary-v1') as EndpointCatchupBoundaryV1
+}
+
+export function validateRuntimeStreamMessageV1(value: unknown): RuntimeStreamMessageV1 {
+  const record = expectRecord(value, '$')
+  const type = expectString(record.type, '$.type')
+  switch (type) {
+    case 'state-batch-v1':
+      return validateStateBatchV1(record)
+    case 'endpoint-lifecycle-v1':
+      return validateEndpointLifecycleV1(record)
+    case 'endpoint-replay-boundary-v1':
+      return validateEndpointReplayBoundaryV1(record)
+    case 'endpoint-catchup-boundary-v1':
+      return validateEndpointCatchupBoundaryV1(record)
+    default:
+      invalid('$.type', `Unknown Runtime stream V1 message type ${JSON.stringify(type)}.`)
+  }
+}
+
 export function validateRuntimePublisherLeaseV1(value: unknown): RuntimePublisherLeaseV1 {
   const record = expectClosedRecord(value, '$', [
     'projectId',
@@ -1107,6 +1319,12 @@ export function validateRuntimeProtocolV1Message(value: unknown): RuntimeProtoco
   switch (type) {
     case 'state-batch-v1':
       return validateStateBatchV1(record)
+    case 'endpoint-lifecycle-v1':
+      return validateEndpointLifecycleV1(record)
+    case 'endpoint-replay-boundary-v1':
+      return validateEndpointReplayBoundaryV1(record)
+    case 'endpoint-catchup-boundary-v1':
+      return validateEndpointCatchupBoundaryV1(record)
     case 'command-request-v1':
       return validateCommandRequestV1(record)
     case 'command-batch-v1':

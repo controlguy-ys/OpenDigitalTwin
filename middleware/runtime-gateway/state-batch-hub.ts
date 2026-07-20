@@ -1,10 +1,18 @@
 import {
-  MAX_RUNTIME_BATCH_BYTES_V1,
   MAX_RUNTIME_STATE_VALUES_V1,
-  validateStateBatchV1,
+  type EndpointLifecycleV1,
   type RuntimeMappedValueV1,
+  type RuntimePublisherMessageV1,
   type StateBatchV1,
 } from '../../src/core/runtime-protocol/v1.js'
+import {
+  readNormalizedOpcUaClientPublicationV1,
+  type NormalizedOpcUaClientPublicationV1,
+} from './opcua-client-adapter.js'
+import {
+  isStreamableStateSnapshotV1,
+  splitStateBatchesV1,
+} from './runtime-stream-timeline.js'
 
 export interface GatewayWebSocketV1 {
   send(data: string, callback: (error?: Error) => void): void
@@ -17,7 +25,7 @@ export interface StateBatchHubV1 {
   attach(socket: GatewayWebSocketV1): () => void
   activateRevision(projectId: string, configRevision: string): void
   deactivateRevision(): void
-  publish(batch: StateBatchV1): void
+  publish(publication: NormalizedOpcUaClientPublicationV1 | StateBatchV1): boolean
   queueDepth(socket: GatewayWebSocketV1): number
   close(): Promise<void>
 }
@@ -58,19 +66,8 @@ interface ActiveRevisionV1 {
   readonly configRevision: string
 }
 
-const encoder = new TextEncoder()
 const MAX_REPLAY_ENDPOINTS_V1 = 8
 const MAX_CACHED_CHANNELS_PER_ENDPOINT_V1 = MAX_RUNTIME_STATE_VALUES_V1
-
-export class StateBatchHubErrorV1 extends Error {
-  readonly code: string
-
-  constructor(code: string, message: string) {
-    super(`${code}: ${message}`)
-    this.name = 'StateBatchHubErrorV1'
-    this.code = code
-  }
-}
 
 function sameRevisionV1(
   batch: Pick<StateBatchV1, 'projectId' | 'configRevision'>,
@@ -156,139 +153,12 @@ function snapshotSourcesV1(source: StateBatchV1): readonly SnapshotSourceV1[] {
   })))
 }
 
-export function isStreamableStateSnapshotV1(snapshot: StateBatchV1): boolean {
-  try {
-    // A cached or deferred snapshot can be assigned any later positive wire
-    // sequence. Reject groups that cannot fit the widest valid envelope.
-    splitStateBatchesV1(snapshot, Number.MAX_SAFE_INTEGER)
-    return true
-  } catch (error) {
-    if (
-      error instanceof StateBatchHubErrorV1
-      && error.code === 'RUNTIME_STATE_BATCH_SIZE_EXCEEDED'
-    ) {
-      return false
-    }
-    throw error
-  }
-}
-
-function assertUniqueSourceMappingIdsV1(
-  values: readonly RuntimeMappedValueV1[],
-): void {
-  const mappingIds = new Set<string>()
-  for (const value of values) {
-    if (mappingIds.has(value.mappingId)) {
-      throw new StateBatchHubErrorV1(
-        'RUNTIME_STATE_MAPPING_DUPLICATE',
-        `Source State Batch contains duplicate Mapping ID ${value.mappingId}.`,
-      )
-    }
-    mappingIds.add(value.mappingId)
-  }
-}
-
-function oversizedGroupV1(reason: string): never {
-  throw new StateBatchHubErrorV1(
-    'RUNTIME_STATE_BATCH_SIZE_EXCEEDED',
-    `One coherence group cannot fit in a State Batch (${reason}).`,
-  )
-}
-
-function encodedMappedValueBytesV1(value: RuntimeMappedValueV1): number {
-  return encoder.encode(JSON.stringify(value) ?? 'null').byteLength
-}
-
-function encodedValueListBytesV1(
-  values: readonly RuntimeMappedValueV1[],
-  encodedValueBytesByMappingId: ReadonlyMap<string, number>,
-): number {
-  return values.reduce(
-    (bytes, value) => bytes + encodedValueBytesByMappingId.get(value.mappingId)!,
-    Math.max(0, values.length - 1),
-  )
-}
-
-export function splitStateBatchesV1(
-  source: StateBatchV1,
-  firstWireSequence = source.sequence,
-): readonly StateBatchV1[] {
-  if (!Array.isArray(source.values) || source.values.length === 0) {
-    return Object.freeze([validateStateBatchV1(source)])
-  }
-  assertUniqueSourceMappingIdsV1(source.values)
-
-  const encodedValueBytesByMappingId = new Map(
-    source.values.map((value) => [value.mappingId, encodedMappedValueBytesV1(value)]),
-  )
-  const encodedEmptyBatchBytesBySequence = new Map<number, number>()
-  const encodedBatchBytesV1 = (
-    sequence: number,
-    valueBytes: number,
-  ): number => {
-    let emptyBatchBytes = encodedEmptyBatchBytesBySequence.get(sequence)
-    if (emptyBatchBytes === undefined) {
-      emptyBatchBytes = encoder.encode(JSON.stringify({ ...source, sequence, values: [] })).byteLength
-      encodedEmptyBatchBytesBySequence.set(sequence, emptyBatchBytes)
-    }
-    return emptyBatchBytes + valueBytes
-  }
-
-  const chunks: StateBatchV1[] = []
-  let pending: RuntimeMappedValueV1[] = []
-  let pendingValueBytes = 0
-
-  const publishPending = (): void => {
-    if (pending.length === 0) return
-    const sequence = firstWireSequence + chunks.length
-    if (!Number.isSafeInteger(sequence)) {
-      throw new StateBatchHubErrorV1(
-        'RUNTIME_STATE_WIRE_SEQUENCE_EXHAUSTED',
-        `Endpoint ${source.endpointId} exhausted its wire sequence range.`,
-      )
-    }
-    chunks.push(validateStateBatchV1({ ...batchWithValuesV1(source, pending), sequence }))
-    pending = []
-    pendingValueBytes = 0
-  }
-
-  for (const group of groupedValuesV1(source.values)) {
-    if (group.length > MAX_RUNTIME_STATE_VALUES_V1) oversizedGroupV1('value limit')
-    const groupValueBytes = encodedValueListBytesV1(group, encodedValueBytesByMappingId)
-    const candidateValueBytes = pending.length === 0
-      ? groupValueBytes
-      : pendingValueBytes + 1 + groupValueBytes
-    const sequence = firstWireSequence + chunks.length
-    if (pending.length > 0 && (
-      pending.length + group.length > MAX_RUNTIME_STATE_VALUES_V1
-      || encodedBatchBytesV1(sequence, candidateValueBytes) > MAX_RUNTIME_BATCH_BYTES_V1
-    )) {
-      publishPending()
-    }
-    const pendingSequence = firstWireSequence + chunks.length
-    if (!Number.isSafeInteger(pendingSequence)) {
-      throw new StateBatchHubErrorV1(
-        'RUNTIME_STATE_WIRE_SEQUENCE_EXHAUSTED',
-        `Endpoint ${source.endpointId} exhausted its wire sequence range.`,
-      )
-    }
-    if (encodedBatchBytesV1(pendingSequence, groupValueBytes) > MAX_RUNTIME_BATCH_BYTES_V1) {
-      oversizedGroupV1('encoded byte limit')
-    }
-    pending = pending.length === 0 ? [...group] : [...pending, ...group]
-    pendingValueBytes = pending.length === group.length
-      ? groupValueBytes
-      : pendingValueBytes + 1 + groupValueBytes
-  }
-  publishPending()
-  return Object.freeze(chunks)
-}
-
 export function createStateBatchHubV1(): StateBatchHubV1 {
   const sockets = new Map<GatewayWebSocketV1, SocketStateV1>()
   const lastSourceSequenceByEndpoint = new Map<string, number>()
   const wireSequenceByEndpoint = new Map<string, number>()
   const latestSnapshotsByEndpoint = new Map<string, Map<string, StateBatchV1>>()
+  const latestLifecycleByEndpoint = new Map<string, EndpointLifecycleV1>()
   let activeRevision: ActiveRevisionV1 | null = null
   let closed = false
 
@@ -429,6 +299,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     lastSourceSequenceByEndpoint.clear()
     wireSequenceByEndpoint.clear()
     latestSnapshotsByEndpoint.clear()
+    latestLifecycleByEndpoint.clear()
     for (const state of sockets.values()) {
       state.pending = null
       state.replay = []
@@ -440,6 +311,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     lastSourceSequenceByEndpoint.clear()
     wireSequenceByEndpoint.clear()
     latestSnapshotsByEndpoint.clear()
+    latestLifecycleByEndpoint.clear()
     for (const state of sockets.values()) detachAndCloseState(state)
   }
 
@@ -545,12 +417,45 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     if (transmission !== null) sendNext(state, transmission)
   }
 
-  const publish = (untrustedBatch: StateBatchV1): void => {
-    if (closed) return
-    if (!sameRevisionV1(untrustedBatch, activeRevision)) return
-    const previousSourceSequence = lastSourceSequenceByEndpoint.get(untrustedBatch.endpointId)
-    if (previousSourceSequence !== undefined && untrustedBatch.sequence <= previousSourceSequence) return
-    assertUniqueSourceMappingIdsV1(untrustedBatch.values)
+  const publish = (publication: NormalizedOpcUaClientPublicationV1 | StateBatchV1): boolean => {
+    if (closed) return false
+    let message: RuntimePublisherMessageV1
+    try {
+      message = readNormalizedOpcUaClientPublicationV1(publication as NormalizedOpcUaClientPublicationV1)
+    } catch (error) {
+      if (error instanceof TypeError && error.message === 'Normalized OPC UA Client publication is invalid.') {
+        // Task 1-3's direct State-only activation remains available while
+        // Task 4's prepared activation uses the opaque producer boundary.
+        // An unactivated Hub still rejects all raw input without mutation.
+        if (activeRevision === null) return false
+        message = publication as unknown as StateBatchV1
+      }
+      else throw error
+    }
+    if (!sameRevisionV1(message, activeRevision)) return false
+    const previousSourceSequence = lastSourceSequenceByEndpoint.get(message.endpointId)
+    if (previousSourceSequence !== undefined && message.sequence <= previousSourceSequence) return false
+    lastSourceSequenceByEndpoint.set(message.endpointId, message.sequence)
+    if (message.type === 'endpoint-lifecycle-v1') {
+      latestLifecycleByEndpoint.set(message.endpointId, message)
+      const wireSequence = (wireSequenceByEndpoint.get(message.endpointId) ?? 0) + 1
+      if (!Number.isSafeInteger(wireSequence)) return false
+      wireSequenceByEndpoint.set(message.endpointId, wireSequence)
+      const transmission: EncodedLogicalTransmissionV1 = Object.freeze({
+        projectId: message.projectId,
+        configRevision: message.configRevision,
+        endpointId: message.endpointId,
+        channelKey: `lifecycle:${message.sessionGeneration}:${message.phase}`,
+        chunks: Object.freeze([Object.freeze({
+          payload: JSON.stringify({ ...message, sequence: wireSequence }),
+        })]),
+      })
+      for (const state of sockets.values()) {
+        if (!state.transmitting) sendNext(state, transmission)
+      }
+      return true
+    }
+    const untrustedBatch = message
     const streamableSnapshots = snapshotSourcesV1(untrustedBatch)
       .filter(({ batch: snapshot }) => isStreamableStateSnapshotV1(snapshot))
     const streamableValues = streamableSnapshots.flatMap(({ batch: snapshot }) => snapshot.values)
@@ -558,8 +463,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
       channelKey: channelKeyV1(values),
       batch: batchWithValuesV1(untrustedBatch, values),
     }))
-    lastSourceSequenceByEndpoint.set(untrustedBatch.endpointId, untrustedBatch.sequence)
-    if (streamableSnapshots.length === 0) return
+    if (streamableSnapshots.length === 0) return true
     const endpointSnapshots = latestSnapshotsByEndpoint.get(untrustedBatch.endpointId) ?? new Map()
     latestSnapshotsByEndpoint.set(untrustedBatch.endpointId, endpointSnapshots)
     for (const source of streamableSnapshots) {
@@ -575,7 +479,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
       const oldestEndpointId = latestSnapshotsByEndpoint.keys().next().value as string | undefined
       if (oldestEndpointId !== undefined) latestSnapshotsByEndpoint.delete(oldestEndpointId)
     }
-    if (sockets.size === 0) return
+    if (sockets.size === 0) return true
     for (const source of sources) {
       const snapshots = snapshotSourcesV1(source.batch)
       const states = [...sockets.values()]
@@ -599,6 +503,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
         )
       }
     }
+    return true
   }
 
   const queueDepth = (socket: GatewayWebSocketV1): number => {
@@ -614,6 +519,7 @@ export function createStateBatchHubV1(): StateBatchHubV1 {
     closed = true
     activeRevision = null
     latestSnapshotsByEndpoint.clear()
+    latestLifecycleByEndpoint.clear()
     for (const state of sockets.values()) {
       detachState(state)
       try {

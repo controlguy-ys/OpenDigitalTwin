@@ -91,6 +91,14 @@ function projectWithMappedBoxFrameAndStatusOnSeparateEndpoints(): WorkcellProjec
   return validateWorkcellProjectV5(project)
 }
 
+function projectWithMappedBoxFrameAndStatusOnOneEndpoint(): WorkcellProjectV5 {
+  const project = cloneWorkcellProjectV5(projectWithMappedBoxFrameAndStatusOnSeparateEndpoints())
+  const box = project.spatialEntities[0] as unknown as { numericStatus: { sourceOwnership: string } }
+  box.numericStatus.sourceOwnership = 'opcua:motion-plc'
+  ;(project.opcUa.mappings[1] as unknown as { endpointId: string }).endpointId = 'motion-plc'
+  return validateWorkcellProjectV5(project)
+}
+
 function batch(
   endpointId: string,
   sequence: number,
@@ -184,16 +192,16 @@ describe('ObjectRuntimeStateV5', () => {
     })
   })
 
-  it('retains the last GOOD Frame payload on BAD and ignores future source timestamps that would snap interpolation', () => {
+  it('uses PLC source/published admission rather than comparing PLC time to browser receipt time', () => {
     const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
     runtime.ingest(objectPoseBatch({ sequence: 1, positionM: [0, 0, 0] }), 1_000)
     runtime.ingest(objectPoseBatch({ sequence: 2, sourceTimestampMs: 1_100, positionM: [1, 0, 0] }), 1_100)
     expect(runtime.sampleFrame('box', 'box-motion', 1_250)).toMatchObject({ sourceTimestampMs: 1_050 })
-    expect(runtime.ingest(objectPoseBatch({ sequence: 3, sourceTimestampMs: 1_301, positionM: [99, 0, 0] }), 1_300)).toBe(false)
-    expect(runtime.ingest(objectPoseBatch({ sequence: 4, sourceTimestampMs: 1_200, positionM: [2, 0, 0], quality: 'BAD', statusCode: 'BadNoData' }), 1_300)).toBe(true)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 3, sourceTimestampMs: 1_301, positionM: [99, 0, 0] }), 1_300)).toBe(true)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 4, sourceTimestampMs: 1_200, positionM: [2, 0, 0], quality: 'BAD', statusCode: 'BadNoData' }), 1_300)).toBe(false)
 
     expect(runtime.sampleFrame('box', 'box-motion', 1_300)).toMatchObject({
-      worldPose: { positionM: [1, 0, 0] }, quality: 'BAD', statusCode: 'BadNoData', owner: 'opcua:plc',
+      quality: 'GOOD', statusCode: 'Good', owner: 'opcua:plc',
     })
   })
 
@@ -207,6 +215,23 @@ describe('ObjectRuntimeStateV5', () => {
     expect(runtime.sampleFrame('box', 'box-motion', 1_600)).toMatchObject({
       worldPose: { positionM: [0, 0, 0] }, quality: 'UNCERTAIN', statusCode: 'UncertainLastUsableValue',
     })
+  })
+
+  it('commits sparse catch-up without overwriting the touched status and abort keeps the Endpoint durably STALE', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithMappedBoxFrameAndStatusOnOneEndpoint(), REVISION)
+    const pose = objectPoseBatch({ endpointId: 'motion-plc', sequence: 1, positionM: [1, 0, 0] })
+    const status = objectStatusBatch({ endpointId: 'motion-plc', sequence: 1, status: 1 })
+    expect(runtime.ingest({ ...pose, values: [...pose.values, ...status.values] }, 1_000)).toBe(true)
+
+    const guard = runtime.beginEndpointCatchup('motion-plc', 1_010)
+    expect(runtime.ingest(objectStatusBatch({ endpointId: 'motion-plc', sequence: 2, status: 2, sourceTimestampMs: 1_001 }), 1_020)).toBe(true)
+    guard.commit()
+    expect(runtime.readNumericStatus('box')).toMatchObject({ value: 2, quality: 'GOOD' })
+    expect(runtime.sampleFrame('box', 'box-motion', 1_020)).toMatchObject({ quality: 'GOOD', worldPose: { positionM: [1, 0, 0] } })
+
+    const aborted = runtime.beginEndpointCatchup('motion-plc', 1_030)
+    aborted.abort()
+    expect(runtime.readNumericStatus('box')).toMatchObject({ quality: 'STALE', statusCode: 'BadNoCommunication' })
   })
 
   it('rejects an older receipt without advancing the Endpoint session fence', () => {

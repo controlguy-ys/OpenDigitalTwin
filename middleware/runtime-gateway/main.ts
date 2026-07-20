@@ -24,6 +24,7 @@ import {
   type CommandRequestV1,
   type CommandResultV1,
 } from '../../src/core/runtime-protocol/v1.js'
+import type { StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
 import {
   RuntimeGatewayDeploymentConfigError,
   readDeploymentConfig,
@@ -36,12 +37,13 @@ import {
 } from './opcua-server-adapter.js'
 import {
   createOpcUaClientAdapterV1,
+  readNormalizedOpcUaClientPublicationV1,
   type OpcUaClientAdapterV1,
   type OpcUaClientAdapterOptionsV1,
+  type NormalizedOpcUaClientPublicationV1,
 } from './opcua-client-adapter.js'
 import {
   createStateBatchHubV1,
-  isStreamableStateSnapshotV1,
   type StateBatchHubV1,
 } from './state-batch-hub.js'
 import {
@@ -52,7 +54,6 @@ import {
   createRuntimeCommandServiceV1,
   type RuntimeCommandServiceV1,
 } from './runtime-command-service.js'
-import type { RuntimeMappedValueV1, StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
 import {
   validateRuntimeGatewayStatusV1,
   type RuntimeGatewayStatusV1,
@@ -98,7 +99,7 @@ interface StagedRobotJointStateV1 {
 }
 
 interface StagedClientBatchesV1 {
-  publish(batch: StateBatchV1): void
+  publish(publication: NormalizedOpcUaClientPublicationV1 | StateBatchV1): void
   flushTo(hub: StateBatchHubV1): void
   clear(): void
 }
@@ -122,89 +123,24 @@ class RuntimeGatewayHttpError extends Error {
   }
 }
 
-const MAX_STAGED_CLIENT_ENDPOINTS_V1 = 8
-const MAX_STAGED_CLIENT_CHANNELS_PER_ENDPOINT_V1 = 128
-
-function stagedChannelGroupsV1(
-  values: readonly RuntimeMappedValueV1[],
-): readonly (readonly RuntimeMappedValueV1[])[] {
-  const coherent = new Map<string, RuntimeMappedValueV1[]>()
-  const groups: RuntimeMappedValueV1[][] = []
-  for (const value of values) {
-    if (value.coherenceGroupId === null) {
-      groups.push([value])
-      continue
-    }
-    const existing = coherent.get(value.coherenceGroupId)
-    if (existing === undefined) {
-      const group = [value]
-      coherent.set(value.coherenceGroupId, group)
-      groups.push(group)
-    } else {
-      existing.push(value)
-    }
-  }
-  return groups
-}
-
-function stagedChannelKeyV1(values: readonly RuntimeMappedValueV1[]): string {
-  const coherenceGroupId = values[0]?.coherenceGroupId
-  return coherenceGroupId === null || coherenceGroupId === undefined
-    ? `mapping:${values[0]!.mappingId}`
-    : `coherence:${coherenceGroupId}`
-}
-
 function createStagedClientBatchesV1(): StagedClientBatchesV1 {
-  const snapshotsByEndpoint = new Map<string, Map<string, StateBatchV1>>()
+  const publications: Array<NormalizedOpcUaClientPublicationV1 | StateBatchV1> = []
 
-  const publish = (batch: StateBatchV1): void => {
-    const endpoint = snapshotsByEndpoint.get(batch.endpointId) ?? new Map<string, StateBatchV1>()
-    snapshotsByEndpoint.set(batch.endpointId, endpoint)
-    for (const values of stagedChannelGroupsV1(batch.values)) {
-      const channelKey = stagedChannelKeyV1(values)
-      const snapshot = { ...batch, values }
-      if (!isStreamableStateSnapshotV1(snapshot)) continue
-      const existing = endpoint.get(channelKey)
-      if (existing !== undefined && existing.sequence > batch.sequence) continue
-      endpoint.delete(channelKey)
-      endpoint.set(channelKey, snapshot)
-    }
-    while (endpoint.size > MAX_STAGED_CLIENT_CHANNELS_PER_ENDPOINT_V1) {
-      const oldest = endpoint.keys().next().value as string | undefined
-      if (oldest === undefined) break
-      endpoint.delete(oldest)
-    }
-    while (snapshotsByEndpoint.size > MAX_STAGED_CLIENT_ENDPOINTS_V1) {
-      const oldest = snapshotsByEndpoint.keys().next().value as string | undefined
-      if (oldest === undefined) break
-      snapshotsByEndpoint.delete(oldest)
-    }
+  const publish = (publication: NormalizedOpcUaClientPublicationV1 | StateBatchV1): void => {
+    // Validate the opaque producer boundary while candidate activation is
+    // detached. The prepared Hub activation owns final timeline sealing.
+    if ('message' in publication) readNormalizedOpcUaClientPublicationV1(publication as NormalizedOpcUaClientPublicationV1)
+    publications.push(publication)
   }
 
   return Object.freeze({
     publish,
     flushTo(hub: StateBatchHubV1) {
-      const batches = [...snapshotsByEndpoint.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .flatMap(([, channels]) => {
-          const sourceBatches = new Map<number, StateBatchV1[]>()
-          for (const batch of channels.values()) {
-            const siblings = sourceBatches.get(batch.sequence) ?? []
-            siblings.push(batch)
-            sourceBatches.set(batch.sequence, siblings)
-          }
-          return [...sourceBatches.entries()]
-            .sort(([left], [right]) => left - right)
-            .map(([, siblings]) => ({
-              ...siblings[0]!,
-              values: siblings.flatMap(({ values }) => values),
-            }))
-        })
-      snapshotsByEndpoint.clear()
-      for (const batch of batches) hub.publish(batch)
+      const staged = publications.splice(0)
+      for (const publication of staged) hub.publish(publication)
     },
     clear() {
-      snapshotsByEndpoint.clear()
+      publications.length = 0
     },
   })
 }
@@ -476,6 +412,7 @@ export function createRuntimeGatewayEntrypointService(
           gatewayId: config.gatewayId,
           originId: `${config.gatewayId}:opcua-client`,
           configRevision,
+          publisherGeneration: candidateGeneration,
           publish: (batch) => {
             if (clientBatchPublisherLive) {
               requireStateBatchHub().publish(batch)

@@ -43,10 +43,18 @@ export interface ObjectRuntimeStateV5 {
   readonly configRevision: string | null
   replaceProject(project: WorkcellProjectV5, configRevision: string): void
   ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  restoreReplayPrefix(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  beginEndpointCatchup(endpointId: string, atMs: number): EndpointCatchupGuardV5
   sampleFrame(entityId: string, frameId: string, renderTimestampMs: number): ObjectFrameRuntimeValueV5 | null
   readNumericStatus(entityId: string): ObjectNumericStatusRuntimeValueV5 | null
   markEndpointDisconnected(endpointId: string, atMs: number): void
+  resetEndpointSession(endpointId: string, atMs: number): void
   resetGatewaySession(atMs: number): void
+}
+
+export interface EndpointCatchupGuardV5 {
+  commit(): void
+  abort(): void
 }
 
 interface FrameChannelV5 {
@@ -262,7 +270,8 @@ export function createObjectRuntimeStateV5(projectInput: WorkcellProjectV5, conf
     })
     if (frames.length === 0 && statuses.length === 0) return false
     if (
-      frames.some(([channel]) => batch.sourceTimestampMs < channel.sourceFenceTimestampMs || batch.sourceTimestampMs > receivedTimestampMs)
+      batch.sourceTimestampMs > batch.publishedTimestampMs
+      || frames.some(([channel]) => batch.sourceTimestampMs < channel.sourceFenceTimestampMs)
       || statuses.some(([channel]) => batch.sourceTimestampMs < channel.sourceFenceTimestampMs)
     ) return false
 
@@ -285,6 +294,68 @@ export function createObjectRuntimeStateV5(projectInput: WorkcellProjectV5, conf
       channel.statusCode = 'BadNoCommunication'
       channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
     }
+  }
+
+  const resetEndpointSession = (endpointId: string, atCandidate: number): void => {
+    const atMs = requireTimestamp(atCandidate, 'Endpoint reset timestamp')
+    for (const channel of context.frameChannelsByEndpoint.get(endpointId) ?? []) {
+      channel.heldPose = channel.displayPose ?? channel.heldPose
+      channel.buffer = createRuntimePoseBufferV1(frameKey(channel.entityId, channel.frameId), channel.publishingIntervalMs)
+      channel.sourceFenceTimestampMs = 0
+      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+      channel.quality = 'BAD'
+      channel.statusCode = 'BadWaitingForInitialData'
+    }
+    for (const channel of context.statusChannelsByEndpoint.get(endpointId) ?? []) {
+      channel.sourceFenceTimestampMs = 0
+      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+      channel.quality = 'BAD'
+      channel.statusCode = 'BadWaitingForInitialData'
+    }
+    context.endpointSequences.delete(endpointId)
+    context.endpointReceiptFences.delete(endpointId)
+  }
+
+  const restoreReplayPrefix = (batchInput: StateBatchV1, receiptCandidate: number): boolean => {
+    const batch = validateStateBatchV1(batchInput)
+    const receivedTimestampMs = requireTimestamp(receiptCandidate, 'Replay receipt timestamp')
+    if (
+      batch.projectId !== context.project.projectId
+      || batch.configRevision !== context.configRevision
+      || batch.sourceTimestampMs > batch.publishedTimestampMs
+    ) return false
+    const frames = batch.values.flatMap((mapped) => {
+      const channel = context.frameChannelsByMappingId.get(mapped.mappingId)
+      return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
+    })
+    const statuses = batch.values.flatMap((mapped) => {
+      const channel = context.statusChannelsByMappingId.get(mapped.mappingId)
+      return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
+    })
+    if (frames.length === 0 && statuses.length === 0) return false
+    frames.forEach(([channel, mapped]) => updateFrameChannel(channel, mapped, batch, receivedTimestampMs))
+    statuses.forEach(([channel, mapped]) => updateStatusChannel(channel, mapped, batch, receivedTimestampMs))
+    return true
+  }
+
+  const beginEndpointCatchup = (endpointId: string, atCandidate: number): EndpointCatchupGuardV5 => {
+    const atMs = requireTimestamp(atCandidate, 'Catch-up timestamp')
+    const frames = context.frameChannelsByEndpoint.get(endpointId) ?? []
+    const statuses = context.statusChannelsByEndpoint.get(endpointId) ?? []
+    const frameSnapshot = frames.map((channel) => ({ channel, quality: channel.quality, statusCode: channel.statusCode, receivedTimestampMs: channel.receivedTimestampMs }))
+    const statusSnapshot = statuses.map((channel) => ({ channel, quality: channel.quality, statusCode: channel.statusCode, receivedTimestampMs: channel.receivedTimestampMs }))
+    for (const { channel } of frameSnapshot) { channel.quality = 'STALE'; channel.statusCode = 'BadNoCommunication'; channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs) }
+    for (const { channel } of statusSnapshot) { channel.quality = 'STALE'; channel.statusCode = 'BadNoCommunication'; channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs) }
+    let active = true
+    return Object.freeze({
+      commit: () => {
+        if (!active) return
+        active = false
+        for (const previous of frameSnapshot) Object.assign(previous.channel, previous)
+        for (const previous of statusSnapshot) Object.assign(previous.channel, previous)
+      },
+      abort: () => { active = false },
+    })
   }
 
   const resetGatewaySession = (atCandidate: number): void => {
@@ -350,7 +421,10 @@ export function createObjectRuntimeStateV5(projectInput: WorkcellProjectV5, conf
     get projectRevisionId() { return context.project.revisionId },
     get configRevision() { return context.configRevision },
     ingest,
+    restoreReplayPrefix,
+    beginEndpointCatchup,
     markEndpointDisconnected,
+    resetEndpointSession,
     resetGatewaySession,
     replaceProject: (nextProjectInput: WorkcellProjectV5, nextConfigRevision: string) => {
       const nextContext = compileContext(nextProjectInput, nextConfigRevision)

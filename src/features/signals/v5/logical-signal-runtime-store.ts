@@ -30,9 +30,17 @@ export interface LogicalSignalRuntimeStoreV1 {
   readonly bySignalId: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
   replaceProject(project: WorkcellProjectV5, configRevision: string): void
   ingest(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  restoreReplayPrefix(batch: StateBatchV1, receivedTimestampMs: number): boolean
+  beginEndpointCatchup(endpointId: string, atMs: number): EndpointCatchupGuardV5
   markEndpointDisconnected(endpointId: string, atMs: number): void
+  resetEndpointSession(endpointId: string, atMs: number): void
   resetGatewaySession(atMs: number): void
   read(signalId: string): LogicalSignalRuntimeValueV1 | null
+}
+
+export interface EndpointCatchupGuardV5 {
+  commit(): void
+  abort(): void
 }
 
 interface SignalChannelV1 {
@@ -50,8 +58,8 @@ interface LogicalSignalRuntimeContextV1 {
   readonly initialSignals: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
   readonly endpointSequences: Map<string, number>
   readonly endpointReceiptFences: Map<string, number>
-  readonly endpointSourceTimestampFences: Map<string, number>
-  readonly endpointPublishedTimestampFences: Map<string, number>
+  readonly channelSourceTimestampFences: Map<string, number>
+  readonly channelPublishedTimestampFences: Map<string, number>
 }
 
 const CONFIG_REVISION_PATTERN = /^[0-9a-f]{64}$/u
@@ -137,8 +145,8 @@ function compileContext(
     initialSignals: frozenSignals(initialSignals),
     endpointSequences: new Map(),
     endpointReceiptFences: new Map(),
-    endpointSourceTimestampFences: new Map(),
-    endpointPublishedTimestampFences: new Map(),
+    channelSourceTimestampFences: new Map(),
+    channelPublishedTimestampFences: new Map(),
   })
 }
 
@@ -166,8 +174,8 @@ function nextSignalValue(
     quality,
     statusCode,
     owner: `opcua:${channel.endpointId}`,
-    sourceTimestampMs: Math.max(previous.sourceTimestampMs, batch.sourceTimestampMs),
-    publishedTimestampMs: Math.max(previous.publishedTimestampMs, batch.publishedTimestampMs),
+    sourceTimestampMs: batch.sourceTimestampMs,
+    publishedTimestampMs: batch.publishedTimestampMs,
     receivedTimestampMs: Math.max(previous.receivedTimestampMs, receivedTimestampMs),
   })
 }
@@ -179,6 +187,7 @@ export function createLogicalSignalRuntimeStoreV1(
   let context = compileContext(projectInput, configRevision)
 
   return createStore<LogicalSignalRuntimeStoreV1>()((set, get) => {
+    const guardsByEndpoint = new Map<string, { readonly snapshot: Readonly<Record<string, LogicalSignalRuntimeValueV1>>; touched: Set<string>; active: boolean }>()
     const publish = (
       nextContext: LogicalSignalRuntimeContextV1,
       bySignalId: Readonly<Record<string, LogicalSignalRuntimeValueV1>>,
@@ -201,8 +210,7 @@ export function createLogicalSignalRuntimeStoreV1(
         || !context.channelIdsByEndpoint.has(batch.endpointId)
         || batch.sequence <= (context.endpointSequences.get(batch.endpointId) ?? 0)
         || receivedTimestampMs < (context.endpointReceiptFences.get(batch.endpointId) ?? 0)
-        || batch.sourceTimestampMs < (context.endpointSourceTimestampFences.get(batch.endpointId) ?? 0)
-        || batch.publishedTimestampMs < (context.endpointPublishedTimestampFences.get(batch.endpointId) ?? 0)
+        || batch.sourceTimestampMs > batch.publishedTimestampMs
       ) return false
 
       const recognized = batch.values.flatMap((mapped) => {
@@ -210,17 +218,24 @@ export function createLogicalSignalRuntimeStoreV1(
         return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
       })
       if (recognized.length === 0) return false
+      if (recognized.some(([channel]) => (
+        batch.sourceTimestampMs < (context.channelSourceTimestampFences.get(channel.mappingId) ?? 0)
+        || batch.publishedTimestampMs < (context.channelPublishedTimestampFences.get(channel.mappingId) ?? 0)
+      ))) return false
 
       const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
       for (const [channel, mapped] of recognized) {
         const previous = nextSignals[channel.signalId]
         if (previous === undefined) continue
         nextSignals[channel.signalId] = nextSignalValue(previous, channel, mapped, batch, receivedTimestampMs)
+        guardsByEndpoint.get(batch.endpointId)?.touched.add(channel.signalId)
       }
       context.endpointSequences.set(batch.endpointId, batch.sequence)
       context.endpointReceiptFences.set(batch.endpointId, receivedTimestampMs)
-      context.endpointSourceTimestampFences.set(batch.endpointId, batch.sourceTimestampMs)
-      context.endpointPublishedTimestampFences.set(batch.endpointId, batch.publishedTimestampMs)
+      for (const [channel] of recognized) {
+        context.channelSourceTimestampFences.set(channel.mappingId, batch.sourceTimestampMs)
+        context.channelPublishedTimestampFences.set(channel.mappingId, batch.publishedTimestampMs)
+      }
       publish(context, nextSignals)
       return true
     }
@@ -243,6 +258,82 @@ export function createLogicalSignalRuntimeStoreV1(
       publish(context, nextSignals)
     }
 
+    const resetEndpointSession = (endpointId: string, atCandidate: number): void => {
+      const atMs = requireTimestamp(atCandidate, 'Endpoint reset timestamp')
+      const signalIds = context.channelIdsByEndpoint.get(endpointId)
+      if (signalIds === undefined) return
+      const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+      for (const signalId of signalIds) {
+        const previous = nextSignals[signalId]
+        if (previous === undefined) continue
+        nextSignals[signalId] = frozenSignalValue({
+          ...previous,
+          quality: 'BAD',
+          statusCode: 'BadWaitingForInitialData',
+          receivedTimestampMs: Math.max(previous.receivedTimestampMs, atMs),
+        })
+      }
+      context.endpointSequences.delete(endpointId)
+      context.endpointReceiptFences.delete(endpointId)
+      for (const channel of context.channelsByMappingId.values()) {
+        if (channel.endpointId !== endpointId) continue
+        context.channelSourceTimestampFences.delete(channel.mappingId)
+        context.channelPublishedTimestampFences.delete(channel.mappingId)
+      }
+      publish(context, nextSignals)
+    }
+
+    const restoreReplayPrefix = (batchInput: StateBatchV1, receiptCandidate: number): boolean => {
+      const batch = validateStateBatchV1(batchInput)
+      const receivedTimestampMs = requireTimestamp(receiptCandidate, 'Replay receipt timestamp')
+      if (
+        batch.projectId !== context.project.projectId
+        || batch.configRevision !== context.configRevision
+        || batch.sourceTimestampMs > batch.publishedTimestampMs
+      ) return false
+      const recognized = batch.values.flatMap((mapped) => {
+        const channel = context.channelsByMappingId.get(mapped.mappingId)
+        return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
+      })
+      if (recognized.length === 0) return false
+      const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+      for (const [channel, mapped] of recognized) {
+        const previous = nextSignals[channel.signalId]
+        if (previous !== undefined) nextSignals[channel.signalId] = nextSignalValue(previous, channel, mapped, batch, receivedTimestampMs)
+      }
+      publish(context, nextSignals)
+      return true
+    }
+
+    const beginEndpointCatchup = (endpointId: string, atCandidate: number): EndpointCatchupGuardV5 => {
+      const atMs = requireTimestamp(atCandidate, 'Catch-up timestamp')
+      if (!context.channelIdsByEndpoint.has(endpointId)) throw new Error('ENDPOINT_CATCHUP_UNKNOWN_ENDPOINT')
+      if (guardsByEndpoint.has(endpointId)) throw new Error('ENDPOINT_CATCHUP_ALREADY_ACTIVE')
+      const snapshot: Record<string, LogicalSignalRuntimeValueV1> = {}
+      const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+      for (const signalId of context.channelIdsByEndpoint.get(endpointId) ?? []) {
+        const previous = nextSignals[signalId]
+        if (previous === undefined) continue
+        snapshot[signalId] = previous
+        nextSignals[signalId] = frozenSignalValue({ ...previous, quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: Math.max(previous.receivedTimestampMs, atMs) })
+      }
+      const guard = { snapshot: frozenSignals(snapshot), touched: new Set<string>(), active: true }
+      guardsByEndpoint.set(endpointId, guard)
+      publish(context, nextSignals)
+      const finish = (commit: boolean): void => {
+        if (!guard.active) return
+        guard.active = false
+        guardsByEndpoint.delete(endpointId)
+        if (!commit) return
+        const next: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+        for (const [signalId, prior] of Object.entries(guard.snapshot)) {
+          if (!guard.touched.has(signalId)) next[signalId] = prior
+        }
+        publish(context, next)
+      }
+      return Object.freeze({ commit: () => finish(true), abort: () => finish(false) })
+    }
+
     const resetGatewaySession = (atCandidate: number): void => {
       const atMs = requireTimestamp(atCandidate, 'Reset timestamp')
       const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
@@ -260,8 +351,8 @@ export function createLogicalSignalRuntimeStoreV1(
       }
       context.endpointSequences.clear()
       context.endpointReceiptFences.clear()
-      context.endpointSourceTimestampFences.clear()
-      context.endpointPublishedTimestampFences.clear()
+      context.channelSourceTimestampFences.clear()
+      context.channelPublishedTimestampFences.clear()
       publish(context, nextSignals)
     }
 
@@ -271,10 +362,14 @@ export function createLogicalSignalRuntimeStoreV1(
       bySignalId: context.initialSignals,
       read: (signalId) => get().bySignalId[signalId] ?? null,
       ingest,
+      restoreReplayPrefix,
+      beginEndpointCatchup,
       markEndpointDisconnected,
+      resetEndpointSession,
       resetGatewaySession,
       replaceProject: (nextProjectInput, nextConfigRevision) => {
         const nextContext = compileContext(nextProjectInput, nextConfigRevision)
+        guardsByEndpoint.clear()
         publish(nextContext, nextContext.initialSignals)
       },
     }

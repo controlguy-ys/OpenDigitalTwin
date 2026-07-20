@@ -87,6 +87,12 @@ function projectWithSignalsOnSeparateEndpoints(): WorkcellProjectV5 {
   return validateWorkcellProjectV5(project)
 }
 
+function projectWithSignalsOnOneEndpoint(): WorkcellProjectV5 {
+  const project = cloneWorkcellProjectV5(projectWithSignalsOnSeparateEndpoints())
+  ;(project.opcUa.mappings[1] as unknown as { endpointId: string }).endpointId = 'plc'
+  return validateWorkcellProjectV5(project)
+}
+
 function signalBatch(overrides: {
   readonly configRevision?: string
   readonly endpointId?: string
@@ -170,13 +176,13 @@ describe('LogicalSignalRuntimeStoreV1', () => {
     const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
     runtime.getState().ingest(signalBatch({ sequence: 1, value: true, quality: 'GOOD' }), 1_050)
     runtime.getState().ingest(signalBatch({
-      sequence: 2, sourceTimestampMs: 1_100, value: false,
+      sequence: 2, sourceTimestampMs: 1_100, publishedTimestampMs: 1_120, value: false,
       quality: 'UNCERTAIN', statusCode: 'UncertainLastUsableValue',
     }), 1_150)
 
     expect(runtime.getState().read('part-present')).toMatchObject({
       value: true, quality: 'UNCERTAIN', statusCode: 'UncertainLastUsableValue',
-      owner: 'opcua:plc', sourceTimestampMs: 1_100, publishedTimestampMs: 1_020,
+      owner: 'opcua:plc', sourceTimestampMs: 1_100, publishedTimestampMs: 1_120,
       receivedTimestampMs: 1_150,
     })
   })
@@ -270,9 +276,43 @@ describe('LogicalSignalRuntimeStoreV1', () => {
       sequence: 1, value: false, sourceTimestampMs: 1, publishedTimestampMs: 2,
     }), 1_080)).toBe(true)
     expect(runtime.getState().read('part-present')).toMatchObject({
-      value: false, quality: 'GOOD', sourceTimestampMs: 1_000,
-      publishedTimestampMs: 1_020, receivedTimestampMs: 1_080,
+      value: false, quality: 'GOOD', sourceTimestampMs: 1,
+      publishedTimestampMs: 2, receivedTimestampMs: 1_080,
     })
+  })
+
+  it('restores untouched sparse channels on catch-up commit, keeps abort durably STALE, and bypasses live fences for replay prefix', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithSignalsOnOneEndpoint(), REVISION)
+    const initial = signalBatch({ sequence: 10, value: true, sourceTimestampMs: 1_000, publishedTimestampMs: 1_020 })
+    expect(runtime.getState().ingest({
+      ...initial,
+      values: [
+        initial.values[0]!,
+        { ...initial.values[0]!, mappingId: 'guard-closed-input', value: true },
+      ],
+    }, 1_050)).toBe(true)
+    const priorB = runtime.getState().read('guard-closed')!
+
+    const guard = runtime.getState().beginEndpointCatchup('plc', 1_060)
+    expect(runtime.getState().read('part-present')).toMatchObject({ quality: 'STALE' })
+    expect(runtime.getState().read('guard-closed')).toMatchObject({ quality: 'STALE' })
+    expect(runtime.getState().ingest(signalBatch({
+      sequence: 11, value: false, sourceTimestampMs: 1_001, publishedTimestampMs: 1_021,
+    }), 1_070)).toBe(true)
+    guard.commit()
+    expect(runtime.getState().read('part-present')).toMatchObject({ value: false, quality: 'GOOD' })
+    expect(runtime.getState().read('guard-closed')).toEqual(priorB)
+
+    const aborted = runtime.getState().beginEndpointCatchup('plc', 1_080)
+    aborted.abort()
+    expect(runtime.getState().read('part-present')).toMatchObject({ quality: 'STALE', statusCode: 'BadNoCommunication' })
+
+    expect(runtime.getState().restoreReplayPrefix(signalBatch({
+      sequence: 1, value: true, sourceTimestampMs: 1, publishedTimestampMs: 2,
+    }), 1_090)).toBe(true)
+    expect(runtime.getState().ingest(signalBatch({
+      sequence: 11, value: true, sourceTimestampMs: 1_002, publishedTimestampMs: 1_022,
+    }), 1_091)).toBe(false)
   })
 
   it('keeps the active runtime snapshot when replaceProject validation fails', () => {

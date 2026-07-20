@@ -10,9 +10,13 @@ import {
   MAX_RUNTIME_STRUCTURE_LEAVES_V1,
   RUNTIME_PROTOCOL_VERSION_V1,
   RuntimeProtocolV1Error,
+  endpointLifecycleEventIdV1,
   validateCommandBatchV1,
   validateCommandRequestV1,
   validateCommandResultV1,
+  validateEndpointCatchupBoundaryV1,
+  validateEndpointLifecycleV1,
+  validateEndpointReplayBoundaryV1,
   validateRevisionActivateRequestV1,
   validateRevisionActivateResultV1,
   validateRevisionRollbackRequestV1,
@@ -22,6 +26,7 @@ import {
   validateRuntimeMappedValueV1,
   validateRuntimeProtocolV1Message,
   validateRuntimePublisherLeaseV1,
+  validateRuntimeStreamMessageV1,
   validateStateBatchV1,
 } from './v1'
 import type {
@@ -58,6 +63,50 @@ function stateBatch(overrides: Record<string, unknown> = {}): Record<string, unk
     publishedTimestampMs: 90,
     originId: 'origin-1',
     values: [mappedValue()],
+    ...overrides,
+  }
+}
+
+function endpointLifecycle(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const publisherGeneration = (overrides.publisherGeneration as number | undefined) ?? 7
+  const sessionGeneration = (overrides.sessionGeneration as number | undefined) ?? 3
+  const phase = (overrides.phase as 'connected' | 'disconnected' | undefined) ?? 'connected'
+  return {
+    type: 'endpoint-lifecycle-v1',
+    protocolVersion: 1,
+    gatewayId: 'gateway-1',
+    projectId: 'project-v5',
+    configRevision: CONFIG_REVISION,
+    endpointId: 'plc-a',
+    sequence: 1,
+    originId: 'gateway-1:opcua-client',
+    eventId: `lifecycle:${publisherGeneration}:${sessionGeneration}:${phase}`,
+    publisherGeneration,
+    sessionGeneration,
+    phase,
+    statusCode: phase === 'connected' ? 'Good' : 'BadNoCommunication',
+    occurredAtMs: 1_000,
+    ...overrides,
+  }
+}
+
+function endpointBoundary(
+  type: 'endpoint-replay-boundary-v1' | 'endpoint-catchup-boundary-v1',
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const idKey = type === 'endpoint-replay-boundary-v1' ? 'replayId' : 'catchupId'
+  return {
+    type,
+    protocolVersion: 1,
+    gatewayId: 'gateway-1',
+    projectId: 'project-v5',
+    configRevision: CONFIG_REVISION,
+    endpointId: 'plc-a',
+    sequence: 1,
+    [idKey]: type === 'endpoint-replay-boundary-v1' ? 'replay:1' : 'catchup:1',
+    messageCount: 1,
+    encodedBytes: 1,
+    phase: 'start',
     ...overrides,
   }
 }
@@ -686,6 +735,73 @@ describe('Runtime Protocol V1 State records', () => {
       () => validateStateBatchV1(stateBatch({ publishedTimestampMs: -1 })),
       'RUNTIME_PROTOCOL_INVALID',
       '$.publishedTimestampMs',
+    )
+  })
+})
+
+describe('Runtime Protocol V1 Endpoint lifecycle stream records', () => {
+  it('accepts closed, deterministic Endpoint lifecycle messages and dispatches them as stream records', () => {
+    const input = endpointLifecycle()
+    const result = validateEndpointLifecycleV1(input)
+
+    expect(endpointLifecycleEventIdV1({
+      publisherGeneration: 7,
+      sessionGeneration: 3,
+      phase: 'connected',
+    })).toBe('lifecycle:7:3:connected')
+    expect(result).toMatchObject(input)
+    expect(result).not.toBe(input)
+    expectDeepFrozen(result)
+    expect(validateRuntimeStreamMessageV1(input).type).toBe('endpoint-lifecycle-v1')
+    expect(validateRuntimeProtocolV1Message(input).type).toBe('endpoint-lifecycle-v1')
+  })
+
+  it('rejects lifecycle status, deterministic-event, and closed-envelope violations at stable paths', () => {
+    expectProtocolError(
+      () => validateEndpointLifecycleV1(endpointLifecycle({ statusCode: 'BadNoCommunication' })),
+      'RUNTIME_PROTOCOL_INVALID',
+      '$.statusCode',
+    )
+    expectProtocolError(
+      () => validateEndpointLifecycleV1(endpointLifecycle({ eventId: 'lifecycle:7:3:disconnected' })),
+      'RUNTIME_PROTOCOL_INVALID',
+      '$.eventId',
+    )
+    expectProtocolError(
+      () => validateEndpointLifecycleV1({ ...endpointLifecycle(), extra: true }),
+      'RUNTIME_PROTOCOL_INVALID',
+      '$',
+    )
+    expectProtocolError(
+      () => validateEndpointLifecycleV1(endpointLifecycle({ sequence: 0 })),
+      'RUNTIME_PROTOCOL_INVALID',
+      '$.sequence',
+    )
+  })
+
+  it('accepts exact positive replay and catch-up boundary envelopes and rejects invalid paired fields', () => {
+    const replay = validateEndpointReplayBoundaryV1(endpointBoundary('endpoint-replay-boundary-v1'))
+    const catchup = validateEndpointCatchupBoundaryV1(endpointBoundary('endpoint-catchup-boundary-v1', {
+      phase: 'end',
+    }))
+
+    expect(replay).toMatchObject({ replayId: 'replay:1', phase: 'start' })
+    expect(catchup).toMatchObject({ catchupId: 'catchup:1', phase: 'end' })
+    expectDeepFrozen(replay)
+    expectDeepFrozen(catchup)
+    expectProtocolError(
+      () => validateEndpointReplayBoundaryV1(endpointBoundary('endpoint-replay-boundary-v1', {
+        replayId: 'catchup:1',
+      })),
+      'RUNTIME_PROTOCOL_INVALID',
+      '$.replayId',
+    )
+    expectProtocolError(
+      () => validateEndpointCatchupBoundaryV1(endpointBoundary('endpoint-catchup-boundary-v1', {
+        messageCount: 0,
+      })),
+      'RUNTIME_PROTOCOL_INVALID',
+      '$.messageCount',
     )
   })
 })

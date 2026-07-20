@@ -13,10 +13,16 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { validateWorkcellProjectV5, type WorkcellProjectV5 } from '../../src/core/project-v5/index.js'
 import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
-import { MAX_RUNTIME_BATCH_BYTES_V1, validateStateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
+import {
+  MAX_RUNTIME_BATCH_BYTES_V1,
+  validateStateBatchV1,
+  type RuntimePublisherMessageV1,
+} from '../../src/core/runtime-protocol/v1.js'
 import {
   createOpcUaClientAdapterV1,
   createOpcUaClientSnapshotAssemblerV1,
+  readNormalizedOpcUaClientPublicationV1,
+  type OpcUaClientAdapterOptionsV1,
 } from './opcua-client-adapter.js'
 import { createStateBatchHubV1, type GatewayWebSocketV1 } from './state-batch-hub.js'
 
@@ -220,7 +226,51 @@ function immediateGatewaySocket(): {
   }
 }
 
+function collectStatePublication(
+  target: unknown[],
+  publication: Parameters<OpcUaClientAdapterOptionsV1['publish']>[0],
+): void {
+  const message = 'message' in publication
+    ? readNormalizedOpcUaClientPublicationV1(publication)
+    : publication
+  if (message.type === 'state-batch-v1') target.push(message)
+}
+
 describe('OPC UA client adapter V1 Project V5 root-notification boundary', () => {
+  it('publishes a normalized connected barrier before State and exactly one terminal disconnect', async () => {
+    const connection = fakeConnection()
+    const published: RuntimePublisherMessageV1[] = []
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:opcua-client',
+      configRevision: REVISION,
+      publisherGeneration: 7,
+      publish: (publication) => { published.push(readNormalizedOpcUaClientPublicationV1(publication as Parameters<typeof readNormalizedOpcUaClientPublicationV1>[0])) },
+      createClient: () => connection.client as never,
+    })
+
+    await adapter.start()
+    await eventually(() => connection.groups.length === 1)
+    expect(published).toEqual([
+      expect.objectContaining({
+        type: 'endpoint-lifecycle-v1', phase: 'connected', statusCode: 'Good', sequence: 1,
+        publisherGeneration: 7, sessionGeneration: 1,
+      }),
+    ])
+
+    connection.groups[0]!.emit('changed', {}, changed({ payload: { present: true } }), 0)
+    await eventually(() => published.length === 2)
+    expect(published.map(({ type, sequence }) => [type, sequence])).toEqual([
+      ['endpoint-lifecycle-v1', 1], ['state-batch-v1', 2],
+    ])
+
+    await adapter.stop()
+    expect(published.filter(({ type }) => type === 'endpoint-lifecycle-v1')).toEqual([
+      expect.objectContaining({ phase: 'connected', sequence: 1 }),
+      expect.objectContaining({ phase: 'disconnected', statusCode: 'BadNoCommunication', sequence: 3 }),
+    ])
+  })
+
   it('fans out a maximal shared String root through bounded State Batches without dropping mapping IDs', () => {
     const project = sharedRootStringProject()
     const endpoint = {
@@ -309,16 +359,19 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     await adapter.start()
     await eventually(() => first.groups.length === 1)
     first.groups[0]!.emit('changed', {}, changed({ payload: { present: true } }), 0)
-    await eventually(() => browser.sent.length === 1)
+    await eventually(() => browser.sent.filter((payload) => JSON.parse(payload).type === 'state-batch-v1').length === 1)
 
     first.client.emit('connection_lost')
     await eventually(() => second.monitorRequests.length === 1)
     expect(second.monitorRequests[0]!.items[0]).toMatchObject({ nodeId: 'ns=2;s=Machine.State' })
     second.groups[0]!.emit('changed', {}, changed({ payload: { present: false } }), 0)
 
-    await eventually(() => browser.sent.length === 2)
-    const batches = browser.sent.map((payload) => validateStateBatchV1(JSON.parse(payload)))
-    expect(batches.map(({ sequence }) => sequence)).toEqual([1, 2])
+    await eventually(() => browser.sent.filter((payload) => JSON.parse(payload).type === 'state-batch-v1').length === 2)
+    const batches = browser.sent
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'state-batch-v1')
+      .map((message) => validateStateBatchV1(message))
+    expect(batches.map(({ sequence }) => sequence)).toEqual([2, 5])
     expect(batches.at(-1)?.values).toEqual([expect.objectContaining({ value: false, mappingId: 'map-part-present' })])
     await adapter.stop()
     await hub.close()
@@ -341,7 +394,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     const batches: unknown[] = []
     const adapter = createOpcUaClientAdapterV1(readProject(), {
       gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
-      publish: (batch) => { batches.push(batch) }, createClient: () => connection.client as never,
+      publish: (publication) => { collectStatePublication(batches, publication) }, createClient: () => connection.client as never,
     })
     await adapter.start()
     await eventually(() => connection.groups.length === 1)
@@ -357,7 +410,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     const batches: unknown[] = []
     const adapter = createOpcUaClientAdapterV1(readProject(), {
       gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
-      publish: (batch) => { batches.push(batch) }, createClient: () => connection.client as never,
+      publish: (publication) => { collectStatePublication(batches, publication) }, createClient: () => connection.client as never,
     })
     await adapter.start()
     await eventually(() => connection.groups.length === 1)
@@ -399,7 +452,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     const batches: unknown[] = []
     const adapter = createOpcUaClientAdapterV1(poseProject(), {
       gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: 'b'.repeat(64),
-      publish: (batch) => { batches.push(batch) }, createClient: () => connection.client as never,
+      publish: (publication) => { collectStatePublication(batches, publication) }, createClient: () => connection.client as never,
     })
     await adapter.start()
     await eventually(() => connection.groups.length === 1)
@@ -409,7 +462,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     }), 0)
 
     const published = validateStateBatchV1(batches[0])
-    expect(published).toMatchObject({ configRevision: 'b'.repeat(64), sequence: 1 })
+    expect(published).toMatchObject({ configRevision: 'b'.repeat(64), sequence: 2 })
     expect(published.values).toEqual([expect.objectContaining({
       mappingId: 'map-pose', coherenceGroupId: 'robot-pose', value: expect.objectContaining({ positionM: [1, 2, 3] }),
     })])
@@ -421,7 +474,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     const batches: unknown[] = []
     const adapter = createOpcUaClientAdapterV1(twoReadMappingsProject(), {
       gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
-      publish: (batch) => { batches.push(batch) }, createClient: () => connection.client as never,
+      publish: (publication) => { collectStatePublication(batches, publication) }, createClient: () => connection.client as never,
     })
     await adapter.start()
     await eventually(() => connection.groups.length === 1)
@@ -512,7 +565,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     const batches: unknown[] = []
     const adapter = createOpcUaClientAdapterV1(readWriteRootProject(), {
       gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
-      publish: (batch) => { batches.push(batch) }, createClient: () => connections.shift()!.client as never,
+      publish: (publication) => { collectStatePublication(batches, publication) }, createClient: () => connections.shift()!.client as never,
     })
     await adapter.start()
     await eventually(() => first.groups.length === 1)
@@ -568,7 +621,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
       const published: unknown[] = []
       adapter = createOpcUaClientAdapterV1(validateWorkcellProjectV5(project), {
         gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
-        publish: (batch) => { published.push(batch) },
+        publish: (publication) => { collectStatePublication(published, publication) },
       })
       await adapter.start()
       await eventually(() => adapter?.status()[0]?.phase === 'connected', 8_000)
