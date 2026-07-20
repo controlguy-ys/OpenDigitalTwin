@@ -54,6 +54,9 @@ export interface RobotJobExecutorV5 {
   reset(): void
   shutdown(reason?: string): void
 }
+export interface RobotJobExecutorLifecycleV5 {
+  requestShutdown(reason?: string, onDeferredShutdownError?: (error: unknown) => void): void
+}
 
 type MoveInstruction = Extract<RobotJobInstructionV1, { readonly kind: 'move-joint' }>
 interface ActiveInstruction {
@@ -122,7 +125,7 @@ function sample(from: Readonly<Record<string, number>>, to: Readonly<Record<stri
   })))
 }
 
-export function createRobotJobExecutorV5(dependencies: RobotJobExecutorDependenciesV5): RobotJobExecutorV5 {
+export function createRobotJobExecutorV5(dependencies: RobotJobExecutorDependenciesV5): RobotJobExecutorV5 & RobotJobExecutorLifecycleV5 {
   const sessions = new Map<string, Session>()
   const chains = new Map<string, ChainEntry>()
   const knownRunIds = new Set<string>()
@@ -133,6 +136,8 @@ export function createRobotJobExecutorV5(dependencies: RobotJobExecutorDependenc
   let disposed = false
   let resetting = false
   let starting = false
+  let requestedShutdownReason: string | null = null
+  let requestedShutdownErrorHandler: ((error: unknown) => void) | null = null
 
   const assertNotStarting = (): void => {
     if (starting) failure('JOB_RUNTIME_START_IN_PROGRESS', '$.jobRuntime', 'A Robot Job start is already being published.')
@@ -377,6 +382,17 @@ export function createRobotJobExecutorV5(dependencies: RobotJobExecutorDependenc
       throw error
     } finally {
       starting = false
+      if (requestedShutdownReason !== null) {
+        const reason = requestedShutdownReason
+        const reportError = requestedShutdownErrorHandler
+        requestedShutdownReason = null
+        requestedShutdownErrorHandler = null
+        try {
+          finishShutdown(reason, preflightReset())
+        } catch (error) {
+          try { reportError?.(error) } catch { /* disposal diagnostics are isolated from Job publication */ }
+        }
+      }
     }
   }
   const advanceRobot = async (robotId: string, simulationMs: number): Promise<void> => {
@@ -414,6 +430,17 @@ export function createRobotJobExecutorV5(dependencies: RobotJobExecutorDependenc
     const configRevision = dependencies.jobs.getState().configRevision
     return configRevision === null ? null : { project: validateWorkcellProjectV5(dependencies.readProject()), configRevision }
   }
+  const finishShutdown = (
+    reason: string,
+    preparedReset: { readonly project: WorkcellProjectV5; readonly configRevision: string } | null,
+  ): void => {
+    resetting = true
+    try {
+      for (const session of Array.from(sessions.values())) settleForTeardown(session, reason)
+      if (preparedReset !== null) dependencies.jobs.getState().reset(preparedReset.project, preparedReset.configRevision)
+      latestTime = null
+    } finally { resetting = false; subscription() }
+  }
   const reset = (): void => {
     assertNotStarting()
     if (disposed || resetting) return
@@ -429,13 +456,28 @@ export function createRobotJobExecutorV5(dependencies: RobotJobExecutorDependenc
     assertNotStarting()
     if (disposed) return
     const preparedReset = preflightReset()
-    disposed = true; resetting = true
-    try {
-      for (const session of Array.from(sessions.values())) settleForTeardown(session, reason)
-      if (preparedReset !== null) dependencies.jobs.getState().reset(preparedReset.project, preparedReset.configRevision)
-      latestTime = null
-    } finally { resetting = false; subscription() }
+    disposed = true
+    finishShutdown(reason, preparedReset)
   }
 
-  return Object.freeze({ startJob, advanceRobot, advanceAll, cancelRobotJob, cancelJob, readState, waitForTerminal, reset, shutdown })
+  const requestShutdown = (
+    reason: string = 'Job executor shut down.',
+    onDeferredShutdownError?: (error: unknown) => void,
+  ): void => {
+    if (disposed) return
+    if (starting) {
+      // Graph disposal can be requested by a subscriber during the synchronous
+      // start publication. Fence the executor now, then preserve that start
+      // transaction until its publication unwinds.
+      disposed = true
+      requestedShutdownReason = reason
+      requestedShutdownErrorHandler = onDeferredShutdownError ?? null
+      return
+    }
+    const preparedReset = preflightReset()
+    disposed = true
+    finishShutdown(reason, preparedReset)
+  }
+
+  return Object.freeze({ startJob, advanceRobot, advanceAll, cancelRobotJob, cancelJob, readState, waitForTerminal, reset, shutdown, requestShutdown })
 }

@@ -750,6 +750,10 @@ export function createRuntimeGatewayStateStreamV5(
       scheduleReconnectV5()
       return
     }
+    if (!started || candidate !== null) {
+      try { native.close() } catch { /* Intentional cleanup is best effort. */ }
+      return
+    }
     const next: SocketCandidateV5 = {
       native,
       listeners: null,

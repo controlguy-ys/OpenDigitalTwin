@@ -67,6 +67,20 @@ describe('RobotJointRuntimeStoreV5', () => {
     expect(robots.getState().readRobot('robot-1')).toMatchObject({ jointValues: { J1: 22.5 }, quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
   })
 
+  it('does not republish an equal-or-older durable disconnect', () => {
+    const robots = createRobotJointRuntimeStoreV5(projectWithOpcUaRobot(), REVISION)
+    robots.getState().markEndpointDisconnected('endpoint-1', 1_000)
+    let publications = 0
+    const stop = robots.subscribe(() => { publications += 1 })
+    robots.getState().markEndpointDisconnected('endpoint-1', 999)
+    robots.getState().markEndpointDisconnected('endpoint-1', 1_000)
+    stop()
+    expect(publications).toBe(0)
+    expect(robots.getState().readRobot('robot-1')).toMatchObject({
+      quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: 1_000,
+    })
+  })
+
   it('restores a framed replay without live fences and isolates catch-up rollback', () => {
     const robots = createRobotJointRuntimeStoreV5(projectWithOpcUaRobot(), REVISION)
     expect(robots.getState().restoreReplayPrefix(jointBatch(10, 99), 10)).toBe(true)
@@ -121,6 +135,28 @@ describe('RobotJointRuntimeStoreV5', () => {
     expect(robots.getState().ingest(jointBatch(10, 2, { sourceTimestampMs: 100, publishedTimestampMs: 100 }), 100)).toBe(true)
     stopIngest()
     expect(robots.getState().readRobot('robot-1')).toMatchObject({ jointValues: { J1: 10 } })
+  })
+
+  it('does not strand a catch-up guard when overlay construction or observers fail', () => {
+    const robots = createRobotJointRuntimeStoreV5(projectWithOpcUaRobot(), REVISION)
+    const initial = robots.getState().readRobot('robot-1')!
+    robots.setState({ byRobotId: {
+      ...robots.getState().byRobotId,
+      'robot-1': { ...initial, revision: Number.MAX_SAFE_INTEGER },
+    } })
+    expect(() => robots.getState().beginEndpointCatchup('endpoint-1', 1)).toThrow('ROBOT_RUNTIME_REVISION_EXHAUSTED')
+    expect(() => robots.getState().beginEndpointCatchup('endpoint-1', 2)).toThrow('ROBOT_RUNTIME_REVISION_EXHAUSTED')
+
+    robots.setState({ byRobotId: {
+      ...robots.getState().byRobotId,
+      'robot-1': { ...initial, revision: Number.MAX_SAFE_INTEGER - 1 },
+    } })
+    const stop = robots.subscribe(() => { throw new Error('hostile catch-up observer') })
+    let guard!: { commit(): void; abort(): void }
+    expect(() => { guard = robots.getState().beginEndpointCatchup('endpoint-1', 3) }).not.toThrow()
+    stop()
+    guard.abort()
+    expect(() => robots.getState().beginEndpointCatchup('endpoint-1', 3).abort()).not.toThrow()
   })
 
   it('clears reset fences before notifying subscribers', () => {

@@ -328,6 +328,20 @@ describe('LogicalSignalRuntimeStoreV1', () => {
     }), 1_091)).toBe(false)
   })
 
+  it('does not republish an equal-or-older durable disconnect', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    runtime.getState().markEndpointDisconnected('plc', 1_000)
+    let publications = 0
+    const stop = runtime.subscribe(() => { publications += 1 })
+    runtime.getState().markEndpointDisconnected('plc', 999)
+    runtime.getState().markEndpointDisconnected('plc', 1_000)
+    stop()
+    expect(publications).toBe(0)
+    expect(runtime.getState().read('part-present')).toMatchObject({
+      quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: 1_000,
+    })
+  })
+
   it('commits a disconnected catch-up as STALE instead of resurrecting the hidden GOOD Signal', () => {
     const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
     const guard = runtime.getState().beginEndpointCatchup('plc', 1_000)

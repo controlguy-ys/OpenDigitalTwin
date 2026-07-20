@@ -275,7 +275,7 @@ export function createLogicalSignalRuntimeStoreV1(
       if (guard !== undefined) {
         for (const signalId of signalIds) {
           const pending = guard.pending[signalId]
-          if (pending === undefined) continue
+          if (pending === undefined || (pending.quality === 'STALE' && pending.statusCode === 'BadNoCommunication' && pending.receivedTimestampMs >= atMs)) continue
           guard.pending[signalId] = frozenSignalValue({
             ...pending,
             quality: 'STALE',
@@ -287,17 +287,19 @@ export function createLogicalSignalRuntimeStoreV1(
         return
       }
       const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+      let changed = false
       for (const signalId of signalIds) {
         const previous = nextSignals[signalId]
-        if (previous === undefined) continue
+        if (previous === undefined || (previous.quality === 'STALE' && previous.statusCode === 'BadNoCommunication' && previous.receivedTimestampMs >= atMs)) continue
         nextSignals[signalId] = frozenSignalValue({
           ...previous,
           quality: 'STALE',
           statusCode: 'BadNoCommunication',
           receivedTimestampMs: Math.max(previous.receivedTimestampMs, atMs),
         })
+        changed = true
       }
-      publish(context, nextSignals)
+      if (changed) publish(context, nextSignals)
     }
 
     const resetEndpointSession = (endpointId: string, atCandidate: number): void => {
@@ -388,7 +390,12 @@ export function createLogicalSignalRuntimeStoreV1(
       }
       const epoch = guardEpoch
       guardsByEndpoint.set(endpointId, guard)
-      publish(context, nextSignals)
+      try {
+        publish(context, nextSignals)
+      } catch {
+        // Zustand updates state before notifying listeners. A hostile observer
+        // must not strand an installed catch-up guard before its handle returns.
+      }
       const finish = (commit: boolean): void => {
         if (!guard.active || epoch !== guardEpoch) return
         guard.active = false

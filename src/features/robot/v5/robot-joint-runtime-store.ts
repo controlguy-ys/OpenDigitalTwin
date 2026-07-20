@@ -231,22 +231,24 @@ export function createRobotJointRuntimeStoreV5(project: WorkcellProjectV5, confi
       if (found === undefined) failure('ROBOT_INSTANCE_NOT_FOUND', `$.robots.${robotId}`, `Robot Instance ${robotId} does not exist.`)
       return found
     }
-    const marked = (target: Readonly<Record<string, RobotJointRuntimeValueV5>>, endpointId: string, at: number, quality: 'STALE' | 'BAD', statusCode: string): Record<string, RobotJointRuntimeValueV5> => {
+    const marked = (target: Readonly<Record<string, RobotJointRuntimeValueV5>>, endpointId: string, at: number, quality: 'STALE' | 'BAD', statusCode: string): Readonly<Record<string, RobotJointRuntimeValueV5>> => {
       const channels = context.channelsByEndpoint.get(endpointId) ?? []
-      const next: Record<string, RobotJointRuntimeValueV5> = { ...target }
+      let next: Record<string, RobotJointRuntimeValueV5> | null = null
       for (const robotId of new Set(channels.map((channel) => channel.robotId))) {
-        const prior = next[robotId]
-        if (prior !== undefined) next[robotId] = frozenRobot({ ...prior, quality, statusCode, receivedTimestampMs: Math.max(prior.receivedTimestampMs, at), revision: increment(prior.revision) })
+        const prior = (next ?? target)[robotId]
+        if (prior === undefined || (prior.quality === quality && prior.statusCode === statusCode && prior.receivedTimestampMs >= at)) continue
+        if (next === null) next = { ...target }
+        next[robotId] = frozenRobot({ ...prior, quality, statusCode, receivedTimestampMs: Math.max(prior.receivedTimestampMs, at), revision: increment(prior.revision) })
       }
-      return next
+      return next ?? target
     }
     const mark = (endpointId: string, at: number, quality: 'STALE' | 'BAD', statusCode: string): void => {
       const channels = context.channelsByEndpoint.get(endpointId) ?? []
       if (channels.length === 0) return
       const guard = guards.get(endpointId)
       const next = marked(guard?.pending ?? get().byRobotId, endpointId, at, quality, statusCode)
-      if (guard !== undefined) guard.pending = next
-      else publish(next)
+      if (guard !== undefined) guard.pending = next as Record<string, RobotJointRuntimeValueV5>
+      else if (next !== get().byRobotId) publish(next)
     }
 
     return {
@@ -265,19 +267,25 @@ export function createRobotJointRuntimeStoreV5(project: WorkcellProjectV5, confi
         }
         const ownedRobotIds = [...new Set(channels.map((channel) => channel.robotId))]
         const snapshot = Object.freeze(Object.fromEntries(ownedRobotIds.map((robotId) => [robotId, get().byRobotId[robotId]!])) as Record<string, RobotJointRuntimeValueV5>)
+        // Build the fallible revision-incrementing overlay before installing the
+        // guard. An exhausted revision must leave this Endpoint immediately
+        // available for a later catch-up attempt.
+        const stale = marked(get().byRobotId, endpointId, at, 'STALE', 'BadNoCommunication')
         const guard: Guard = {
           snapshot, pending: { ...snapshot }, sequence: context.endpointSequence.get(endpointId), receipt: context.endpointReceipt.get(endpointId), active: true,
           sourceFences: new Map(channels.map((channel) => [channel.mappingId, context.sourceFences.get(channel.mappingId)])),
           publishedFences: new Map(channels.map((channel) => [channel.mappingId, context.publishedFences.get(channel.mappingId)])),
         }
+        // The guard must be observable to reentrant callers before the isolated
+        // publication, but no earlier: construction above can still throw.
         guards.set(endpointId, guard)
         const epoch = guardEpoch
-        const stale: Record<string, RobotJointRuntimeValueV5> = { ...get().byRobotId }
-        for (const robotId of ownedRobotIds) {
-          const prior = stale[robotId]
-          if (prior !== undefined) stale[robotId] = frozenRobot({ ...prior, quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: Math.max(prior.receivedTimestampMs, at), revision: increment(prior.revision) })
+        try {
+          publish(stale)
+        } catch {
+          // Zustand updates state before notifying listeners. A hostile observer
+          // must not strand an installed catch-up guard before its handle returns.
         }
-        publish(stale)
         const finish = (commit: boolean): void => {
           if (!guard.active || epoch !== guardEpoch) return
           guard.active = false; guards.delete(endpointId)
@@ -286,11 +294,8 @@ export function createRobotJointRuntimeStoreV5(project: WorkcellProjectV5, confi
           if (guard.receipt === undefined) context.endpointReceipt.delete(endpointId); else context.endpointReceipt.set(endpointId, guard.receipt)
           for (const [id, value] of guard.sourceFences) { if (value === undefined) context.sourceFences.delete(id); else context.sourceFences.set(id, value) }
           for (const [id, value] of guard.publishedFences) { if (value === undefined) context.publishedFences.delete(id); else context.publishedFences.set(id, value) }
-          const stale: Record<string, RobotJointRuntimeValueV5> = { ...get().byRobotId }
-          for (const robotId of ownedRobotIds) {
-            const prior = stale[robotId]; if (prior !== undefined) stale[robotId] = frozenRobot({ ...prior, quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: Math.max(prior.receivedTimestampMs, at), revision: increment(prior.revision) })
-          }
-          publish(stale)
+          // The initial overlay remains public and becomes durable on abort.
+          // Do not emit a second STALE transition while restoring its fences.
         }
         return Object.freeze({ commit: () => finish(true), abort: () => finish(false) })
       },
