@@ -33,6 +33,10 @@ interface AcceptedLifecycleRecordV5 {
   readonly phaseOrdinal: 0 | 1
 }
 
+// Project validation caps OPC UA Endpoints at eight; retain the same bound at
+// this browser boundary even if a caller supplies a stale/malformed context.
+const MAX_ENDPOINT_LIFECYCLE_RECORDS_V5 = 8
+
 function phaseOrdinal(phase: EndpointLifecycleV1['phase']): 0 | 1 {
   return phase === 'connected' ? 0 : 1
 }
@@ -69,6 +73,28 @@ export function createEndpointLifecycleRouterV5(
   options: CreateEndpointLifecycleRouterOptionsV5,
 ): EndpointLifecycleRouterV5 {
   const recordsByEndpoint = new Map<string, AcceptedLifecycleRecordV5>()
+  const pending: Array<Readonly<{ event: EndpointLifecycleV1; receivedTimestampMs: number }>> = []
+  let draining = false
+
+  const drain = (): void => {
+    if (draining) return
+    draining = true
+    try {
+      while (pending.length > 0) {
+        const next = pending.shift()!
+        for (const target of options.targets) {
+          try {
+            if (next.event.phase === 'connected') target.resetEndpointSession(next.event.endpointId, next.receivedTimestampMs)
+            else target.markEndpointDisconnected(next.event.endpointId, next.receivedTimestampMs)
+          } catch {
+            // Independent targets still receive this consumed lifecycle event.
+          }
+        }
+      }
+    } finally {
+      draining = false
+    }
+  }
 
   const ingest = (eventInput: EndpointLifecycleV1, receivedTimestampMs: number): boolean => {
     if (!validReceiptTimestamp(receivedTimestampMs)) return false
@@ -101,20 +127,21 @@ export function createEndpointLifecycleRouterV5(
       phaseOrdinal: phaseOrdinal(event.phase),
     })
     const previous = recordsByEndpoint.get(event.endpointId)
+    if (previous === undefined && recordsByEndpoint.size >= MAX_ENDPOINT_LIFECYCLE_RECORDS_V5) return false
     if (previous !== undefined) {
       const comparison = compareOrder(candidate, previous)
       if (comparison <= 0) return false
     }
     recordsByEndpoint.set(event.endpointId, candidate)
-    for (const target of options.targets) {
-      if (event.phase === 'connected') target.resetEndpointSession(event.endpointId, receivedTimestampMs)
-      else target.markEndpointDisconnected(event.endpointId, receivedTimestampMs)
-    }
+    // Consumption happens before fan-out: target exceptions cannot make an
+    // accepted lifecycle transition retryable, and reentrant input queues.
+    pending.push(Object.freeze({ event, receivedTimestampMs }))
+    drain()
     return true
   }
 
   return Object.freeze({
     ingest,
-    resetSocketSession: () => { recordsByEndpoint.clear() },
+    resetSocketSession: () => { recordsByEndpoint.clear(); pending.length = 0 },
   })
 }

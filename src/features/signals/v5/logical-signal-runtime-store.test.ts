@@ -129,6 +129,18 @@ function signalBatch(overrides: {
 }
 
 describe('LogicalSignalRuntimeStoreV1', () => {
+  it('returns a single-use no-op catch-up guard for an enabled Endpoint with no Signal channels', () => {
+    const project = cloneWorkcellProjectV5(projectWithBooleanInput())
+    ;(project.opcUa.endpoints as unknown as Array<WorkcellProjectV5['opcUa']['endpoints'][number]>).push(endpoint('idle'))
+    const runtime = createLogicalSignalRuntimeStoreV1(validateWorkcellProjectV5(project), REVISION)
+
+    const guard = runtime.getState().beginEndpointCatchup('idle', 1_000)
+    expect(() => runtime.getState().beginEndpointCatchup('idle', 1_001)).toThrow('ENDPOINT_CATCHUP_ALREADY_ACTIVE')
+    expect(() => { guard.commit(); guard.commit(); guard.abort(); guard.abort() }).not.toThrow()
+    expect(() => runtime.getState().beginEndpointCatchup('idle', 1_002).abort()).not.toThrow()
+    expect(() => runtime.getState().beginEndpointCatchup('missing', 1_000)).toThrow('ENDPOINT_CATCHUP_UNKNOWN_ENDPOINT')
+  })
+
   it('accepts a scalar Signal value assembled from a structured OPC UA root', () => {
     const project = cloneWorkcellProjectV5(projectWithBooleanInput())
     ;(project.opcUa.mappings as unknown as OpcUaMappingV5[]).splice(0, 1,
@@ -299,6 +311,7 @@ describe('LogicalSignalRuntimeStoreV1', () => {
     expect(runtime.getState().ingest(signalBatch({
       sequence: 11, value: false, sourceTimestampMs: 1_001, publishedTimestampMs: 1_021,
     }), 1_070)).toBe(true)
+    expect(runtime.getState().read('part-present')).toMatchObject({ quality: 'STALE', statusCode: 'BadNoCommunication' })
     guard.commit()
     expect(runtime.getState().read('part-present')).toMatchObject({ value: false, quality: 'GOOD' })
     expect(runtime.getState().read('guard-closed')).toEqual(priorB)
@@ -313,6 +326,133 @@ describe('LogicalSignalRuntimeStoreV1', () => {
     expect(runtime.getState().ingest(signalBatch({
       sequence: 11, value: true, sourceTimestampMs: 1_002, publishedTimestampMs: 1_022,
     }), 1_091)).toBe(false)
+  })
+
+  it('commits a disconnected catch-up as STALE instead of resurrecting the hidden GOOD Signal', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    const guard = runtime.getState().beginEndpointCatchup('plc', 1_000)
+    expect(runtime.getState().ingest(signalBatch({ sequence: 1, value: true }), 1_001)).toBe(true)
+    runtime.getState().markEndpointDisconnected('plc', 1_002)
+    guard.commit()
+
+    expect(runtime.getState().read('part-present')).toMatchObject({
+      value: true, quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: 1_002,
+    })
+  })
+
+  it('keeps guarded Signal lifecycle transitions in the hidden candidate through commit', () => {
+    const preGood = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    const preGoodGuard = preGood.getState().beginEndpointCatchup('plc', 1_000)
+    preGood.getState().resetEndpointSession('plc', 1_001)
+    expect(preGood.getState().read('part-present')).toMatchObject({ quality: 'STALE', statusCode: 'BadNoCommunication' })
+    preGoodGuard.commit()
+    expect(preGood.getState().read('part-present')).toMatchObject({ quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
+
+    const connectedThenDisconnected = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    const stateGuard = connectedThenDisconnected.getState().beginEndpointCatchup('plc', 2_000)
+    connectedThenDisconnected.getState().resetEndpointSession('plc', 2_001)
+    expect(connectedThenDisconnected.getState().ingest(signalBatch({ sequence: 1, value: true }), 2_002)).toBe(true)
+    connectedThenDisconnected.getState().markEndpointDisconnected('plc', 2_003)
+    stateGuard.commit()
+    expect(connectedThenDisconnected.getState().read('part-present')).toMatchObject({ value: true, quality: 'STALE', statusCode: 'BadNoCommunication' })
+
+    const reconnect = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    expect(reconnect.getState().ingest(signalBatch({ value: true }), 3_000)).toBe(true)
+    const reconnectGuard = reconnect.getState().beginEndpointCatchup('plc', 3_001)
+    reconnect.getState().markEndpointDisconnected('plc', 3_002)
+    reconnect.getState().resetEndpointSession('plc', 3_003)
+    reconnectGuard.commit()
+    expect(reconnect.getState().read('part-present')).toMatchObject({ value: true, quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
+  })
+
+  it('keeps the public Signal STALE overlay field-for-field unchanged during guarded lifecycle transitions', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    expect(runtime.getState().ingest(signalBatch({ value: true }), 1_000)).toBe(true)
+    const guard = runtime.getState().beginEndpointCatchup('plc', 1_001)
+    const overlay = runtime.getState().read('part-present')
+
+    runtime.getState().resetEndpointSession('plc', 1_002)
+    expect(runtime.getState().read('part-present')).toEqual(overlay)
+    runtime.getState().markEndpointDisconnected('plc', 1_003)
+    expect(runtime.getState().read('part-present')).toEqual(overlay)
+
+    guard.commit()
+    expect(runtime.getState().read('part-present')).toMatchObject({
+      value: true, quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: 1_003,
+    })
+  })
+
+  it('admits an independent fresh Signal group while rejecting a stale group atomically', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithSignalsOnOneEndpoint(), REVISION)
+    const first = signalBatch({ sequence: 1, value: true, sourceTimestampMs: 1_000, publishedTimestampMs: 1_020 })
+    expect(runtime.getState().ingest(first, 1_020)).toBe(true)
+    const initialB = signalBatch({ sequence: 2, mappingId: 'guard-closed-input', value: true, sourceTimestampMs: 500, publishedTimestampMs: 520 })
+    expect(runtime.getState().ingest(initialB, 1_020)).toBe(true)
+    const mixed = signalBatch({ sequence: 3, value: false, sourceTimestampMs: 999, publishedTimestampMs: 1_021 })
+    expect(runtime.getState().ingest({ ...mixed, values: [
+      mixed.values[0]!,
+      { ...mixed.values[0]!, mappingId: 'guard-closed-input', value: false, coherenceGroupId: null },
+    ] }, 1_021)).toBe(true)
+    expect(runtime.getState().read('part-present')).toMatchObject({ value: true })
+    expect(runtime.getState().read('guard-closed')).toMatchObject({ value: false })
+
+    const sameGroup = signalBatch({ sequence: 4, value: false, sourceTimestampMs: 998, publishedTimestampMs: 1_022 })
+    expect(runtime.getState().ingest({ ...sameGroup, values: [
+      { ...sameGroup.values[0]!, coherenceGroupId: 'paired' },
+      { ...sameGroup.values[0]!, mappingId: 'guard-closed-input', coherenceGroupId: 'paired' },
+    ] }, 1_022)).toBe(false)
+    expect(runtime.getState().read('guard-closed')).toMatchObject({ value: false })
+  })
+
+  it('namespaces Signal coherence groups away from colliding Mapping IDs', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithSignalsOnOneEndpoint(), REVISION)
+    expect(runtime.getState().ingest(signalBatch({ sequence: 1, sourceTimestampMs: 1_000 }), 1_000)).toBe(true)
+    expect(runtime.getState().ingest(signalBatch({ sequence: 2, mappingId: 'guard-closed-input', sourceTimestampMs: 500 }), 1_001)).toBe(true)
+    const mixed = signalBatch({ sequence: 3, sourceTimestampMs: 900, value: false })
+    expect(runtime.getState().ingest({ ...mixed, values: [
+      { ...mixed.values[0]!, coherenceGroupId: 'guard-closed-input' },
+      { ...mixed.values[0]!, mappingId: 'guard-closed-input', coherenceGroupId: null, value: false },
+    ] }, 1_002)).toBe(true)
+    expect(runtime.getState().read('guard-closed')).toMatchObject({ value: false })
+  })
+
+  it('aborts a Signal cut back to its payload and live fences before leaving it durably STALE', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    expect(runtime.getState().ingest(signalBatch({ sequence: 1, value: true, sourceTimestampMs: 1_000, publishedTimestampMs: 1_020 }), 1_000)).toBe(true)
+    const guard = runtime.getState().beginEndpointCatchup('plc', 1_001)
+    expect(runtime.getState().ingest(signalBatch({ sequence: 2, value: false, sourceTimestampMs: 1_001, publishedTimestampMs: 1_021 }), 1_002)).toBe(true)
+    guard.abort()
+    expect(runtime.getState().read('part-present')).toMatchObject({
+      value: true, quality: 'STALE', sourceTimestampMs: 1_000, publishedTimestampMs: 1_020, receivedTimestampMs: 1_001,
+    })
+    expect(runtime.getState().ingest(signalBatch({ sequence: 2, value: false, sourceTimestampMs: 1_001, publishedTimestampMs: 1_021 }), 1_003)).toBe(true)
+  })
+
+  it('invalidates an outstanding Signal guard on gateway reset without resurrecting GOOD', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    expect(runtime.getState().ingest(signalBatch({ value: true }), 1_000)).toBe(true)
+    const guard = runtime.getState().beginEndpointCatchup('plc', 1_001)
+    runtime.getState().resetGatewaySession(1_002)
+    guard.commit()
+    expect(runtime.getState().read('part-present')).toMatchObject({ quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
+  })
+
+  it('invalidates an outstanding Signal guard on project replacement', () => {
+    const project = projectWithBooleanInput()
+    const runtime = createLogicalSignalRuntimeStoreV1(project, REVISION)
+    const guard = runtime.getState().beginEndpointCatchup('plc', 1_000)
+    runtime.getState().replaceProject(project, REVISION)
+    guard.abort(); guard.commit()
+    expect(runtime.getState().read('part-present')).toMatchObject({ quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
+  })
+
+  it('commits a rejected-only Signal cut by restoring its untouched pre-cut state', () => {
+    const runtime = createLogicalSignalRuntimeStoreV1(projectWithBooleanInput(), REVISION)
+    expect(runtime.getState().ingest(signalBatch({ value: true, sourceTimestampMs: 1_000 }), 1_000)).toBe(true)
+    const guard = runtime.getState().beginEndpointCatchup('plc', 1_001)
+    expect(runtime.getState().ingest(signalBatch({ sequence: 2, value: false, sourceTimestampMs: 999 }), 1_002)).toBe(false)
+    guard.commit()
+    expect(runtime.getState().read('part-present')).toMatchObject({ value: true, quality: 'GOOD' })
   })
 
   it('keeps the active runtime snapshot when replaceProject validation fails', () => {

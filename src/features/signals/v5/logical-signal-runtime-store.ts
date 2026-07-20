@@ -55,6 +55,7 @@ interface LogicalSignalRuntimeContextV1 {
   readonly configRevision: string
   readonly channelsByMappingId: ReadonlyMap<string, SignalChannelV1>
   readonly channelIdsByEndpoint: ReadonlyMap<string, readonly string[]>
+  readonly enabledEndpointIds: ReadonlySet<string>
   readonly initialSignals: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
   readonly endpointSequences: Map<string, number>
   readonly endpointReceiptFences: Map<string, number>
@@ -142,6 +143,7 @@ function compileContext(
     configRevision: revision,
     channelsByMappingId,
     channelIdsByEndpoint: new Map([...channelIdsByEndpoint].map(([endpointId, ids]) => [endpointId, Object.freeze([...new Set(ids)])])),
+    enabledEndpointIds: new Set(project.opcUa.endpoints.filter((endpoint) => endpoint.enabled).map((endpoint) => endpoint.endpointId)),
     initialSignals: frozenSignals(initialSignals),
     endpointSequences: new Map(),
     endpointReceiptFences: new Map(),
@@ -185,9 +187,20 @@ export function createLogicalSignalRuntimeStoreV1(
   configRevision: string,
 ): StoreApi<LogicalSignalRuntimeStoreV1> {
   let context = compileContext(projectInput, configRevision)
+  let guardEpoch = 0
 
   return createStore<LogicalSignalRuntimeStoreV1>()((set, get) => {
-    const guardsByEndpoint = new Map<string, { readonly snapshot: Readonly<Record<string, LogicalSignalRuntimeValueV1>>; touched: Set<string>; active: boolean }>()
+    const guardsByEndpoint = new Map<string, {
+      readonly snapshot: Readonly<Record<string, LogicalSignalRuntimeValueV1>>
+      readonly pending: Record<string, LogicalSignalRuntimeValueV1>
+      readonly sequence: number | undefined
+      readonly receipt: number | undefined
+      readonly sourceFences: ReadonlyMap<string, number | undefined>
+      readonly publishedFences: ReadonlyMap<string, number | undefined>
+      touched: Set<string>
+      active: boolean
+    }>()
+    const noOpGuardsByEndpoint = new Set<string>()
     const publish = (
       nextContext: LogicalSignalRuntimeContextV1,
       bySignalId: Readonly<Record<string, LogicalSignalRuntimeValueV1>>,
@@ -218,21 +231,35 @@ export function createLogicalSignalRuntimeStoreV1(
         return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
       })
       if (recognized.length === 0) return false
-      if (recognized.some(([channel]) => (
+      const groups = new Map<string, typeof recognized>()
+      for (const entry of recognized) {
+        const key = entry[1].coherenceGroupId === null
+          ? `mapping:${entry[0].mappingId}`
+          : `coherence:${entry[1].coherenceGroupId}`
+        const group = groups.get(key) ?? []
+        group.push(entry)
+        groups.set(key, group)
+      }
+      const accepted = [...groups.values()].flatMap((group) => group.some(([channel]) => (
         batch.sourceTimestampMs < (context.channelSourceTimestampFences.get(channel.mappingId) ?? 0)
         || batch.publishedTimestampMs < (context.channelPublishedTimestampFences.get(channel.mappingId) ?? 0)
-      ))) return false
+      )) ? [] : group)
+      if (accepted.length === 0) return false
 
       const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
-      for (const [channel, mapped] of recognized) {
-        const previous = nextSignals[channel.signalId]
+      const guard = guardsByEndpoint.get(batch.endpointId)
+      for (const [channel, mapped] of accepted) {
+        const previous = guard?.pending[channel.signalId] ?? nextSignals[channel.signalId]
         if (previous === undefined) continue
-        nextSignals[channel.signalId] = nextSignalValue(previous, channel, mapped, batch, receivedTimestampMs)
-        guardsByEndpoint.get(batch.endpointId)?.touched.add(channel.signalId)
+        const next = nextSignalValue(previous, channel, mapped, batch, receivedTimestampMs)
+        if (guard !== undefined) {
+          guard.pending[channel.signalId] = next
+          guard.touched.add(channel.signalId)
+        } else nextSignals[channel.signalId] = next
       }
       context.endpointSequences.set(batch.endpointId, batch.sequence)
       context.endpointReceiptFences.set(batch.endpointId, receivedTimestampMs)
-      for (const [channel] of recognized) {
+      for (const [channel] of accepted) {
         context.channelSourceTimestampFences.set(channel.mappingId, batch.sourceTimestampMs)
         context.channelPublishedTimestampFences.set(channel.mappingId, batch.publishedTimestampMs)
       }
@@ -244,6 +271,21 @@ export function createLogicalSignalRuntimeStoreV1(
       const atMs = requireTimestamp(atCandidate, 'Disconnect timestamp')
       const signalIds = context.channelIdsByEndpoint.get(endpointId)
       if (signalIds === undefined) return
+      const guard = guardsByEndpoint.get(endpointId)
+      if (guard !== undefined) {
+        for (const signalId of signalIds) {
+          const pending = guard.pending[signalId]
+          if (pending === undefined) continue
+          guard.pending[signalId] = frozenSignalValue({
+            ...pending,
+            quality: 'STALE',
+            statusCode: 'BadNoCommunication',
+            receivedTimestampMs: Math.max(pending.receivedTimestampMs, atMs),
+          })
+          guard.touched.add(signalId)
+        }
+        return
+      }
       const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
       for (const signalId of signalIds) {
         const previous = nextSignals[signalId]
@@ -263,15 +305,21 @@ export function createLogicalSignalRuntimeStoreV1(
       const signalIds = context.channelIdsByEndpoint.get(endpointId)
       if (signalIds === undefined) return
       const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
+      const guard = guardsByEndpoint.get(endpointId)
       for (const signalId of signalIds) {
-        const previous = nextSignals[signalId]
+        const previous = guard?.pending[signalId] ?? nextSignals[signalId]
         if (previous === undefined) continue
-        nextSignals[signalId] = frozenSignalValue({
+        const next = frozenSignalValue({
           ...previous,
           quality: 'BAD',
           statusCode: 'BadWaitingForInitialData',
           receivedTimestampMs: Math.max(previous.receivedTimestampMs, atMs),
         })
+        if (guard === undefined) nextSignals[signalId] = next
+        else {
+          guard.pending[signalId] = next
+          guard.touched.add(signalId)
+        }
       }
       context.endpointSequences.delete(endpointId)
       context.endpointReceiptFences.delete(endpointId)
@@ -307,8 +355,19 @@ export function createLogicalSignalRuntimeStoreV1(
 
     const beginEndpointCatchup = (endpointId: string, atCandidate: number): EndpointCatchupGuardV5 => {
       const atMs = requireTimestamp(atCandidate, 'Catch-up timestamp')
-      if (!context.channelIdsByEndpoint.has(endpointId)) throw new Error('ENDPOINT_CATCHUP_UNKNOWN_ENDPOINT')
-      if (guardsByEndpoint.has(endpointId)) throw new Error('ENDPOINT_CATCHUP_ALREADY_ACTIVE')
+      if (!context.enabledEndpointIds.has(endpointId)) throw new Error('ENDPOINT_CATCHUP_UNKNOWN_ENDPOINT')
+      if (guardsByEndpoint.has(endpointId) || noOpGuardsByEndpoint.has(endpointId)) throw new Error('ENDPOINT_CATCHUP_ALREADY_ACTIVE')
+      if (!context.channelIdsByEndpoint.has(endpointId)) {
+        const epoch = guardEpoch
+        let active = true
+        noOpGuardsByEndpoint.add(endpointId)
+        const finish = (): void => {
+          if (!active || epoch !== guardEpoch) return
+          active = false
+          noOpGuardsByEndpoint.delete(endpointId)
+        }
+        return Object.freeze({ commit: finish, abort: finish })
+      }
       const snapshot: Record<string, LogicalSignalRuntimeValueV1> = {}
       const nextSignals: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
       for (const signalId of context.channelIdsByEndpoint.get(endpointId) ?? []) {
@@ -317,17 +376,43 @@ export function createLogicalSignalRuntimeStoreV1(
         snapshot[signalId] = previous
         nextSignals[signalId] = frozenSignalValue({ ...previous, quality: 'STALE', statusCode: 'BadNoCommunication', receivedTimestampMs: Math.max(previous.receivedTimestampMs, atMs) })
       }
-      const guard = { snapshot: frozenSignals(snapshot), touched: new Set<string>(), active: true }
+      const guard = {
+        snapshot: frozenSignals(snapshot), pending: { ...snapshot }, touched: new Set<string>(),
+        sequence: context.endpointSequences.get(endpointId), receipt: context.endpointReceiptFences.get(endpointId), active: true,
+        sourceFences: new Map([...context.channelsByMappingId.values()]
+          .filter((channel) => channel.endpointId === endpointId)
+          .map((channel) => [channel.mappingId, context.channelSourceTimestampFences.get(channel.mappingId)])),
+        publishedFences: new Map([...context.channelsByMappingId.values()]
+          .filter((channel) => channel.endpointId === endpointId)
+          .map((channel) => [channel.mappingId, context.channelPublishedTimestampFences.get(channel.mappingId)])),
+      }
+      const epoch = guardEpoch
       guardsByEndpoint.set(endpointId, guard)
       publish(context, nextSignals)
       const finish = (commit: boolean): void => {
-        if (!guard.active) return
+        if (!guard.active || epoch !== guardEpoch) return
         guard.active = false
         guardsByEndpoint.delete(endpointId)
-        if (!commit) return
+        if (!commit) {
+          if (guard.sequence === undefined) context.endpointSequences.delete(endpointId)
+          else context.endpointSequences.set(endpointId, guard.sequence)
+          if (guard.receipt === undefined) context.endpointReceiptFences.delete(endpointId)
+          else context.endpointReceiptFences.set(endpointId, guard.receipt)
+          for (const [mappingId, value] of guard.sourceFences) {
+            if (value === undefined) context.channelSourceTimestampFences.delete(mappingId)
+            else context.channelSourceTimestampFences.set(mappingId, value)
+          }
+          for (const [mappingId, value] of guard.publishedFences) {
+            if (value === undefined) context.channelPublishedTimestampFences.delete(mappingId)
+            else context.channelPublishedTimestampFences.set(mappingId, value)
+          }
+          // The stale overlay is already published and intentionally becomes
+          // durable when the frame is aborted.
+          return
+        }
         const next: Record<string, LogicalSignalRuntimeValueV1> = { ...get().bySignalId }
         for (const [signalId, prior] of Object.entries(guard.snapshot)) {
-          if (!guard.touched.has(signalId)) next[signalId] = prior
+          next[signalId] = guard.touched.has(signalId) ? guard.pending[signalId]! : prior
         }
         publish(context, next)
       }
@@ -353,6 +438,9 @@ export function createLogicalSignalRuntimeStoreV1(
       context.endpointReceiptFences.clear()
       context.channelSourceTimestampFences.clear()
       context.channelPublishedTimestampFences.clear()
+      guardsByEndpoint.clear()
+      noOpGuardsByEndpoint.clear()
+      guardEpoch += 1
       publish(context, nextSignals)
     }
 
@@ -370,6 +458,8 @@ export function createLogicalSignalRuntimeStoreV1(
       replaceProject: (nextProjectInput, nextConfigRevision) => {
         const nextContext = compileContext(nextProjectInput, nextConfigRevision)
         guardsByEndpoint.clear()
+        noOpGuardsByEndpoint.clear()
+        guardEpoch += 1
         publish(nextContext, nextContext.initialSignals)
       },
     }

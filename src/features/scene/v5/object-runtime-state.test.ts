@@ -147,6 +147,18 @@ function objectStatusBatch(overrides: {
 }
 
 describe('ObjectRuntimeStateV5', () => {
+  it('returns a single-use no-op catch-up guard for an enabled Endpoint with no Object channels', () => {
+    const project = cloneWorkcellProjectV5(projectWithArrayMappedBox())
+    ;(project.opcUa.endpoints as unknown as Array<WorkcellProjectV5['opcUa']['endpoints'][number]>).push(endpoint('idle'))
+    const runtime = createObjectRuntimeStateV5(validateWorkcellProjectV5(project), REVISION)
+
+    const guard = runtime.beginEndpointCatchup('idle', 1_000)
+    expect(() => runtime.beginEndpointCatchup('idle', 1_001)).toThrow('ENDPOINT_CATCHUP_ALREADY_ACTIVE')
+    expect(() => { guard.commit(); guard.commit(); guard.abort(); guard.abort() }).not.toThrow()
+    expect(() => runtime.beginEndpointCatchup('idle', 1_002).abort()).not.toThrow()
+    expect(() => runtime.beginEndpointCatchup('missing', 1_000)).toThrow('ENDPOINT_CATCHUP_UNKNOWN_ENDPOINT')
+  })
+
   it('exposes the fixed revision contract and nullable configured channels before GOOD data', () => {
     const runtime = createObjectRuntimeStateV5(projectWithMappedBoxFrameAndStatusOnSeparateEndpoints(), REVISION)
 
@@ -224,14 +236,128 @@ describe('ObjectRuntimeStateV5', () => {
     expect(runtime.ingest({ ...pose, values: [...pose.values, ...status.values] }, 1_000)).toBe(true)
 
     const guard = runtime.beginEndpointCatchup('motion-plc', 1_010)
+    expect(() => runtime.beginEndpointCatchup('motion-plc', 1_011)).toThrow('ENDPOINT_CATCHUP_ALREADY_ACTIVE')
     expect(runtime.ingest(objectStatusBatch({ endpointId: 'motion-plc', sequence: 2, status: 2, sourceTimestampMs: 1_001 }), 1_020)).toBe(true)
+    expect(runtime.readNumericStatus('box')).toMatchObject({ quality: 'STALE', statusCode: 'BadNoCommunication' })
     guard.commit()
     expect(runtime.readNumericStatus('box')).toMatchObject({ value: 2, quality: 'GOOD' })
     expect(runtime.sampleFrame('box', 'box-motion', 1_020)).toMatchObject({ quality: 'GOOD', worldPose: { positionM: [1, 0, 0] } })
 
     const aborted = runtime.beginEndpointCatchup('motion-plc', 1_030)
+    expect(runtime.ingest(objectStatusBatch({ endpointId: 'motion-plc', sequence: 3, status: 3, sourceTimestampMs: 1_002 }), 1_031)).toBe(true)
     aborted.abort()
-    expect(runtime.readNumericStatus('box')).toMatchObject({ quality: 'STALE', statusCode: 'BadNoCommunication' })
+    expect(runtime.readNumericStatus('box')).toMatchObject({ value: 2, quality: 'STALE', statusCode: 'BadNoCommunication' })
+  })
+
+  it('preserves Object interpolation history for a State-only catch-up', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithMappedBoxFrameAndStatusOnOneEndpoint(), REVISION)
+    expect(runtime.ingest(objectPoseBatch({ endpointId: 'motion-plc', sequence: 1, positionM: [0, 0, 0], sourceTimestampMs: 1_000 }), 1_000)).toBe(true)
+    expect(runtime.ingest(objectPoseBatch({ endpointId: 'motion-plc', sequence: 2, positionM: [10, 0, 0], sourceTimestampMs: 1_100 }), 1_100)).toBe(true)
+
+    const guard = runtime.beginEndpointCatchup('motion-plc', 1_200)
+    expect(runtime.ingest(objectStatusBatch({ endpointId: 'motion-plc', sequence: 3, status: 2, sourceTimestampMs: 1_101 }), 1_201)).toBe(true)
+    guard.commit()
+
+    expect(runtime.sampleFrame('box', 'box-motion', 1_250)).toMatchObject({ worldPose: { positionM: [5, 0, 0] } })
+  })
+
+  it('keeps a guarded Object Frame payload and timestamps invisible until atomic commit', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 1, positionM: [1, 0, 0], sourceTimestampMs: 1_000 }), 1_000)).toBe(true)
+    const guard = runtime.beginEndpointCatchup('plc', 1_010)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 2, positionM: [3, 0, 0], sourceTimestampMs: 1_100 }), 1_100)).toBe(true)
+    expect(runtime.sampleFrame('box', 'box-motion', 1_100)).toMatchObject({
+      worldPose: { positionM: [1, 0, 0] }, quality: 'STALE', statusCode: 'BadNoCommunication', sourceTimestampMs: 1_000,
+    })
+    guard.commit()
+    expect(runtime.sampleFrame('box', 'box-motion', 1_300)).toMatchObject({ worldPose: { positionM: [3, 0, 0] }, quality: 'GOOD' })
+  })
+
+  it('appends a lifecycle-free Object Frame catch-up to the retained interpolation trajectory', () => {
+    const baseline = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    const guarded = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    for (const runtime of [baseline, guarded]) {
+      expect(runtime.ingest(objectPoseBatch({ sequence: 1, positionM: [0, 0, 0], sourceTimestampMs: 1_000 }), 1_000)).toBe(true)
+    }
+    expect(baseline.ingest(objectPoseBatch({ sequence: 2, positionM: [10, 0, 0], sourceTimestampMs: 1_100 }), 1_100)).toBe(true)
+    const guard = guarded.beginEndpointCatchup('plc', 1_050)
+    expect(guarded.ingest(objectPoseBatch({ sequence: 2, positionM: [10, 0, 0], sourceTimestampMs: 1_100 }), 1_100)).toBe(true)
+    guard.commit()
+    expect(guarded.sampleFrame('box', 'box-motion', 1_250)).toEqual(baseline.sampleFrame('box', 'box-motion', 1_250))
+  })
+
+  it('namespaces Object coherence groups away from colliding Mapping IDs', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithMappedBoxFrameAndStatusOnOneEndpoint(), REVISION)
+    expect(runtime.ingest(objectPoseBatch({ endpointId: 'motion-plc', sequence: 1, sourceTimestampMs: 1_000 }), 1_000)).toBe(true)
+    expect(runtime.ingest(objectStatusBatch({ endpointId: 'motion-plc', sequence: 2, sourceTimestampMs: 500, status: 1 }), 1_001)).toBe(true)
+    const status = objectStatusBatch({ endpointId: 'motion-plc', sequence: 3, sourceTimestampMs: 900, status: 2 })
+    expect(runtime.ingest({ ...status, values: [
+      { ...objectPoseBatch({ endpointId: 'motion-plc', sequence: 3, sourceTimestampMs: 900 }).values[0]!, coherenceGroupId: 'box-status' },
+      { ...status.values[0]!, coherenceGroupId: null },
+    ] }, 1_002)).toBe(true)
+    expect(runtime.readNumericStatus('box')).toMatchObject({ value: 2 })
+  })
+
+  it('admits an independent fresh Object group while rejecting a stale group atomically', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithMappedBoxFrameAndStatusOnOneEndpoint(), REVISION)
+    expect(runtime.ingest(objectPoseBatch({ endpointId: 'motion-plc', sequence: 1, sourceTimestampMs: 1_000, positionM: [1, 0, 0] }), 1_000)).toBe(true)
+    expect(runtime.ingest(objectStatusBatch({ endpointId: 'motion-plc', sequence: 2, sourceTimestampMs: 500, status: 1 }), 1_001)).toBe(true)
+    const status = objectStatusBatch({ endpointId: 'motion-plc', sequence: 3, sourceTimestampMs: 900, status: 2 })
+    expect(runtime.ingest({ ...status, values: [
+      { ...objectPoseBatch({ endpointId: 'motion-plc', sequence: 3, sourceTimestampMs: 900 }).values[0]! },
+      status.values[0]!,
+    ] }, 1_002)).toBe(true)
+    expect(runtime.sampleFrame('box', 'box-motion', 1_002)).toMatchObject({ worldPose: { positionM: [1, 0, 0] } })
+    expect(runtime.readNumericStatus('box')).toMatchObject({ value: 2 })
+
+    const grouped = objectStatusBatch({ endpointId: 'motion-plc', sequence: 4, sourceTimestampMs: 800, status: 3 })
+    expect(runtime.ingest({ ...grouped, values: [
+      { ...objectPoseBatch({ endpointId: 'motion-plc', sequence: 4, sourceTimestampMs: 800 }).values[0]!, coherenceGroupId: 'paired' },
+      { ...grouped.values[0]!, coherenceGroupId: 'paired' },
+    ] }, 1_003)).toBe(false)
+    expect(runtime.readNumericStatus('box')).toMatchObject({ value: 2 })
+  })
+
+  it('aborts an Object cut back to its pose buffer and live fences before durable STALE', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 1, positionM: [1, 0, 0], sourceTimestampMs: 1_000 }), 1_000)).toBe(true)
+    const guard = runtime.beginEndpointCatchup('plc', 1_001)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 2, positionM: [2, 0, 0], sourceTimestampMs: 1_001 }), 1_002)).toBe(true)
+    guard.abort()
+    expect(runtime.sampleFrame('box', 'box-motion', 1_001)).toMatchObject({ worldPose: { positionM: [1, 0, 0] }, quality: 'STALE', sourceTimestampMs: 1_000 })
+    expect(runtime.ingest(objectPoseBatch({ sequence: 2, positionM: [2, 0, 0], sourceTimestampMs: 1_001 }), 1_003)).toBe(true)
+  })
+
+  it('keeps Object reads quarantined through a guarded lifecycle reset and invalidates the guard on gateway reset', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    expect(runtime.ingest(objectPoseBatch({ positionM: [1, 0, 0] }), 1_000)).toBe(true)
+    const guard = runtime.beginEndpointCatchup('plc', 1_001)
+    runtime.resetEndpointSession('plc', 1_002)
+    expect(runtime.sampleFrame('box', 'box-motion', 1_002)).toMatchObject({ quality: 'STALE', statusCode: 'BadNoCommunication' })
+    guard.commit()
+    expect(runtime.sampleFrame('box', 'box-motion', 1_002)).toMatchObject({ quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
+    const invalidated = runtime.beginEndpointCatchup('plc', 1_003)
+    runtime.resetGatewaySession(1_004)
+    invalidated.commit()
+    expect(runtime.sampleFrame('box', 'box-motion', 1_004)).toMatchObject({ quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
+  })
+
+  it('invalidates an outstanding Object guard on project replacement', () => {
+    const project = projectWithArrayMappedBox()
+    const runtime = createObjectRuntimeStateV5(project, REVISION)
+    const guard = runtime.beginEndpointCatchup('plc', 1_000)
+    runtime.replaceProject(project, REVISION)
+    guard.abort(); guard.commit()
+    expect(runtime.sampleFrame('box', 'box-motion', 1_000)).toMatchObject({ quality: 'BAD', statusCode: 'BadWaitingForInitialData' })
+  })
+
+  it('commits a rejected-only Object cut by restoring its untouched pre-cut pose', () => {
+    const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
+    expect(runtime.ingest(objectPoseBatch({ positionM: [1, 0, 0], sourceTimestampMs: 1_000 }), 1_000)).toBe(true)
+    const guard = runtime.beginEndpointCatchup('plc', 1_001)
+    expect(runtime.ingest(objectPoseBatch({ sequence: 2, positionM: [2, 0, 0], sourceTimestampMs: 999 }), 1_002)).toBe(false)
+    guard.commit()
+    expect(runtime.sampleFrame('box', 'box-motion', 1_002)).toMatchObject({ worldPose: { positionM: [1, 0, 0] }, quality: 'GOOD' })
   })
 
   it('rejects an older receipt without advancing the Endpoint session fence', () => {
@@ -272,14 +398,14 @@ describe('ObjectRuntimeStateV5', () => {
     expect(runtime.sampleFrame('box', 'box-motion', 1_001)?.worldPose?.positionM).toEqual([1, 2, 3])
   })
 
-  it('keeps displayed diagnostic source timestamps monotonic across a new gateway session', () => {
+  it('replaces displayed diagnostic source timestamps after a new gateway session', () => {
     const runtime = createObjectRuntimeStateV5(projectWithArrayMappedBox(), REVISION)
     runtime.ingest(objectPoseBatch({ sequence: 10, sourceTimestampMs: 1_000, positionM: [1, 0, 0] }), 1_000)
     runtime.sampleFrame('box', 'box-motion', 1_000)
     runtime.resetGatewaySession(1_001)
 
     expect(runtime.ingest(objectPoseBatch({ sequence: 1, sourceTimestampMs: 1, positionM: [2, 0, 0] }), 1_002)).toBe(true)
-    expect(runtime.sampleFrame('box', 'box-motion', 1_002)).toMatchObject({ sourceTimestampMs: 1_000 })
+    expect(runtime.sampleFrame('box', 'box-motion', 1_002)).toMatchObject({ sourceTimestampMs: 1 })
   })
 
   it('keeps the active Object runtime snapshot when replacement has a partial frame Mapping', () => {

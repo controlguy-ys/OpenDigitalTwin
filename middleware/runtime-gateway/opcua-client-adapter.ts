@@ -15,6 +15,8 @@ import {
   type WorkcellProjectV5,
 } from '../../src/core/project-v5/index.js'
 import {
+  MAX_RUNTIME_BATCH_BYTES_V1,
+  MAX_RUNTIME_STATE_VALUES_V1,
   endpointLifecycleEventIdV1,
   validateEndpointLifecycleV1,
   validateStateBatchV1,
@@ -36,7 +38,7 @@ import {
   type CompiledOpcUaClientEndpointReadPlanV1,
   type ResolvedOpcUaClientMonitoredRootV1,
 } from './opcua-client-read-plan.js'
-import { splitStateBatchesV1 } from './runtime-stream-timeline.js'
+import { RuntimeStreamTimelineErrorV1, splitStateBatchesV1 } from './runtime-stream-timeline.js'
 import {
   compileOpcUaClientWritePlanV1,
   createOpcUaClientWriteServiceV1,
@@ -47,15 +49,20 @@ import {
 export interface OpcUaClientSnapshotAssemblerOptionsV1 {
   readonly project: WorkcellProjectV5
   readonly endpoint: CompiledOpcUaClientEndpointReadPlanV1
-  readonly configRevision: string
-  readonly gatewayId: string
-  readonly originId: string
-  readonly nowMs: () => number
-  readonly publish: (batch: StateBatchV1) => void
+}
+
+export interface UnsequencedOpcUaClientSnapshotV1 {
+  readonly sourceTimestampMs: number
+  readonly values: readonly RuntimeMappedValueV1[]
 }
 
 export interface OpcUaClientSnapshotAssemblerV1 {
-  accept(rootKey: string, value: unknown, statusCode: string, sourceTimestampMs: number): void
+  accept(
+    rootKey: string,
+    value: unknown,
+    statusCode: string,
+    sourceTimestampMs: number,
+  ): UnsequencedOpcUaClientSnapshotV1 | null
   reset(): void
 }
 
@@ -64,9 +71,13 @@ export interface OpcUaClientAdapterOptionsV1 {
   readonly originId: string
   readonly configRevision: string
   readonly publisherGeneration?: number
-  readonly publish: (publication: NormalizedOpcUaClientPublicationV1 | StateBatchV1) => void
+  readonly publish: (publication: NormalizedOpcUaClientPublicationV1) => void
   readonly nowMs?: () => number
   readonly createClient?: (endpoint: OpcUaEndpointV5) => OPCUAClient
+  /** Test/process-restore seam; each value must be a positive safe integer. */
+  readonly initialSourceSequenceByEndpoint?: Readonly<Record<string, number>>
+  /** Test/process-restore seam; each value must be a non-negative safe integer. */
+  readonly initialSessionGenerationByEndpoint?: Readonly<Record<string, number>>
 }
 
 export interface OpcUaClientAdapterV1 {
@@ -85,6 +96,13 @@ interface EndpointRuntimeDiagnosticsV1 {
   lastError: RuntimeGatewayDiagnosticErrorV1 | null
 }
 
+interface EarlyRootSnapshotV1 {
+  readonly rootKey: string
+  readonly snapshot: UnsequencedOpcUaClientSnapshotV1
+  readonly arrivalOrdinal: number
+  readonly encodedBytes: number
+}
+
 interface EndpointRuntimeV1 extends EndpointRuntimeDiagnosticsV1 {
   readonly endpoint: OpcUaEndpointV5
   readonly readPlan: CompiledOpcUaClientEndpointReadPlanV1 | null
@@ -101,13 +119,22 @@ interface EndpointRuntimeV1 extends EndpointRuntimeDiagnosticsV1 {
   nextSourceSequence: number
   sessionGeneration: number
   lastGatewayTimestampMs: number
-  earlyBatches: StateBatchV1[]
+  earlyRoots: Map<string, EarlyRootSnapshotV1>
+  earlyEncodedBytes: number
+  nextEarlyArrivalOrdinal: number
+  drainingEarlyRoots: boolean
+  sourceSequenceExhausted: boolean
+  sessionGenerationExhausted: boolean
+  gatewayClockFailed: boolean
+  disconnectedSessionGeneration: number | null
   stopped: boolean
   connecting: boolean
   connected: boolean
 }
 
 const CONNECT_TIMEOUT_MS = 5_000
+const MAX_EARLY_NOTIFICATION_BYTES_V1 = 8 * MAX_RUNTIME_BATCH_BYTES_V1
+const encoder = new TextEncoder()
 const NORMALIZED_OPCUA_CLIENT_PUBLICATION_V1: unique symbol = Symbol('normalized-opcua-client-publication-v1')
 const normalizedOpcUaClientPublicationsV1 = new WeakSet<object>()
 
@@ -141,6 +168,119 @@ export function readNormalizedOpcUaClientPublicationV1(
     throw new TypeError('Normalized OPC UA Client publication is invalid.')
   }
   return publication.message
+}
+
+export interface OpcUaClientAdapterPublicationHarnessV1 {
+  lifecycle(phase: 'connected' | 'disconnected'): NormalizedOpcUaClientPublicationV1
+  state(input: Readonly<{
+    readonly rootKey: string
+    readonly value: unknown
+    readonly statusCode: string
+    readonly sourceTimestampMs: number
+  }>): readonly NormalizedOpcUaClientPublicationV1[]
+}
+
+/**
+ * Test-only construction aid for Hub/Gateway fakes.  It intentionally accepts
+ * OPC UA root notifications rather than raw protocol envelopes, so every State
+ * publication follows the real mapping assembly and the module-private
+ * normalization path.
+ */
+export function createOpcUaClientAdapterPublicationHarnessV1(options: Readonly<{
+  readonly project: WorkcellProjectV5
+  readonly endpointId: string
+  readonly gatewayId: string
+  readonly originId: string
+  readonly configRevision: string
+  readonly publisherGeneration?: number
+  readonly nowMs?: () => number
+}>): OpcUaClientAdapterPublicationHarnessV1 {
+  const project = validateWorkcellProjectV5(options.project)
+  const endpoint = compileOpcUaClientReadPlanV1(project)
+    .find((candidate) => candidate.endpointId === options.endpointId)
+  if (endpoint === undefined) {
+    throw new TypeError(`OPC UA Client publication harness requires a read plan for ${options.endpointId}.`)
+  }
+  const publisherGeneration = options.publisherGeneration ?? 1
+  if (!Number.isSafeInteger(publisherGeneration) || publisherGeneration < 1) {
+    throw new TypeError('OPC UA publisher generation must be a positive safe integer.')
+  }
+  const nowMs = options.nowMs ?? Date.now
+  const assembler = createOpcUaClientSnapshotAssemblerV1({ project, endpoint })
+  let nextSequence = 1
+  let sessionGeneration = 0
+  let lastGatewayTimestampMs = 0
+  const nextTimestamp = (): number => {
+    const sample = nowMs()
+    if (!Number.isSafeInteger(sample) || sample < 0) {
+      throw new TypeError('Gateway clock must return a non-negative safe integer.')
+    }
+    lastGatewayTimestampMs = Math.max(lastGatewayTimestampMs, sample)
+    return lastGatewayTimestampMs
+  }
+  const reserve = (count: number): number => {
+    const first = nextSequence
+    const last = first + count - 1
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || last < 1) {
+      throw new Error('OPC_UA_SOURCE_SEQUENCE_EXHAUSTED')
+    }
+    nextSequence = last + 1
+    return first
+  }
+
+  return Object.freeze({
+    lifecycle(phase: 'connected' | 'disconnected'): NormalizedOpcUaClientPublicationV1 {
+      const occurredAtMs = nextTimestamp()
+      if (phase === 'connected') sessionGeneration += 1
+      const sequence = reserve(1)
+      return normalizeOpcUaClientPublicationV1(validateEndpointLifecycleV1({
+        type: 'endpoint-lifecycle-v1',
+        protocolVersion: 1,
+        gatewayId: options.gatewayId,
+        projectId: project.projectId,
+        configRevision: options.configRevision,
+        endpointId: endpoint.endpointId,
+        sequence,
+        originId: options.originId,
+        eventId: endpointLifecycleEventIdV1({ publisherGeneration, sessionGeneration, phase }),
+        publisherGeneration,
+        sessionGeneration,
+        phase,
+        statusCode: phase === 'connected' ? 'Good' : 'BadNoCommunication',
+        occurredAtMs,
+      }))
+    },
+    state(input: Readonly<{
+      readonly rootKey: string
+      readonly value: unknown
+      readonly statusCode: string
+      readonly sourceTimestampMs: number
+    }>): readonly NormalizedOpcUaClientPublicationV1[] {
+      const snapshot = assembler.accept(
+        input.rootKey,
+        input.value,
+        input.statusCode,
+        input.sourceTimestampMs,
+      )
+      if (snapshot === null) return Object.freeze([])
+      const source = Object.freeze({
+        type: 'state-batch-v1' as const,
+        protocolVersion: 1 as const,
+        gatewayId: options.gatewayId,
+        projectId: project.projectId,
+        configRevision: options.configRevision,
+        endpointId: endpoint.endpointId,
+        sequence: 1,
+        sourceTimestampMs: snapshot.sourceTimestampMs,
+        publishedTimestampMs: nextTimestamp(),
+        originId: options.originId,
+        values: snapshot.values,
+      }) as StateBatchV1
+      const chunks = splitStateBatchesV1(source, nextSequence)
+      reserve(chunks.length)
+      return Object.freeze(chunks.map(normalizeOpcUaClientPublicationV1))
+    },
+  })
 }
 
 function isClientMode(project: WorkcellProjectV5): boolean {
@@ -204,17 +344,15 @@ export function createOpcUaClientSnapshotAssemblerV1(
     options.endpoint.monitoredRoots.map((root) => [root.rootKey, root.mappingIds]),
   )
   const retained = new Map<string, { readonly value: RuntimeMappedValueV1['value']; readonly unit: string }>()
-  let nextSequence = 1
-
   const reset = (): void => {
     retained.clear()
   }
 
   return Object.freeze({
     reset,
-    accept(rootKey: string, input: unknown, statusCode: string, sourceTimestampMs: number): void {
+    accept(rootKey: string, input: unknown, statusCode: string, sourceTimestampMs: number): UnsequencedOpcUaClientSnapshotV1 | null {
       const mappingIds = mappingIdsByRootKey.get(rootKey)
-      if (mappingIds === undefined) return
+      if (mappingIds === undefined) return null
       const quality = runtimeQuality(statusCode)
       const values: RuntimeMappedValueV1[] = []
       for (const mappingId of mappingIds) {
@@ -246,23 +384,11 @@ export function createOpcUaClientSnapshotAssemblerV1(
           statusCode: quality === 'GOOD' ? assembled.statusCode : statusCode,
         }))
       }
-      if (values.length === 0) return
-      const source: StateBatchV1 = {
-        type: 'state-batch-v1',
-        protocolVersion: 1,
-        gatewayId: options.gatewayId,
-        projectId: project.projectId,
-        configRevision: options.configRevision,
-        endpointId: options.endpoint.endpointId,
-        sequence: nextSequence,
+      if (values.length === 0) return null
+      return Object.freeze({
         sourceTimestampMs,
-        publishedTimestampMs: options.nowMs(),
-        originId: options.originId,
-        values,
-      }
-      const batches = splitStateBatchesV1(source, nextSequence)
-      nextSequence += batches.length
-      for (const batch of batches) options.publish(batch)
+        values: Object.freeze(values),
+      })
     },
   })
 }
@@ -285,6 +411,10 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
   runtime.session = null
   runtime.client = null
   runtime.assembler?.reset()
+  runtime.earlyRoots.clear()
+  runtime.earlyEncodedBytes = 0
+  runtime.nextEarlyArrivalOrdinal = 1
+  runtime.drainingEarlyRoots = false
   runtime.connected = false
   await terminateGroups(groups)
   if (subscription !== null) await subscription.terminate().catch(() => undefined)
@@ -325,6 +455,8 @@ export function createOpcUaClientAdapterV1(
   if (!Number.isSafeInteger(publisherGeneration) || publisherGeneration < 1) {
     throw new TypeError('OPC UA publisher generation must be a positive safe integer.')
   }
+  const initialSourceSequenceByEndpoint = options.initialSourceSequenceByEndpoint ?? {}
+  const initialSessionGenerationByEndpoint = options.initialSessionGenerationByEndpoint ?? {}
   const runtimes = new Map<string, EndpointRuntimeV1>()
   let lifecycleTail: Promise<void> = Promise.resolve()
 
@@ -335,6 +467,14 @@ export function createOpcUaClientAdapterV1(
       ...(writeMappingIdsByEndpoint.get(endpoint.endpointId) ?? []),
     ])
     const eligible = isClientMode(project) && endpoint.enabled && mappingIds.size > 0
+    const initialSourceSequence = initialSourceSequenceByEndpoint[endpoint.endpointId] ?? 1
+    const initialSessionGeneration = initialSessionGenerationByEndpoint[endpoint.endpointId] ?? 0
+    if (!Number.isSafeInteger(initialSourceSequence) || initialSourceSequence < 1) {
+      throw new TypeError('OPC UA initial source sequence must be a positive safe integer.')
+    }
+    if (!Number.isSafeInteger(initialSessionGeneration) || initialSessionGeneration < 0) {
+      throw new TypeError('OPC UA initial session generation must be a non-negative safe integer.')
+    }
     const runtime: EndpointRuntimeV1 = {
       endpoint,
       readPlan: eligible ? readPlan : null,
@@ -348,10 +488,17 @@ export function createOpcUaClientAdapterV1(
       recovery: null,
       connectTask: null,
       generation: 0,
-      nextSourceSequence: 1,
-      sessionGeneration: 0,
+      nextSourceSequence: initialSourceSequence,
+      sessionGeneration: initialSessionGeneration,
       lastGatewayTimestampMs: 0,
-      earlyBatches: [],
+      earlyRoots: new Map(),
+      earlyEncodedBytes: 0,
+      nextEarlyArrivalOrdinal: 1,
+      drainingEarlyRoots: false,
+      sourceSequenceExhausted: false,
+      sessionGenerationExhausted: false,
+      gatewayClockFailed: false,
+      disconnectedSessionGeneration: null,
       stopped: true,
       connecting: false,
       connected: false,
@@ -366,11 +513,6 @@ export function createOpcUaClientAdapterV1(
       runtime.assembler = createOpcUaClientSnapshotAssemblerV1({
         project,
         endpoint: runtime.readPlan,
-        configRevision: options.configRevision,
-        gatewayId: options.gatewayId,
-        originId: options.originId,
-        nowMs,
-        publish: (batch) => publishState(runtime, batch),
       })
     }
     runtimes.set(endpoint.endpointId, runtime)
@@ -385,24 +527,48 @@ export function createOpcUaClientAdapterV1(
     return runtime.lastGatewayTimestampMs
   }
 
-  function reserveSourceSequence(runtime: EndpointRuntimeV1, terminal = false): number | null {
-    // Keep one final value for the mandatory terminal disconnect while a live
-    // session exists. A fresh adapter activation is the only way to restart.
-    if (runtime.nextSourceSequence > Number.MAX_SAFE_INTEGER || (
-      !terminal && runtime.nextSourceSequence >= Number.MAX_SAFE_INTEGER
-    )) return null
+  function isGatewayClockError(error: unknown): error is TypeError {
+    return error instanceof TypeError
+      && error.message === 'Gateway clock must return a non-negative safe integer.'
+  }
+
+  function reserveSourceSequenceRange(
+    runtime: EndpointRuntimeV1,
+    count: number,
+  ): number | null {
+    // Every non-terminal emission must leave the last safe sequence available
+    // for the one required disconnected lifecycle event.
+    if (!Number.isSafeInteger(count) || count < 1) return null
+    const first = runtime.nextSourceSequence
+    const last = first + count - 1
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || last >= Number.MAX_SAFE_INTEGER) {
+      return null
+    }
+    runtime.nextSourceSequence = last + 1
+    return first
+  }
+
+  function reserveTerminalSourceSequence(runtime: EndpointRuntimeV1): number | null {
     const sequence = runtime.nextSourceSequence
-    runtime.nextSourceSequence += 1
+    if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence > Number.MAX_SAFE_INTEGER) {
+      return null
+    }
+    runtime.nextSourceSequence = sequence + 1
     return sequence
   }
 
-  function publishLifecycle(runtime: EndpointRuntimeV1, phase: 'connected' | 'disconnected'): boolean {
-    const sequence = reserveSourceSequence(runtime, phase === 'disconnected')
+  function publishLifecycle(
+    runtime: EndpointRuntimeV1,
+    phase: 'connected' | 'disconnected',
+    occurredAtMs = nextGatewayTimestamp(runtime),
+  ): boolean {
+    const sequence = phase === 'disconnected'
+      ? reserveTerminalSourceSequence(runtime)
+      : reserveSourceSequenceRange(runtime, 1)
     if (sequence === null) {
-      runtime.lastError = diagnosticError(new Error('OPC_UA_SOURCE_SEQUENCE_EXHAUSTED'), nextGatewayTimestamp(runtime))
+      runtime.lastError = diagnosticError(new Error('OPC_UA_SOURCE_SEQUENCE_EXHAUSTED'), runtime.lastGatewayTimestampMs)
       return false
     }
-    const occurredAtMs = nextGatewayTimestamp(runtime)
     const message = validateEndpointLifecycleV1({
       type: 'endpoint-lifecycle-v1',
       protocolVersion: 1,
@@ -427,40 +593,189 @@ export function createOpcUaClientAdapterV1(
     return true
   }
 
-  function publishState(runtime: EndpointRuntimeV1, source: StateBatchV1): void {
-    if (!runtime.connected) {
-      runtime.earlyBatches.push(source)
-      return
-    }
-    const sequence = reserveSourceSequence(runtime)
-    if (sequence === null) {
-      runtime.lastError = diagnosticError(new Error('OPC_UA_SOURCE_SEQUENCE_EXHAUSTED'), nextGatewayTimestamp(runtime))
-      return
-    }
-    const message = validateStateBatchV1({
-      ...source,
-      sequence,
-      publishedTimestampMs: nextGatewayTimestamp(runtime),
-    })
-    options.publish(normalizeOpcUaClientPublicationV1(message))
+  function publishDisconnectedForSession(runtime: EndpointRuntimeV1): boolean {
+    if (runtime.disconnectedSessionGeneration === runtime.sessionGeneration) return false
+    const occurredAtMs = nextGatewayTimestamp(runtime)
+    // Mark before the external publication callout. Reentrant recovery/stop
+    // signals for this same Session therefore cannot create a second barrier.
+    runtime.disconnectedSessionGeneration = runtime.sessionGeneration
+    return publishLifecycle(runtime, 'disconnected', occurredAtMs)
   }
 
-  function publishEarlyBatches(runtime: EndpointRuntimeV1): void {
-    while (runtime.earlyBatches.length > 0 && runtime.connected) {
-      const source = runtime.earlyBatches.shift()
-      if (source !== undefined) publishState(runtime, source)
+  function exhaustSourceSequence(runtime: EndpointRuntimeV1): void {
+    if (runtime.sourceSequenceExhausted) return
+    const wasLive = runtime.connected
+    runtime.sourceSequenceExhausted = true
+    // Fence callbacks before the terminal barrier so a notification from the
+    // lost Session cannot follow its disconnected lifecycle event.
+    runtime.generation += 1
+    if (wasLive) {
+      try {
+        publishDisconnectedForSession(runtime)
+      } catch {
+        // The exact exhaustion diagnostic below remains authoritative.
+      }
     }
+    runtime.connected = false
+    clearEarlyRoots(runtime)
+    runtime.lastError = diagnosticError(
+      new Error('OPC_UA_SOURCE_SEQUENCE_EXHAUSTED'),
+      runtime.lastGatewayTimestampMs,
+    )
+    const recovery = closeRuntime(runtime).catch(() => undefined)
+    runtime.recovery = recovery
+    void recovery.finally(() => {
+      if (runtime.recovery === recovery) runtime.recovery = null
+    })
+  }
+
+  function createStateSource(
+    runtime: EndpointRuntimeV1,
+    snapshot: UnsequencedOpcUaClientSnapshotV1,
+  ): StateBatchV1 {
+    return createStateSourceAt(runtime, snapshot, nextGatewayTimestamp(runtime))
+  }
+
+  function createStateSourceAt(
+    runtime: EndpointRuntimeV1,
+    snapshot: UnsequencedOpcUaClientSnapshotV1,
+    publishedTimestampMs: number,
+  ): StateBatchV1 {
+    // A logical snapshot can exceed the wire-byte limit and therefore cannot
+    // be validated as one StateBatch before the splitter forms bounded chunks.
+    // Its values originate only from the typed assembler above; each emitted
+    // chunk is validated by splitStateBatchesV1.
+    return Object.freeze({
+      type: 'state-batch-v1',
+      protocolVersion: 1,
+      gatewayId: options.gatewayId,
+      projectId: project.projectId,
+      configRevision: options.configRevision,
+      endpointId: runtime.endpoint.endpointId,
+      // This is a placeholder solely for the splitter's preflight count. The
+      // adapter replaces it with an atomically reserved source range below.
+      sequence: 1,
+      sourceTimestampMs: snapshot.sourceTimestampMs,
+      publishedTimestampMs,
+      originId: options.originId,
+      values: snapshot.values,
+    }) as StateBatchV1
+  }
+
+  function clearEarlyRoots(runtime: EndpointRuntimeV1): void {
+    runtime.earlyRoots.clear()
+    runtime.earlyEncodedBytes = 0
+    runtime.nextEarlyArrivalOrdinal = 1
+    runtime.drainingEarlyRoots = false
+  }
+
+  function encodedEarlySnapshotBytes(
+    runtime: EndpointRuntimeV1,
+    snapshot: UnsequencedOpcUaClientSnapshotV1,
+  ): number {
+    // Early buffering must account for the derived State frames, including
+    // envelope repetition and high sequence-digit overhead, without sampling
+    // the live clock or consuming a source counter.
+    try {
+      const chunks = splitStateBatchesV1(
+        createStateSourceAt(runtime, snapshot, Number.MAX_SAFE_INTEGER),
+        Number.MAX_SAFE_INTEGER - MAX_RUNTIME_STATE_VALUES_V1,
+      )
+      return chunks.reduce(
+        (bytes, batch) => bytes + encoder.encode(JSON.stringify(batch)).byteLength,
+        0,
+      )
+    } catch {
+      // A root which cannot form a bounded State frame is necessarily beyond
+      // the complete early-notification budget.
+      return MAX_EARLY_NOTIFICATION_BYTES_V1 + 1
+    }
+  }
+
+  function bufferEarlySnapshot(
+    runtime: EndpointRuntimeV1,
+    rootKey: string,
+    snapshot: UnsequencedOpcUaClientSnapshotV1,
+  ): void {
+    const previous = runtime.earlyRoots.get(rootKey)
+    if (previous !== undefined) runtime.earlyEncodedBytes -= previous.encodedBytes
+    const entry: EarlyRootSnapshotV1 = Object.freeze({
+      rootKey,
+      snapshot,
+      arrivalOrdinal: runtime.nextEarlyArrivalOrdinal,
+      encodedBytes: encodedEarlySnapshotBytes(runtime, snapshot),
+    })
+    runtime.nextEarlyArrivalOrdinal += 1
+    runtime.earlyRoots.set(rootKey, entry)
+    runtime.earlyEncodedBytes += entry.encodedBytes
+    const rootLimit = runtime.readPlan?.monitoredRoots.length ?? 0
+    if (
+      runtime.earlyRoots.size > rootLimit
+      || runtime.earlyEncodedBytes > MAX_EARLY_NOTIFICATION_BYTES_V1
+    ) {
+      recover(runtime, new Error('OPC_UA_EARLY_NOTIFICATION_CAPACITY_EXCEEDED'))
+    }
+  }
+
+  function drainEarlySnapshots(runtime: EndpointRuntimeV1): void {
+    while (runtime.connected && runtime.earlyRoots.size > 0) {
+      const next = [...runtime.earlyRoots.values()]
+        .sort((left, right) => left.arrivalOrdinal - right.arrivalOrdinal)[0]
+      if (next === undefined) break
+      runtime.earlyRoots.delete(next.rootKey)
+      runtime.earlyEncodedBytes -= next.encodedBytes
+      publishState(runtime, createStateSource(runtime, next.snapshot))
+    }
+    if (runtime.connected) runtime.drainingEarlyRoots = false
+  }
+
+  function publishState(runtime: EndpointRuntimeV1, source: StateBatchV1): boolean {
+    if (!runtime.connected || runtime.sourceSequenceExhausted) return false
+    // Split using the exact next source sequence before reservation.  Decimal
+    // digit growth changes JSON byte length near the safe-integer boundary;
+    // preflighting at sequence 1 can otherwise reserve too short a range.
+    const firstSequence = runtime.nextSourceSequence
+    let batches: readonly StateBatchV1[]
+    try {
+      batches = splitStateBatchesV1(source, firstSequence)
+    } catch (error) {
+      if (
+        error instanceof RuntimeStreamTimelineErrorV1
+        && error.code === 'RUNTIME_STATE_WIRE_SEQUENCE_EXHAUSTED'
+      ) {
+        exhaustSourceSequence(runtime)
+        return false
+      }
+      throw error
+    }
+    const reservedFirstSequence = reserveSourceSequenceRange(runtime, batches.length)
+    if (reservedFirstSequence === null) {
+      exhaustSourceSequence(runtime)
+      return false
+    }
+    for (const batch of batches) options.publish(normalizeOpcUaClientPublicationV1(batch))
+    return true
   }
 
   function scheduleReconnect(runtime: EndpointRuntimeV1): void {
     if (
       runtime.stopped
+      || runtime.sourceSequenceExhausted
+      || runtime.sessionGenerationExhausted
+      || runtime.gatewayClockFailed
       || runtime.reconnectTimer !== null
       || runtime.recovery !== null
       || runtime.connecting
       || runtime.connected
     ) return
-    runtime.nextRetryAtMs = nowMs() + runtime.endpoint.reconnectDelayMs
+    try {
+      runtime.nextRetryAtMs = nextGatewayTimestamp(runtime) + runtime.endpoint.reconnectDelayMs
+    } catch (error) {
+      runtime.gatewayClockFailed = true
+      runtime.lastError = diagnosticError(error, runtime.lastGatewayTimestampMs)
+      runtime.nextRetryAtMs = null
+      return
+    }
     runtime.reconnectTimer = setTimeout(() => {
       runtime.reconnectTimer = null
       runtime.nextRetryAtMs = null
@@ -469,7 +784,11 @@ export function createOpcUaClientAdapterV1(
   }
 
   function startConnect(runtime: EndpointRuntimeV1): void {
-    if (runtime.connectTask !== null) return
+    if (
+      runtime.connectTask !== null
+      || runtime.sessionGenerationExhausted
+      || runtime.gatewayClockFailed
+    ) return
     const task = connect(runtime)
     runtime.connectTask = task
     void task.finally(() => {
@@ -478,21 +797,44 @@ export function createOpcUaClientAdapterV1(
   }
 
   function recover(runtime: EndpointRuntimeV1, error: unknown): void {
-    if (runtime.stopped || runtime.recovery !== null) return
+    if (
+      runtime.stopped
+      || runtime.sourceSequenceExhausted
+      || runtime.recovery !== null
+    ) return
     const wasLive = runtime.connected
     runtime.generation += 1
+    // Mark the Session non-live before the publication callout.  This fences
+    // repeated/reentrant transport loss signals even if clock validation
+    // prevents the terminal lifecycle message from being constructed.
+    runtime.connected = false
+    clearEarlyRoots(runtime)
+    let diagnostic = error
     if (wasLive) {
       try {
-        publishLifecycle(runtime, 'disconnected')
+        publishDisconnectedForSession(runtime)
       } catch (publishError) {
-        runtime.lastError = diagnosticError(publishError, nextGatewayTimestamp(runtime))
+        diagnostic = publishError
       }
     }
-    runtime.connected = false
-    runtime.earlyBatches = []
-    runtime.lastError = diagnosticError(error, nowMs())
+    if (runtime.nextSourceSequence > Number.MAX_SAFE_INTEGER) {
+      exhaustSourceSequence(runtime)
+      return
+    }
+    if (isGatewayClockError(diagnostic)) runtime.gatewayClockFailed = true
+    runtime.lastError = diagnosticError(diagnostic, runtime.lastGatewayTimestampMs)
     runtime.reconnectAttempt += 1
-    runtime.nextRetryAtMs = nowMs() + runtime.endpoint.reconnectDelayMs
+    if (runtime.gatewayClockFailed) {
+      runtime.nextRetryAtMs = null
+    } else {
+      try {
+        runtime.nextRetryAtMs = nextGatewayTimestamp(runtime) + runtime.endpoint.reconnectDelayMs
+      } catch (clockError) {
+        runtime.gatewayClockFailed = true
+        runtime.nextRetryAtMs = null
+        runtime.lastError = diagnosticError(clockError, runtime.lastGatewayTimestampMs)
+      }
+    }
     const recovery = closeRuntime(runtime).catch(() => undefined)
     runtime.recovery = recovery
     void recovery.finally(() => {
@@ -526,7 +868,19 @@ export function createOpcUaClientAdapterV1(
         const sourceTimestampMs = dataValue.sourceTimestamp?.getTime()
           ?? dataValue.serverTimestamp?.getTime()
           ?? nowMs()
-        runtime.assembler?.accept(root.rootKey, dataValue.value.value, statusCode, sourceTimestampMs)
+        const snapshot = runtime.assembler?.accept(
+          root.rootKey,
+          dataValue.value.value,
+          statusCode,
+          sourceTimestampMs,
+        )
+        if (snapshot !== null && snapshot !== undefined) {
+          if (runtime.connected && !runtime.drainingEarlyRoots) {
+            publishState(runtime, createStateSource(runtime, snapshot))
+          } else {
+            bufferEarlySnapshot(runtime, root.rootKey, snapshot)
+          }
+        }
       } catch (error) {
         runtime.lastError = diagnosticError(error, nowMs())
       }
@@ -540,6 +894,9 @@ export function createOpcUaClientAdapterV1(
   async function connect(runtime: EndpointRuntimeV1): Promise<void> {
     if (
       runtime.stopped
+      || runtime.sourceSequenceExhausted
+      || runtime.sessionGenerationExhausted
+      || runtime.gatewayClockFailed
       || runtime.connecting
       || runtime.connected
       || runtime.recovery !== null
@@ -603,15 +960,23 @@ export function createOpcUaClientAdapterV1(
       }
       if (!active()) return
       if (runtime.sessionGeneration >= Number.MAX_SAFE_INTEGER) {
+        runtime.sessionGenerationExhausted = true
         throw new Error('OPC_UA_SESSION_GENERATION_EXHAUSTED')
       }
+      // Validate the clock before mutating a Session generation or reserving a
+      // lifecycle source sequence. A bad injected clock must be retryable.
+      const connectedOccurredAtMs = nextGatewayTimestamp(runtime)
       runtime.sessionGeneration += 1
+      runtime.disconnectedSessionGeneration = null
       runtime.connected = true
-      if (!publishLifecycle(runtime, 'connected')) {
+      runtime.drainingEarlyRoots = true
+      if (!publishLifecycle(runtime, 'connected', connectedOccurredAtMs)) {
         runtime.connected = false
+        exhaustSourceSequence(runtime)
         return
       }
-      publishEarlyBatches(runtime)
+      drainEarlySnapshots(runtime)
+      if (!runtime.connected || runtime.sourceSequenceExhausted) return
       runtime.reconnectAttempt = 0
       runtime.nextRetryAtMs = null
       runtime.lastError = null
@@ -624,6 +989,9 @@ export function createOpcUaClientAdapterV1(
       }
       if (
         !runtime.stopped
+        && !runtime.sourceSequenceExhausted
+        && !runtime.sessionGenerationExhausted
+        && !runtime.gatewayClockFailed
         && runtime.recovery === null
         && !runtime.connected
         && runtime.reconnectTimer === null
@@ -665,18 +1033,23 @@ export function createOpcUaClientAdapterV1(
         runtime.generation += 1
         if (wasLive) {
           try {
-            publishLifecycle(runtime, 'disconnected')
+            publishDisconnectedForSession(runtime)
           } catch (error) {
-            runtime.lastError = diagnosticError(error, nextGatewayTimestamp(runtime))
+            // A failed clock must not be sampled again merely to decorate a
+            // stop diagnostic: cleanup remains unconditional.
+            runtime.lastError = diagnosticError(error, runtime.lastGatewayTimestampMs)
           }
         }
-        runtime.earlyBatches = []
+        clearEarlyRoots(runtime)
         runtime.reconnectAttempt = 0
         runtime.nextRetryAtMs = null
-        await closeRuntime(runtime)
-        await runtime.recovery
-        await runtime.connectTask
-        await closeRuntime(runtime)
+        try {
+          await closeRuntime(runtime)
+          await runtime.recovery
+          await runtime.connectTask
+        } finally {
+          await closeRuntime(runtime)
+        }
       }))
     }),
     status: () => Object.freeze([...runtimes.values()].map((runtime) => Object.freeze({

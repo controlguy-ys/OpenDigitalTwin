@@ -25,12 +25,16 @@ import type {
   OpcUaClientAdapterOptionsV1,
   OpcUaClientAdapterV1,
 } from './opcua-client-adapter.js'
+import { createOpcUaClientAdapterPublicationHarnessV1 } from './opcua-client-adapter.js'
+import { compileOpcUaClientReadPlanV1 } from './opcua-client-read-plan.js'
 import {
   MAX_RUNTIME_BATCH_BYTES_V1,
   type StateBatchV1,
 } from '../../src/core/runtime-protocol/v1.js'
 import { validateRuntimeGatewayStatusV1 } from '../../src/core/runtime-protocol/gateway-status-v1.js'
 import { createStateBatchHubV1 } from './state-batch-hub.js'
+
+let createPublicationHarnessV1 = createOpcUaClientAdapterPublicationHarnessV1
 
 async function importMain() {
   return import('./main.js')
@@ -104,6 +108,90 @@ function sampleProject(
   ;(project as unknown as { revisionId: string }).revisionId = revisionId
   ;(project.opcUa as unknown as { mode: WorkcellProjectV5['opcUa']['mode'] }).mode = mode
   return validateWorkcellProjectV5(project)
+}
+
+function clientPublicationHarness(
+  project: WorkcellProjectV5,
+  configRevision: string,
+  publisherGeneration = 1,
+) {
+  const endpoint = project.opcUa.endpoints[0]!
+  const harness = createPublicationHarnessV1({
+    project,
+    endpointId: endpoint.endpointId,
+    gatewayId: 'test-gateway',
+    originId: 'test-gateway:opcua-client',
+    configRevision,
+    publisherGeneration,
+  })
+  const roots = compileOpcUaClientReadPlanV1(project)[0]!.monitoredRoots
+  const rootKeyForMapping = (mappingId: string): string => {
+    const root = roots.find(({ mappingIds }) => mappingIds.includes(mappingId))
+    if (root === undefined) throw new Error(`Missing test monitored root for ${mappingId}.`)
+    return root.rootKey
+  }
+  return Object.freeze({
+    connected: () => harness.lifecycle('connected'),
+    disconnected: () => harness.lifecycle('disconnected'),
+    booleanState: (value: boolean, sourceTimestampMs = 1) => harness.state({
+      rootKey: rootKeyForMapping('mapping-1'), value, statusCode: 'Good', sourceTimestampMs,
+    }),
+    state: (
+      mappingId: string,
+      value: unknown,
+      sourceTimestampMs = 1,
+      statusCode = 'Good',
+    ) => harness.state({ rootKey: rootKeyForMapping(mappingId), value, statusCode, sourceTimestampMs }),
+  })
+}
+
+interface TestReadMappingSpecV1 {
+  readonly mappingId: string
+  readonly signalId: string
+  readonly dataType: 'Boolean' | 'Double' | 'String'
+  readonly projectDataType: 'boolean' | 'number' | 'string'
+  readonly initialValue: boolean | number | string
+  readonly unit: string
+}
+
+function clientProjectWithReadMappings(
+  revisionId: string,
+  mappings: readonly TestReadMappingSpecV1[],
+  mode: 'client' | 'bridge' = 'client',
+): WorkcellProjectV5 {
+  const source = sampleProject(mode, revisionId)
+  const baseMapping = source.opcUa.mappings[0]!
+  const baseLeaf = baseMapping.leaves[0]!
+  return validateWorkcellProjectV5({
+    ...source,
+    logicalSignals: mappings.map((mapping) => ({
+      id: mapping.signalId,
+      name: mapping.signalId,
+      dataType: mapping.dataType,
+      direction: 'input',
+      initialValue: mapping.initialValue,
+      unit: mapping.unit,
+      scope: { type: 'project' as const },
+    })),
+    opcUa: {
+      ...source.opcUa,
+      mappings: mappings.map((mapping) => ({
+        ...baseMapping,
+        id: mapping.mappingId,
+        nodeAddress: {
+          ...baseMapping.nodeAddress,
+          identifier: `Signals.${mapping.mappingId}`,
+        },
+        leaves: [{
+          ...baseLeaf,
+          projectTarget: { type: 'logical-signal' as const, signalId: mapping.signalId },
+          opcUaDataType: mapping.dataType,
+          projectDataType: mapping.projectDataType,
+          unit: mapping.unit,
+        }],
+      })),
+    },
+  })
 }
 
 function projectWithReservedJointId(): WorkcellProjectV5 {
@@ -214,22 +302,6 @@ function fakeClientAdapter(): {
 
 function gatewayStatus(value: unknown) {
   return validateRuntimeGatewayStatusV1(value)
-}
-
-function singleMappingBatchAtExactEncodedSize(
-  source: StateBatchV1,
-  byteLength: number,
-): StateBatchV1 {
-  const emptyValueSource = {
-    ...source,
-    values: [{ ...source.values[0]!, value: '' }],
-  }
-  const padding = byteLength - new TextEncoder().encode(JSON.stringify(emptyValueSource)).byteLength
-  if (padding < 0) throw new Error('Requested batch size is below its fixed envelope.')
-  return {
-    ...emptyValueSource,
-    values: [{ ...emptyValueSource.values[0]!, value: 'x'.repeat(padding) }],
-  }
 }
 
 async function requestJson(
@@ -475,20 +547,19 @@ describe('runtime Gateway entrypoint', () => {
 
       await service.start()
       expect(createStateBatchHub).toHaveBeenCalledTimes(3)
-      restartedSocket = await openWebSocket(port)
       const project = sampleProject('client', 'revision-hub-reset-restarted')
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      restartedSocket = await openWebSocket(port)
+      const publications = clientPublicationHarness(
+        project,
+        clientOptions!.configRevision,
+        clientOptions!.publisherGeneration,
+      )
+      const connected = nextWebSocketMessage(restartedSocket)
+      clientOptions!.publish(publications.connected())
+      expect(JSON.parse(await connected)).toMatchObject({ type: 'endpoint-lifecycle-v1', phase: 'connected' })
       const nextMessage = nextWebSocketMessage(restartedSocket)
-      clientOptions!.publish({
-        type: 'state-batch-v1', protocolVersion: 1, gatewayId: 'test-gateway',
-        projectId: project.projectId, configRevision: clientOptions!.configRevision,
-        endpointId: 'endpoint-1', sequence: 1, sourceTimestampMs: 1, publishedTimestampMs: 1,
-        originId: 'test-gateway:opcua-client',
-        values: [{
-          mappingId: 'mapping-1', coherenceGroupId: null, value: true, unit: '',
-          quality: 'GOOD', statusCode: 'Good',
-        }],
-      })
+      for (const publication of publications.booleanState(true)) clientOptions!.publish(publication)
       await expect(nextMessage).resolves.toContain('"mappingId":"mapping-1"')
       expect(restartedSocket.readyState).toBe(WebSocket.OPEN)
     } finally {
@@ -965,6 +1036,8 @@ describe('runtime Gateway entrypoint', () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
     await importMain()
+    const currentAdapterModule = await import('./opcua-client-adapter.js')
+    createPublicationHarnessV1 = currentAdapterModule.createOpcUaClientAdapterPublicationHarnessV1
 
     expect(process.listenerCount('SIGINT')).toBe(signalCounts.SIGINT)
     expect(process.listenerCount('SIGTERM')).toBe(signalCounts.SIGTERM)
@@ -1148,11 +1221,13 @@ describe('runtime Gateway entrypoint', () => {
     const port = await findAvailablePort()
     const client = fakeClientAdapter()
     let publish: OpcUaClientAdapterOptionsV1['publish'] | null = null
+    let clientOptions: OpcUaClientAdapterOptionsV1 | null = null
     const service = createRuntimeGatewayEntrypointService(
       createTestConfig(port),
       {
         createOpcUaClientAdapter: (_project, options) => {
           publish = options.publish
+          clientOptions = options
           return client.adapter
         },
       },
@@ -1164,33 +1239,28 @@ describe('runtime Gateway entrypoint', () => {
     let socket: WebSocket | null = null
     try {
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
-      socket = await openWebSocket(port)
-      const message = nextWebSocketMessage(socket)
-      publish!({
-        type: 'state-batch-v1',
-        protocolVersion: 1,
-        gatewayId: 'test-gateway',
-        projectId: project.projectId,
-        configRevision,
-        endpointId: 'endpoint-sample-server',
-        sequence: 1,
-        sourceTimestampMs: 1,
-        publishedTimestampMs: 1,
-        originId: 'test-gateway:opcua-client',
-        values: [{
-          mappingId: 'mapping-sample-crb-j1',
-          coherenceGroupId: null,
-          value: 10,
-          unit: 'degree',
-          quality: 'GOOD',
-          statusCode: 'Good',
-        }],
+      socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
+      const received: StateBatchV1[] = []
+      socket.on('message', (data) => received.push(JSON.parse(data.toString()) as StateBatchV1))
+      await new Promise<void>((resolve, reject) => {
+        socket!.once('open', resolve)
+        socket!.once('error', reject)
       })
-      expect(JSON.parse(await message)).toMatchObject({
-        type: 'state-batch-v1',
-        projectId: project.projectId,
+      const adapterPublications = clientPublicationHarness(
+        project,
         configRevision,
-        values: [{ mappingId: 'mapping-sample-crb-j1', value: 10 }],
+        clientOptions!.publisherGeneration,
+      )
+      publish!(adapterPublications.connected())
+      for (const publication of adapterPublications.booleanState(true)) publish!(publication)
+      await expect.poll(() => received.map(({ type }) => type)).toEqual([
+        'endpoint-lifecycle-v1',
+        'endpoint-catchup-boundary-v1',
+        'state-batch-v1',
+        'endpoint-catchup-boundary-v1',
+      ])
+      expect(received[2]).toMatchObject({
+        projectId: project.projectId, configRevision, values: [{ mappingId: 'mapping-1', value: true }],
       })
     } finally {
       socket?.close()
@@ -1204,29 +1274,11 @@ describe('runtime Gateway entrypoint', () => {
     let adapterIndex = 0
     const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV5, options) => {
       const value = ++adapterIndex
+      const publications = clientPublicationHarness(_project, options.configRevision, options.publisherGeneration)
       const adapter: OpcUaClientAdapterV1 = {
         start: async () => {
-          options.publish({
-            type: 'state-batch-v1',
-            protocolVersion: 1,
-            gatewayId: 'test-gateway',
-            projectId: _project.projectId,
-            configRevision: options.configRevision,
-            endpointId: 'endpoint-sample-server',
-            sequence: 1,
-            sourceTimestampMs: value,
-            publishedTimestampMs: value,
-
-            originId: 'test-gateway:opcua-client',
-            values: [{
-              mappingId: 'mapping-synchronous-start',
-              coherenceGroupId: null,
-              value,
-              unit: 'degree',
-              quality: 'GOOD',
-              statusCode: 'Good',
-            }],
-          })
+          options.publish(publications.connected())
+          for (const publication of publications.booleanState(value % 2 === 0, value)) options.publish(publication)
         },
         stop: async () => undefined,
         write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
@@ -1244,33 +1296,90 @@ describe('runtime Gateway entrypoint', () => {
     let socket: WebSocket | null = null
     let replaySocket: WebSocket | null = null
     try {
-      socket = await openWebSocket(port)
-      const initial = nextWebSocketMessage(socket)
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
-      expect(JSON.parse(await initial)).toMatchObject({
-        sequence: 1,
-        values: [{ mappingId: 'mapping-synchronous-start', value: 1 }],
+      socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
+      const received: StateBatchV1[] = []
+      socket.on('message', (data) => received.push(JSON.parse(data.toString()) as StateBatchV1))
+      await new Promise<void>((resolve, reject) => {
+        socket!.once('open', resolve)
+        socket!.once('error', reject)
       })
+      await expect.poll(() => received.map(({ type }) => type)).toEqual([
+        'endpoint-replay-boundary-v1',
+        'endpoint-lifecycle-v1',
+        'state-batch-v1',
+        'endpoint-replay-boundary-v1',
+      ])
+      expect(received[2]).toMatchObject({ values: [{ mappingId: 'mapping-1', value: false }] })
 
       replaySocket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
-      const replay = nextWebSocketMessage(replaySocket)
+      const replayed: StateBatchV1[] = []
+      replaySocket.on('message', (data) => replayed.push(JSON.parse(data.toString()) as StateBatchV1))
       await new Promise<void>((resolve, reject) => {
         replaySocket!.once('open', resolve)
         replaySocket!.once('error', reject)
       })
-      expect(JSON.parse(await replay)).toMatchObject({
-        values: [{ mappingId: 'mapping-synchronous-start', value: 1 }],
-      })
+      await expect.poll(() => replayed.map(({ type }) => type)).toEqual([
+        'endpoint-replay-boundary-v1',
+        'endpoint-lifecycle-v1',
+        'state-batch-v1',
+        'endpoint-replay-boundary-v1',
+      ])
+      expect(replayed[2]).toMatchObject({ values: [{ mappingId: 'mapping-1', value: false }] })
 
-      const replacement = nextWebSocketMessage(socket)
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
-      expect(JSON.parse(await replacement)).toMatchObject({
-        sequence: 3,
-        values: [{ mappingId: 'mapping-synchronous-start', value: 2 }],
-      })
+      await expect.poll(() => received.filter(({ type }) => type === 'state-batch-v1')
+        .map(({ values }) => values[0]?.value)).toEqual([false, true])
       expect(createOpcUaClientAdapter).toHaveBeenCalledTimes(2)
     } finally {
       replaySocket?.close()
+      socket?.close()
+      await service.stop()
+    }
+  })
+
+  it('includes a synchronous pre-seal injected candidate publication in the sealed activation cut', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    let inject: (() => void) | null = null
+    const beforeCandidateTimelineSealForTest = vi.fn(() => { inject?.() })
+    const createOpcUaClientAdapter = vi.fn((project: WorkcellProjectV5, options: OpcUaClientAdapterOptionsV1) => {
+      const publications = clientPublicationHarness(project, options.configRevision, options.publisherGeneration)
+      inject = () => {
+        for (const publication of publications.booleanState(true, 2)) options.publish(publication)
+      }
+      return {
+        start: async () => { options.publish(publications.connected()) },
+        stop: async () => undefined,
+        write: async () => ({ ok: false as const, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
+        status: () => [],
+      }
+    })
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter,
+      beforeCandidateTimelineSealForTest,
+    } as never)
+    const project = sampleProject('client', 'revision-pre-seal-injection')
+    await service.start()
+    let socket: WebSocket | null = null
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      expect(beforeCandidateTimelineSealForTest).toHaveBeenCalledOnce()
+      socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
+      const received: Array<Record<string, unknown>> = []
+      socket.on('message', (data) => received.push(JSON.parse(data.toString()) as Record<string, unknown>))
+      await new Promise<void>((resolve, reject) => {
+        socket!.once('open', resolve)
+        socket!.once('error', reject)
+      })
+      await expect.poll(() => received.map(({ type }) => type)).toEqual([
+        'endpoint-replay-boundary-v1',
+        'endpoint-lifecycle-v1',
+        'state-batch-v1',
+        'endpoint-replay-boundary-v1',
+      ])
+      expect((received[2] as unknown as StateBatchV1).values[0]).toMatchObject({ value: true })
+    } finally {
       socket?.close()
       await service.stop()
     }
@@ -1280,39 +1389,12 @@ describe('runtime Gateway entrypoint', () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV5, options) => {
+      const publications = clientPublicationHarness(_project, options.configRevision, options.publisherGeneration)
       const adapter: OpcUaClientAdapterV1 = {
         start: async () => {
-          options.publish({
-            type: 'state-batch-v1',
-            protocolVersion: 1,
-            gatewayId: 'test-gateway',
-            projectId: _project.projectId,
-            configRevision: options.configRevision,
-            endpointId: 'endpoint-sample-server',
-            sequence: 1,
-            sourceTimestampMs: 1,
-            publishedTimestampMs: 1,
-            originId: 'test-gateway:opcua-client',
-            values: [
-              {
-                mappingId: 'mapping-object-box-x',
-                coherenceGroupId: null,
-                value: 1.5,
-
-                unit: 'meter',
-                quality: 'GOOD',
-                statusCode: 'Good',
-              },
-              {
-                mappingId: 'mapping-object-box-status',
-                coherenceGroupId: null,
-                value: 92,
-                unit: 'status-code',
-                quality: 'GOOD',
-                statusCode: 'Good',
-              },
-            ],
-          })
+          options.publish(publications.connected())
+          for (const publication of publications.state('mapping-object-box-x', 1.5, 1)) options.publish(publication)
+          for (const publication of publications.state('mapping-object-box-status', 92, 2)) options.publish(publication)
         },
         stop: async () => undefined,
         write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
@@ -1324,19 +1406,26 @@ describe('runtime Gateway entrypoint', () => {
       createTestConfig(port),
       { createOpcUaClientAdapter },
     )
-    const project = sampleProject('client', 'revision-synchronous-multi-channel')
+    const project = clientProjectWithReadMappings('revision-synchronous-multi-channel', [
+      { mappingId: 'mapping-object-box-x', signalId: 'box-x', dataType: 'Double', projectDataType: 'number', initialValue: 0, unit: 'meter' },
+      { mappingId: 'mapping-object-box-status', signalId: 'box-status', dataType: 'Double', projectDataType: 'number', initialValue: 0, unit: 'status-code' },
+    ])
 
     await service.start()
     let socket: WebSocket | null = null
     try {
-      socket = await openWebSocket(port)
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
       const received: StateBatchV1[] = []
       socket.on('message', (data) => {
         received.push(JSON.parse(data.toString()) as StateBatchV1)
       })
-      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      await new Promise<void>((resolve, reject) => {
+        socket!.once('open', resolve)
+        socket!.once('error', reject)
+      })
       await expect.poll(
-        () => received.flatMap(({ values }) => values.map(({ mappingId, value }) => ({ mappingId, value })))
+        () => received.filter(({ type }) => type === 'state-batch-v1').flatMap(({ values }) => values.map(({ mappingId, value }) => ({ mappingId, value })))
           .sort((left, right) => left.mappingId.localeCompare(right.mappingId)),
       ).toEqual([
         { mappingId: 'mapping-object-box-status', value: 92 },
@@ -1353,37 +1442,13 @@ describe('runtime Gateway entrypoint', () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV5, options) => {
-      const publish = (
-        sequence: number,
-        mappingId: string,
-        value: number,
-        unit: string,
-      ) => options.publish({
-        type: 'state-batch-v1',
-        protocolVersion: 1,
-        gatewayId: 'test-gateway',
-        projectId: _project.projectId,
-        configRevision: options.configRevision,
-        endpointId: 'endpoint-sample-server',
-        sequence,
-        sourceTimestampMs: sequence,
-        publishedTimestampMs: sequence,
-        originId: 'test-gateway:opcua-client',
-        values: [{
-          mappingId,
-          coherenceGroupId: null,
-          value,
-          unit,
-          quality: 'GOOD',
-          statusCode: 'Good',
-        }],
-      })
+      const publications = clientPublicationHarness(_project, options.configRevision, options.publisherGeneration)
       const adapter: OpcUaClientAdapterV1 = {
         start: async () => {
-
-          publish(1, 'mapping-object-box-status', 91, 'status-code')
+          options.publish(publications.connected())
+          for (const publication of publications.state('mapping-object-box-status', 91, 1)) options.publish(publication)
           for (let sequence = 2; sequence <= 130; sequence += 1) {
-            publish(sequence, 'mapping-object-box-x', sequence, 'meter')
+            for (const publication of publications.state('mapping-object-box-x', sequence, sequence)) options.publish(publication)
           }
         },
         stop: async () => undefined,
@@ -1396,19 +1461,26 @@ describe('runtime Gateway entrypoint', () => {
       createTestConfig(port),
       { createOpcUaClientAdapter },
     )
-    const project = sampleProject('client', 'revision-synchronous-channel-retention')
+    const project = clientProjectWithReadMappings('revision-synchronous-channel-retention', [
+      { mappingId: 'mapping-object-box-x', signalId: 'box-x', dataType: 'Double', projectDataType: 'number', initialValue: 0, unit: 'meter' },
+      { mappingId: 'mapping-object-box-status', signalId: 'box-status', dataType: 'Double', projectDataType: 'number', initialValue: 0, unit: 'status-code' },
+    ])
 
     await service.start()
     let socket: WebSocket | null = null
     try {
-      socket = await openWebSocket(port)
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
       const received: StateBatchV1[] = []
       socket.on('message', (data) => {
         received.push(JSON.parse(data.toString()) as StateBatchV1)
       })
-      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      await new Promise<void>((resolve, reject) => {
+        socket!.once('open', resolve)
+        socket!.once('error', reject)
+      })
       await expect.poll(
-        () => received.flatMap(({ values }) => values.map(({ mappingId, value }) => ({ mappingId, value })))
+        () => received.filter(({ type }) => type === 'state-batch-v1').flatMap(({ values }) => values.map(({ mappingId, value }) => ({ mappingId, value })))
           .sort((left, right) => left.mappingId.localeCompare(right.mappingId)),
       ).toEqual([
         { mappingId: 'mapping-object-box-status', value: 91 },
@@ -1421,39 +1493,19 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
-  it('keeps the last streamable staged channel when a newer activation sample cannot be streamed', async () => {
+  it('keeps the last staged Client channel and accepts a later real live publication', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
-    let publishLive: ((batch: StateBatchV1) => void) | null = null
+    let publishLive: OpcUaClientAdapterOptionsV1['publish'] | null = null
+    let livePublications: ReturnType<typeof clientPublicationHarness> | null = null
     const createOpcUaClientAdapter = vi.fn((_project: WorkcellProjectV5, options) => {
-      const batch = (sequence: number, value: number | string): StateBatchV1 => ({
-        type: 'state-batch-v1',
-        protocolVersion: 1,
-        gatewayId: 'test-gateway',
-        projectId: _project.projectId,
-        configRevision: options.configRevision,
-        endpointId: 'endpoint-sample-server',
-        sequence,
-        sourceTimestampMs: sequence,
-        publishedTimestampMs: sequence,
-        originId: 'test-gateway:opcua-client',
-        values: [{
-          mappingId: 'mapping-object-box-x',
-          coherenceGroupId: null,
-          value,
-          unit: 'meter',
-          quality: 'GOOD',
-          statusCode: 'Good',
-        }],
-      })
+      const publications = clientPublicationHarness(_project, options.configRevision, options.publisherGeneration)
+      livePublications = publications
       publishLive = options.publish
       const adapter: OpcUaClientAdapterV1 = {
         start: async () => {
-          options.publish(batch(1, 1.5))
-          options.publish(singleMappingBatchAtExactEncodedSize(
-            batch(2, ''),
-            MAX_RUNTIME_BATCH_BYTES_V1,
-          ))
+          options.publish(publications.connected())
+          for (const publication of publications.booleanState(true, 1)) options.publish(publication)
         },
         stop: async () => undefined,
         write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
@@ -1471,39 +1523,24 @@ describe('runtime Gateway entrypoint', () => {
     await service.start()
     let socket: WebSocket | null = null
     try {
-      socket = await openWebSocket(port)
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
       const received: StateBatchV1[] = []
       socket.on('message', (data) => {
         received.push(JSON.parse(data.toString()) as StateBatchV1)
       })
-      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
-      await expect.poll(
-        () => received.flatMap(({ values }) => values.map(({ value }) => value)),
-      ).toEqual([1.5])
-
-      publishLive!({
-        type: 'state-batch-v1',
-        protocolVersion: 1,
-        gatewayId: 'test-gateway',
-        projectId: project.projectId,
-        configRevision: await configRevisionForProjectV5(project),
-        endpointId: 'endpoint-sample-server',
-        sequence: 3,
-        sourceTimestampMs: 3,
-        publishedTimestampMs: 3,
-        originId: 'test-gateway:opcua-client',
-        values: [{
-          mappingId: 'mapping-object-box-x',
-          coherenceGroupId: null,
-          value: 3.5,
-          unit: 'meter',
-          quality: 'GOOD',
-          statusCode: 'Good',
-        }],
+      await new Promise<void>((resolve, reject) => {
+        socket!.once('open', resolve)
+        socket!.once('error', reject)
       })
       await expect.poll(
-        () => received.flatMap(({ values }) => values.map(({ value }) => value)),
-      ).toEqual([1.5, 3.5])
+        () => received.filter(({ type }) => type === 'state-batch-v1').flatMap(({ values }) => values.map(({ value }) => value)),
+      ).toEqual([true])
+
+      for (const publication of livePublications!.booleanState(false, 3)) publishLive!(publication)
+      await expect.poll(
+        () => received.filter(({ type }) => type === 'state-batch-v1').flatMap(({ values }) => values.map(({ value }) => value)),
+      ).toEqual([true, false])
     } finally {
       socket?.close()
       await service.stop()
@@ -1564,6 +1601,91 @@ describe('runtime Gateway entrypoint', () => {
         opcUa: { mode: 'client' },
       })
     } finally {
+      await service.stop()
+    }
+  })
+
+  it('replays the prior stop disconnect and never exposes failed-candidate data when recovery does not reconnect', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const firstProject = sampleProject('client', 'revision-client-disconnected-rollback')
+    const replacement = sampleProject('client', 'revision-client-failed-candidate-data')
+    const prior = fakeClientAdapter()
+    const candidate = fakeClientAdapter()
+    let priorOptions: OpcUaClientAdapterOptionsV1 | null = null
+    let candidateOptions: OpcUaClientAdapterOptionsV1 | null = null
+    let priorPublications: ReturnType<typeof clientPublicationHarness> | null = null
+
+    prior.start
+      .mockImplementationOnce(async () => {
+        priorPublications = clientPublicationHarness(
+          firstProject,
+          priorOptions!.configRevision,
+          priorOptions!.publisherGeneration,
+        )
+        priorOptions!.publish(priorPublications.connected())
+        for (const publication of priorPublications.booleanState(true, 1)) priorOptions!.publish(publication)
+      })
+      .mockResolvedValueOnce(undefined)
+    prior.stop.mockImplementationOnce(async () => {
+      priorOptions!.publish(priorPublications!.disconnected())
+    })
+    candidate.start.mockImplementationOnce(async () => {
+      const publications = clientPublicationHarness(
+        replacement,
+        candidateOptions!.configRevision,
+        candidateOptions!.publisherGeneration,
+      )
+      candidateOptions!.publish(publications.connected())
+      for (const publication of publications.booleanState(false, 2)) candidateOptions!.publish(publication)
+      throw new Error('candidate-start-after-staged-data')
+    })
+
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: (project, options) => {
+        if (project.revisionId === replacement.revisionId) {
+          candidateOptions = options
+          return candidate.adapter
+        }
+        priorOptions = options
+        return prior.adapter
+      },
+    })
+    await service.start()
+    let socket: WebSocket | null = null
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', firstProject)).status).toBe(200)
+      const failed = await requestJson(port, 'PUT', '/runtime/project', replacement)
+      expect(failed.status).toBe(503)
+      expect(await failed.json()).toMatchObject({
+        code: 'PROJECT_ACTIVATION_FAILED',
+        recoveredRevisionId: firstProject.revisionId,
+      })
+      expect(prior.start).toHaveBeenCalledTimes(2)
+
+      const received: Array<Record<string, unknown>> = []
+      socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
+      socket.on('message', (data) => received.push(JSON.parse(data.toString()) as Record<string, unknown>))
+      await new Promise<void>((resolve, reject) => {
+        socket!.once('open', resolve)
+        socket!.once('error', reject)
+      })
+      await expect.poll(() => received.some(({ type, phase }) =>
+        type === 'endpoint-replay-boundary-v1' && phase === 'end',
+      )).toBe(true)
+
+      expect(received.map(({ type, phase }) => `${type}:${phase ?? ''}`)).toEqual([
+        'endpoint-replay-boundary-v1:start',
+        'endpoint-lifecycle-v1:connected',
+        'state-batch-v1:',
+        'endpoint-lifecycle-v1:disconnected',
+        'endpoint-replay-boundary-v1:end',
+      ])
+      expect(received.filter(({ type }) => type === 'state-batch-v1').flatMap(({ values }) =>
+        (values as Array<{ value: unknown }>).map(({ value }) => value),
+      )).toEqual([true])
+    } finally {
+      socket?.close()
       await service.stop()
     }
   })
@@ -1630,16 +1752,13 @@ describe('runtime Gateway entrypoint', () => {
     const candidateClient = fakeClientAdapter()
     let priorOptions: OpcUaClientAdapterOptionsV1 | null = null
     priorClient.start.mockImplementationOnce(async () => {
-      priorOptions!.publish({
-        type: 'state-batch-v1', protocolVersion: 1, gatewayId: 'test-gateway',
-        projectId: firstProject.projectId, configRevision: priorOptions!.configRevision,
-        endpointId: 'endpoint-sample-server', sequence: 1, sourceTimestampMs: 1, publishedTimestampMs: 1,
-        originId: 'test-gateway:opcua-client',
-        values: [{
-          mappingId: 'mapping-bridge-stale', coherenceGroupId: null, value: 1,
-          unit: 'state', quality: 'GOOD', statusCode: 'Good',
-        }],
-      })
+      const publications = clientPublicationHarness(
+        firstProject,
+        priorOptions!.configRevision,
+        priorOptions!.publisherGeneration,
+      )
+      priorOptions!.publish(publications.connected())
+      for (const publication of publications.booleanState(true)) priorOptions!.publish(publication)
     }).mockRejectedValueOnce(new Error('prior-bridge-client-restart-failure'))
     candidateClient.start.mockRejectedValueOnce(new Error('candidate-bridge-client-start-failure'))
     const service = createRuntimeGatewayEntrypointService(

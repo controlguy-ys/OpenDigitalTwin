@@ -64,6 +64,7 @@ interface FrameChannelV5 {
   displaySourceTimestampMs: number
   sourceTimestampMs: number
   sourceFenceTimestampMs: number
+  publishedFenceTimestampMs: number
   receivedTimestampMs: number
   quality: LogicalSignalRuntimeQualityV1
   statusCode: string
@@ -76,9 +77,27 @@ interface StatusChannelV5 {
   value: number | null
   sourceTimestampMs: number
   sourceFenceTimestampMs: number
+  publishedFenceTimestampMs: number
   receivedTimestampMs: number
   quality: LogicalSignalRuntimeQualityV1
   statusCode: string
+}
+
+type RobotCatchupEventV5 =
+  | Readonly<{ kind: 'frame'; mappingId: string; mapped: RuntimeMappedValueV1; batch: StateBatchV1; receivedTimestampMs: number }>
+  | Readonly<{ kind: 'status'; mappingId: string; mapped: RuntimeMappedValueV1; batch: StateBatchV1; receivedTimestampMs: number }>
+  | Readonly<{ kind: 'connected'; atMs: number }>
+  | Readonly<{ kind: 'disconnected'; atMs: number }>
+
+interface RobotCatchupStateV5 {
+  readonly frameCandidates: ReadonlyMap<string, FrameChannelV5>
+  readonly statusCandidates: ReadonlyMap<string, StatusChannelV5>
+  readonly events: RobotCatchupEventV5[]
+  readonly touched: Set<string>
+  readonly sequence: number | undefined
+  readonly receipt: number | undefined
+  readonly atMs: number
+  active: boolean
 }
 
 interface RobotRuntimeContextV5 {
@@ -90,6 +109,7 @@ interface RobotRuntimeContextV5 {
   readonly statusChannelsByRobotId: ReadonlyMap<string, StatusChannelV5>
   readonly frameChannelsByEndpoint: ReadonlyMap<string, readonly FrameChannelV5[]>
   readonly statusChannelsByEndpoint: ReadonlyMap<string, readonly StatusChannelV5[]>
+  readonly enabledEndpointIds: ReadonlySet<string>
   readonly endpointSequences: Map<string, number>
   readonly endpointReceiptFences: Map<string, number>
 }
@@ -149,6 +169,7 @@ function compileContext(projectInput: WorkcellProjectV5, configRevision: string)
         displaySourceTimestampMs: 0,
         sourceTimestampMs: 0,
         sourceFenceTimestampMs: 0,
+        publishedFenceTimestampMs: 0,
         receivedTimestampMs: 0,
         quality: 'BAD',
         statusCode: 'BadWaitingForInitialData',
@@ -164,6 +185,7 @@ function compileContext(projectInput: WorkcellProjectV5, configRevision: string)
         value: null,
         sourceTimestampMs: 0,
         sourceFenceTimestampMs: 0,
+        publishedFenceTimestampMs: 0,
         receivedTimestampMs: 0,
         quality: 'BAD',
         statusCode: 'BadWaitingForInitialData',
@@ -183,6 +205,7 @@ function compileContext(projectInput: WorkcellProjectV5, configRevision: string)
     statusChannelsByRobotId,
     frameChannelsByEndpoint: new Map([...frameChannelsByEndpoint].map(([key, value]) => [key, Object.freeze(value)])),
     statusChannelsByEndpoint: new Map([...statusChannelsByEndpoint].map(([key, value]) => [key, Object.freeze(value)])),
+    enabledEndpointIds: new Set(enabledEndpoints.keys()),
     endpointSequences: new Map(),
     endpointReceiptFences: new Map(),
   })
@@ -220,8 +243,10 @@ function updateFrameChannel(channel: FrameChannelV5, mapped: RuntimeMappedValueV
       channel.displayPose = pose
     }
   }
+  const firstInSession = channel.sourceFenceTimestampMs === 0
   channel.sourceFenceTimestampMs = batch.sourceTimestampMs
-  channel.sourceTimestampMs = Math.max(channel.sourceTimestampMs, batch.sourceTimestampMs)
+  channel.publishedFenceTimestampMs = batch.publishedTimestampMs
+  channel.sourceTimestampMs = firstInSession ? batch.sourceTimestampMs : Math.max(channel.sourceTimestampMs, batch.sourceTimestampMs)
   channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, receivedTimestampMs)
   channel.quality = quality
   channel.statusCode = statusCode
@@ -236,9 +261,93 @@ function updateStatusChannel(channel: StatusChannelV5, mapped: RuntimeMappedValu
       statusCode = 'BadTypeMismatch'
     } else channel.value = mapped.value
   }
+  const firstInSession = channel.sourceFenceTimestampMs === 0
   channel.sourceFenceTimestampMs = batch.sourceTimestampMs
-  channel.sourceTimestampMs = Math.max(channel.sourceTimestampMs, batch.sourceTimestampMs)
+  channel.publishedFenceTimestampMs = batch.publishedTimestampMs
+  channel.sourceTimestampMs = firstInSession ? batch.sourceTimestampMs : Math.max(channel.sourceTimestampMs, batch.sourceTimestampMs)
   channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, receivedTimestampMs)
+  channel.quality = quality
+  channel.statusCode = statusCode
+}
+
+function updateFrameCandidate(channel: FrameChannelV5, mapped: RuntimeMappedValueV1, batch: StateBatchV1, receivedTimestampMs: number): void {
+  let quality: LogicalSignalRuntimeQualityV1 = mapped.quality
+  let statusCode = mapped.statusCode
+  if (mapped.quality === 'GOOD') {
+    const pose = canonicalPose(mapped.value)
+    if (pose === null) {
+      quality = 'BAD'
+      statusCode = 'BadTypeMismatch'
+    } else {
+      channel.heldPose = pose
+      channel.displayPose = pose
+    }
+  }
+  const firstInSession = channel.sourceFenceTimestampMs === 0
+  channel.sourceFenceTimestampMs = batch.sourceTimestampMs
+  channel.publishedFenceTimestampMs = batch.publishedTimestampMs
+  channel.sourceTimestampMs = firstInSession ? batch.sourceTimestampMs : Math.max(channel.sourceTimestampMs, batch.sourceTimestampMs)
+  channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, receivedTimestampMs)
+  channel.quality = quality
+  channel.statusCode = statusCode
+}
+
+function markFrameDisconnected(channel: FrameChannelV5, atMs: number): void {
+  channel.quality = 'STALE'
+  channel.statusCode = 'BadNoCommunication'
+  channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+}
+
+function markStatusDisconnected(channel: StatusChannelV5, atMs: number): void {
+  channel.quality = 'STALE'
+  channel.statusCode = 'BadNoCommunication'
+  channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+}
+
+function resetFrameSession(channel: FrameChannelV5, atMs: number): void {
+  channel.heldPose = channel.displayPose ?? channel.heldPose
+  channel.buffer = createRuntimePoseBufferV1(frameKey(channel.robotId, channel.frameId), channel.publishingIntervalMs)
+  channel.displaySourceTimestampMs = 0
+  channel.sourceFenceTimestampMs = 0
+  channel.publishedFenceTimestampMs = 0
+  channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+  channel.quality = 'BAD'
+  channel.statusCode = 'BadWaitingForInitialData'
+}
+
+function resetStatusSession(channel: StatusChannelV5, atMs: number): void {
+  channel.sourceFenceTimestampMs = 0
+  channel.publishedFenceTimestampMs = 0
+  channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+  channel.quality = 'BAD'
+  channel.statusCode = 'BadWaitingForInitialData'
+}
+
+function restorePrefixFrameChannel(channel: FrameChannelV5, mapped: RuntimeMappedValueV1, batch: StateBatchV1, receivedTimestampMs: number): void {
+  let quality: LogicalSignalRuntimeQualityV1 = mapped.quality
+  let statusCode = mapped.statusCode
+  if (mapped.quality === 'GOOD') {
+    const pose = canonicalPose(mapped.value)
+    if (pose === null) { quality = 'BAD'; statusCode = 'BadTypeMismatch' } else {
+      channel.heldPose = pose
+      channel.displayPose = pose
+      channel.displaySourceTimestampMs = batch.sourceTimestampMs
+    }
+  }
+  channel.sourceTimestampMs = batch.sourceTimestampMs
+  channel.receivedTimestampMs = receivedTimestampMs
+  channel.quality = quality
+  channel.statusCode = statusCode
+}
+
+function restorePrefixStatusChannel(channel: StatusChannelV5, mapped: RuntimeMappedValueV1, batch: StateBatchV1, receivedTimestampMs: number): void {
+  let quality: LogicalSignalRuntimeQualityV1 = mapped.quality
+  let statusCode = mapped.statusCode
+  if (mapped.quality === 'GOOD') {
+    if (typeof mapped.value !== 'number' || !Number.isFinite(mapped.value)) { quality = 'BAD'; statusCode = 'BadTypeMismatch' } else channel.value = mapped.value
+  }
+  channel.sourceTimestampMs = batch.sourceTimestampMs
+  channel.receivedTimestampMs = receivedTimestampMs
   channel.quality = quality
   channel.statusCode = statusCode
 }
@@ -248,6 +357,9 @@ export function createRobotFrameStatusRuntimeStoreV5(
   configRevision: string,
 ): RobotFrameStatusRuntimeStoreV5 {
   let context = compileContext(projectInput, configRevision)
+  let guardEpoch = 0
+  const guardsByEndpoint = new Map<string, RobotCatchupStateV5>()
+  const noOpGuardsByEndpoint = new Set<string>()
 
   const ingest = (batchInput: StateBatchV1, receiptCandidate: number): boolean => {
     const batch = validateStateBatchV1(batchInput)
@@ -258,23 +370,51 @@ export function createRobotFrameStatusRuntimeStoreV5(
       || batch.sequence <= (context.endpointSequences.get(batch.endpointId) ?? 0)
       || receivedTimestampMs < (context.endpointReceiptFences.get(batch.endpointId) ?? 0)
     ) return false
+    const guard = guardsByEndpoint.get(batch.endpointId)
     const frames = batch.values.flatMap((mapped) => {
       const channel = context.frameChannelsByMappingId.get(mapped.mappingId)
-      return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
+      if (channel?.endpointId !== batch.endpointId) return []
+      return [[guard?.frameCandidates.get(channel.mappingId) ?? channel, mapped] as const]
     })
     const statuses = batch.values.flatMap((mapped) => {
       const channel = context.statusChannelsByMappingId.get(mapped.mappingId)
-      return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
+      if (channel?.endpointId !== batch.endpointId) return []
+      return [[guard?.statusCandidates.get(channel.mappingId) ?? channel, mapped] as const]
     })
     if (frames.length === 0 && statuses.length === 0) return false
-    if (
-      batch.sourceTimestampMs > batch.publishedTimestampMs
-      || frames.some(([channel]) => batch.sourceTimestampMs < channel.sourceFenceTimestampMs)
-      || statuses.some(([channel]) => batch.sourceTimestampMs < channel.sourceFenceTimestampMs)
-    ) return false
+    if (batch.sourceTimestampMs > batch.publishedTimestampMs) return false
+    const grouped = new Map<string, Array<(typeof frames)[number] | (typeof statuses)[number]>>()
+    for (const entry of [...frames, ...statuses]) {
+      const key = entry[1].coherenceGroupId === null
+        ? `mapping:${entry[0].mappingId}`
+        : `coherence:${entry[1].coherenceGroupId}`
+      const group = grouped.get(key) ?? []
+      group.push(entry)
+      grouped.set(key, group)
+    }
+    const accepted = [...grouped.values()].flatMap((group) => group.some(([channel]) => (
+      batch.sourceTimestampMs < channel.sourceFenceTimestampMs
+      || batch.publishedTimestampMs < channel.publishedFenceTimestampMs
+    )) ? [] : group)
+    if (accepted.length === 0) return false
 
-    frames.forEach(([channel, mapped]) => updateFrameChannel(channel, mapped, batch, receivedTimestampMs))
-    statuses.forEach(([channel, mapped]) => updateStatusChannel(channel, mapped, batch, receivedTimestampMs))
+    const acceptedFrames = accepted.filter((entry): entry is (typeof frames)[number] => 'buffer' in entry[0])
+    const acceptedStatuses = accepted.filter((entry): entry is (typeof statuses)[number] => !('buffer' in entry[0]))
+    if (guard === undefined) {
+      acceptedFrames.forEach(([channel, mapped]) => updateFrameChannel(channel, mapped, batch, receivedTimestampMs))
+      acceptedStatuses.forEach(([channel, mapped]) => updateStatusChannel(channel, mapped, batch, receivedTimestampMs))
+    } else {
+      for (const [channel, mapped] of acceptedFrames) {
+        updateFrameCandidate(channel, mapped, batch, receivedTimestampMs)
+        guard.touched.add(channel.mappingId)
+        guard.events.push(Object.freeze({ kind: 'frame', mappingId: channel.mappingId, mapped, batch, receivedTimestampMs }))
+      }
+      for (const [channel, mapped] of acceptedStatuses) {
+        updateStatusChannel(channel, mapped, batch, receivedTimestampMs)
+        guard.touched.add(channel.mappingId)
+        guard.events.push(Object.freeze({ kind: 'status', mappingId: channel.mappingId, mapped, batch, receivedTimestampMs }))
+      }
+    }
     context.endpointSequences.set(batch.endpointId, batch.sequence)
     context.endpointReceiptFences.set(batch.endpointId, receivedTimestampMs)
     return true
@@ -282,33 +422,43 @@ export function createRobotFrameStatusRuntimeStoreV5(
 
   const markEndpointDisconnected = (endpointId: string, atCandidate: number): void => {
     const atMs = requireTimestamp(atCandidate, 'Disconnect timestamp')
+    const guard = guardsByEndpoint.get(endpointId)
+    if (guard !== undefined) {
+      for (const channel of guard.frameCandidates.values()) {
+        markFrameDisconnected(channel, atMs)
+        guard.touched.add(channel.mappingId)
+      }
+      for (const channel of guard.statusCandidates.values()) {
+        markStatusDisconnected(channel, atMs)
+        guard.touched.add(channel.mappingId)
+      }
+      guard.events.push(Object.freeze({ kind: 'disconnected', atMs }))
+      return
+    }
     for (const channel of context.frameChannelsByEndpoint.get(endpointId) ?? []) {
-      channel.quality = 'STALE'
-      channel.statusCode = 'BadNoCommunication'
-      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+      markFrameDisconnected(channel, atMs)
     }
     for (const channel of context.statusChannelsByEndpoint.get(endpointId) ?? []) {
-      channel.quality = 'STALE'
-      channel.statusCode = 'BadNoCommunication'
-      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
+      markStatusDisconnected(channel, atMs)
     }
   }
 
   const resetEndpointSession = (endpointId: string, atCandidate: number): void => {
     const atMs = requireTimestamp(atCandidate, 'Endpoint reset timestamp')
-    for (const channel of context.frameChannelsByEndpoint.get(endpointId) ?? []) {
-      channel.heldPose = channel.displayPose ?? channel.heldPose
-      channel.buffer = createRuntimePoseBufferV1(frameKey(channel.robotId, channel.frameId), channel.publishingIntervalMs)
-      channel.sourceFenceTimestampMs = 0
-      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
-      channel.quality = 'BAD'
-      channel.statusCode = 'BadWaitingForInitialData'
-    }
-    for (const channel of context.statusChannelsByEndpoint.get(endpointId) ?? []) {
-      channel.sourceFenceTimestampMs = 0
-      channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
-      channel.quality = 'BAD'
-      channel.statusCode = 'BadWaitingForInitialData'
+    const guard = guardsByEndpoint.get(endpointId)
+    if (guard === undefined) {
+      for (const channel of context.frameChannelsByEndpoint.get(endpointId) ?? []) resetFrameSession(channel, atMs)
+      for (const channel of context.statusChannelsByEndpoint.get(endpointId) ?? []) resetStatusSession(channel, atMs)
+    } else {
+      for (const channel of guard.frameCandidates.values()) {
+        resetFrameSession(channel, atMs)
+        guard.touched.add(channel.mappingId)
+      }
+      for (const channel of guard.statusCandidates.values()) {
+        resetStatusSession(channel, atMs)
+        guard.touched.add(channel.mappingId)
+      }
+      guard.events.push(Object.freeze({ kind: 'connected', atMs }))
     }
     context.endpointSequences.delete(endpointId)
     context.endpointReceiptFences.delete(endpointId)
@@ -327,8 +477,8 @@ export function createRobotFrameStatusRuntimeStoreV5(
       return channel?.endpointId === batch.endpointId ? [[channel, mapped] as const] : []
     })
     if (frames.length === 0 && statuses.length === 0) return false
-    frames.forEach(([channel, mapped]) => updateFrameChannel(channel, mapped, batch, receivedTimestampMs))
-    statuses.forEach(([channel, mapped]) => updateStatusChannel(channel, mapped, batch, receivedTimestampMs))
+    frames.forEach(([channel, mapped]) => restorePrefixFrameChannel(channel, mapped, batch, receivedTimestampMs))
+    statuses.forEach(([channel, mapped]) => restorePrefixStatusChannel(channel, mapped, batch, receivedTimestampMs))
     return true
   }
 
@@ -336,19 +486,58 @@ export function createRobotFrameStatusRuntimeStoreV5(
     const atMs = requireTimestamp(atCandidate, 'Catch-up timestamp')
     const frames = context.frameChannelsByEndpoint.get(endpointId) ?? []
     const statuses = context.statusChannelsByEndpoint.get(endpointId) ?? []
-    const frameSnapshot = frames.map((channel) => ({ channel, quality: channel.quality, statusCode: channel.statusCode, receivedTimestampMs: channel.receivedTimestampMs }))
-    const statusSnapshot = statuses.map((channel) => ({ channel, quality: channel.quality, statusCode: channel.statusCode, receivedTimestampMs: channel.receivedTimestampMs }))
-    for (const { channel } of frameSnapshot) { channel.quality = 'STALE'; channel.statusCode = 'BadNoCommunication'; channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs) }
-    for (const { channel } of statusSnapshot) { channel.quality = 'STALE'; channel.statusCode = 'BadNoCommunication'; channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs) }
-    let active = true
+    if (!context.enabledEndpointIds.has(endpointId)) throw new Error('ENDPOINT_CATCHUP_UNKNOWN_ENDPOINT')
+    if (guardsByEndpoint.has(endpointId) || noOpGuardsByEndpoint.has(endpointId)) throw new Error('ENDPOINT_CATCHUP_ALREADY_ACTIVE')
+    const epoch = guardEpoch
+    if (frames.length === 0 && statuses.length === 0) {
+      let active = true
+      noOpGuardsByEndpoint.add(endpointId)
+      const finish = (): void => {
+        if (!active || epoch !== guardEpoch) return
+        active = false
+        noOpGuardsByEndpoint.delete(endpointId)
+      }
+      return Object.freeze({ commit: finish, abort: finish })
+    }
+    const guard: RobotCatchupStateV5 = {
+      frameCandidates: new Map(frames.map((channel) => [channel.mappingId, { ...channel }])),
+      statusCandidates: new Map(statuses.map((channel) => [channel.mappingId, { ...channel }])),
+      events: [], touched: new Set<string>(),
+      sequence: context.endpointSequences.get(endpointId), receipt: context.endpointReceiptFences.get(endpointId),
+      atMs, active: true,
+    }
+    guardsByEndpoint.set(endpointId, guard)
     return Object.freeze({
       commit: () => {
-        if (!active) return
-        active = false
-        for (const previous of frameSnapshot) Object.assign(previous.channel, previous)
-        for (const previous of statusSnapshot) Object.assign(previous.channel, previous)
+        if (!guard.active || epoch !== guardEpoch) return
+        guard.active = false
+        for (const event of guard.events) {
+          if (event.kind === 'connected') {
+            for (const channel of frames) resetFrameSession(channel, event.atMs)
+            for (const channel of statuses) resetStatusSession(channel, event.atMs)
+          } else if (event.kind === 'disconnected') {
+            for (const channel of frames) markFrameDisconnected(channel, event.atMs)
+            for (const channel of statuses) markStatusDisconnected(channel, event.atMs)
+          } else if (event.kind === 'frame') {
+            const channel = context.frameChannelsByMappingId.get(event.mappingId)
+            if (channel !== undefined) updateFrameChannel(channel, event.mapped, event.batch, event.receivedTimestampMs)
+          } else {
+            const channel = context.statusChannelsByMappingId.get(event.mappingId)
+            if (channel !== undefined) updateStatusChannel(channel, event.mapped, event.batch, event.receivedTimestampMs)
+          }
+        }
+        guardsByEndpoint.delete(endpointId)
       },
-      abort: () => { active = false },
+      abort: () => {
+        if (!guard.active || epoch !== guardEpoch) return
+        guard.active = false
+        guardsByEndpoint.delete(endpointId)
+        if (guard.sequence === undefined) context.endpointSequences.delete(endpointId)
+        else context.endpointSequences.set(endpointId, guard.sequence)
+        if (guard.receipt === undefined) context.endpointReceiptFences.delete(endpointId)
+        else context.endpointReceiptFences.set(endpointId, guard.receipt)
+        markEndpointDisconnected(endpointId, atMs)
+      },
     })
   }
 
@@ -357,19 +546,25 @@ export function createRobotFrameStatusRuntimeStoreV5(
     for (const channel of context.frameChannelsByMappingId.values()) {
       channel.heldPose = channel.displayPose ?? channel.heldPose
       channel.buffer = createRuntimePoseBufferV1(frameKey(channel.robotId, channel.frameId), channel.publishingIntervalMs)
+      channel.displaySourceTimestampMs = 0
       channel.sourceFenceTimestampMs = 0
+      channel.publishedFenceTimestampMs = 0
       channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
       channel.quality = 'BAD'
       channel.statusCode = 'BadWaitingForInitialData'
     }
     for (const channel of context.statusChannelsByMappingId.values()) {
       channel.sourceFenceTimestampMs = 0
+      channel.publishedFenceTimestampMs = 0
       channel.receivedTimestampMs = Math.max(channel.receivedTimestampMs, atMs)
       channel.quality = 'BAD'
       channel.statusCode = 'BadWaitingForInitialData'
     }
     context.endpointSequences.clear()
     context.endpointReceiptFences.clear()
+    guardsByEndpoint.clear()
+    noOpGuardsByEndpoint.clear()
+    guardEpoch += 1
   }
 
   const sampleFrame = (robotId: string, frameId: string, renderCandidate: number): RobotFrameRuntimeValueV5 | null => {
@@ -381,29 +576,32 @@ export function createRobotFrameStatusRuntimeStoreV5(
       channel.displayPose = sample.pose
       channel.displaySourceTimestampMs = Math.max(channel.displaySourceTimestampMs, sample.sourceTimestampMs)
     }
+    const guard = guardsByEndpoint.get(channel.endpointId)
+    const quarantined = guard !== undefined
     const bufferIsStale = sample?.quality === 'STALE'
-    const quality = channel.quality === 'GOOD' && bufferIsStale ? 'STALE' : channel.quality
+    const quality = quarantined || (channel.quality === 'GOOD' && bufferIsStale) ? 'STALE' : channel.quality
     return Object.freeze({
       robotId,
       frameId,
       worldPose: sample?.pose ?? channel.displayPose ?? channel.heldPose,
       quality,
-      statusCode: quality === 'STALE' && channel.quality === 'GOOD' ? 'BadNoCommunication' : channel.statusCode,
+      statusCode: quality === 'STALE' && (quarantined || channel.quality === 'GOOD') ? 'BadNoCommunication' : channel.statusCode,
       owner: `opcua:${channel.endpointId}`,
       sourceTimestampMs: channel.quality === 'GOOD' && sample?.quality === 'GOOD'
         ? channel.displaySourceTimestampMs
         : channel.sourceTimestampMs,
-      receivedTimestampMs: channel.receivedTimestampMs,
+      receivedTimestampMs: guard === undefined ? channel.receivedTimestampMs : Math.max(channel.receivedTimestampMs, guard.atMs),
     })
   }
 
   const readNumericStatus = (robotId: string) => {
     const channel = context.statusChannelsByRobotId.get(robotId)
     if (channel === undefined) return null
+    const guard = guardsByEndpoint.get(channel.endpointId)
     return Object.freeze({
       value: channel.value,
-      quality: channel.quality,
-      statusCode: channel.statusCode,
+      quality: guard === undefined ? channel.quality : 'STALE',
+      statusCode: guard === undefined ? channel.statusCode : 'BadNoCommunication',
       owner: `opcua:${channel.endpointId}` as const,
     })
   }
@@ -420,6 +618,9 @@ export function createRobotFrameStatusRuntimeStoreV5(
     replaceProject: (nextProjectInput: WorkcellProjectV5, nextConfigRevision: string) => {
       const nextContext = compileContext(nextProjectInput, nextConfigRevision)
       context = nextContext
+      guardsByEndpoint.clear()
+      noOpGuardsByEndpoint.clear()
+      guardEpoch += 1
     },
     sampleFrame,
     readNumericStatus,

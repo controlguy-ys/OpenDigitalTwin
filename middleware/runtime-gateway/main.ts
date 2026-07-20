@@ -24,7 +24,6 @@ import {
   type CommandRequestV1,
   type CommandResultV1,
 } from '../../src/core/runtime-protocol/v1.js'
-import type { StateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
 import {
   RuntimeGatewayDeploymentConfigError,
   readDeploymentConfig,
@@ -37,13 +36,14 @@ import {
 } from './opcua-server-adapter.js'
 import {
   createOpcUaClientAdapterV1,
-  readNormalizedOpcUaClientPublicationV1,
   type OpcUaClientAdapterV1,
   type OpcUaClientAdapterOptionsV1,
   type NormalizedOpcUaClientPublicationV1,
 } from './opcua-client-adapter.js'
 import {
+  createRuntimeTimelineStagingV1,
   createStateBatchHubV1,
+  type RuntimeTimelineStagingV1,
   type StateBatchHubV1,
 } from './state-batch-hub.js'
 import {
@@ -81,6 +81,8 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
   readonly pkiRootDir?: string
   readonly nowMs?: () => number
   readonly initialCommittedCommandGeneration?: number
+  /** Test-only synchronous injection point immediately before the final staging health check. */
+  readonly beforeCandidateTimelineSealForTest?: () => void
 }
 
 interface ActiveProjectRuntimeV1 {
@@ -96,12 +98,6 @@ interface ActiveProjectRuntimeV1 {
 interface StagedRobotJointStateV1 {
   readonly robotId: string
   readonly jointValues: Readonly<Record<string, number>>
-}
-
-interface StagedClientBatchesV1 {
-  publish(publication: NormalizedOpcUaClientPublicationV1 | StateBatchV1): void
-  flushTo(hub: StateBatchHubV1): void
-  clear(): void
 }
 
 class RuntimeGatewayHttpError extends Error {
@@ -121,28 +117,6 @@ class RuntimeGatewayHttpError extends Error {
     this.code = code
     this.details = details
   }
-}
-
-function createStagedClientBatchesV1(): StagedClientBatchesV1 {
-  const publications: Array<NormalizedOpcUaClientPublicationV1 | StateBatchV1> = []
-
-  const publish = (publication: NormalizedOpcUaClientPublicationV1 | StateBatchV1): void => {
-    // Validate the opaque producer boundary while candidate activation is
-    // detached. The prepared Hub activation owns final timeline sealing.
-    if ('message' in publication) readNormalizedOpcUaClientPublicationV1(publication as NormalizedOpcUaClientPublicationV1)
-    publications.push(publication)
-  }
-
-  return Object.freeze({
-    publish,
-    flushTo(hub: StateBatchHubV1) {
-      const staged = publications.splice(0)
-      for (const publication of staged) hub.publish(publication)
-    },
-    clear() {
-      publications.length = 0
-    },
-  })
 }
 
 function writeJson(
@@ -393,7 +367,7 @@ export function createRuntimeGatewayEntrypointService(
     let candidateClientAdapter: OpcUaClientAdapterV1 | null = null
     let candidateCommandDedupe: RuntimeCommandDedupeRegistryV1 | null = null
     let candidateCommandService: RuntimeCommandServiceV1 | null = null
-    const stagedClientBatches = createStagedClientBatchesV1()
+    const stagedClientTimeline: RuntimeTimelineStagingV1 = createRuntimeTimelineStagingV1()
     let clientBatchPublisherLive = false
     let previousAdaptersStopped = false
 
@@ -413,11 +387,14 @@ export function createRuntimeGatewayEntrypointService(
           originId: `${config.gatewayId}:opcua-client`,
           configRevision,
           publisherGeneration: candidateGeneration,
-          publish: (batch) => {
+          publish: (batch: NormalizedOpcUaClientPublicationV1) => {
             if (clientBatchPublisherLive) {
               requireStateBatchHub().publish(batch)
             } else {
-              stagedClientBatches.publish(batch)
+              // Candidate callbacks cannot throw into node-opcua.  The
+              // detached timeline records a sticky health failure for the
+              // transition's final pre-seal check instead.
+              try { stagedClientTimeline.publish(batch) } catch { /* sealed callback is unreachable by design */ }
             }
           },
         })
@@ -435,13 +412,6 @@ export function createRuntimeGatewayEntrypointService(
         }
       }
       await candidateClientAdapter?.start()
-      // Candidate adapters can synchronously emit their first monitored value
-      // from start().  Do not let it race the revision fence or old source
-      // sequence; stage it until the candidate has started successfully.
-      const activeHub = requireStateBatchHub()
-      activeHub.activateRevision(project.projectId, configRevision)
-      stagedClientBatches.flushTo(activeHub)
-      clientBatchPublisherLive = true
       candidateCommandDedupe = createRuntimeCommandDedupeRegistryV1()
       if (candidateClientAdapter !== null) {
         candidateCommandService = createRuntimeCommandServiceV1({
@@ -454,7 +424,7 @@ export function createRuntimeGatewayEntrypointService(
           dedupe: candidateCommandDedupe,
         })
       }
-      activeRuntime = Object.freeze({
+      const nextRuntime = Object.freeze({
         project,
         configRevision,
         generation: candidateGeneration,
@@ -463,11 +433,37 @@ export function createRuntimeGatewayEntrypointService(
         serverAdapter: candidateServerAdapter,
         clientAdapter: candidateClientAdapter,
       })
+
+      // Resolve the Hub and run the one explicit test-only injection while
+      // callbacks still target the detached candidate timeline.  The final
+      // health check therefore either includes that synchronous publication
+      // in the sealed cut or fails the transition.
+      const activeHub = requireStateBatchHub()
+      dependencies.beforeCandidateTimelineSealForTest?.()
+      stagedClientTimeline.assertHealthy()
+      const sealedTimeline = stagedClientTimeline.seal()
+      const preparedActivation = activeHub.prepareRevisionActivation({
+        projectId: project.projectId,
+        configRevision,
+        gatewayId: config.gatewayId,
+        originId: `${config.gatewayId}:opcua-client`,
+        publisherGeneration: candidateGeneration,
+        endpointIds: project.opcUa.mode === 'client' || project.opcUa.mode === 'bridge'
+          ? project.opcUa.endpoints.filter(({ enabled }) => enabled).map(({ endpointId }) => endpointId)
+          : [],
+        stagedTimeline: sealedTimeline,
+      })
+
+      // No await, user callback, send/close, or disposal may appear in this
+      // tail. A reentrant callback during flush reaches the installed Hub.
+      activeRuntime = nextRuntime
       committedCommandGeneration = candidateGeneration
-      previous?.commandService?.close()
-      previous?.commandDedupe.clear()
+      preparedActivation.installPrepared()
+      clientBatchPublisherLive = true
+      preparedActivation.flushPrepared()
+      try { previous?.commandService?.close() } catch { /* post-commit cleanup is isolated */ }
+      try { previous?.commandDedupe.clear() } catch { /* post-commit cleanup is isolated */ }
     } catch (error) {
-      stagedClientBatches.clear()
       candidateCommandService?.close()
       candidateCommandDedupe?.clear()
       await candidateClientAdapter?.stop().catch(() => undefined)

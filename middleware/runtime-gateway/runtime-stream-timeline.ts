@@ -144,7 +144,10 @@ export function splitStateBatchesV1(
 
 export function isStreamableStateSnapshotV1(snapshot: StateBatchV1): boolean {
   try {
-    splitStateBatchesV1(snapshot, Number.MAX_SAFE_INTEGER)
+    // Streamability concerns the envelope and coherence grouping, not a
+    // hypothetical exhausted Hub counter.  The Hub reserves its real range
+    // atomically before using the splitter.
+    splitStateBatchesV1(snapshot)
     return true
   } catch (error) {
     if (
