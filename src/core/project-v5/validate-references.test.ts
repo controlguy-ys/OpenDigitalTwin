@@ -276,6 +276,14 @@ describe('validateWorkcellProjectV5 reference, semantic, and OPC UA budget valid
     expect(() => validateWorkcellProjectV5(path)).toThrow('OPCUA_PROJECT_PATH_INVALID')
   })
 
+  it('rejects multiple Leaves for a scalar Mapping target', () => {
+    const project = projectWithRobotJointTarget({ type: 'robot-joint', robotId: 'robot-1', jointId: 'J1' })
+    const first = project.opcUa.mappings[0]!.leaves[0]!
+    ;(first as unknown as { leafPath: readonly string[] }).leafPath = ['first-scalar']
+    ;(project.opcUa.mappings[0]!.leaves as unknown as unknown[]).push({ ...first, leafPath: ['second-scalar'] })
+    expect(() => validateWorkcellProjectV5(project)).toThrow('OPCUA_SCALAR_MAPPING_LEAF_COUNT_INVALID')
+  })
+
   it('requires all six Frame destination paths and authored OPC UA ownership', () => {
     const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
     ;(project.robots[0]!.frameSources as unknown as Record<string, unknown>).Base = 'opcua:endpoint-1'

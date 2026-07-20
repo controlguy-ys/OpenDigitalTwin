@@ -847,6 +847,9 @@ function validateMappingLeaves(
   })
   validateFixedArrayIndexes(indexesByPrefix, `${mappingPath}.leaves`)
   const target = mappingTarget!
+  if (target.type === 'robot-joint' && mapping.leaves.length !== 1) {
+    fail('OPCUA_SCALAR_MAPPING_LEAF_COUNT_INVALID', `${mappingPath}.leaves`, 'A scalar Mapping target requires exactly one Leaf.')
+  }
   if (target.type === 'robot-frame' || target.type === 'entity-frame') validateFrameProjectPaths(mapping.leaves, mappingPath)
   const references = validateMappingTargetReferences(target, `${mappingPath}.leaves[0].projectTarget`, indexes)
   if (target.type === 'logical-signal') {
