@@ -487,6 +487,43 @@ describe('V5 Runtime Gateway catch-up boundaries and atomic drains', () => {
     const active = target({ onEndpointCatchupStart: () => { throw new Error('begin') }, onSessionDisconnect: vi.fn() }); const socket = startOpen(streamWith({ readActiveTarget: () => active })); socket.frame(catchup(1, 'start', 1, 1)); expect(active.onSessionDisconnect).toHaveBeenCalledTimes(1)
   })
 
+  it('notifies the established target before fallback-aborting an active catch-up on close', () => {
+    const stalePublications: string[] = []; const order: string[] = []; let compositeAborted = false
+    const guardAbort = vi.fn(() => { stalePublications.push('a') })
+    const compositeGuard = guard({ abort: vi.fn(() => { order.push('guard abort'); if (compositeAborted) return; compositeAborted = true; guardAbort() }) })
+    const active = target({
+      onEndpointCatchupStart: () => compositeGuard,
+      onSessionDisconnect: () => {
+        order.push('disconnect')
+        compositeGuard.abort()
+        stalePublications.push('b')
+      },
+    })
+    const rig = streamWith({ readActiveTarget: () => active }); const socket = startOpen(rig)
+    socket.frame(lifecycle(1, 'connected', 'a')); socket.frame(lifecycle(1, 'connected', 'b'))
+    const body = state(3, 'a'); socket.frame(catchup(2, 'start', 1, utf8(json(body)), { endpointId: 'a' }))
+    socket.emit('close'); socket.emit('error')
+    expect(order).toEqual(['disconnect', 'guard abort', 'guard abort']); expect(guardAbort).toHaveBeenCalledTimes(1)
+    expect(stalePublications).toEqual(['a', 'b'])
+  })
+
+  it('aborts only the old catch-up when session disconnect refreshes into a replacement catch-up', () => {
+    const oldGuard = guard(); const replacementGuard = guard(); let stream!: ReturnType<typeof createRuntimeGatewayStateStreamV5>; let rig!: ReturnType<typeof streamWith>
+    let starts = 0
+    const active = target({
+      onEndpointCatchupStart: () => (++starts === 1 ? oldGuard : replacementGuard),
+      onSessionDisconnect: () => {
+        stream.refreshActiveTarget()
+        const replacement = rig.sockets[1]!; replacement.emit('open'); replacement.frame(lifecycle(1, 'connected', 'b'))
+        const body = state(3, 'b'); replacement.frame(catchup(2, 'start', 1, utf8(json(body)), { endpointId: 'b' }))
+      },
+    })
+    rig = streamWith({ readActiveTarget: () => active }); stream = rig.stream; const first = startOpen(rig)
+    first.frame(lifecycle(1, 'connected', 'a')); const body = state(3, 'a'); first.frame(catchup(2, 'start', 1, utf8(json(body)), { endpointId: 'a' }))
+    first.emit('close')
+    expect(oldGuard.abort).toHaveBeenCalledTimes(1); expect(replacementGuard.abort).not.toHaveBeenCalled(); expect(replacementGuard.commit).not.toHaveBeenCalled()
+  })
+
   it('rejects catch-up nesting, cross-kind end, mismatched totals, physical-byte mismatch, and over-budget declaration', () => {
     const invalidRuns: Array<(socket: FakeSocket) => void> = [
       (socket) => { socket.frame(catchup(1, 'start', 1, 1)); socket.frame(catchup(2, 'start', 1, 1)) },

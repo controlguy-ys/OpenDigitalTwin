@@ -276,8 +276,13 @@ export function createRuntimeGatewayStateStreamV5(
     }
   }
 
-  const abortActiveBoundaryV5 = (): void => {
+  const takeActiveBoundaryV5 = (): ActiveBoundaryV5 | null => {
     const active = boundary
+    boundary = null
+    return active
+  }
+
+  const abortBoundaryV5 = (active: ActiveBoundaryV5 | null): void => {
     if (active === null) return
     active.canceled = true
     if (active.guard !== null && active.guardState === 'active') {
@@ -288,7 +293,10 @@ export function createRuntimeGatewayStateStreamV5(
         // Guard cleanup is isolated from transport cleanup.
       }
     }
-    boundary = null
+  }
+
+  const abortActiveBoundaryV5 = (): void => {
+    abortBoundaryV5(takeActiveBoundaryV5())
   }
 
   const abortReturnedGuardV5 = (returnedGuard: EndpointCatchupGuardV5): void => {
@@ -312,7 +320,7 @@ export function createRuntimeGatewayStateStreamV5(
     target.failed = true
     target.accepting = false
     detachCandidateV5(target)
-    abortActiveBoundaryV5()
+    const rejectedBoundary = takeActiveBoundaryV5()
     endpointRecords.clear()
     if (target.established && !target.disconnectReported) {
       target.disconnectReported = true
@@ -322,6 +330,7 @@ export function createRuntimeGatewayStateStreamV5(
         // Session observers are isolated from reconnection.
       }
     }
+    abortBoundaryV5(rejectedBoundary)
     closeDetachedV5(target)
     scheduleReconnectV5()
   }
