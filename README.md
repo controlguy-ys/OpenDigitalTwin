@@ -9,6 +9,20 @@ Client/Bridge subscriptions.
 It is an engineering visualization tool, not a Robot controller, physics engine,
 or safety-rated system.
 
+## Built with Codex and GPT-5.6
+
+This project was developed with Codex powered by GPT-5.6 as an engineering copilot.
+
+Codex/GPT-5.6 was used to:
+
+- design and iterate the Project V4 multi-robot data model and runtime contracts;
+- implement and review the browser simulator, per-robot jobs, collision checks, and OPC UA Runtime Gateway;
+- generate and refine validation, unit, middleware, and end-to-end test coverage;
+- troubleshoot Docker, same-origin runtime routing, and OPC UA integration behavior;
+- document reproducible setup, demo flows, limitations, and verification commands.
+
+All final architecture decisions, validation, and repository integration were reviewed and verified by the submitter.
+
 ## Current short-term scope
 
 - Project V4 is the only active browser Project format. New, Save, Export,
