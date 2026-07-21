@@ -12,6 +12,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:sites": "npm run build && node scripts/sites/prepare-build.mjs",
     "build:gateway": "tsc -p tsconfig.gateway.json",
     "build:e2e": "tsc -b && vite build --mode test",
     "preview": "vite preview",
