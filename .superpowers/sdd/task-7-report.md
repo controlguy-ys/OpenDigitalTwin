@@ -1,94 +1,105 @@
-# Task 7 Report: Minimal Coordinate-Aware Viewport Controls
+# Task 7 Report: NED2 Handover Acceptance and Operator Runbook
 
 ## Status
 
 DONE
 
+Commit subject: `test: verify offline NED2 handover demo`
+
 ## Scope delivered
 
-- Added browser-local viewport preferences for Grid, World/Base/TCP frames,
-  Pose Frame, Gizmo Frame, and complete camera state (position, target,
-  quaternion, up vector, zoom, FOV, and clipping planes).
-- Added camera-only Home View, Fit All, Focus Selection, and fixed World
-  standard views. Focus is disabled until the selected committed Robot,
-  Object, Axis, or Group descendant has registered renderable geometry and a
-  non-empty post-commit bound; STEP loading/failure remains safely disabled.
-- Added a non-draggable World View Cube and compact coordinate status strip
-  with Actual TCP XYZ and ZYX RPY readouts in World, MCP, or Base frames.
-- Added labelled, depth-tested World, Robot Base, and Actual TCP triads. Marker
-  scale is distance/FOV aware for normal zoom readability.
-- Connected Gizmo Frame World/Parent to World axes or a parent-oriented proxy,
-  preserving the selected child's orientation during parent-frame translation.
-- Kept camera and layer state outside Project V3, Robot Joint, Job, Timeline,
-  collision, entity-pose, and simulation mutation paths.
-- Gated camera diagnostic state publication to test mode and normalized safe
-  persisted camera quaternion/up vectors while rejecting degenerate vectors.
+- Added `tests/hackathon-handover-demo.spec.ts` with the offline happy path,
+  COMPLETE and READY acceptance, a strict Header Offline assertion, the
+  GRIP_CONFIRM_TIMEOUT ownership invariant, and Reset fault clearing.
+- Added the exact operator and fault-injection flows to `README.md` and
+  `docs/operator/working-demo-known-limitations.md`.
+- Documented fixed Joint keyframes, local simulated Grip Confirm, visual-only
+  Shared Zone, and the absence of physics, IK, and safety-rated validation.
+- The live visual check did not justify changing sample `POSES`; the existing
+  TCP-coincidence unit coverage remains intact.
+
+## Browser-plugin evidence
+
+The browser plugin ran first against Chrome at `http://127.0.0.1:4173/`
+(`RobotSim`, approximately 1919 x 977). Semantic DOM controls loaded the sample,
+selected NED2-A and the direct-handover Job, opened Timeline, started and reset
+the flow, and exercised Grip Confirm Timeout.
+
+Observed status checkpoints:
+
+- `Step READY | Part TABLE | Shared Zone NONE`
+- `Step PICK_GRIP | Part NED2-A | Shared Zone NONE`
+- `Step HANDOVER_CONFIRM | Part NED2-A | Shared Zone NED2-A`
+- `Step COMPLETE | Part OUTPUT_TRAY | Shared Zone NONE`
+- Fault: `Failure GRIP_CONFIRM_TIMEOUT` with NED2-A retaining Part and Shared
+  Zone ownership; Reset returned READY and cleared the toggle.
+
+Screenshots were deliberately kept outside the repository:
+
+```text
+C:\Users\googo\AppData\Local\Temp\robotsim-handover-task7-20260721-200146\READY.png
+C:\Users\googo\AppData\Local\Temp\robotsim-handover-task7-20260721-200146\PICK_GRIP.png
+C:\Users\googo\AppData\Local\Temp\robotsim-handover-task7-20260721-200146\HANDOVER_CONFIRM.png
+C:\Users\googo\AppData\Local\Temp\robotsim-handover-task7-20260721-200146\COMPLETE.png
+C:\Users\googo\AppData\Local\Temp\robotsim-handover-task7-20260721-200146\GRIP_CONFIRM_TIMEOUT.png
+```
+
+The two Robot meshes, owning-TCP Workpiece placement, transparent wireframe
+Shared Zone, and final Output Tray placement were visible. Console inspection
+found no application error or framework overlay; it contained two existing
+`THREE.Clock` deprecation warnings. One optional canvas zoom gesture timed out
+after 10 seconds at `Input.synthesizeScrollGesture`; semantic browser control,
+status inspection, and screenshot capture remained healthy, so no browser
+fallback was required. The screenshots preceded the separately routed Header
+presentation correction; the final strict Playwright assertion proves Offline.
 
 ## TDD evidence
 
-Initial RED:
+Initial acceptance RED exposed ambiguous NED2-A text matching and then captured
+the exact accessible status punctuation. After narrowing semantic locators, the
+happy and fault paths reached their intended states. A subsequent strict Header
+Offline RED exposed the gateway presentation issue; its owning correction was
+routed outside Task 7 and retained here as a strict regression assertion.
+
+## Required verification, in order
 
 ```text
-npm run test:run -- src/features/viewport src/features/scene/SceneCanvas.test.tsx
-7 test files failed: six missing viewport modules and SceneCanvas missing Home View.
-Existing SceneCanvas tests: 3 passed.
-```
-
-Focused GREEN:
-
-```text
-npm run test:run -- src/features/viewport src/features/scene/SceneCanvas.test.tsx
-7 files passed, 14 tests passed.
-
-npm run test:run -- src/features/viewport src/features/scene src/app
-24 files passed, 154 tests passed.
-```
-
-Self-review RED/GREEN covered Top/Bottom up-vector stability, camera-distance
-marker scale, and Gizmo Frame propagation through TransformControls.
-
-Review-fix RED/GREEN additionally covered deterministic TCP frame conversion,
-complete camera persistence and Home reset, render-pure bounds resolution,
-true rotated-parent gizmo translation, and browser-level semantic invariance.
-
-Final review closure RED reproduced four failures: missing/empty geometry still
-enabled Focus, production diagnostic publication was ungated, degenerate camera
-vectors were accepted, and non-unit vectors were not normalized. The empty-bound
-Focus no-op characterization already passed.
-
-The final async-root RED reproduced a frozen `canFocusSelection`: adding valid
-geometry to the same registered STEP root remained false. GREEN verifies the
-same root transitions false-to-true-to-false as geometry is added and removed,
-without render-time world-matrix mutation. A low-frequency selected probe reads
-live eligibility and skips committed bounds work while readiness stays valid.
-
-```text
-npm run test:run -- src/features/viewport src/features/scene/SceneCanvas.test.tsx src/features/scene/Workcell.test.tsx src/features/interaction/EquipmentTransformControls.test.tsx src/features/equipment src/app/App.test.tsx
-19 files passed, 78 tests passed.
-```
-
-## Final verification
-
-```text
-npx vitest run --maxWorkers=1 --no-file-parallelism
-116 files passed, 954 tests passed, exact-final duration 307.26s.
-
-npm run test:e2e -- tests/viewport-spatial-controls.spec.ts
-test-mode build passed; 1 browser scenario passed in 1.4m, total 1.5m.
-
 npm run lint
-exit 0, no findings.
+PASS, 0 findings.
+
+npm run test:run
+PASS, 171 files and 2,190 tests; 172.11s.
 
 npm run build
-exit 0; 2203 modules transformed.
+PASS, 2,225 modules transformed.
+
+npm run test:e2e:v4
+PASS, 2/2; 53.8s.
+
+npm run test:e2e:viewport
+PASS, 1/1; 35.0s.
+
+npm run test:e2e:layout
+PASS, 11/11 on the required full rerun; 4.1m.
+
+npx playwright test tests/hackathon-handover-demo.spec.ts
+PASS, 2/2; 50.9s.
 
 git diff --check
-exit 0.
+BLOCKED only by the preserved unrelated user-owned
+.superpowers/sdd/task-4-brief.md:71 blank line at EOF.
+Task 7 scoped and staged diff checks both PASS.
 ```
 
-Build retains the existing Vite informational warnings for browser-externalized
-OCCT Node modules and the pre-existing large bundle threshold.
+The first layout run was 10/11 because the shortcut test did not observe its
+viewport-preferences localStorage write in time. The isolated test passed 1/1,
+then the required full command passed 11/11. Build and E2E retain existing OCCT
+`path`/`crypto` externalization and large-chunk warnings. Runtime gateway
+`ECONNREFUSED 127.0.0.1:8081` messages are expected for this offline flow and
+the Header now presents the state as Offline.
 
-## Concerns
+## Self-review
 
-None. No PLC/OPC UA live write, Legacy path, physics, push, or merge was added.
+The commit contains only the acceptance spec and two operator-document updates.
+No sample pose, application source, STEP asset, backup, package artifact, raw
+log, PLC write, push, merge, or unrelated Task 4 edit is included.

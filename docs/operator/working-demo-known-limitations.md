@@ -33,6 +33,33 @@ The bundled default NED2 uses this same deterministic fallback. Its current
 acceptance target is a stable Working Demo, not manufacturer-certified
 kinematics.
 
+## NED2 Direct Handover Hackathon demo
+
+Operator flow:
+
+1. Open **Project > Samples > NED2 Direct Handover Demo**.
+2. Select **NED2 Direct Handover** in Robot Jobs.
+3. Press **Start Job**.
+4. Observe **Current Step**, **Part Owner**, **Shared Zone Owner**, and the Header
+   OPC UA status.
+5. Press **Reset Handover Demo**.
+
+Fault test:
+
+1. Open **Simulation > Fault Injection > Grip Confirm Timeout**.
+2. Press **Start Job**.
+3. Observe **GRIP_CONFIRM_TIMEOUT** at **HANDOVER_CONFIRM**. The Workpiece and
+   Shared Zone remain owned by **NED2-A**.
+4. Press **Reset Handover Demo** to return to READY and clear the fault toggle.
+
+The sample is intentionally bounded. It uses fixed Joint keyframes and a local
+simulated Grip Confirm. It has no physics or inverse kinematics (IK), and it
+does not provide safety-rated validation of reachability, collision clearance,
+handover timing, or Robot motion. The Shared Zone is a visual-only wireframe and
+does not participate in collision validation. Offline completion demonstrates
+the local choreography only; it does not validate a PLC or real Grip Confirm
+signal.
+
 ## Geometry and performance
 
 - Robot import accepts one through seven STEP sources per Definition.

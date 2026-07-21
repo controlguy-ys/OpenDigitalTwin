@@ -113,6 +113,33 @@ extraction, mechanical correctness, or a second rendered industrial Robot.
 The full Pose table, acceptance checks, and remaining scope checklist are in the
 [12-Pose Technical Demo guide](docs/operator/technical-demo-12-pose.md).
 
+## NED2 Direct Handover Hackathon flow
+
+The Hackathon sample is a deterministic, browser-first two-Robot demonstration
+that completes while OPC UA and the Runtime Gateway are offline:
+
+1. Open **Project > Samples > NED2 Direct Handover Demo**.
+2. Select **NED2 Direct Handover** in Robot Jobs.
+3. Press **Start Job** once.
+4. Observe **Current Step**, **Part Owner**, **Shared Zone Owner**, and the Header
+   OPC UA status as the Workpiece moves from the Table through the Direct
+   Handover to the Output Tray.
+5. Press **Reset Handover Demo** and confirm the status returns to
+   **READY | Part TABLE | Shared Zone NONE**.
+
+Fault test:
+
+1. Open **Simulation > Fault Injection > Grip Confirm Timeout**.
+2. Press **Start Job**.
+3. Observe **GRIP_CONFIRM_TIMEOUT** at **HANDOVER_CONFIRM** with both Part and
+   Shared Zone ownership retained by **NED2-A**.
+4. Press **Reset Handover Demo**. Reset returns the scenario to READY and clears
+   the runtime-only fault toggle.
+
+This bounded demonstration uses fixed Joint keyframes and a local simulated
+Grip Confirm. It has no physics or inverse kinematics (IK), and it is not a
+safety-rated validation of the Robot motion, handover, or workcell.
+
 ## Runtime Gateway contract
 
 The browser and Gateway exchange exact Project/Revision-qualified JSON:
@@ -250,7 +277,11 @@ middleware/runtime-gateway      HTTP activation and OPC UA Server/Client adapter
   It maps each whole source to one Link and applies the built-in six-axis
   mechanical template. Arbitrary mechanical axes, origins, and limits still
   require a later deterministic authoring workflow and human confirmation.
-- No explicit Attach/Detach pick-place runtime in the released short-term slice.
+- No generic Attach/Detach pick-place runtime. The Hackathon Handover sample
+  owns one bounded transient attachment and ownership flow.
+- The NED2 Direct Handover Hackathon sample is sample-specific choreography,
+  not a generic scheduler or planner. It uses fixed Joint keyframes, no physics
+  or IK, a local simulated Grip Confirm, and no safety-rated validation.
 - No Legacy Project adoption. Unsupported Projects are rejected without
   mutating the active V4 revision.
 
