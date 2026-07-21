@@ -41,6 +41,8 @@ export interface AppCommandActionPortsV4 {
   }
   readonly connectivity: { setMode(mode: WorkcellProjectV4['opcUa']['mode']): Promise<void> }
   readonly presentation: {
+    canOpenRobotImport(): boolean
+    openRobotImport(): void
     openRobotBase(robotId: RobotIdV4): void
     openInspector(request: {
       readonly selection: SceneSelectionTargetV4
@@ -94,7 +96,7 @@ export const APP_COMMAND_PLACEMENTS_BY_SECTION_V4: PlacementMapV4 = Object.freez
     ['view.focusSelection', null, null], ['scene.rename', null, null], ['scene.pose.copy', null, null], ['scene.pose.paste', null, null], ['scene.pose.reset', null, null], ['scene.visibility.toggle', null, null], ['scene.isolate', null, null], ['scene.showAll', null, null], ['scene.delete', null, null], ['robot.home', null, null], ['robot.gripper.open', null, null], ['robot.gripper.close', null, null],
   ]),
   model: placements([
-    ['model.add.box', null, null], ['model.add.cylinder', null, null], ['model.add.group', null, null], ['scene.group.move', null, null], ['scene.group.remove', null, null], ['robot.base.edit', null, null], ['robot.mount.edit', null, null],
+    ['model.importRobotStep', null, null], ['model.add.box', null, null], ['model.add.cylinder', null, null], ['model.add.group', null, null], ['scene.group.move', null, null], ['scene.group.remove', null, null], ['robot.base.edit', null, null], ['robot.mount.edit', null, null],
   ]),
   job: placements([
     ['job.new', null, null], ['job.pose.save', null, null], ['job.start', null, null], ['job.cancel', null, null], ['job.rename', null, null], ['job.duplicate', null, null], ['job.delete', null, null], ['view.timeline.open', null, null],
@@ -236,6 +238,25 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
     projectCommand(context, 'project.import', 'Import Project', false, () => context.actions.project.importProject()),
     projectCommand(context, 'project.export', 'Export Project', true, () => context.actions.project.exportProject()),
     projectCommand(context, 'project.sample.dual', 'Dual-Robot Technical Demo', true, () => context.actions.project.loadDualRobotSample()),
+    command('model.importRobotStep', 'Import Robot STEP', 'model', {
+      kind: 'action', visible: true,
+      get enabled() {
+        return projectReason(context, true) === undefined
+          && context.actions.presentation.canOpenRobotImport()
+      },
+      get disabledReason() {
+        return projectReason(context, true)
+          ?? (context.actions.presentation.canOpenRobotImport()
+            ? undefined
+            : 'Robot STEP import is unavailable.')
+      },
+      execute() {
+        if (!context.actions.presentation.canOpenRobotImport()) {
+          throw new Error('Robot STEP import is unavailable.')
+        }
+        context.actions.presentation.openRobotImport()
+      },
+    }),
     ...composeSceneContextCommandsV4({ project: context.project, interaction: context.interaction, scene: context.scene, prompt: context.prompt, presentation: contextualPresentation(context) }),
     activeRobotCommand(context, 'robot.home', 'Robot Home', (robotId) => context.robotOperator.home(robotId), (robotId) => context.robotOperator.canHome(robotId)),
     activeRobotCommand(context, 'robot.gripper.open', 'Open Gripper', (robotId) => context.robotOperator.setGripper(robotId, 'OPEN')),

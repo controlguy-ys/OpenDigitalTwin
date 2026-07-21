@@ -5,6 +5,8 @@ import type {
   RobotDefinitionV4,
   WorkcellProjectV4,
 } from '../../core/project-v4/index.js'
+import { createProjectHashService, type ProjectHashService } from '../../lib/hash/sha256.js'
+import { stepImportClient } from '../import/StepImportClient.js'
 import { createCoordinateDisplayStoreV4 } from '../frames/v4/coordinate-display-store.js'
 import { createInteractionStoreV4 } from '../interaction/v4/interaction-store.js'
 import {
@@ -30,6 +32,16 @@ import {
   createRobotRuntimeRegistryV4,
   type RobotRuntimeRegistryV4,
 } from '../robot/v4/robot-runtime-registry.js'
+import {
+  createRobotImportControllerV4,
+  createRobotImportGeometryResolverV4,
+  type RobotImportControllerV4,
+  type RobotStepImportParserV4,
+} from '../robot/v4/robot-step-import-v4.js'
+import {
+  createRobotStepAssetRepositoryV4,
+  type RobotStepAssetRepositoryV4,
+} from '../robot/v4/robot-step-asset-repository-v4.js'
 import {
   createSceneCommandServiceV4,
   type SceneCommandServiceV4,
@@ -96,6 +108,7 @@ export interface BrowserProjectResourcesV4 {
   readonly jobCommands: JobCommandServiceV4
   readonly projectFiles: ProjectFileCommandPortV4
   readonly userPrompt: UserPromptPortV4
+  readonly robotImport?: RobotImportControllerV4
 }
 
 export interface BrowserProjectResourcesOptionsV4 {
@@ -109,6 +122,9 @@ export interface BrowserProjectResourcesOptionsV4 {
   ) => Promise<PreparedRobotDefinitionGeometryV4 | null>
   readonly projectFiles?: ProjectFileCommandPortV4
   readonly userPrompt?: UserPromptPortV4
+  readonly robotStepAssets?: RobotStepAssetRepositoryV4
+  readonly robotStepParser?: RobotStepImportParserV4
+  readonly robotHash?: ProjectHashService
 }
 
 function browserAnimationSchedulerV4(): AnimationFrameSchedulerV4 {
@@ -139,6 +155,12 @@ export function createBrowserProjectResourcesV4(
     ?? browserAnimationSchedulerV4()
   const projectFiles = options.projectFiles ?? createBrowserProjectFileCommandPortV4()
   const userPrompt = options.userPrompt ?? createBrowserUserPromptPortV4()
+  const robotStepAssets = options.robotStepAssets ?? createRobotStepAssetRepositoryV4()
+  const robotStepParser = options.robotStepParser ?? stepImportClient
+  const importedGeometry = createRobotImportGeometryResolverV4({
+    assets: robotStepAssets,
+    parser: robotStepParser,
+  })
 
   const rawRobots = createRobotRuntimeRegistryV4()
   const rawJobs = createJobRuntimeStoreV4()
@@ -172,7 +194,7 @@ export function createBrowserProjectResourcesV4(
     ): Promise<PreparedRobotDefinitionGeometryV4 | null> => (
       definition.id === BUILTIN_CRB_DEFINITION_ID_V4
         ? prepareBuiltinCrbGeometryV4(definition)
-        : null
+        : importedGeometry.resolve(_project, definition)
     ))
 
   const runtime = createBrowserProjectRuntimeV4({
@@ -253,6 +275,15 @@ export function createBrowserProjectResourcesV4(
     jobs,
     createId,
   })
+  const robotImport = createRobotImportControllerV4({
+    mutations,
+    interaction,
+    assets: robotStepAssets,
+    geometry: importedGeometry,
+    parser: robotStepParser,
+    hash: options.robotHash ?? createProjectHashService({ subtle: globalThis.crypto?.subtle }),
+    createId,
+  })
 
   return Object.freeze({
     projectStore,
@@ -270,6 +301,7 @@ export function createBrowserProjectResourcesV4(
     jobCommands,
     projectFiles,
     userPrompt,
+    robotImport,
   })
 }
 

@@ -218,6 +218,7 @@ describe('browser Project V4 resource root', () => {
       'mutations',
       'projectFiles',
       'projectStore',
+      'robotImport',
       'robots',
       'runtimeBundle',
       'scene',

@@ -11,7 +11,7 @@ function command(id: string, section: AppCommandV4['section'], visible = true): 
 const COMPLETE_CATALOG = [
   ['project.new', 'project'], ['project.save', 'project'], ['project.import', 'project'], ['project.export', 'project'], ['project.sample.dual', 'project'],
   ['view.focusSelection', 'view'], ['scene.rename', 'home'], ['scene.pose.copy', 'home'], ['scene.pose.paste', 'home'], ['scene.pose.reset', 'home'], ['scene.visibility.toggle', 'home'], ['scene.isolate', 'home'], ['scene.showAll', 'home'], ['scene.delete', 'home'], ['robot.home', 'home'], ['robot.gripper.open', 'home'], ['robot.gripper.close', 'home'],
-  ['model.add.box', 'model'], ['model.add.cylinder', 'model'], ['model.add.group', 'model'], ['scene.group.move', 'model'], ['scene.group.remove', 'model'], ['robot.base.edit', 'model'], ['robot.mount.edit', 'model'],
+  ['model.importRobotStep', 'model'], ['model.add.box', 'model'], ['model.add.cylinder', 'model'], ['model.add.group', 'model'], ['scene.group.move', 'model'], ['scene.group.remove', 'model'], ['robot.base.edit', 'model'], ['robot.mount.edit', 'model'],
   ['job.new', 'job'], ['job.pose.save', 'job'], ['job.start', 'job'], ['job.cancel', 'job'], ['job.rename', 'job'], ['job.duplicate', 'job'], ['job.delete', 'job'], ['view.timeline.open', 'job'],
   ['collision.validate', 'simulation'], ['view.collision.open', 'simulation'],
   ['connectivity.mode.off', 'connectivity'], ['connectivity.mode.client', 'connectivity'], ['connectivity.mode.server', 'connectivity'], ['connectivity.mode.bridge', 'connectivity'], ['connectivity.details.open', 'connectivity'],

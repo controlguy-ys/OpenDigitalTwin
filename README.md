@@ -19,7 +19,9 @@ or safety-rated system.
   ID rather than a global active Robot.
 - Robot STEP source count and Joint count are independent. A Definition may
   reference one through seven Robot STEP sources, including one assembly source,
-  but this release does not infer Links or Joints from STEP topology.
+  and **Model → Import Robot STEP** maps them to LINK00–LINK06. Imported Robots
+  use the deterministic six-axis mechanical template; this release does not
+  infer Links or Joints from STEP topology.
 - The default Project renders the built-in ABB CRB15000 geometry. The V4 Scene
   also supports primitive Boxes/Cylinders, Groups, visibility, transforms, and
   geometry-proxy collision inspection. Boxes, Cylinders, and imported STEP
@@ -55,6 +57,12 @@ npm run dev -- --host 127.0.0.1 --port 5173
 
 Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/). The application remains
 usable when `/runtime` is unavailable; Gateway status is reported separately.
+
+To add custom Robot Geometry, open **Model → Import Robot STEP**, select one to
+seven `.step`/`.stp` sources, confirm the LINK mapping, and choose the source
+X/Y/Z-Up convention. Files named with `LINK00` through `LINK06` map explicitly;
+other filenames fill the first free Link. Raw sources are retained in the local
+browser asset database so the imported Geometry can be restored after reload.
 
 Build and run the Runtime Gateway directly for HTTP/OPC UA integration tests:
 
@@ -226,10 +234,10 @@ middleware/runtime-gateway      HTTP activation and OPC UA Server/Client adapter
   planning, reachability solving, or coordinated multi-Robot synchronization.
 - No automatic STEP assembly splitting, Link/Joint inference, mesh
   simplification, or API/harness-based semantic conversion.
-- No current Robot-definition authoring UI for turning an arbitrary single STEP
-  assembly such as MRb05 into a functional articulated Robot. Mechanical axes,
-  origins, limits, Geometry occurrences, and source orientation still require a
-  later deterministic authoring workflow and human confirmation.
+- Robot STEP Import does not split one assembly source into movable subparts.
+  It maps each whole source to one Link and applies the built-in six-axis
+  mechanical template. Arbitrary mechanical axes, origins, and limits still
+  require a later deterministic authoring workflow and human confirmation.
 - No explicit Attach/Detach pick-place runtime in the released short-term slice.
 - No Legacy Project adoption. Unsupported Projects are rejected without
   mutating the active V4 revision.

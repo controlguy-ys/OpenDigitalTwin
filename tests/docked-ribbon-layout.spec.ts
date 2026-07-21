@@ -747,7 +747,8 @@ test('keeps selection context, menus, commands, and OPC UA mode available on the
   expect(await ribbonLabels(page)).toEqual(['Joint Jog', 'Robot Home', 'Edit Robot Base', 'Hide'])
 
   await openTopLevelMenu(page, 'Model')
-  for (const label of ['Robot Geometry', 'Robot Kinematics', 'Import STEP', 'Import Robot STEP', 'Add Object', 'STEP Add Object']) {
+  await expect(page.getByRole('menuitem', { name: 'Import Robot STEP', exact: true })).toBeVisible()
+  for (const label of ['Robot Geometry', 'Robot Kinematics', 'Import STEP', 'Add Object', 'STEP Add Object']) {
     await expect(page.getByRole('menuitem', { name: label, exact: true })).toHaveCount(0)
   }
   await page.keyboard.press('Escape')

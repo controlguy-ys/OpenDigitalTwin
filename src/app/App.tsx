@@ -52,6 +52,7 @@ import {
   type BrowserProjectResourcesV4,
 } from '../features/project/project-store-browser.js'
 import { createDualRobotSampleV4 } from '../features/project/v4/dual-robot-sample-v4.js'
+import { RobotImportDialogV4 } from '../features/robot/v4/RobotImportDialogV4.js'
 import type { RobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
 import {
   createRuntimeGatewayPublisherV4,
@@ -297,6 +298,7 @@ export function App({
   const [inspectorFocusRequest, setInspectorFocusRequest] =
     useState<AppInspectorFocusRequestV4 | null>(null)
   const [gatewayDetailsOpen, setGatewayDetailsOpen] = useState(false)
+  const [robotImportOpen, setRobotImportOpen] = useState(false)
   const [contextTargetSource, setContextTargetSource] =
     useState<AppContextTargetSourceV4>('empty')
   const contextTargetSourceRef = useRef<AppContextTargetSourceV4>('empty')
@@ -806,6 +808,8 @@ export function App({
         },
       }),
       presentation: Object.freeze({
+        canOpenRobotImport: () => resources.robotImport !== undefined,
+        openRobotImport: () => setRobotImportOpen(true),
         openRobotBase: (robotId: RobotIdV4) => openInspector({
           selection: { kind: 'robot', robotId },
           section: 'pose',
@@ -967,6 +971,13 @@ export function App({
         <p className="operation-feedback" role="alert">{commandError}</p>
       )}
       <LocalHelpPanelV4 controller={activeCommandEnvironment.help} />
+      {resources.robotImport === undefined ? null : (
+        <RobotImportDialogV4
+          controller={resources.robotImport}
+          onClose={() => setRobotImportOpen(false)}
+          open={robotImportOpen}
+        />
+      )}
       <AppShellV4
         commandBindings={activeCommandEnvironment.bindings}
         header={(

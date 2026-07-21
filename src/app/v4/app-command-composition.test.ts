@@ -62,7 +62,7 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
     actions: {
       project: { newProject: vi.fn(), saveProject: vi.fn(async () => undefined), importProject: vi.fn(async () => 'cancelled' as const), exportProject: vi.fn(async () => undefined), loadDualRobotSample: vi.fn() },
       connectivity: { setMode: vi.fn(async () => undefined) },
-      presentation: { openRobotBase: vi.fn(), openInspector: vi.fn(), openTimeline: vi.fn(), openCollision: vi.fn(), openGatewayDetails: vi.fn() },
+      presentation: { canOpenRobotImport: vi.fn(() => true), openRobotImport: vi.fn(), openRobotBase: vi.fn(), openInspector: vi.fn(), openTimeline: vi.fn(), openCollision: vi.fn(), openGatewayDetails: vi.fn() },
     },
   }
 }
@@ -74,7 +74,7 @@ describe('composeAppCommandsV4', () => {
     expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).toEqual({
       project: [root('project.new'), root('project.save'), root('project.import'), root('project.export'), submenu('project.sample.dual', 'project.samples', 'Samples')],
       home: ['view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'scene.showAll', 'scene.delete', 'robot.home', 'robot.gripper.open', 'robot.gripper.close'].map(root),
-      model: ['model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'].map(root),
+      model: ['model.importRobotStep', 'model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'].map(root),
       job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'].map(root),
       simulation: ['job.start', 'job.cancel', 'view.timeline.open', 'collision.validate', 'view.collision.open'].map(root),
       connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.details.open')],
@@ -306,7 +306,12 @@ describe('composeAppCommandsV4', () => {
     expect(composed.help.open).toHaveBeenCalledWith('controls')
     expect(registry.get('connectivity.mode.client')).toMatchObject({ label: 'OPC UA Client' })
     expect(registry.get('connectivity.mode.bridge')).toMatchObject({ label: 'OPC UA Bridge' })
-    expect(registry.get('model.importRobotStep')).toBeNull()
+    expect(registry.get('model.importRobotStep')).toMatchObject({
+      label: 'Import Robot STEP',
+      enabled: true,
+    })
+    await registry.get('model.importRobotStep')!.execute()
+    expect(composed.actions.presentation.openRobotImport).toHaveBeenCalledTimes(1)
   })
 
   it('flips every Shell checked state and reset restores its deterministic defaults', async () => {
@@ -421,6 +426,7 @@ describe('composeAppCommandsV4', () => {
       { id: 'robot.home', label: 'Robot Home', section: 'home' },
       { id: 'robot.gripper.open', label: 'Open Gripper', section: 'home' },
       { id: 'robot.gripper.close', label: 'Close Gripper', section: 'home' },
+      { id: 'model.importRobotStep', label: 'Import Robot STEP', section: 'model' },
       { id: 'model.add.box', label: 'Add Box', section: 'model' },
       { id: 'model.add.cylinder', label: 'Add Cylinder', section: 'model' },
       { id: 'model.add.group', label: 'Add Group', section: 'model' },
@@ -520,6 +526,6 @@ describe('composeAppCommandsV4', () => {
     expect(help.open).toHaveBeenCalledWith('stepImport')
     expect(help.open).toHaveBeenCalledWith('opcUaMapping')
     expect(help.open).toHaveBeenCalledWith('about')
-    for (const id of ['job.pause', 'job.resume', 'model.importRobotStep', 'robot.geometry.open', 'robot.kinematics.open', 'robot.rapid.open', 'scene.opcUaMapping.open', 'coordinate.frames.open'] as const) expect(registry.get(id)).toBeNull()
+    for (const id of ['job.pause', 'job.resume', 'robot.geometry.open', 'robot.kinematics.open', 'robot.rapid.open', 'scene.opcUaMapping.open', 'coordinate.frames.open'] as const) expect(registry.get(id)).toBeNull()
   })
 })
