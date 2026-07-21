@@ -740,6 +740,77 @@ export function createRuntimeGatewayEntrypointService(
     return result!
   }
 
+  function clientEndpointActionPath(
+    url: string | undefined,
+  ): { readonly endpointId: string; readonly action: 'disconnect' | 'reconnect' } | null {
+    if (url === undefined) return null
+    const match = /^\/runtime\/client-endpoints\/([^/]+)\/(disconnect|reconnect)$/u.exec(url)
+    if (match === null) return null
+    try {
+      return Object.freeze({
+        endpointId: decodeURIComponent(match[1]!),
+        action: match[2] as 'disconnect' | 'reconnect',
+      })
+    } catch {
+      throw new RuntimeGatewayHttpError(
+        400,
+        'OPC_UA_ENDPOINT_ID_INVALID',
+        'Client Endpoint id is not valid URL encoding.',
+      )
+    }
+  }
+
+  async function clientEndpointActionRequest(
+    endpointId: string,
+    action: 'disconnect' | 'reconnect',
+  ): Promise<RuntimeGatewayStatusV1> {
+    await enqueueRuntimeTransition(async () => {
+      const active = activeRuntime
+      if (
+        active === null
+        || (active.project.opcUa.mode !== 'client' && active.project.opcUa.mode !== 'bridge')
+        || active.clientAdapter === null
+      ) {
+        throw new RuntimeGatewayHttpError(
+          409,
+          'OPC_UA_CLIENT_NOT_ACTIVE',
+          'Client Endpoint control requires an active OPC UA Client Project.',
+        )
+      }
+      const control = action === 'disconnect'
+        ? active.clientAdapter.disconnectEndpoint
+        : active.clientAdapter.reconnectEndpoint
+      if (control === undefined) {
+        throw new RuntimeGatewayHttpError(
+          501,
+          'OPC_UA_ENDPOINT_CONTROL_UNAVAILABLE',
+          'The active OPC UA Client adapter does not support endpoint control.',
+        )
+      }
+      try {
+        await control(endpointId)
+      } catch (error) {
+        const code = error instanceof Error ? error.message : String(error)
+        if (code === 'OPC_UA_ENDPOINT_NOT_FOUND') {
+          throw new RuntimeGatewayHttpError(
+            404,
+            code,
+            `Client Endpoint ${endpointId} does not exist in the active Project.`,
+          )
+        }
+        if (code === 'OPC_UA_ENDPOINT_NOT_ACTIVE') {
+          throw new RuntimeGatewayHttpError(
+            409,
+            code,
+            `Client Endpoint ${endpointId} has no active binding.`,
+          )
+        }
+        throw error
+      }
+    })
+    return status()
+  }
+
   function writeRequestError(response: ServerResponse, error: unknown): void {
     if (response.destroyed || response.headersSent || response.writableEnded) return
     if (error instanceof RuntimeGatewayHttpError) {
@@ -803,6 +874,16 @@ export function createRuntimeGatewayEntrypointService(
 
     if (request.method === 'POST' && request.url === '/runtime/command') {
       writeJson(response, 200, await commandRequest(request))
+      return
+    }
+
+    const endpointAction = clientEndpointActionPath(request.url)
+    if (request.method === 'POST' && endpointAction !== null) {
+      writeJson(
+        response,
+        200,
+        await clientEndpointActionRequest(endpointAction.endpointId, endpointAction.action),
+      )
       return
     }
 

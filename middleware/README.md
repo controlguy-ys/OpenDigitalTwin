@@ -44,6 +44,10 @@ Invoke-WebRequest http://127.0.0.1:8080/runtime/status
 - `PUT /runtime/project` - validate and atomically activate one Project V4.
 - `POST /runtime/state` - publish a revision-fenced multi-Robot Joint snapshot
   in Server or Bridge mode.
+- `POST /runtime/client-endpoints/<endpointId>/disconnect` - stop one Client
+  Endpoint at runtime without changing the saved Project Binding.
+- `POST /runtime/client-endpoints/<endpointId>/reconnect` - restart that saved
+  Client Endpoint without replacing the active Project Revision.
 - `/runtime/ws` - stream bounded, revision-fenced Client/Bridge mapping batches
   to the browser over WebSocket.
 

@@ -36,6 +36,10 @@ export interface RuntimeGatewayPublisherV4 {
     signal?: AbortSignal,
   ): Promise<RuntimeGatewayStatusV4>
   readStatus(signal?: AbortSignal): Promise<RuntimeGatewayStatusV4>
+  /** Runtime-only control; Project bindings remain persisted. */
+  disconnectEndpoint?: (endpointId: string, signal?: AbortSignal) => Promise<RuntimeGatewayStatusV4>
+  /** Runtime-only control; Project bindings remain persisted. */
+  reconnectEndpoint?: (endpointId: string, signal?: AbortSignal) => Promise<RuntimeGatewayStatusV4>
 }
 
 export interface RuntimeGatewayPublisherOptionsV4 {
@@ -404,6 +408,12 @@ export function createRuntimeGatewayPublisherV4(
   return Object.freeze({
     activateProject,
     publishRobotState,
+    disconnectEndpoint: (endpointId: string, signal?: AbortSignal) => enqueueCommand(
+      () => requestStatus('POST', `/client-endpoints/${encodeURIComponent(endpointId)}/disconnect`, undefined, signal),
+    ),
+    reconnectEndpoint: (endpointId: string, signal?: AbortSignal) => enqueueCommand(
+      () => requestStatus('POST', `/client-endpoints/${encodeURIComponent(endpointId)}/reconnect`, undefined, signal),
+    ),
     readStatus: (signal?: AbortSignal) => enqueueCommand(
       () => requestStatus('GET', '/status', undefined, signal),
     ),

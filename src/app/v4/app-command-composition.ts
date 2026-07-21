@@ -48,6 +48,8 @@ export interface AppCommandActionPortsV4 {
   readonly connectivity: {
     setMode(mode: WorkcellProjectV4['opcUa']['mode']): Promise<void>
     bindBrObjectPosBoxes(): Promise<void>
+    disconnectRobotBinding?: (robotId: RobotIdV4) => Promise<void>
+    reconnectRobotBinding?: (robotId: RobotIdV4) => Promise<void>
   }
   readonly presentation: {
     canOpenRobotImport(): boolean
@@ -115,7 +117,7 @@ export const APP_COMMAND_PLACEMENTS_BY_SECTION_V4: PlacementMapV4 = Object.freez
     ['job.start', null, null], ['job.cancel', null, null], ['view.timeline.open', null, null], ['collision.validate', null, null], ['view.collision.open', null, null], ['simulation.fault.gripConfirmTimeout', 'simulation.faults', 'Fault Injection'],
   ]),
   connectivity: placements([
-    ['connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.bindObjectPosBoxes', null, null], ['connectivity.details.open', null, null],
+    ['connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.bindObjectPosBoxes', null, null], ['connectivity.robotBinding.disconnect', null, null], ['connectivity.robotBinding.reconnect', null, null], ['connectivity.details.open', null, null],
   ]),
   view: placements([
     ['view.sidebar', 'view.panels', 'Panels'], ['view.inspector', 'view.panels', 'Panels'], ['view.bottom', 'view.panels', 'Panels'], ['view.ribbon', 'view.panels', 'Panels'], ['view.layout.reset', 'view.panels', 'Panels'],
@@ -161,6 +163,23 @@ function activeJob(context: AppCommandCompositionContextV4): WorkcellProjectV4['
 
 function activeRobotReason(context: AppCommandCompositionContextV4): string | undefined {
   return activeRobot(context) === null ? 'No active Robot.' : undefined
+}
+
+function activeRobotBindingEndpointId(context: AppCommandCompositionContextV4): string | null {
+  const robot = activeRobot(context)
+  if (robot === null || !robot.jointSource.startsWith('opcua:')) return null
+  const endpointId = robot.jointSource.slice('opcua:'.length)
+  return endpointId.length === 0 ? null : endpointId
+}
+
+function robotBindingControlReason(context: AppCommandCompositionContextV4): string | undefined {
+  if (context.project.opcUa.mode !== 'client' && context.project.opcUa.mode !== 'bridge') {
+    return 'Robot Binding control requires OPC UA Client Mode.'
+  }
+  if (activeRobotBindingEndpointId(context) === null) {
+    return activeRobotReason(context) ?? 'The active Robot has no saved OPC UA Binding.'
+  }
+  return undefined
 }
 
 function activeJobReason(context: AppCommandCompositionContextV4): string | undefined {
@@ -412,6 +431,50 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
       get enabled() { return projectReason(context, true) === undefined },
       get disabledReason() { return projectReason(context, true) },
       execute: () => context.actions.connectivity.bindBrObjectPosBoxes(),
+    }),
+    command('connectivity.robotBinding.disconnect', 'Disconnect Robot Binding', 'connectivity', {
+      kind: 'action', visible: true,
+      get enabled() {
+        return robotBindingControlReason(context) === undefined
+          && context.actions.connectivity.disconnectRobotBinding !== undefined
+      },
+      get disabledReason() {
+        return robotBindingControlReason(context)
+          ?? (context.actions.connectivity.disconnectRobotBinding === undefined
+            ? 'Runtime Gateway endpoint control is unavailable.'
+            : undefined)
+      },
+      async execute() {
+        const robot = activeRobot(context)
+        const endpointId = activeRobotBindingEndpointId(context)
+        const disconnect = context.actions.connectivity.disconnectRobotBinding
+        if (robot === null || endpointId === null || disconnect === undefined) {
+          throw new Error(robotBindingControlReason(context) ?? 'Runtime Gateway endpoint control is unavailable.')
+        }
+        await disconnect(robot.id)
+      },
+    }),
+    command('connectivity.robotBinding.reconnect', 'Reconnect Robot Binding', 'connectivity', {
+      kind: 'action', visible: true,
+      get enabled() {
+        return robotBindingControlReason(context) === undefined
+          && context.actions.connectivity.reconnectRobotBinding !== undefined
+      },
+      get disabledReason() {
+        return robotBindingControlReason(context)
+          ?? (context.actions.connectivity.reconnectRobotBinding === undefined
+            ? 'Runtime Gateway endpoint control is unavailable.'
+            : undefined)
+      },
+      async execute() {
+        const robot = activeRobot(context)
+        const endpointId = activeRobotBindingEndpointId(context)
+        const reconnect = context.actions.connectivity.reconnectRobotBinding
+        if (robot === null || endpointId === null || reconnect === undefined) {
+          throw new Error(robotBindingControlReason(context) ?? 'Runtime Gateway endpoint control is unavailable.')
+        }
+        await reconnect(robot.id)
+      },
     }),
     command('connectivity.details.open', 'Gateway Details', 'connectivity', { kind: 'action', visible: true, enabled: true, execute: () => context.actions.presentation.openGatewayDetails() }),
   ]

@@ -86,6 +86,10 @@ export interface OpcUaClientAdapterOptionsV1 {
 export interface OpcUaClientAdapterV1 {
   start(): Promise<void>
   stop(): Promise<void>
+  /** Runtime-only control; the configured Project binding remains unchanged. */
+  disconnectEndpoint?: (endpointId: string) => Promise<void>
+  /** Runtime-only control; the configured Project binding remains unchanged. */
+  reconnectEndpoint?: (endpointId: string) => Promise<void>
   status(): readonly RuntimeGatewayOpcUaClientEndpointStatusV1[]
   write(request: OpcUaClientWriteRequestV1): Promise<OpcUaClientWriteResultV1>
 }
@@ -1042,6 +1046,37 @@ export function createOpcUaClientAdapterV1(
     return requested
   }
 
+  function requireRuntime(endpointId: string): EndpointRuntimeV1 {
+    const runtime = runtimes.get(endpointId)
+    if (runtime === undefined) throw new Error('OPC_UA_ENDPOINT_NOT_FOUND')
+    return runtime
+  }
+
+  async function stopEndpointRuntime(runtime: EndpointRuntimeV1): Promise<void> {
+    const wasLive = runtime.connected
+    runtime.stopped = true
+    runtime.generation += 1
+    if (wasLive) {
+      try {
+        publishDisconnectedForSession(runtime)
+      } catch (error) {
+        // A failed clock must not be sampled again merely to decorate a stop
+        // diagnostic: cleanup remains unconditional.
+        runtime.lastError = diagnosticError(error, runtime.lastGatewayTimestampMs)
+      }
+    }
+    clearEarlyRoots(runtime)
+    runtime.reconnectAttempt = 0
+    runtime.nextRetryAtMs = null
+    try {
+      await closeRuntime(runtime)
+      await runtime.recovery
+      await runtime.connectTask
+    } finally {
+      await closeRuntime(runtime)
+    }
+  }
+
   return Object.freeze({
     start: () => enqueue(async () => {
       for (const runtime of runtimes.values()) {
@@ -1050,31 +1085,19 @@ export function createOpcUaClientAdapterV1(
         startConnect(runtime)
       }
     }),
+    disconnectEndpoint: (endpointId: string) => enqueue(async () => {
+      await stopEndpointRuntime(requireRuntime(endpointId))
+    }),
+    reconnectEndpoint: (endpointId: string) => enqueue(async () => {
+      const runtime = requireRuntime(endpointId)
+      if (runtime.mappingCount === 0) {
+        throw new Error('OPC_UA_ENDPOINT_NOT_ACTIVE')
+      }
+      runtime.stopped = false
+      startConnect(runtime)
+    }),
     stop: () => enqueue(async () => {
-      await Promise.all([...runtimes.values()].map(async (runtime) => {
-        const wasLive = runtime.connected
-        runtime.stopped = true
-        runtime.generation += 1
-        if (wasLive) {
-          try {
-            publishDisconnectedForSession(runtime)
-          } catch (error) {
-            // A failed clock must not be sampled again merely to decorate a
-            // stop diagnostic: cleanup remains unconditional.
-            runtime.lastError = diagnosticError(error, runtime.lastGatewayTimestampMs)
-          }
-        }
-        clearEarlyRoots(runtime)
-        runtime.reconnectAttempt = 0
-        runtime.nextRetryAtMs = null
-        try {
-          await closeRuntime(runtime)
-          await runtime.recovery
-          await runtime.connectTask
-        } finally {
-          await closeRuntime(runtime)
-        }
-      }))
+      await Promise.all([...runtimes.values()].map((runtime) => stopEndpointRuntime(runtime)))
     }),
     status: () => Object.freeze([...runtimes.values()].map((runtime) => Object.freeze({
       endpointId: runtime.endpoint.endpointId,

@@ -871,6 +871,44 @@ export function App({
             mutate: (active) => bindBrObjectPosBoxesV4(active),
           })
         },
+        disconnectRobotBinding: async (robotId: RobotIdV4) => {
+          const robot = project.robots.find((candidate) => candidate.id === robotId)
+          const endpointId = robot?.jointSource.startsWith('opcua:')
+            ? robot.jointSource.slice('opcua:'.length)
+            : null
+          if (gatewayPublisher?.disconnectEndpoint === undefined || endpointId === null || endpointId.length === 0) {
+            throw new Error('Runtime Gateway cannot disconnect the active Robot Binding.')
+          }
+          const status = await gatewayPublisher.disconnectEndpoint(endpointId)
+          if (status.project.revisionId === project.revisionId) {
+            setGatewayPresentation({
+              phase: 'ready',
+              projectRevisionId: status.project.revisionId,
+              mode: status.opcUa.mode,
+              endpointUrl: status.opcUa.server.endpointUrl,
+              message: null,
+            })
+          }
+        },
+        reconnectRobotBinding: async (robotId: RobotIdV4) => {
+          const robot = project.robots.find((candidate) => candidate.id === robotId)
+          const endpointId = robot?.jointSource.startsWith('opcua:')
+            ? robot.jointSource.slice('opcua:'.length)
+            : null
+          if (gatewayPublisher?.reconnectEndpoint === undefined || endpointId === null || endpointId.length === 0) {
+            throw new Error('Runtime Gateway cannot reconnect the active Robot Binding.')
+          }
+          const status = await gatewayPublisher.reconnectEndpoint(endpointId)
+          if (status.project.revisionId === project.revisionId) {
+            setGatewayPresentation({
+              phase: 'ready',
+              projectRevisionId: status.project.revisionId,
+              mode: status.opcUa.mode,
+              endpointUrl: status.opcUa.server.endpointUrl,
+              message: null,
+            })
+          }
+        },
       }),
       presentation: Object.freeze({
         canOpenRobotImport: () => resources.robotImport !== undefined,
@@ -896,7 +934,7 @@ export function App({
         openGatewayDetails: () => setGatewayDetailsOpen(true),
       }),
     })
-  }, [closeContextMenuRequest, project, resources, shellLayoutController])
+  }, [closeContextMenuRequest, gatewayPublisher, project, resources, shellLayoutController])
   const candidateRegistry = useMemo(() => {
     if (
       activeCommandEnvironment === null

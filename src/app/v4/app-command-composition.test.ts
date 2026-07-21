@@ -12,6 +12,11 @@ import {
   HACKATHON_HANDOVER_IDS_V4,
   createHackathonHandoverSampleV4,
 } from '../../features/project/v4/hackathon-handover-sample-v4.js'
+import {
+  createDualRobotSampleV4,
+  DUAL_ROBOT_SAMPLE_IDS_V4,
+} from '../../features/project/v4/dual-robot-sample-v4.js'
+import { bindBrRobotJointsV4, BR_ROBOT_OPCUA_ENDPOINT_ID_V4 } from '../../features/project/v4/robot-joint-opcua-binding-v4.js'
 import type { AppCommandCompositionContextV4 } from './app-command-composition.js'
 import {
   APP_COMMAND_PLACEMENTS_BY_SECTION_V4,
@@ -85,7 +90,7 @@ describe('composeAppCommandsV4', () => {
       model: ['model.importRobotStep', 'model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'].map(root),
       job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.reset', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'].map(root),
       simulation: [root('job.start'), root('job.cancel'), root('view.timeline.open'), root('collision.validate'), root('view.collision.open'), submenu('simulation.fault.gripConfirmTimeout', 'simulation.faults', 'Fault Injection')],
-      connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.bindObjectPosBoxes'), root('connectivity.details.open')],
+      connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.bindObjectPosBoxes'), root('connectivity.robotBinding.disconnect'), root('connectivity.robotBinding.reconnect'), root('connectivity.details.open')],
       view: [
         ...['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset'].map((id) => submenu(id, 'view.panels', 'Panels')),
         ...['view.theme.system', 'view.theme.light', 'view.theme.dark'].map((id) => submenu(id, 'view.theme', 'Theme')),
@@ -151,6 +156,33 @@ describe('composeAppCommandsV4', () => {
     expect(composed.robotOperator.home).toHaveBeenCalledWith('robot-1')
     expect(composed.jobOperator.start).toHaveBeenCalledWith('robot-1', 'job-1')
     expect(composed.jobOperator.cancel).toHaveBeenCalledWith('robot-1')
+  })
+
+  it('controls the saved active Robot Binding without mutating its Project source', async () => {
+    const source = createDualRobotSampleV4({
+      projectId: 'project-binding-command',
+      revisionId: 'revision-binding-command',
+      nowIso: '2026-07-22T00:00:00.000Z',
+    })
+    const project = bindBrRobotJointsV4(source, DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId)
+    const composed = context(project)
+    const disconnect = vi.fn(async () => undefined)
+    const reconnect = vi.fn(async () => undefined)
+    Object.assign(composed.actions.connectivity, {
+      disconnectRobotBinding: disconnect,
+      reconnectRobotBinding: reconnect,
+    })
+    const registry = composeAppCommandsV4(composed)
+
+    expect(registry.get('connectivity.robotBinding.disconnect')).toMatchObject({ enabled: true })
+    expect(registry.get('connectivity.robotBinding.reconnect')).toMatchObject({ enabled: true })
+    await registry.get('connectivity.robotBinding.disconnect')!.execute()
+    await registry.get('connectivity.robotBinding.reconnect')!.execute()
+
+    expect(disconnect).toHaveBeenCalledWith(DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId)
+    expect(reconnect).toHaveBeenCalledWith(DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId)
+    expect(project.robots[0]!.jointSource).toBe(`opcua:${BR_ROBOT_OPCUA_ENDPOINT_ID_V4}`)
+    expect(project.opcUa.mappings).toHaveLength(6)
   })
 
   it('uses exact live gripper, Job authoring, and missing-or-foreign Job gates', async () => {
@@ -489,7 +521,7 @@ describe('composeAppCommandsV4', () => {
       ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Technical Demo'], ['project.sample.handover', 'NED2 Direct Handover Demo'],
     ])
     expect(all.filter(({ section }) => section === 'connectivity').map(({ id, label }) => [id, label])).toEqual([
-      ['connectivity.mode.off', 'Off'], ['connectivity.mode.client', 'OPC UA Client'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.mode.bridge', 'OPC UA Bridge'], ['connectivity.bindObjectPosBoxes', 'Create 20 Box ObjectPos bindings'], ['connectivity.details.open', 'Gateway Details'],
+      ['connectivity.mode.off', 'Off'], ['connectivity.mode.client', 'OPC UA Client'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.mode.bridge', 'OPC UA Bridge'], ['connectivity.bindObjectPosBoxes', 'Create 20 Box ObjectPos bindings'], ['connectivity.robotBinding.disconnect', 'Disconnect Robot Binding'], ['connectivity.robotBinding.reconnect', 'Reconnect Robot Binding'], ['connectivity.details.open', 'Gateway Details'],
     ])
   })
 

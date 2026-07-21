@@ -268,14 +268,20 @@ function fakeClientAdapter(): {
   readonly adapter: OpcUaClientAdapterV1
   readonly start: ReturnType<typeof vi.fn>
   readonly stop: ReturnType<typeof vi.fn>
+  readonly disconnectEndpoint: ReturnType<typeof vi.fn>
+  readonly reconnectEndpoint: ReturnType<typeof vi.fn>
 } {
   let started = false
   const start = vi.fn(async () => { started = true })
   const stop = vi.fn(async () => { started = false })
+  const disconnectEndpoint = vi.fn(async () => { started = false })
+  const reconnectEndpoint = vi.fn(async () => { started = true })
   return {
     adapter: {
       start,
       stop,
+      disconnectEndpoint,
+      reconnectEndpoint,
       write: async () => ({ ok: false, statusCode: 'BadNoCommunication', failureCode: 'OPC_UA_ENDPOINT_DISCONNECTED', message: 'Endpoint is not connected.' }),
       status: () => [{
         endpointId: 'endpoint-sample-server',
@@ -297,6 +303,8 @@ function fakeClientAdapter(): {
     },
     start,
     stop,
+    disconnectEndpoint,
+    reconnectEndpoint,
   }
 }
 
@@ -1176,6 +1184,39 @@ describe('runtime Gateway entrypoint', () => {
       await service.stop()
     }
     expect(fake.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('disconnects and reconnects a Client Endpoint without replacing the active Project', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const fake = fakeClientAdapter()
+    const service = createRuntimeGatewayEntrypointService(
+      createTestConfig(port),
+      { createOpcUaClientAdapter: () => fake.adapter },
+    )
+    const project = sampleProject('client', 'revision-client-endpoint-control')
+
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const disconnect = await requestJson(port, 'POST', '/runtime/client-endpoints/endpoint-sample-server/disconnect', {})
+      expect(disconnect.status).toBe(200)
+      expect(fake.disconnectEndpoint).toHaveBeenCalledWith('endpoint-sample-server')
+      expect(gatewayStatus(await disconnect.json())).toMatchObject({
+        project: { projectId: project.projectId, revisionId: project.revisionId },
+        opcUa: { mode: 'client', clientEndpoints: [{ endpointId: 'endpoint-sample-server', phase: 'disabled' }] },
+      })
+
+      const reconnect = await requestJson(port, 'POST', '/runtime/client-endpoints/endpoint-sample-server/reconnect', {})
+      expect(reconnect.status).toBe(200)
+      expect(fake.reconnectEndpoint).toHaveBeenCalledWith('endpoint-sample-server')
+      expect(gatewayStatus(await reconnect.json())).toMatchObject({
+        project: { projectId: project.projectId, revisionId: project.revisionId },
+        opcUa: { mode: 'client', clientEndpoints: [{ endpointId: 'endpoint-sample-server', phase: 'reconnecting' }] },
+      })
+    } finally {
+      await service.stop()
+    }
   })
 
   it('activates both adapters for a Bridge Project', async () => {

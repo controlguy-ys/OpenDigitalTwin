@@ -1140,6 +1140,34 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     expect(adapter.status()[0]).toMatchObject({ phase: 'disabled', reconnectAttempt: 0, nextRetryAtMs: null })
   })
 
+  it('disconnects and reconnects one Endpoint without changing its saved mapping count', async () => {
+    const first = fakeConnection()
+    const second = fakeConnection()
+    const connections = [first, second]
+    const published: RuntimePublisherMessageV1[] = []
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
+      publish: (publication) => { published.push(readNormalizedOpcUaClientPublicationV1(publication)) },
+      createClient: () => connections.shift()!.client as never,
+    })
+
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    await adapter.disconnectEndpoint!('plc')
+
+    expect(adapter.status()[0]).toMatchObject({
+      endpointId: 'plc', phase: 'disabled', mappingCount: 1,
+      sessionActive: false, subscriptionActive: false,
+    })
+    expect(published.map((message) => message.type === 'endpoint-lifecycle-v1' ? message.phase : message.type))
+      .toEqual(['connected', 'disconnected'])
+
+    await adapter.reconnectEndpoint!('plc')
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    expect(adapter.status()[0]).toMatchObject({ endpointId: 'plc', phase: 'connected', mappingCount: 1 })
+    await adapter.stop()
+  })
+
   it('settles live stop and closes every resource exactly once when the Gateway clock becomes invalid', async () => {
     const connection = fakeConnection()
     let samples = 0
