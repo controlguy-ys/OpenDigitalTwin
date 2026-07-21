@@ -150,6 +150,7 @@ function inspectJobResourcesV4(resources: BrowserJobRuntimeResourcesV4): void {
     || typeof resources.executor?.reset !== 'function'
     || typeof resources.playback?.quiesce !== 'function'
     || typeof resources.playback?.resume !== 'function'
+    || !Object.hasOwn(resources, 'handover')
   ) {
     runtimeFailureV4(
       'BROWSER_JOB_RUNTIME_RESOURCE_INVALID',
@@ -165,7 +166,13 @@ function disposeJobResourcesV4(
 ): void {
   if (authority.jobDisposed) return
   authority.jobDisposed = true
-  resources.dispose()
+  let cleanupError: unknown = null
+  cleanupError = captureCleanupErrorV4(
+    cleanupError,
+    () => resources.handover?.coordinator.dispose(),
+  )
+  cleanupError = captureCleanupErrorV4(cleanupError, resources.dispose)
+  if (cleanupError !== null) throw cleanupError
 }
 
 function captureCleanupErrorV4(

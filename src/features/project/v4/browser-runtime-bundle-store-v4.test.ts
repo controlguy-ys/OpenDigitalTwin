@@ -28,6 +28,7 @@ function jobs(): BrowserJobRuntimeResourcesV4 {
       resume: () => undefined,
       dispose: () => undefined,
     },
+    handover: null,
     dispose: () => undefined,
   }
 }
@@ -85,5 +86,22 @@ describe('Browser runtime bundle store V4', () => {
     expect(() => store.getState().restoreCheckpoint(foreignCheckpoint))
       .toThrow(/BROWSER_RUNTIME_BUNDLE_CHECKPOINT_INVALID/)
     expect(store.getState()).toBe(before)
+  })
+
+  it('rejects an incomplete optional Handover resource boundary', () => {
+    const store = createBrowserRuntimeBundleStoreV4()
+    const invalid = active('revision-handover-invalid')
+    const candidate = {
+      ...invalid,
+      jobs: {
+        ...invalid.jobs,
+        handover: {},
+      },
+    }
+
+    expect(() => store.getState().replaceActive(
+      candidate as ActiveBrowserRuntimeBundleV4,
+    )).toThrow(/BROWSER_RUNTIME_BUNDLE_INVALID/)
+    expect(store.getState().active).toBeNull()
   })
 })

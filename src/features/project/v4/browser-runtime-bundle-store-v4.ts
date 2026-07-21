@@ -8,14 +8,22 @@ import {
   validateCollisionPolicyV4,
   type CollisionPolicyV4,
 } from '../../../domain/collision/collision.js'
+import type { HandoverDemoCoordinatorV4 } from '../../handover/v4/handover-demo-coordinator.js'
+import type { HandoverDemoRuntimeStateV4 } from '../../handover/v4/handover-demo-runtime-store.js'
 import type { RobotJobExecutorV4 } from '../../jobs/v4/job-executor.js'
 import type { RobotJobPlaybackControllerV4 } from '../../jobs/v4/simulation-clock.js'
 import type { SceneRuntimeProjectionV4 } from '../../scene/v4/scene-runtime-selector.js'
 import { createStore, type StoreApi } from 'zustand/vanilla'
 
+export interface BrowserHandoverRuntimeResourcesV4 {
+  readonly store: StoreApi<HandoverDemoRuntimeStateV4>
+  readonly coordinator: HandoverDemoCoordinatorV4
+}
+
 export interface BrowserJobRuntimeResourcesV4 {
   readonly executor: RobotJobExecutorV4
   readonly playback: RobotJobPlaybackControllerV4
+  readonly handover: BrowserHandoverRuntimeResourcesV4 | null
   dispose(): void
 }
 
@@ -72,6 +80,25 @@ function inspectActiveBundleV4(active: ActiveBrowserRuntimeBundleV4): void {
     bundleFailureV4(
       'BROWSER_RUNTIME_BUNDLE_INVALID',
       'Active browser runtime bundle must own complete Job resources.',
+    )
+  }
+  const handover = active.jobs.handover
+  if (
+    handover !== null
+    && (
+      typeof handover !== 'object'
+      || typeof handover.store?.getState !== 'function'
+      || typeof handover.store?.subscribe !== 'function'
+      || typeof handover.coordinator?.canHandle !== 'function'
+      || typeof handover.coordinator?.start !== 'function'
+      || typeof handover.coordinator?.cancel !== 'function'
+      || typeof handover.coordinator?.reset !== 'function'
+      || typeof handover.coordinator?.dispose !== 'function'
+    )
+  ) {
+    bundleFailureV4(
+      'BROWSER_RUNTIME_BUNDLE_INVALID',
+      'Active browser runtime bundle contains incomplete Handover resources.',
     )
   }
 }

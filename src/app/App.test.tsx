@@ -233,6 +233,7 @@ function resourcesForTest(): BrowserProjectResourcesV4 & {
     jobs: {
       executor,
       playback,
+      handover: null,
       dispose: vi.fn(),
     },
   })

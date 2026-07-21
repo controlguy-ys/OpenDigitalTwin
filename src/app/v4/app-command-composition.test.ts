@@ -54,7 +54,7 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
     viewportPreferences: createViewportPreferenceStoreV4(null),
     projectFiles: { pickProject: vi.fn(async () => null), downloadProject: vi.fn() },
     robotOperator: { canHome: vi.fn(() => true), home: vi.fn(), setGripper: vi.fn(), canSavePose: vi.fn(() => true), savePose: vi.fn(async () => undefined) },
-    jobOperator: { canAuthor: vi.fn(() => true), canStart: vi.fn(() => true), start: vi.fn(async () => undefined), canCancel: vi.fn(() => true), cancel: vi.fn(async () => undefined) },
+    jobOperator: { canAuthor: vi.fn(() => true), canStart: vi.fn(() => true), start: vi.fn(async () => undefined), canCancel: vi.fn(() => true), cancel: vi.fn(async () => undefined), canReset: vi.fn(() => false), reset: vi.fn(async () => undefined) },
     collision: { getState: vi.fn(() => ({ projectRevisionId: project.revisionId, pending: false, canValidate: true, error: null, result: null })), subscribe: vi.fn(() => () => undefined), replaceInput: vi.fn(), validate: vi.fn(async () => undefined), dispose: vi.fn() },
     camera: { home: vi.fn(), fitAll: vi.fn(), canFocusSelection: vi.fn(() => true), focusSelection: vi.fn(), setStandardView: vi.fn() },
     prompt: { requestText: vi.fn(async () => 'Job') },

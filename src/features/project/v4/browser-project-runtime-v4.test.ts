@@ -13,6 +13,8 @@ import type {
 import { MAX_VISIBLE_SCENE_TRIANGLES_V4 } from '../../../core/project-v4/limits.js'
 import { createCoordinateDisplayStoreV4 } from '../../frames/v4/coordinate-display-store.js'
 import { createInteractionStoreV4 } from '../../interaction/v4/interaction-store.js'
+import type { HandoverDemoCoordinatorV4 } from '../../handover/v4/handover-demo-coordinator.js'
+import { createHandoverDemoRuntimeStoreV4 } from '../../handover/v4/handover-demo-runtime-store.js'
 import type { RobotJobExecutorV4 } from '../../jobs/v4/job-executor.js'
 import { createJobRuntimeStoreV4 } from '../../jobs/v4/job-runtime-store.js'
 import type { RobotJobPlaybackControllerV4 } from '../../jobs/v4/simulation-clock.js'
@@ -22,6 +24,10 @@ import {
   type PreparedRobotDefinitionGeometryV4,
 } from '../../robot/v4/robot-definition-geometry-repository.js'
 import { createRobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
+import {
+  createHackathonHandoverSampleV4,
+  isHackathonHandoverSampleV4,
+} from './hackathon-handover-sample-v4.js'
 import { selectSceneRuntimeV4 } from '../../scene/v4/scene-runtime-selector.js'
 import { createSceneRuntimeStoreV4 } from '../../scene/v4/scene-runtime-store.js'
 import {
@@ -60,12 +66,14 @@ interface JobResourcesHarness extends BrowserJobRuntimeResourcesV4 {
   readonly quiesce: ReturnType<typeof vi.fn>
   readonly resume: ReturnType<typeof vi.fn>
   readonly disposeSpy: ReturnType<typeof vi.fn>
+  readonly coordinatorDispose: ReturnType<typeof vi.fn>
 }
 
-function jobResources(): JobResourcesHarness {
+function jobResources(project: WorkcellProjectV4): JobResourcesHarness {
   const quiesce = vi.fn(async () => undefined)
   const resume = vi.fn()
   const disposeSpy = vi.fn()
+  const coordinatorDispose = vi.fn()
   const executor: RobotJobExecutorV4 = {
     startJob: () => ({ runId: 'run-1' }),
     advanceAll: async () => undefined,
@@ -83,7 +91,33 @@ function jobResources(): JobResourcesHarness {
     resume,
     dispose: disposeSpy,
   }
-  return { executor, playback, quiesce, resume, disposeSpy, dispose: disposeSpy }
+  const coordinator: HandoverDemoCoordinatorV4 = {
+    canHandle: vi.fn(() => true),
+    canStart: vi.fn(() => true),
+    start: vi.fn(() => ({ runId: 'handover-run' })),
+    canCancel: vi.fn(() => true),
+    cancel: vi.fn(),
+    canReset: vi.fn(() => true),
+    reset: vi.fn(),
+    setGripConfirmTimeoutInjection: vi.fn(),
+    dispose: coordinatorDispose,
+  }
+  const handover = isHackathonHandoverSampleV4(project)
+    ? {
+        store: createHandoverDemoRuntimeStoreV4(project),
+        coordinator,
+      }
+    : null
+  return {
+    executor,
+    playback,
+    handover,
+    quiesce,
+    resume,
+    disposeSpy,
+    coordinatorDispose,
+    dispose: disposeSpy,
+  }
 }
 
 function revision(project: WorkcellProjectV4, revisionId: string): WorkcellProjectV4 {
@@ -161,7 +195,7 @@ function runtimeHarness(options: {
       robots: robotStates,
     }),
     createJobRuntime: (project) => {
-      const resources = jobResources()
+      const resources = jobResources(project)
       jobResourcesByRevision.set(project.revisionId, resources)
       return resources
     },
@@ -209,6 +243,24 @@ describe('Browser Project runtime V4', () => {
     expect(sources[0]!.dispose).toHaveBeenCalledTimes(1)
     expect(harness.jobResourcesByRevision.get(project.revisionId)!.disposeSpy)
       .toHaveBeenCalledTimes(1)
+  })
+
+  it('disposes Handover resources before a rejected prepared Job runtime', async () => {
+    const harness = runtimeHarness()
+    const project = createHackathonHandoverSampleV4({
+      projectId: 'project-handover-runtime-lifecycle',
+      revisionId: 'revision-handover-runtime-lifecycle',
+      nowIso: '2026-07-21T06:00:00.000Z',
+    })
+    const bundle = await harness.runtime.prepare(project, project.revisionId)
+    const resources = harness.jobResourcesByRevision.get(project.revisionId)!
+
+    await harness.runtime.dispose(bundle)
+
+    expect(resources.coordinatorDispose).toHaveBeenCalledOnce()
+    expect(resources.disposeSpy).toHaveBeenCalledOnce()
+    expect(resources.coordinatorDispose.mock.invocationCallOrder[0])
+      .toBeLessThan(resources.disposeSpy.mock.invocationCallOrder[0]!)
   })
 
   it('disposes a resolved Geometry resource that fails Definition validation', async () => {

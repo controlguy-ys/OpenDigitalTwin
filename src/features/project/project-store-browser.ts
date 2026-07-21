@@ -10,6 +10,11 @@ import { stepImportClient } from '../import/StepImportClient.js'
 import { createCoordinateDisplayStoreV4 } from '../frames/v4/coordinate-display-store.js'
 import { createInteractionStoreV4 } from '../interaction/v4/interaction-store.js'
 import {
+  createHandoverDemoCoordinatorV4,
+  type HandoverDemoCoordinatorV4,
+} from '../handover/v4/handover-demo-coordinator.js'
+import { createHandoverDemoRuntimeStoreV4 } from '../handover/v4/handover-demo-runtime-store.js'
+import {
   createRobotJobExecutorV4,
   unavailableJobActionExecutionPortV4,
 } from '../jobs/v4/job-executor.js'
@@ -73,6 +78,7 @@ import {
   type BrowserRuntimeBundleStoreStateV4,
 } from './v4/browser-runtime-bundle-store-v4.js'
 import { createDefaultProjectV4 } from './v4/default-project-v4.js'
+import { isHackathonHandoverSampleV4 } from './v4/hackathon-handover-sample-v4.js'
 import { decodeProjectV4, encodeProjectV4 } from './v4/project-v4-codec.js'
 import { ProjectDatabaseV4 } from './v4/project-v4-db.js'
 import {
@@ -137,6 +143,39 @@ function browserAnimationSchedulerV4(): AnimationFrameSchedulerV4 {
     request: (callback) => requestAnimationFrame(callback),
     cancel: (handle) => cancelAnimationFrame(handle),
   }
+}
+
+function createScopedAnimationSchedulerV4(
+  delegate: AnimationFrameSchedulerV4,
+): { readonly scheduler: AnimationFrameSchedulerV4; dispose(): void } {
+  const handles = new Set<number>()
+  let disposed = false
+  const scheduler: AnimationFrameSchedulerV4 = {
+    now: () => delegate.now(),
+    request(callback) {
+      if (disposed) throw new Error('Handover animation scheduler is disposed.')
+      let handle = -1
+      handle = delegate.request((simulationMs) => {
+        handles.delete(handle)
+        if (!disposed) callback(simulationMs)
+      })
+      handles.add(handle)
+      return handle
+    },
+    cancel(handle) {
+      handles.delete(handle)
+      delegate.cancel(handle)
+    },
+  }
+  return Object.freeze({
+    scheduler,
+    dispose() {
+      if (disposed) return
+      disposed = true
+      for (const handle of handles) delegate.cancel(handle)
+      handles.clear()
+    },
+  })
 }
 
 function requirePublishedProjectV4(
@@ -231,10 +270,59 @@ export function createBrowserProjectResourcesV4(
         scheduler: animationScheduler,
         onError: (error) => console.error(error),
       })
+      const handover = (() => {
+        if (!isHackathonHandoverSampleV4(project)) return null
+        const store = createHandoverDemoRuntimeStoreV4(project)
+        const ownedScheduler = createScopedAnimationSchedulerV4(animationScheduler)
+        const implementation = createHandoverDemoCoordinatorV4({
+          readProject: () => project,
+          robots: rawRobots,
+          jobs: rawJobs,
+          demo: store,
+          scheduler: ownedScheduler.scheduler,
+          createRunId: createId,
+        })
+        let handoverDisposed = false
+        let coordinator: HandoverDemoCoordinatorV4
+        coordinator = Object.freeze({
+          canHandle: (jobId: string) => !handoverDisposed && implementation.canHandle(jobId),
+          canStart: (jobId: string) => !handoverDisposed && implementation.canStart(jobId),
+          start(jobId: string) {
+            if (handoverDisposed) throw new Error('Handover Coordinator is disposed.')
+            return implementation.start(jobId)
+          },
+          canCancel: () => !handoverDisposed && implementation.canCancel(),
+          cancel(reason: string) {
+            if (!handoverDisposed) implementation.cancel(reason)
+          },
+          canReset: (jobId: string) => !handoverDisposed && implementation.canReset(jobId),
+          reset() {
+            if (!handoverDisposed) implementation.reset()
+          },
+          setGripConfirmTimeoutInjection(enabled: boolean) {
+            if (handoverDisposed) throw new Error('Handover Coordinator is disposed.')
+            implementation.setGripConfirmTimeoutInjection(enabled)
+          },
+          dispose() {
+            if (handoverDisposed) return
+            handoverDisposed = true
+            const isPublishedOwner = rawRuntimeBundle.getState().active
+              ?.jobs.handover?.coordinator === coordinator
+            try {
+              if (isPublishedOwner) implementation.dispose()
+              else store.getState().reset()
+            } finally {
+              ownedScheduler.dispose()
+            }
+          },
+        })
+        return Object.freeze({ store, coordinator })
+      })()
       let disposed = false
       return Object.freeze({
         executor,
         playback,
+        handover,
         dispose() {
           if (disposed) return
           disposed = true

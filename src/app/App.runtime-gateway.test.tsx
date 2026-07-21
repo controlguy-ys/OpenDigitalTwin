@@ -152,6 +152,7 @@ function resourcesForProject(
         shutdown: vi.fn(),
       },
       playback,
+      handover: null,
       dispose: vi.fn(),
     },
   })

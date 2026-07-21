@@ -95,6 +95,7 @@ function resourcesForSceneStatusTest(): BrowserProjectResourcesV4 {
         resume: vi.fn(),
         dispose: vi.fn(),
       },
+      handover: null,
       dispose: vi.fn(),
     },
   })

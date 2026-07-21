@@ -5,6 +5,11 @@ import {
   type WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-support.js'
+import type { HandoverDemoCoordinatorV4 } from '../../handover/v4/handover-demo-coordinator.js'
+import {
+  createHackathonHandoverSampleV4,
+  HACKATHON_HANDOVER_IDS_V4,
+} from '../../project/v4/hackathon-handover-sample-v4.js'
 import { createJobRuntimeStoreV4 } from './job-runtime-store.js'
 import { createJobOperatorServiceV4 } from './job-operator-service.js'
 import type { RobotJobPlaybackControllerV4 } from './simulation-clock.js'
@@ -32,7 +37,44 @@ function running(robotId: string, jobId: string) {
   }
 }
 
-function harness(project = projectFixture()) {
+function handoverCoordinator(): HandoverDemoCoordinatorV4 {
+  return {
+    canHandle: vi.fn((jobId: string) => jobId === HACKATHON_HANDOVER_IDS_V4.jobId),
+    canStart: vi.fn((jobId: string) => jobId === HACKATHON_HANDOVER_IDS_V4.jobId),
+    start: vi.fn(() => ({ runId: 'handover-run' })),
+    canCancel: vi.fn(() => true),
+    cancel: vi.fn(),
+    canReset: vi.fn((jobId: string) => jobId === HACKATHON_HANDOVER_IDS_V4.jobId),
+    reset: vi.fn(),
+    setGripConfirmTimeoutInjection: vi.fn(),
+    dispose: vi.fn(),
+  }
+}
+
+function handoverProject(): WorkcellProjectV4 {
+  const sample = createHackathonHandoverSampleV4({
+    projectId: 'project-job-operator-handover',
+    revisionId: 'revision-job-operator-handover',
+    nowIso: '2026-07-21T06:00:00.000Z',
+  })
+  return validateWorkcellProjectV4({
+    ...sample,
+    jobs: [
+      ...sample.jobs,
+      {
+        id: 'ordinary-job',
+        name: 'Ordinary Job',
+        robotId: HACKATHON_HANDOVER_IDS_V4.robotBId,
+        steps: [],
+      },
+    ],
+  })
+}
+
+function harness(
+  project = projectFixture(),
+  handover: HandoverDemoCoordinatorV4 | null = null,
+) {
   const jobs = createJobRuntimeStoreV4()
   jobs.getState().replaceProject(project)
   const playback = {
@@ -40,7 +82,17 @@ function harness(project = projectFixture()) {
     cancelRobotJob: vi.fn((_robotId: string, _reason: string) => undefined),
     ensureRunning: vi.fn(), quiesce: vi.fn(async () => undefined), resume: vi.fn(), dispose: vi.fn(),
   } satisfies RobotJobPlaybackControllerV4
-  return { jobs, playback, service: createJobOperatorServiceV4({ readProject: () => project, jobs, playback }) }
+  return {
+    jobs,
+    playback,
+    handover,
+    service: createJobOperatorServiceV4({
+      readProject: () => project,
+      jobs,
+      playback,
+      handover,
+    }),
+  }
 }
 
 describe('createJobOperatorServiceV4', () => {
@@ -94,5 +146,57 @@ describe('createJobOperatorServiceV4', () => {
     expect(state.playback.cancelRobotJob).toHaveBeenCalledWith('robot-a', 'Operator cancelled Job.')
     state.jobs.getState().replaceProject({ ...projectFixture(), revisionId: 'revision-new' })
     expect(state.service.canCancel('robot-a')).toBe(false)
+  })
+
+  it('routes only the representative Job through the Handover Coordinator', async () => {
+    const project = handoverProject()
+    const handover = handoverCoordinator()
+    const state = harness(project, handover)
+
+    expect(state.service.canStart(
+      HACKATHON_HANDOVER_IDS_V4.robotAId,
+      HACKATHON_HANDOVER_IDS_V4.jobId,
+    )).toBe(true)
+    await state.service.start(
+      HACKATHON_HANDOVER_IDS_V4.robotAId,
+      HACKATHON_HANDOVER_IDS_V4.jobId,
+    )
+
+    expect(handover.start).toHaveBeenCalledWith(HACKATHON_HANDOVER_IDS_V4.jobId)
+    expect(state.playback.startJob).not.toHaveBeenCalled()
+
+    await state.service.start(HACKATHON_HANDOVER_IDS_V4.robotBId, 'ordinary-job')
+    expect(state.playback.startJob).toHaveBeenCalledWith('ordinary-job')
+  })
+
+  it('delegates representative Cancel and Reset without changing ordinary paths', async () => {
+    const project = handoverProject()
+    const handover = handoverCoordinator()
+    const state = harness(project, handover)
+    state.jobs.getState().setRobotState(running(
+      HACKATHON_HANDOVER_IDS_V4.robotAId,
+      HACKATHON_HANDOVER_IDS_V4.jobId,
+    ))
+
+    expect(state.service.canCancel(HACKATHON_HANDOVER_IDS_V4.robotAId)).toBe(true)
+    await state.service.cancel(HACKATHON_HANDOVER_IDS_V4.robotAId)
+    expect(handover.cancel).toHaveBeenCalledWith('Operator cancelled Job.')
+    expect(state.playback.cancelRobotJob).not.toHaveBeenCalled()
+
+    expect(state.service.canReset(HACKATHON_HANDOVER_IDS_V4.jobId)).toBe(true)
+    await state.service.reset(HACKATHON_HANDOVER_IDS_V4.jobId)
+    expect(handover.reset).toHaveBeenCalledOnce()
+    expect(state.service.canReset('ordinary-job')).toBe(false)
+    await expect(state.service.reset('ordinary-job')).rejects.toThrow(/Reset is unavailable/)
+
+    state.jobs.getState().setRobotState(running(
+      HACKATHON_HANDOVER_IDS_V4.robotBId,
+      'ordinary-job',
+    ))
+    await state.service.cancel(HACKATHON_HANDOVER_IDS_V4.robotBId)
+    expect(state.playback.cancelRobotJob).toHaveBeenCalledWith(
+      HACKATHON_HANDOVER_IDS_V4.robotBId,
+      'Operator cancelled Job.',
+    )
   })
 })

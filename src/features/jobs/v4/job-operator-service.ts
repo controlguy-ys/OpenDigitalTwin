@@ -4,6 +4,7 @@ import type {
   WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import type { StoreApi } from 'zustand/vanilla'
+import type { HandoverDemoCoordinatorV4 } from '../../handover/v4/handover-demo-coordinator.js'
 import type { JobRuntimeStoreV4 } from './job-runtime-store.js'
 import type { RobotJobPlaybackControllerV4 } from './simulation-clock.js'
 
@@ -14,12 +15,23 @@ export interface JobOperatorServiceV4 {
   start(robotId: RobotIdV4, jobId: RobotJobIdV4): Promise<void>
   canCancel(robotId: RobotIdV4): boolean
   cancel(robotId: RobotIdV4): Promise<void>
+  canReset(jobId: RobotJobIdV4 | null): boolean
+  reset(jobId: RobotJobIdV4): Promise<void>
 }
 
 export interface CreateJobOperatorServiceOptionsV4 {
   readonly readProject: () => WorkcellProjectV4
   readonly jobs: StoreApi<JobRuntimeStoreV4>
   readonly playback: RobotJobPlaybackControllerV4
+  readonly handover?: HandoverDemoCoordinatorV4 | null
+}
+
+function handoverForJob(
+  options: CreateJobOperatorServiceOptionsV4,
+  jobId: RobotJobIdV4,
+): HandoverDemoCoordinatorV4 | null {
+  const handover = options.handover ?? null
+  return handover?.canHandle(jobId) === true ? handover : null
 }
 
 function startable(
@@ -31,11 +43,14 @@ function startable(
   if (jobId === null) return false
   const robot = project.robots.find((candidate) => candidate.id === robotId)
   const job = project.jobs.find((candidate) => candidate.id === jobId)
-  return authorable(options, project, robotId)
+  const valid = authorable(options, project, robotId)
     && robot !== undefined
     && robot.jointSource === 'simulation'
     && job !== undefined
     && job.robotId === robotId
+  if (!valid) return false
+  const handover = handoverForJob(options, jobId)
+  return handover === null || handover.canStart(jobId)
 }
 
 function authorable(
@@ -78,16 +93,53 @@ export function createJobOperatorServiceV4(
       if (!startable(options, options.readProject(), robotId, jobId)) {
         throw new Error('Job Start is unavailable because the runtime is stale or no longer permitted.')
       }
+      const handover = handoverForJob(options, jobId)
+      if (handover !== null) {
+        handover.start(jobId)
+        return
+      }
       options.playback.startJob(jobId)
     },
     canCancel(robotId: RobotIdV4) {
-      try { return cancellable(options, options.readProject(), robotId) } catch { return false }
+      try {
+        const project = options.readProject()
+        if (!cancellable(options, project, robotId)) return false
+        const jobId = options.jobs.getState().byRobotId[robotId]?.jobId
+        if (jobId === null || jobId === undefined) return false
+        const handover = handoverForJob(options, jobId)
+        return handover === null || handover.canCancel()
+      } catch { return false }
     },
     async cancel(robotId: RobotIdV4) {
-      if (!cancellable(options, options.readProject(), robotId)) {
+      const project = options.readProject()
+      if (!cancellable(options, project, robotId)) {
         throw new Error('Job Cancel is unavailable because the runtime is stale or no longer running.')
       }
+      const jobId = options.jobs.getState().byRobotId[robotId]?.jobId
+      if (jobId !== null && jobId !== undefined) {
+        const handover = handoverForJob(options, jobId)
+        if (handover !== null) {
+          if (!handover.canCancel()) {
+            throw new Error('Job Cancel is unavailable because the runtime is stale or no longer running.')
+          }
+          handover.cancel('Operator cancelled Job.')
+          return
+        }
+      }
       options.playback.cancelRobotJob(robotId, 'Operator cancelled Job.')
+    },
+    canReset(jobId: RobotJobIdV4 | null) {
+      if (jobId === null) return false
+      try {
+        return handoverForJob(options, jobId)?.canReset(jobId) === true
+      } catch { return false }
+    },
+    async reset(jobId: RobotJobIdV4) {
+      const handover = handoverForJob(options, jobId)
+      if (handover === null || !handover.canReset(jobId)) {
+        throw new Error('Job Reset is unavailable for this Job.')
+      }
+      handover.reset()
     },
   })
 }
