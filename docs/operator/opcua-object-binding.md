@@ -38,6 +38,27 @@ switches to Bridge so Robot Actual Server values remain available. The Gateway
 connects outward to the supplied endpoint. It does not expose those Object nodes
 from its own Server namespace.
 
+## Run the bundled ObjectPos demo Server
+
+The repository includes a deterministic local OPC UA Server that mirrors the
+B&R `Sample6X:ObjectPos[0..19]` structure used by the bulk binding command. Run
+the Server, Gateway, and web application in separate terminals:
+
+```powershell
+npm run demo:opcua-server
+
+npm run build:gateway
+npm run runtime:gateway
+
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+In the application, choose **Project > Samples > Dual-Robot Technical Demo**
+and then **Connectivity > Create 20 Box ObjectPos bindings**. The demo Server
+uses `opc.tcp://127.0.0.1:4840`, namespace index `5`, XYZ in millimetres, and RPY
+in degrees. It is an anonymous Security Policy None endpoint for local testing,
+not a production security configuration.
+
 ## Ownership and runtime behavior
 
 While the Object transform is OPC UA-owned, the Inspector's manual XYZ/RPY

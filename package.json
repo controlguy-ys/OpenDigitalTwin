@@ -11,6 +11,7 @@
   "packageManager": "npm@11.4.2",
   "scripts": {
     "dev": "vite",
+    "demo:opcua-server": "tsx scripts/demo-opcua-server/main.ts",
     "build": "tsc -b && vite build",
     "build:sites": "npm run build && node scripts/sites/prepare-build.mjs",
     "build:gateway": "tsc -p tsconfig.gateway.json",
@@ -22,6 +23,7 @@
     "test:run": "vitest run",
     "test:middleware": "vitest run middleware",
     "test:gateway": "vitest run middleware/runtime-gateway src/features/runtime-gateway/v4",
+    "test:demo:opcua": "vitest run scripts/demo-opcua-server",
     "test:job-io": "vitest run src/core/project-v5 src/core/robot-runtime-v5 src/core/action-runtime-v5 src/core/runtime-protocol/v1.test.ts src/features/project/v5 src/features/signals/v5 src/features/runtime-gateway/v5 src/features/robot/v5 src/features/jobs/v5 src/features/actions/v5 src/features/scene/v5 middleware/runtime-gateway/opcua-client-read-plan.test.ts middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/opcua-client-write.integration.test.ts",
     "test:coverage": "vitest run --coverage",
     "verify:p1": "npm run test:run -- src/core src/features/project/v4 middleware/runtime-gateway && npm run lint && npm run build:gateway && node dist-gateway/middleware/runtime-gateway/main.js --check-config && npm run build",

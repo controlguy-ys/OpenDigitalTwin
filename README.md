@@ -1,10 +1,14 @@
-# WebDigitalTwin RobotSim Web
+# OpenDigitalTwin
 
-WebDigitalTwin is a lightweight, browser-first Robot workcell simulator. The
-current release uses one deterministic Project V4 model for multiple independent
-Robot Instances, scene objects, Robot-owned Simulation Jobs, geometric collision
-checks, and an optional Runtime Gateway with read-only OPC UA Server and
-Client/Bridge subscriptions.
+![OpenDigitalTwin web digital twin preview](./Thumbnail.png)
+
+OpenDigitalTwin is a lightweight, browser-first Robot workcell simulator for
+small manufacturers and engineering teams that need accessible kinematic and
+OPC UA integration checks without adopting a full Unity, Unreal, or industrial
+physics toolchain. The current release uses one deterministic Project V4 model
+for multiple independent Robot Instances, scene objects, Robot-owned Simulation
+Jobs, geometric collision checks, and an optional Runtime Gateway with read-only
+OPC UA Server and Client/Bridge subscriptions.
 
 It is an engineering visualization tool, not a Robot controller, physics engine,
 or safety-rated system.
@@ -127,32 +131,60 @@ extraction, mechanical correctness, or a second rendered industrial Robot.
 The full Pose table, acceptance checks, and remaining scope checklist are in the
 [12-Pose Technical Demo guide](docs/operator/technical-demo-12-pose.md).
 
-## NED2 Direct Handover Hackathon flow
+## OPC UA Client ObjectPos demo
 
-The Hackathon sample is a deterministic, browser-first two-Robot demonstration
-that completes while OPC UA and the Runtime Gateway are offline:
+This is the recommended technical-demo path. The included local OPC UA Server
+reproduces the `Sample6X` data shape and deterministic motion from the supplied
+B&R Automation Studio TrakDemo: 20 moving Object poses and one six-axis Robot
+job sequencer. No PLC or Automation Studio installation is required to run it.
 
-1. Open **Project > Samples > NED2 Direct Handover Demo**.
-2. Select **NED2 Direct Handover** in Robot Jobs.
-3. Press **Start Job** once.
-4. Observe **Current Step**, **Part Owner**, **Shared Zone Owner**, and the Header
-   OPC UA status as the Workpiece moves from the Table through the Direct
-   Handover to the Output Tray.
-5. Press **Reset Handover Demo** and confirm the status returns to
-   **READY | Part TABLE | Shared Zone NONE**.
+Use three PowerShell terminals after `npm install`:
 
-Fault test:
+```powershell
+# Terminal 1: deterministic OPC UA Server (anonymous, None/None)
+npm run demo:opcua-server
 
-1. Open **Simulation > Fault Injection > Grip Confirm Timeout**.
-2. Press **Start Job**.
-3. Observe **GRIP_CONFIRM_TIMEOUT** at **HANDOVER_CONFIRM** with both Part and
-   Shared Zone ownership retained by **NED2-A**.
-4. Press **Reset Handover Demo**. Reset returns the scenario to READY and clears
-   the runtime-only fault toggle.
+# Terminal 2: OpenDigitalTwin Runtime Gateway
+npm run build:gateway
+npm run runtime:gateway
 
-This bounded demonstration uses fixed Joint keyframes and a local simulated
-Grip Confirm. It has no physics or inverse kinematics (IK), and it is not a
-safety-rated validation of the Robot motion, handover, or workcell.
+# Terminal 3: browser application
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+Then:
+
+1. Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
+2. Choose **Project > Samples > Dual-Robot Technical Demo**.
+3. Choose **Connectivity > Create 20 Box ObjectPos bindings**. This creates the
+   20 Boxes, switches the Project to OPC UA Client mode, and publishes its
+   binding configuration to the Gateway.
+4. Confirm the Gateway status becomes connected and the Boxes move around the
+   track. Select a Box to verify that its transform owner is OPC UA.
+
+The compatibility namespace is
+`http://br-automation.com/OpcUa/PLC/PV/` at namespace index `5`. Object pose
+leaves are `Double` values at
+`ns=5;s=::Sample6X:ObjectPos[0..19].X/Y/Z/Roll/Pitch/Yaw`. XYZ values are
+millimetres and the built-in binding converts them to metres; RPY values are
+degrees. The Server also exposes `Rob.Q1` through `Rob.Q6`, `Rob.Status`,
+`JobID`, `Job1` through `Job20`, and a writable Int32 `Button`. An external OPC
+UA Client can write `1` to `ns=5;s=::Sample6X:Button` to start the Robot job
+sequence or `2` to stop it. OpenDigitalTwin's Gateway intentionally reads these
+external nodes and does not issue that motion command.
+
+Override the demo listener when required:
+
+```powershell
+$env:DEMO_OPCUA_PORT = '4842'
+$env:DEMO_OPCUA_ADVERTISED_HOST = '127.0.0.1'
+npm run demo:opcua-server
+```
+
+If the port changes, update the Project binding endpoint accordingly. The demo
+Server is local development infrastructure: anonymous access and Security
+Policy None are intentional and must not be used as a production security
+configuration. See the complete [Object OPC UA live binding guide](docs/operator/opcua-object-binding.md).
 
 ## Runtime Gateway contract
 
