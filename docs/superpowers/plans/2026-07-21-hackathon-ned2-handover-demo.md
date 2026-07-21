@@ -441,7 +441,7 @@ it('uses a Handover World-pose override for the Workpiece', () => {
 
 it('renders one visual-only Shared Zone and no collision proxy', () => {
   const view = renderSceneLayer({ owner: 'NED2-A' })
-  expect(view.container.querySelector('[data-shared-zone-owner="NED2-A"]')).not.toBeNull()
+  expect(view.sharedZone.userData.sharedZoneOwner).toBe('NED2-A')
   expect(sceneRegistration.collisionProxies).toHaveLength(0)
 })
 ```
@@ -463,7 +463,7 @@ if (override !== null) return { pose: override, dynamic: true }
 // persisted Project pose remains the final fallback
 ```
 
-Render the Shared Zone as one transparent `BoxGeometry` with a wireframe material. Its owner changes only its color: neutral gray, NED2-A cyan, NED2-B amber. Create and dispose its Geometry and Material inside the component. Do not register it as a Spatial Entity and do not create a collision proxy.
+Render the Shared Zone as one transparent `BoxGeometry` with a wireframe material. Its owner changes only its color: neutral gray, NED2-A cyan, NED2-B amber. Store inspection metadata in `Object3D.userData.sharedZoneOwner`; never pass DOM-only `data-*` props into an R3F Three Object. Create and dispose its Geometry and Material inside the component. Do not register it as a Spatial Entity and do not create a collision proxy.
 
 - [ ] **Step 4: Run renderer and collision tests**
 
