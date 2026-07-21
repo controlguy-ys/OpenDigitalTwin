@@ -69,7 +69,7 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
     help: { getState: vi.fn(() => ({ openTopic: null })), subscribe: vi.fn(() => () => undefined), hasTopic: vi.fn((topic: string) => topic !== 'opcUaMapping'), open: vi.fn(), close: vi.fn(), dispose: vi.fn() },
     actions: {
       project: { newProject: vi.fn(), saveProject: vi.fn(async () => undefined), importProject: vi.fn(async () => 'cancelled' as const), exportProject: vi.fn(async () => undefined), loadDualRobotSample: vi.fn(), loadHackathonHandoverSample: vi.fn() },
-      connectivity: { setMode: vi.fn(async () => undefined) },
+      connectivity: { setMode: vi.fn(async () => undefined), bindBrObjectPosBoxes: vi.fn(async () => undefined) },
       presentation: { canOpenRobotImport: vi.fn(() => true), openRobotImport: vi.fn(), openRobotBase: vi.fn(), openInspector: vi.fn(), openTimeline: vi.fn(), openCollision: vi.fn(), openGatewayDetails: vi.fn() },
     },
   }
@@ -85,7 +85,7 @@ describe('composeAppCommandsV4', () => {
       model: ['model.importRobotStep', 'model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'].map(root),
       job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.reset', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'].map(root),
       simulation: [root('job.start'), root('job.cancel'), root('view.timeline.open'), root('collision.validate'), root('view.collision.open'), submenu('simulation.fault.gripConfirmTimeout', 'simulation.faults', 'Fault Injection')],
-      connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.details.open')],
+      connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.bindObjectPosBoxes'), root('connectivity.details.open')],
       view: [
         ...['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset'].map((id) => submenu(id, 'view.panels', 'Panels')),
         ...['view.theme.system', 'view.theme.light', 'view.theme.dark'].map((id) => submenu(id, 'view.theme', 'Theme')),
@@ -302,9 +302,11 @@ describe('composeAppCommandsV4', () => {
     await expect(registry.get('project.import')!.execute()).resolves.toBe('cancelled')
     await registry.get('view.layer.grid')!.execute()
     await registry.get('connectivity.mode.server')!.execute()
+    await registry.get('connectivity.bindObjectPosBoxes')!.execute()
     expect(composed.actions.project.importProject).toHaveBeenCalledTimes(1)
     expect(composed.viewportPreferences.getState().layers.grid).toBe(false)
     expect(composed.actions.connectivity.setMode).toHaveBeenCalledWith('server')
+    expect(composed.actions.connectivity.bindBrObjectPosBoxes).toHaveBeenCalledOnce()
   })
 
   it('routes every Project action once, leaves projectFiles untouched, and preserves action rejection', async () => {
@@ -487,7 +489,7 @@ describe('composeAppCommandsV4', () => {
       ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Technical Demo'], ['project.sample.handover', 'NED2 Direct Handover Demo'],
     ])
     expect(all.filter(({ section }) => section === 'connectivity').map(({ id, label }) => [id, label])).toEqual([
-      ['connectivity.mode.off', 'Off'], ['connectivity.mode.client', 'OPC UA Client'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.mode.bridge', 'OPC UA Bridge'], ['connectivity.details.open', 'Gateway Details'],
+      ['connectivity.mode.off', 'Off'], ['connectivity.mode.client', 'OPC UA Client'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.mode.bridge', 'OPC UA Bridge'], ['connectivity.bindObjectPosBoxes', 'Create 20 Box ObjectPos bindings'], ['connectivity.details.open', 'Gateway Details'],
     ])
   })
 

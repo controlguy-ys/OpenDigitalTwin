@@ -45,7 +45,10 @@ export interface AppCommandActionPortsV4 {
     loadDualRobotSample(): void | Promise<void>
     loadHackathonHandoverSample(): void | Promise<void>
   }
-  readonly connectivity: { setMode(mode: WorkcellProjectV4['opcUa']['mode']): Promise<void> }
+  readonly connectivity: {
+    setMode(mode: WorkcellProjectV4['opcUa']['mode']): Promise<void>
+    bindBrObjectPosBoxes(): Promise<void>
+  }
   readonly presentation: {
     canOpenRobotImport(): boolean
     openRobotImport(): void
@@ -112,7 +115,7 @@ export const APP_COMMAND_PLACEMENTS_BY_SECTION_V4: PlacementMapV4 = Object.freez
     ['job.start', null, null], ['job.cancel', null, null], ['view.timeline.open', null, null], ['collision.validate', null, null], ['view.collision.open', null, null], ['simulation.fault.gripConfirmTimeout', 'simulation.faults', 'Fault Injection'],
   ]),
   connectivity: placements([
-    ['connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.details.open', null, null],
+    ['connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.bindObjectPosBoxes', null, null], ['connectivity.details.open', null, null],
   ]),
   view: placements([
     ['view.sidebar', 'view.panels', 'Panels'], ['view.inspector', 'view.panels', 'Panels'], ['view.bottom', 'view.panels', 'Panels'], ['view.ribbon', 'view.panels', 'Panels'], ['view.layout.reset', 'view.panels', 'Panels'],
@@ -404,6 +407,12 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
     command('connectivity.mode.client', 'OPC UA Client', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'client' }, execute: () => context.actions.connectivity.setMode('client') }),
     command('connectivity.mode.server', 'OPC UA Server', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'server' }, execute: () => context.actions.connectivity.setMode('server') }),
     command('connectivity.mode.bridge', 'OPC UA Bridge', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'bridge' }, execute: () => context.actions.connectivity.setMode('bridge') }),
+    command('connectivity.bindObjectPosBoxes', 'Create 20 Box ObjectPos bindings', 'connectivity', {
+      kind: 'action', visible: true,
+      get enabled() { return projectReason(context, true) === undefined },
+      get disabledReason() { return projectReason(context, true) },
+      execute: () => context.actions.connectivity.bindBrObjectPosBoxes(),
+    }),
     command('connectivity.details.open', 'Gateway Details', 'connectivity', { kind: 'action', visible: true, enabled: true, execute: () => context.actions.presentation.openGatewayDetails() }),
   ]
 

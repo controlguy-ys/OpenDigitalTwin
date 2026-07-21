@@ -55,6 +55,7 @@ import {
 import { createDualRobotSampleV4 } from '../features/project/v4/dual-robot-sample-v4.js'
 import { createHackathonHandoverSampleV4 } from '../features/project/v4/hackathon-handover-sample-v4.js'
 import { bindBrRobotJointsV4 } from '../features/project/v4/robot-joint-opcua-binding-v4.js'
+import { bindBrObjectPosBoxesV4 } from '../features/project/v4/box-objectpos-opcua-binding-v4.js'
 import { RobotImportDialogV4 } from '../features/robot/v4/RobotImportDialogV4.js'
 import type { RobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
 import {
@@ -862,6 +863,12 @@ export function App({
               ...active,
               opcUa: { ...active.opcUa, mode },
             }),
+          })
+        },
+        bindBrObjectPosBoxes: async () => {
+          await resources.mutations.replaceFromActive({
+            description: 'Create 20 Box ObjectPos OPC UA bindings',
+            mutate: (active) => bindBrObjectPosBoxesV4(active),
           })
         },
       }),
