@@ -37,6 +37,7 @@ import { App } from './App.js'
 
 const observed = vi.hoisted(() => ({
   canvas: null as null | Record<string, unknown>,
+  canvasRenders: 0,
   collision: null as null | Record<string, unknown>,
   inspector: null as null | Record<string, unknown>,
   jobList: null as null | Record<string, unknown>,
@@ -68,6 +69,7 @@ vi.mock('./AppShell.js', async (importOriginal) => {
 vi.mock('../features/scene/v4/SceneCanvas.js', () => ({
   SceneCanvasV4: (props: Record<string, unknown>) => {
     observed.canvas = props
+    observed.canvasRenders += 1
     return (
       <div data-testid="scene-canvas-v4">
         <button
@@ -297,6 +299,7 @@ function resourcesForTest(options: {
 describe('App Project V4 production composition', () => {
   beforeEach(() => {
     observed.canvas = null
+    observed.canvasRenders = 0
     observed.collision = null
     observed.inspector = null
     observed.jobList = null
@@ -631,7 +634,12 @@ describe('App Project V4 production composition', () => {
     const resources = resourcesForTest({ project, handover })
     render(<App gatewayPublisher={null} resources={resources} />)
 
-    expect(observed.canvas?.poseOverride).toBe(store.getState())
+    const poseOverride = observed.canvas?.poseOverride as {
+      readWorldPose(entityId: string): unknown
+    }
+    expect(poseOverride).not.toBe(store.getState())
+    expect(poseOverride.readWorldPose(HACKATHON_HANDOVER_IDS_V4.workpieceId))
+      .toEqual(store.getState().readWorldPose(HACKATHON_HANDOVER_IDS_V4.workpieceId))
     expect(observed.canvas?.handoverSharedZoneOwner).toBe('NONE')
     expect(observed.timeline?.handover).toMatchObject({
       projectRevisionId: project.revisionId,
@@ -657,8 +665,20 @@ describe('App Project V4 production composition', () => {
     })
     await waitFor(() => {
       expect(observed.canvas?.handoverSharedZoneOwner).toBe('NED2-A')
-      expect(observed.canvas?.poseOverride).toBe(store.getState())
+      expect(observed.canvas?.poseOverride).toBe(poseOverride)
     })
+
+    const rendersBeforePoseChange = observed.canvasRenders
+    act(() => {
+      store.getState().updateAttachedPose(generation, 'NED2-A', {
+        positionM: [0.4, 0.2, 0.1],
+        quaternion: [0, 0, 0, 1],
+      })
+    })
+    expect(observed.canvasRenders).toBe(rendersBeforePoseChange)
+    expect(observed.canvas?.poseOverride).toBe(poseOverride)
+    expect(poseOverride.readWorldPose(HACKATHON_HANDOVER_IDS_V4.workpieceId))
+      .toEqual(store.getState().readWorldPose(HACKATHON_HANDOVER_IDS_V4.workpieceId))
   })
 
   it('keeps the Job ribbon active across a revision committed by Save Current Pose', async () => {

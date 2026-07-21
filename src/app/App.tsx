@@ -44,6 +44,7 @@ import type {
 } from '../features/collision/v4/scene-entity-adapter-v4.js'
 import { activeJobIdV4 } from '../features/interaction/v4/interaction-store.js'
 import type { SceneSelectionTargetV4 } from '../features/interaction/v4/scene-selection.js'
+import { createHandoverPoseOverrideV4 } from '../features/handover/v4/handover-demo-runtime-store.js'
 import { RobotJobListV4 } from '../features/jobs/v4/RobotJobList.js'
 import { createJobOperatorServiceV4 } from '../features/jobs/v4/job-operator-service.js'
 import { createRobotOperatorCommandServiceV4 } from '../features/joints/v4/robot-operator-command-service.js'
@@ -137,7 +138,7 @@ const EMPTY_COLLISION_PROXIES_V4: readonly CollisionGeometryProxyV4[] = Object.f
 
 const getInactiveCommandRuntimeStateV4 = () => INACTIVE_COMMAND_RUNTIME_STATE_V4
 const subscribeInactiveCommandRuntimeV4 = () => () => undefined
-const getInactiveHandoverRuntimeStateV4 = () => null
+const getInactiveHandoverZoneOwnerV4 = () => null
 const subscribeInactiveHandoverRuntimeV4 = () => () => undefined
 
 interface AppCommandEnvironmentV4 {
@@ -420,10 +421,18 @@ export function App({
     && runtimeBundle.active?.project.revisionId === project.revisionId
     ? runtimeBundle.active.jobs.handover
     : null
-  const handoverState = useSyncExternalStore(
+  const handoverPoseOverride = useMemo(() => (
+    activeHandover === null
+      ? null
+      : createHandoverPoseOverrideV4(activeHandover.store)
+  ), [activeHandover])
+  const readHandoverZoneOwner = useCallback(() => (
+    activeHandover?.store.getState().sharedZoneOwner ?? null
+  ), [activeHandover])
+  const handoverSharedZoneOwner = useSyncExternalStore(
     activeHandover?.store.subscribe ?? subscribeInactiveHandoverRuntimeV4,
-    activeHandover?.store.getState ?? getInactiveHandoverRuntimeStateV4,
-    activeHandover?.store.getState ?? getInactiveHandoverRuntimeStateV4,
+    activeHandover === null ? getInactiveHandoverZoneOwnerV4 : readHandoverZoneOwner,
+    activeHandover === null ? getInactiveHandoverZoneOwnerV4 : readHandoverZoneOwner,
   )
   const publishedBundle = resources.mutations.readPublished()
   const objectRuntimeConfigRevision = project !== null
@@ -1105,8 +1114,8 @@ export function App({
               }}
               onStatusChange={handleSceneStatusChange}
               objectRuntime={objectRuntime}
-              poseOverride={handoverState}
-              handoverSharedZoneOwner={handoverState?.sharedZoneOwner ?? null}
+              poseOverride={handoverPoseOverride}
+              handoverSharedZoneOwner={handoverSharedZoneOwner}
               project={project}
               safeAreaInsets={safeAreaInsets}
               sceneRuntime={sceneRuntime}

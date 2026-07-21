@@ -21,6 +21,14 @@ import { validateWorkcellProjectV4 } from '../../../core/project-v4/validate'
 import type { SpatialEntityV4, WorkcellProjectV4 } from '../../../core/project-v4/types'
 import { createObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4'
 import { visibleCollisionEntitiesV4 } from '../../collision/v4/scene-entity-adapter-v4'
+import {
+  createHandoverDemoRuntimeStoreV4,
+  createHandoverPoseOverrideV4,
+} from '../../handover/v4/handover-demo-runtime-store'
+import {
+  HACKATHON_HANDOVER_IDS_V4,
+  createHackathonHandoverSampleV4,
+} from '../../project/v4/hackathon-handover-sample-v4'
 import { buildInitialRobotRuntimeStatesV4 } from '../../robot/v4/robot-runtime-registry'
 import {
   selectSceneRuntimeV4,
@@ -392,6 +400,56 @@ describe('SpatialEntitySceneV4', () => {
 
     expect(root.position.toArray()).toEqual([0.7, -0.2, 1.1])
     expect(proxy.resolveEntity!().worldMatrix.slice(12, 15)).toEqual([0.7, -0.2, 1.1])
+  })
+
+  it('retains scene and collision registration identity across store-backed pose publications', async () => {
+    fiberCapture.frame = null
+    const project = createHackathonHandoverSampleV4({
+      projectId: 'project-stable-pose-adapter',
+      revisionId: 'revision-stable-pose-adapter',
+      nowIso: '2026-07-21T00:00:00.000Z',
+    })
+    const store = createHandoverDemoRuntimeStoreV4(project)
+    const poseOverride = createHandoverPoseOverrideV4(store)
+    const registrations: SpatialEntitySceneRegistrationV4[] = []
+    const onRegister = (value: SpatialEntitySceneRegistrationV4 | null) => {
+      if (value !== null) registrations.push(value)
+    }
+    const generation = store.getState().begin('run-stable-pose-adapter')
+    store.getState().attach(
+      generation,
+      'NED2-A',
+      { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+      { positionM: [0.1, 0.2, 0.3], quaternion: [0, 0, 0, 1] },
+    )
+
+    render(
+      <SpatialEntitySceneV4
+        onRegister={onRegister}
+        poseOverride={poseOverride}
+        project={project}
+        sceneRuntime={runtimeFor(project)}
+      />,
+    )
+    await waitFor(() => expect(registrations).toHaveLength(1))
+    const registration = registrations[0]!
+    const root = registration.roots.get(HACKATHON_HANDOVER_IDS_V4.workpieceId)!
+    const proxy = registration.collisionProxies.find(
+      ({ entity }) => entity.name === 'Workpiece',
+    )!
+
+    act(() => {
+      store.getState().updateAttachedPose(generation, 'NED2-A', {
+        positionM: [0.5, 0.4, 0.3],
+        quaternion: [0, 0, 0, 1],
+      })
+      fiberCapture.frame?.()
+    })
+
+    expect(registrations).toEqual([registration])
+    root.position.toArray().forEach((coordinate) => expect(coordinate).toBeCloseTo(0.6))
+    proxy.resolveEntity!().worldMatrix.slice(12, 15)
+      .forEach((coordinate) => expect(coordinate).toBeCloseTo(0.6))
   })
 
   it('shows a translate gizmo only for the selected manually owned Spatial Entity', async () => {

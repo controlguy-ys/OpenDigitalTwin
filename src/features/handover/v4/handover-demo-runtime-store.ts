@@ -19,6 +19,14 @@ export interface HandoverPoseOverrideV4 {
   readWorldPose(entityId: string): RigidTransformV4 | null
 }
 
+export function createHandoverPoseOverrideV4(
+  store: StoreApi<HandoverDemoRuntimeStateV4>,
+): Readonly<HandoverPoseOverrideV4> {
+  return Object.freeze({
+    readWorldPose: (entityId: string) => store.getState().readWorldPose(entityId),
+  })
+}
+
 export interface HandoverDemoRuntimeStateV4 extends HandoverPoseOverrideV4 {
   readonly runState: HandoverRunStateV4
   readonly step: typeof HACKATHON_HANDOVER_STEPS_V4[number]

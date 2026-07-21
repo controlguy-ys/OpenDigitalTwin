@@ -11,7 +11,10 @@ export interface HandoverDemoStatusStripPropsV4 {
 export function HandoverDemoStatusStripV4({
   store,
 }: HandoverDemoStatusStripPropsV4): ReactNode {
-  const state = useStore(store)
+  const step = useStore(store, (state) => state.step)
+  const partOwner = useStore(store, (state) => state.partOwner)
+  const sharedZoneOwner = useStore(store, (state) => state.sharedZoneOwner)
+  const failureCode = useStore(store, (state) => state.failureCode)
 
   return (
     <p
@@ -19,14 +22,14 @@ export function HandoverDemoStatusStripV4({
       className="handover-demo-status-strip-v4"
       role="status"
     >
-      <span>Step {state.step}</span>
+      <span>Step {step}</span>
       {' | '}
-      <span>Part {state.partOwner}</span>
+      <span>Part {partOwner}</span>
       {' | '}
-      <span>Shared Zone {state.sharedZoneOwner}</span>
-      {state.failureCode === null
+      <span>Shared Zone {sharedZoneOwner}</span>
+      {failureCode === null
         ? null
-        : <>{' | '}<span className="handover-demo-status-failure-v4">Failure {state.failureCode}</span></>}
+        : <>{' | '}<span className="handover-demo-status-failure-v4">Failure {failureCode}</span></>}
     </p>
   )
 }

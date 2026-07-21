@@ -1,5 +1,6 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
+import { Profiler } from 'react'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { RigidTransformV4 } from '../../../core/project-v4/index.js'
 import { createHackathonHandoverSampleV4 } from '../../project/v4/hackathon-handover-sample-v4.js'
@@ -46,5 +47,29 @@ describe('HandoverDemoStatusStripV4', () => {
 
     expect(screen.getByRole('status', { name: 'Handover demo status' }))
       .toHaveTextContent('Failure GRIP_CONFIRM_TIMEOUT')
+  })
+
+  it('does not re-render when only the attached Workpiece pose changes', () => {
+    const store = runtime()
+    const generation = store.getState().begin('run-status-pose-only')
+    store.getState().attach(generation, 'NED2-A', IDENTITY_POSE, IDENTITY_POSE)
+    store.getState().setStep(generation, 'HANDOVER_CONFIRM')
+    const onRender = vi.fn()
+
+    render(
+      <Profiler id="handover-status" onRender={onRender}>
+        <HandoverDemoStatusStripV4 store={store} />
+      </Profiler>,
+    )
+    expect(onRender).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      store.getState().updateAttachedPose(generation, 'NED2-A', {
+        positionM: [0.3, -0.1, 0.2],
+        quaternion: [0, 0, 0, 1],
+      })
+    })
+
+    expect(onRender).toHaveBeenCalledTimes(1)
   })
 })
