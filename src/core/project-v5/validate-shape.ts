@@ -601,8 +601,11 @@ function validateMapping(value: unknown, path: string): void {
     const leafRecord = expectClosedRecord(leaf, leafPath, [
       'leafPath', 'projectPath', 'projectTarget', 'opcUaDataType', 'projectDataType', 'scale', 'offset', 'unit',
       'required',
-    ])
+    ], ['nodeAddress'])
     validatePath(leafRecord.leafPath, `${leafPath}.leafPath`)
+    if (Object.hasOwn(leafRecord, 'nodeAddress')) {
+      leafRecord.nodeAddress = validateOpcUaNodeAddressV1(leafRecord.nodeAddress, `${leafPath}.nodeAddress`)
+    }
     validatePath(leafRecord.projectPath, `${leafPath}.projectPath`)
     validateProjectTarget(leafRecord.projectTarget, `${leafPath}.projectTarget`)
     expectEnum(leafRecord.opcUaDataType, `${leafPath}.opcUaDataType`, [

@@ -307,6 +307,7 @@ export type OpcUaProjectTargetV5 =
 
 export interface OpcUaMappingLeafV5 {
   readonly leafPath: readonly (string | number)[]
+  readonly nodeAddress?: OpcUaNodeAddressV1
   readonly projectPath: readonly (string | number)[]
   readonly projectTarget: OpcUaProjectTargetV5
   readonly opcUaDataType: 'Boolean' | 'SByte' | 'Byte' | 'Int16' | 'UInt16' | 'Int32' | 'UInt32' | 'Float' | 'Double' | 'String'

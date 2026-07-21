@@ -94,32 +94,59 @@ function robotInstanceV5(
   }
 }
 
-function robotJointMappingsV5(project: WorkcellProjectV4): WorkcellProjectV5['opcUa']['mappings'] {
+function readMappingsV5(project: WorkcellProjectV4): WorkcellProjectV5['opcUa']['mappings'] {
   if (project.opcUa.mode !== 'client' && project.opcUa.mode !== 'bridge') return []
   return project.opcUa.mappings.flatMap((mapping) => {
     if (mapping.direction !== 'read' && mapping.direction !== 'readWrite') return []
     const leaf = mapping.leaves.length === 1 ? mapping.leaves[0] : undefined
-    if (leaf?.projectTarget.type !== 'robot-joint') return []
+    if (leaf?.projectTarget.type === 'robot-joint') {
+      return [{
+        id: mapping.id,
+        endpointId: mapping.endpointId,
+        nodeAddress: nodeAddressV5(leaf.nodeId),
+        direction: mapping.direction,
+        ...(mapping.publishingIntervalMs === undefined ? {} : { publishingIntervalMs: mapping.publishingIntervalMs }),
+        coherenceGroupId: mapping.coherenceGroupId,
+        interpolationMode: mapping.interpolationMode,
+        coordinateConvention: 'project-v5-z-up-metres-quaternion-xyzw' as const,
+        leaves: [{
+          leafPath: [],
+          projectPath: [],
+          projectTarget: leaf.projectTarget,
+          opcUaDataType: leaf.opcUaDataType,
+          projectDataType: leaf.projectDataType,
+          scale: leaf.scale,
+          offset: leaf.offset,
+          unit: leaf.unit,
+          required: leaf.required,
+        }],
+      }]
+    }
+    const frameLeaf = mapping.leaves[0]
+    if (frameLeaf?.projectTarget.type !== 'entity-frame') return []
     return [{
       id: mapping.id,
       endpointId: mapping.endpointId,
-      nodeAddress: nodeAddressV5(leaf.nodeId),
+      nodeAddress: nodeAddressV5(frameLeaf.nodeId),
       direction: mapping.direction,
       ...(mapping.publishingIntervalMs === undefined ? {} : { publishingIntervalMs: mapping.publishingIntervalMs }),
       coherenceGroupId: mapping.coherenceGroupId,
       interpolationMode: mapping.interpolationMode,
       coordinateConvention: 'project-v5-z-up-metres-quaternion-xyzw' as const,
-      leaves: [{
-        leafPath: [],
-        projectPath: [],
-        projectTarget: leaf.projectTarget,
-        opcUaDataType: leaf.opcUaDataType,
-        projectDataType: leaf.projectDataType,
-        scale: leaf.scale,
-        offset: leaf.offset,
-        unit: leaf.unit,
-        required: leaf.required,
-      }],
+      leaves: mapping.leaves.map((candidate) => ({
+        // Each explicit scalar root is monitored independently; the numeric
+        // leaf path is only a unique V5 tree key for this scalar channel.
+        leafPath: [mapping.leaves.indexOf(candidate)],
+        nodeAddress: nodeAddressV5(candidate.nodeId),
+        projectPath: candidate.leafPath,
+        projectTarget: candidate.projectTarget,
+        opcUaDataType: candidate.opcUaDataType,
+        projectDataType: candidate.projectDataType,
+        scale: candidate.scale,
+        offset: candidate.offset,
+        unit: candidate.unit,
+        required: candidate.required,
+      })),
     }]
   })
 }
@@ -142,7 +169,7 @@ export function projectV4ToV5Gateway(project: WorkcellProjectV4): WorkcellProjec
     opcUa: {
       mode: project.opcUa.mode,
       endpoints: project.opcUa.endpoints,
-      mappings: robotJointMappingsV5(project),
+      mappings: readMappingsV5(project),
       bridgeRoutes: [],
     },
   }

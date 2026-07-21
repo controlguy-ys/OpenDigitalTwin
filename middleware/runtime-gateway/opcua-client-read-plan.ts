@@ -61,8 +61,15 @@ function isReadDirection(direction: OpcUaMappingV5['direction']): boolean {
   return direction === 'read' || direction === 'readWrite'
 }
 
-function rootKey(endpointId: string, nodeAddress: OpcUaNodeAddressV1): string {
+export function opcUaClientReadPlanRootKeyV1(endpointId: string, nodeAddress: OpcUaNodeAddressV1): string {
   return `${endpointId}\0${opcUaNodeAddressKeyV1(nodeAddress)}`
+}
+
+export function effectiveOpcUaMappingLeafNodeAddressV1(
+  mapping: OpcUaMappingV5,
+  leaf: OpcUaMappingLeafV5,
+): OpcUaNodeAddressV1 {
+  return leaf.nodeAddress ?? mapping.nodeAddress
 }
 
 function nodeIdIdentifierPrefix(address: OpcUaNodeAddressV1): 's' | 'i' | 'g' | 'b' {
@@ -96,20 +103,28 @@ export function compileOpcUaClientReadPlanV1(
     if (endpoint === undefined || !endpoint.enabled) continue
     const endpointRoots = rootsByEndpoint.get(endpoint.endpointId) ?? new Map<string, MutableRootV1>()
     rootsByEndpoint.set(endpoint.endpointId, endpointRoots)
-    const key = rootKey(endpoint.endpointId, mapping.nodeAddress)
     const interval = mapping.publishingIntervalMs ?? endpoint.publishingIntervalMs
-    const existing = endpointRoots.get(key)
-    if (existing === undefined) {
-      endpointRoots.set(key, {
-        rootKey: key,
-        endpointId: endpoint.endpointId,
-        nodeAddress: mapping.nodeAddress,
-        mappingIds: [mapping.id],
-        samplingIntervalMs: interval,
-      })
-    } else {
-      existing.mappingIds.push(mapping.id)
-      existing.samplingIntervalMs = Math.min(existing.samplingIntervalMs, interval)
+    const hasLeafNodeAddresses = mapping.leaves.some((leaf) => leaf.nodeAddress !== undefined)
+    const roots = !hasLeafNodeAddresses
+      ? [{ nodeAddress: mapping.nodeAddress }]
+      : mapping.leaves.map((leaf) => ({
+          nodeAddress: effectiveOpcUaMappingLeafNodeAddressV1(mapping, leaf),
+        }))
+    for (const { nodeAddress } of roots) {
+      const key = opcUaClientReadPlanRootKeyV1(endpoint.endpointId, nodeAddress)
+      const existing = endpointRoots.get(key)
+      if (existing === undefined) {
+        endpointRoots.set(key, {
+          rootKey: key,
+          endpointId: endpoint.endpointId,
+          nodeAddress,
+          mappingIds: [mapping.id],
+          samplingIntervalMs: interval,
+        })
+      } else {
+        if (!existing.mappingIds.includes(mapping.id)) existing.mappingIds.push(mapping.id)
+        existing.samplingIntervalMs = Math.min(existing.samplingIntervalMs, interval)
+      }
     }
   }
 
@@ -159,7 +174,7 @@ export function groupResolvedRootsBySamplingIntervalV1(
   })))
 }
 
-function valueAtLeafPath(input: unknown, path: readonly (string | number)[]): unknown {
+export function valueAtLeafPathV1(input: unknown, path: readonly (string | number)[]): unknown {
   let value = input
   for (const segment of path) {
     if (value === null || typeof value !== 'object') return undefined
@@ -277,22 +292,22 @@ function assembledFrameValue(
   })
 }
 
-export function assembleMappingValueV1(
+function assembleMappingValueFromInputsV1(
   mapping: OpcUaMappingV5,
-  rootValue: unknown,
+  inputForLeaf: (leaf: OpcUaMappingLeafV5, leafIndex: number) => unknown,
 ): AssembleMappingValueResultV1 {
   const firstLeaf = mapping.leaves[0]
   if (firstLeaf === undefined) return { ok: false, statusCode: 'BadNoData' }
   if (mapping.leaves.length === 1 && firstLeaf.projectPath.length === 0) {
-    const normalized = normalizeLeafValue(firstLeaf, valueAtLeafPath(rootValue, firstLeaf.leafPath))
+    const normalized = normalizeLeafValue(firstLeaf, inputForLeaf(firstLeaf, 0))
     return normalized.ok
       ? { ok: true, value: normalized.value, unit: firstLeaf.unit }
       : normalized
   }
 
   const structured: Record<string, RuntimeScalarOrStructureV1> = {}
-  for (const leaf of mapping.leaves) {
-    const normalized = normalizeLeafValue(leaf, valueAtLeafPath(rootValue, leaf.leafPath))
+  for (const [leafIndex, leaf] of mapping.leaves.entries()) {
+    const normalized = normalizeLeafValue(leaf, inputForLeaf(leaf, leafIndex))
     if (!normalized.ok) return normalized
     if (!setProjectPath(structured, leaf.projectPath, normalized.value)) {
       return { ok: false, statusCode: 'BadTypeMismatch' }
@@ -306,4 +321,24 @@ export function assembleMappingValueV1(
       : { ok: true, value: frame, unit: mapping.coordinateConvention }
   }
   return { ok: true, value: Object.freeze(structured), unit: firstLeaf.unit }
+}
+
+export function assembleMappingValueV1(
+  mapping: OpcUaMappingV5,
+  rootValue: unknown,
+): AssembleMappingValueResultV1 {
+  return assembleMappingValueFromInputsV1(
+    mapping,
+    (leaf) => valueAtLeafPathV1(rootValue, leaf.leafPath),
+  )
+}
+
+export function assembleMappingValueFromLeafValuesV1(
+  mapping: OpcUaMappingV5,
+  leafValues: ReadonlyMap<number, unknown>,
+): AssembleMappingValueResultV1 {
+  return assembleMappingValueFromInputsV1(
+    mapping,
+    (_leaf, leafIndex) => leafValues.get(leafIndex),
+  )
 }

@@ -41,7 +41,7 @@ import {
   MIN_ROBOT_LINKS_V5,
   MIN_ROBOT_STEP_SOURCES_V5,
 } from './limits.js'
-import { opcUaNodeAddressKeyV1 } from './opcua-node-address.js'
+import { opcUaNodeAddressKeyV1, type OpcUaNodeAddressV1 } from './opcua-node-address.js'
 import type {
   AssetReferenceV5,
   FrameDefinitionV5,
@@ -257,6 +257,13 @@ function targetKey(target: OpcUaProjectTargetV5): string {
 
 function pathKey(path: readonly (string | number)[]): string {
   return JSON.stringify(path)
+}
+
+function effectiveLeafNodeAddressV1(
+  mapping: OpcUaMappingV5,
+  leaf: OpcUaMappingLeafV5,
+): OpcUaNodeAddressV1 {
+  return leaf.nodeAddress ?? mapping.nodeAddress
 }
 
 function validateFrameProjectPaths(leaves: readonly OpcUaMappingLeafV5[], path: string): void {
@@ -816,7 +823,6 @@ function validateMappingLeaves(
   const leafPaths = new Set<string>()
   const tree = createLeafPathTreeNode()
   const indexesByPrefix = new Map<string, Set<number>>()
-  const rootAddressKey = opcUaNodeAddressKeyV1(mapping.nodeAddress)
   let mappingTarget: OpcUaProjectTargetV5 | undefined
   mapping.leaves.forEach((leaf, leafIndex) => {
     const leafPath = `${mappingPath}.leaves[${leafIndex}]`
@@ -833,7 +839,8 @@ function validateMappingLeaves(
       numericIndexes.add(segment)
       indexesByPrefix.set(prefix, numericIndexes)
     })
-    const channelKey = `${mapping.endpointId}\u0000${rootAddressKey}\u0000${key}`
+    const nodeAddressKey = opcUaNodeAddressKeyV1(effectiveLeafNodeAddressV1(mapping, leaf))
+    const channelKey = `${mapping.endpointId}\u0000${nodeAddressKey}\u0000${key}`
     if (channelKeys.has(channelKey)) fail('OPCUA_CHANNEL_DUPLICATE', `${leafPath}.leafPath`, 'Endpoint Node and Leaf path must be unique.')
     channelKeys.add(channelKey)
     validateGenericDataTypePair(leaf, leafPath)

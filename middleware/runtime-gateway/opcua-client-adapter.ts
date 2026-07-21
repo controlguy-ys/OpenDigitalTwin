@@ -32,8 +32,11 @@ import type {
 } from '../../src/core/runtime-protocol/gateway-status-v1.js'
 import {
   assembleMappingValueV1,
+  assembleMappingValueFromLeafValuesV1,
   compileOpcUaClientReadPlanV1,
+  effectiveOpcUaMappingLeafNodeAddressV1,
   groupResolvedRootsBySamplingIntervalV1,
+  opcUaClientReadPlanRootKeyV1,
   resolveOpcUaClientReadRootsV1,
   type CompiledOpcUaClientEndpointReadPlanV1,
   type ResolvedOpcUaClientMonitoredRootV1,
@@ -344,8 +347,10 @@ export function createOpcUaClientSnapshotAssemblerV1(
     options.endpoint.monitoredRoots.map((root) => [root.rootKey, root.mappingIds]),
   )
   const retained = new Map<string, { readonly value: RuntimeMappedValueV1['value']; readonly unit: string }>()
+  const retainedLeafValues = new Map<string, Map<number, unknown>>()
   const reset = (): void => {
     retained.clear()
+    retainedLeafValues.clear()
   }
 
   return Object.freeze({
@@ -358,9 +363,28 @@ export function createOpcUaClientSnapshotAssemblerV1(
       for (const mappingId of mappingIds) {
         const mapping = mappingsById.get(mappingId)
         if (mapping === undefined) continue
-        const assembled = quality === 'GOOD'
-          ? assembleMappingValueV1(mapping, input)
-          : { ok: false as const, statusCode }
+        const hasExplicitLeafRoots = mapping.leaves.some((leaf) => leaf.nodeAddress !== undefined)
+        let assembled
+        if (!hasExplicitLeafRoots) {
+          assembled = quality === 'GOOD'
+            ? assembleMappingValueV1(mapping, input)
+            : { ok: false as const, statusCode }
+        } else {
+          const leafValues = retainedLeafValues.get(mapping.id) ?? new Map<number, unknown>()
+          retainedLeafValues.set(mapping.id, leafValues)
+          if (quality === 'GOOD') {
+            mapping.leaves.forEach((leaf, leafIndex) => {
+              const leafRootKey = opcUaClientReadPlanRootKeyV1(
+                mapping.endpointId,
+                effectiveOpcUaMappingLeafNodeAddressV1(mapping, leaf),
+              )
+              if (leafRootKey === rootKey) {
+                leafValues.set(leafIndex, input)
+              }
+            })
+          }
+          assembled = assembleMappingValueFromLeafValuesV1(mapping, leafValues)
+        }
         if (assembled.ok) {
           retained.set(mapping.id, { value: assembled.value, unit: assembled.unit })
           values.push(Object.freeze({
