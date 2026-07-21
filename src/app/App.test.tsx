@@ -15,7 +15,14 @@ import type {
   BrowserProjectResourcesV4,
 } from '../features/project/project-store-browser.js'
 import { createBrowserRuntimeBundleStoreV4 } from '../features/project/v4/browser-runtime-bundle-store-v4.js'
+import type { BrowserHandoverRuntimeResourcesV4 } from '../features/project/v4/browser-runtime-bundle-store-v4.js'
 import { createDefaultProjectV4 } from '../features/project/v4/default-project-v4.js'
+import {
+  HACKATHON_HANDOVER_IDS_V4,
+  createHackathonHandoverSampleV4,
+  isHackathonHandoverSampleV4,
+} from '../features/project/v4/hackathon-handover-sample-v4.js'
+import { createHandoverDemoRuntimeStoreV4 } from '../features/handover/v4/handover-demo-runtime-store.js'
 import type { ProjectMutationServiceV4 } from '../features/project/v4/project-v4-mutation-service.js'
 import type { ProjectStoreStateV4 } from '../features/project/v4/project-store-v4.js'
 import { createRobotDefinitionGeometryRepositoryV4 } from '../features/robot/v4/robot-definition-geometry-repository.js'
@@ -185,10 +192,13 @@ vi.mock('../features/collision/v4/CollisionPanel.js', () => ({
   },
 }))
 
-function resourcesForTest(): BrowserProjectResourcesV4 & {
+function resourcesForTest(options: {
+  readonly project?: ReturnType<typeof createDefaultProjectV4>
+  readonly handover?: BrowserHandoverRuntimeResourcesV4 | null
+} = {}): BrowserProjectResourcesV4 & {
   readonly sceneCommands: SceneCommandServiceV4
 } {
-  const project = createDefaultProjectV4({
+  const project = options.project ?? createDefaultProjectV4({
     projectId: 'project-app-v4',
     revisionId: 'revision-app-v4',
     nowIso: '2026-07-17T00:00:00.000Z',
@@ -233,7 +243,7 @@ function resourcesForTest(): BrowserProjectResourcesV4 & {
     jobs: {
       executor,
       playback,
-      handover: null,
+      handover: options.handover ?? null,
       dispose: vi.fn(),
     },
   })
@@ -589,12 +599,66 @@ describe('App Project V4 production composition', () => {
     await expect(runtime.invoke('project.import')).resolves.toBe('cancelled')
     await expect(runtime.invoke('project.export')).resolves.toBe('completed')
     await expect(runtime.invoke('project.sample.dual')).resolves.toBe('completed')
+    await expect(runtime.invoke('project.sample.handover')).resolves.toBe('completed')
     await expect(runtime.invoke('connectivity.mode.server')).resolves.toBe('completed')
     expect(resources.projectStore.getState().newProject).toHaveBeenCalledOnce()
     expect(resources.projectStore.getState().saveActiveProject).toHaveBeenCalledOnce()
     expect(resources.projectFiles.pickProject).toHaveBeenCalledOnce()
     expect(resources.projectFiles.downloadProject).toHaveBeenCalledWith(expect.any(Blob), 'Untitled Workcell.json')
-    expect(vi.mocked(resources.mutations.replaceFromActive)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(resources.mutations.replaceFromActive)).toHaveBeenCalledTimes(3)
+    const handoverMutation = vi.mocked(resources.mutations.replaceFromActive)
+      .mock.calls.find(([request]) => request.description === 'Load NED2 direct Handover demo')?.[0]
+    expect(handoverMutation).toBeDefined()
+    expect(isHackathonHandoverSampleV4(handoverMutation!.mutate(
+      resources.projectStore.getState().activeProject!,
+    ))).toBe(true)
+  })
+
+  it('wires the active Handover runtime to renderer, Timeline, Reset, and fault commands', async () => {
+    const project = createHackathonHandoverSampleV4({
+      projectId: 'project-app-handover',
+      revisionId: 'revision-app-handover',
+      nowIso: '2026-07-21T00:00:00.000Z',
+    })
+    const store = createHandoverDemoRuntimeStoreV4(project)
+    const coordinator = {
+      canHandle: vi.fn((jobId: string) => jobId === HACKATHON_HANDOVER_IDS_V4.jobId),
+      canStart: vi.fn(() => true), start: vi.fn(() => ({ runId: 'run-app-handover' })),
+      canCancel: vi.fn(() => false), cancel: vi.fn(), canReset: vi.fn(() => true),
+      reset: vi.fn(), setGripConfirmTimeoutInjection: vi.fn(), dispose: vi.fn(),
+    }
+    const handover = { store, coordinator }
+    const resources = resourcesForTest({ project, handover })
+    render(<App gatewayPublisher={null} resources={resources} />)
+
+    expect(observed.canvas?.poseOverride).toBe(store.getState())
+    expect(observed.canvas?.handoverSharedZoneOwner).toBe('NONE')
+    expect(observed.timeline?.handover).toMatchObject({
+      projectRevisionId: project.revisionId,
+      store,
+    })
+
+    const runtime = observed.commandBindings.at(-1)!.runtime
+    await expect(runtime.invoke('job.reset')).resolves.toBe('completed')
+    await expect(runtime.invoke('simulation.fault.gripConfirmTimeout'))
+      .resolves.toBe('completed')
+    expect(coordinator.reset).toHaveBeenCalledOnce()
+    expect(coordinator.setGripConfirmTimeoutInjection).toHaveBeenCalledWith(true)
+
+    const generation = store.getState().begin('run-app-handover-owner')
+    act(() => {
+      store.getState().attach(
+        generation,
+        'NED2-A',
+        { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+        { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+      )
+      store.getState().setStep(generation, 'HANDOVER_CONFIRM')
+    })
+    await waitFor(() => {
+      expect(observed.canvas?.handoverSharedZoneOwner).toBe('NED2-A')
+      expect(observed.canvas?.poseOverride).toBe(store.getState())
+    })
   })
 
   it('keeps the Job ribbon active across a revision committed by Save Current Pose', async () => {

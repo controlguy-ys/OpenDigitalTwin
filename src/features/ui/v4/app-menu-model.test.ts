@@ -9,11 +9,11 @@ function command(id: string, section: AppCommandV4['section'], visible = true): 
 }
 
 const COMPLETE_CATALOG = [
-  ['project.new', 'project'], ['project.save', 'project'], ['project.import', 'project'], ['project.export', 'project'], ['project.sample.dual', 'project'],
+  ['project.new', 'project'], ['project.save', 'project'], ['project.import', 'project'], ['project.export', 'project'], ['project.sample.dual', 'project'], ['project.sample.handover', 'project'],
   ['view.focusSelection', 'view'], ['scene.rename', 'home'], ['scene.pose.copy', 'home'], ['scene.pose.paste', 'home'], ['scene.pose.reset', 'home'], ['scene.visibility.toggle', 'home'], ['scene.isolate', 'home'], ['scene.showAll', 'home'], ['scene.delete', 'home'], ['robot.home', 'home'], ['robot.gripper.open', 'home'], ['robot.gripper.close', 'home'],
   ['model.importRobotStep', 'model'], ['model.add.box', 'model'], ['model.add.cylinder', 'model'], ['model.add.group', 'model'], ['scene.group.move', 'model'], ['scene.group.remove', 'model'], ['robot.base.edit', 'model'], ['robot.mount.edit', 'model'],
-  ['job.new', 'job'], ['job.pose.save', 'job'], ['job.start', 'job'], ['job.cancel', 'job'], ['job.rename', 'job'], ['job.duplicate', 'job'], ['job.delete', 'job'], ['view.timeline.open', 'job'],
-  ['collision.validate', 'simulation'], ['view.collision.open', 'simulation'],
+  ['job.new', 'job'], ['job.pose.save', 'job'], ['job.start', 'job'], ['job.cancel', 'job'], ['job.reset', 'job'], ['job.rename', 'job'], ['job.duplicate', 'job'], ['job.delete', 'job'], ['view.timeline.open', 'job'],
+  ['collision.validate', 'simulation'], ['view.collision.open', 'simulation'], ['simulation.fault.gripConfirmTimeout', 'simulation'],
   ['connectivity.mode.off', 'connectivity'], ['connectivity.mode.client', 'connectivity'], ['connectivity.mode.server', 'connectivity'], ['connectivity.mode.bridge', 'connectivity'], ['connectivity.details.open', 'connectivity'],
   ['view.sidebar', 'view'], ['view.inspector', 'view'], ['view.bottom', 'view'], ['view.ribbon', 'view'], ['view.layout.reset', 'view'], ['view.theme.system', 'view'], ['view.theme.light', 'view'], ['view.theme.dark', 'view'], ['view.layer.grid', 'view'], ['view.layer.world', 'view'], ['view.layer.mcp', 'view'], ['view.layer.base', 'view'], ['view.layer.tcp', 'view'], ['view.home', 'view'], ['view.fitAll', 'view'], ['view.orientation.isometric', 'view'], ['view.orientation.top', 'view'], ['view.orientation.front', 'view'], ['view.orientation.right', 'view'], ['view.orientation.back', 'view'], ['view.orientation.left', 'view'], ['view.orientation.bottom', 'view'],
   ['help.controls', 'help'], ['help.stepImport', 'help'], ['help.opcUaMapping', 'help'], ['help.about', 'help'],
@@ -33,7 +33,7 @@ describe('buildAppMenuModelV4', () => {
   })
   it('keeps placement order, submenus, separators, and cross-section ids', () => {
     const commands = [
-      command('project.new', 'project'), command('project.save', 'project'), command('project.import', 'project'), command('project.export', 'project'), command('project.sample.dual', 'project'),
+      command('project.new', 'project'), command('project.save', 'project'), command('project.import', 'project'), command('project.export', 'project'), command('project.sample.dual', 'project'), command('project.sample.handover', 'project'),
       command('connectivity.mode.off', 'connectivity'), command('connectivity.mode.client', 'connectivity'), command('connectivity.mode.server', 'connectivity'), command('connectivity.mode.bridge', 'connectivity'), command('connectivity.details.open', 'connectivity'),
       command('view.sidebar', 'view'), command('view.inspector', 'view'), command('view.bottom', 'view'), command('view.ribbon', 'view'), command('view.layout.reset', 'view'), command('view.theme.system', 'view'), command('view.theme.light', 'view'), command('view.theme.dark', 'view'), command('view.layer.grid', 'view'), command('view.layer.world', 'view'), command('view.layer.mcp', 'view'), command('view.layer.base', 'view'), command('view.layer.tcp', 'view'), command('view.home', 'view'), command('view.fitAll', 'view'), command('view.focusSelection', 'view'), command('view.orientation.isometric', 'view'), command('view.orientation.top', 'view'), command('view.orientation.front', 'view'), command('view.orientation.right', 'view'), command('view.orientation.back', 'view'), command('view.orientation.left', 'view'), command('view.orientation.bottom', 'view'),
     ]
@@ -95,6 +95,11 @@ describe('buildAppMenuModelV4', () => {
       ['view.home', 'view.fitAll', 'view.focusSelection'],
       ['view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom'],
     ])
+    const simulation = model.find((section) => section.id === 'simulation')!
+    expect(simulation.children.at(-1)).toMatchObject({
+      kind: 'submenu', id: 'simulation.faults', label: 'Fault Injection',
+      children: [{ kind: 'command', commandId: 'simulation.fault.gripConfirmTimeout' }],
+    })
   })
 
   it('uses stable cross-placement references and never exceeds section-submenu-command depth', () => {

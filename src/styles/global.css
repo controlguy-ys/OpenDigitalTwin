@@ -1745,6 +1745,23 @@ button {
   color: var(--color-accent);
 }
 
+.handover-demo-status-strip-v4 {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 0 16px 5px;
+  margin: -2px 0 0;
+  overflow-x: auto;
+  color: var(--color-muted);
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: nowrap;
+}
+
+.handover-demo-status-failure-v4 {
+  color: var(--color-warning);
+}
+
 .timeline-track {
   position: relative;
   height: 78px;

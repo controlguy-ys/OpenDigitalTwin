@@ -7,6 +7,11 @@ import { createAppCommandBindingsV4, createAppCommandRuntimeV4 } from '../../com
 import { createAppCommandRegistryV4 } from '../../commands/v4/app-command-registry.js'
 import type { JobCommandServiceV4 } from '../../jobs/v4/job-command-service.js'
 import { createJobRuntimeStoreV4 } from '../../jobs/v4/job-runtime-store.js'
+import { createHandoverDemoRuntimeStoreV4 } from '../../handover/v4/handover-demo-runtime-store.js'
+import {
+  HACKATHON_HANDOVER_IDS_V4,
+  createHackathonHandoverSampleV4,
+} from '../../project/v4/hackathon-handover-sample-v4.js'
 import { TimelineV4 } from './Timeline.js'
 
 function pose(speedPercentToNext: number): RobotJobStepV4 { return { kind: 'joint-pose', jointValues: { 'prismatic:Z': 0.2 }, speedPercentToNext } }
@@ -50,7 +55,77 @@ function harness() {
 
 function timeline(state: ReturnType<typeof harness>, robotId: 'robot-A' | 'robot-B' = 'robot-A', jobId: 'job-A' | 'job-B' = robotId === 'robot-A' ? 'job-A' : 'job-B') { return <TimelineV4 {...state} jobId={jobId} robotId={robotId} /> }
 
+function handoverHarness() {
+  const project = createHackathonHandoverSampleV4({
+    projectId: 'project-timeline-handover',
+    revisionId: 'revision-timeline-handover',
+    nowIso: '2026-07-21T00:00:00.000Z',
+  })
+  const jobs = createJobRuntimeStoreV4()
+  jobs.getState().replaceProject(project)
+  const store = createHandoverDemoRuntimeStoreV4(project)
+  const reset = vi.fn(async () => undefined)
+  const runtime = createAppCommandRuntimeV4(createAppCommandRegistryV4([
+    { id: 'job.start', label: 'Start Job', section: 'job', kind: 'action', visible: true, enabled: true, execute() {} },
+    { id: 'job.cancel', label: 'Cancel Active Robot Job', section: 'job', kind: 'action', visible: true, enabled: false, execute() {} },
+    { id: 'job.reset', label: 'Reset Handover Demo', section: 'job', kind: 'action', visible: true, enabled: true, execute: reset },
+  ]))
+  return {
+    project,
+    jobs,
+    store,
+    reset,
+    commands: localCommands(),
+    commandBindings: createAppCommandBindingsV4(runtime),
+  }
+}
+
 describe('TimelineV4', () => {
+  it('shows one Reset control and compact status for the active representative Handover Job', async () => {
+    const user = userEvent.setup()
+    const state = handoverHarness()
+    render(
+      <TimelineV4
+        {...state}
+        handover={{
+          projectRevisionId: state.project.revisionId,
+          store: state.store,
+        }}
+        jobId={HACKATHON_HANDOVER_IDS_V4.jobId}
+        robotId={HACKATHON_HANDOVER_IDS_V4.robotAId}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Reset Handover Demo' })).toBeEnabled()
+    expect(screen.getByRole('status', { name: 'Handover demo status' }))
+      .toHaveTextContent('Step READY | Part TABLE | Shared Zone NONE')
+    expect(screen.getAllByRole('button', { name: 'Start Job' })).toHaveLength(1)
+
+    await user.click(screen.getByRole('button', { name: 'Reset Handover Demo' }))
+    expect(state.reset).toHaveBeenCalledOnce()
+  })
+
+  it('keeps Handover controls out of ordinary or revision-stale Timelines', () => {
+    const ordinary = harness()
+    const handover = handoverHarness()
+    const view = render(timeline(ordinary))
+    expect(screen.queryByRole('button', { name: 'Reset Handover Demo' }))
+      .not.toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: 'Handover demo status' }))
+      .not.toBeInTheDocument()
+
+    view.rerender(
+      <TimelineV4
+        {...handover}
+        handover={{ projectRevisionId: 'revision-stale', store: handover.store }}
+        jobId={HACKATHON_HANDOVER_IDS_V4.jobId}
+        robotId={HACKATHON_HANDOVER_IDS_V4.robotAId}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'Reset Handover Demo' }))
+      .not.toBeInTheDocument()
+  })
+
   it('renders stored Joint-Pose/Action order and terminal runtime state', () => {
     const state = harness(); state.jobs.getState().setRobotState({ ...running(), state: 'FAILED', stepIndex: 1, completedAtSimulationMs: 90, failureCode: 'ACTION_FAILED', message: 'Gripper unavailable' })
     render(timeline(state))

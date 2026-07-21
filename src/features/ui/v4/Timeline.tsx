@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Play, Square, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, Play, RotateCcw, Square, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type {
   RobotIdV4,
@@ -13,6 +13,17 @@ import type {
 } from '../../jobs/v4/job-runtime-store.js'
 import type { AppCommandBindingsV4 } from '../../commands/v4/app-command-runtime.js'
 import { useAppCommandV4 } from '../../commands/v4/use-app-command.js'
+import { HandoverDemoStatusStripV4 } from '../../handover/v4/HandoverDemoStatusStrip.js'
+import type { HandoverDemoRuntimeStateV4 } from '../../handover/v4/handover-demo-runtime-store.js'
+import {
+  HACKATHON_HANDOVER_IDS_V4,
+  isHackathonHandoverSampleV4,
+} from '../../project/v4/hackathon-handover-sample-v4.js'
+
+export interface TimelineHandoverRuntimeV4 {
+  readonly projectRevisionId: WorkcellProjectV4['revisionId']
+  readonly store: StoreApi<HandoverDemoRuntimeStateV4>
+}
 
 export interface TimelinePropsV4 {
   readonly project: WorkcellProjectV4
@@ -21,6 +32,7 @@ export interface TimelinePropsV4 {
   readonly jobs: StoreApi<JobRuntimeStoreV4>
   readonly commands: JobCommandServiceV4
   readonly commandBindings: AppCommandBindingsV4
+  readonly handover?: TimelineHandoverRuntimeV4 | null
   readonly disabled?: boolean
 }
 
@@ -64,10 +76,12 @@ export function TimelineV4({
   jobs,
   commands,
   commandBindings,
+  handover = null,
   disabled = false,
 }: TimelinePropsV4): ReactNode {
   const startJob = useAppCommandV4(commandBindings, 'job.start')
   const cancelJob = useAppCommandV4(commandBindings, 'job.cancel')
+  const resetDemo = useAppCommandV4(commandBindings, 'job.reset')
   const runtime = useRobotRuntimeV4(jobs, robotId)
   const job = project.jobs.find((candidate) => (
     candidate.id === jobId && candidate.robotId === robotId
@@ -79,6 +93,13 @@ export function TimelineV4({
   const running = runtime?.state === 'RUNNING'
   const authoringDisabled = disabled || running || pendingCommand !== null
   const startBlockedByAuthoring = authoringDisabled || pendingCommandTokenRef.current !== null
+  const activeHandover = handover !== null
+    && handover.projectRevisionId === project.revisionId
+    && robotId === HACKATHON_HANDOVER_IDS_V4.robotAId
+    && jobId === HACKATHON_HANDOVER_IDS_V4.jobId
+    && isHackathonHandoverSampleV4(project)
+    ? handover
+    : null
 
   const canAuthorCurrentJob = (): boolean => {
     if (disabled || robotId === null || job === null || job.id !== jobId) return false
@@ -170,8 +191,37 @@ export function TimelineV4({
             <Square aria-hidden="true" size={16} strokeWidth={1.75} />
           </button>
           {cancelJob.error === null ? null : <p id="timeline-cancel-error" role="alert">{cancelJob.error}</p>}
+          {activeHandover === null ? null : (
+            <button
+              aria-label="Reset Handover Demo"
+              aria-describedby={resetDemo.error === null ? undefined : 'timeline-reset-error'}
+              disabled={disabled
+                || resetDemo.command?.visible !== true
+                || resetDemo.command.enabled !== true
+                || resetDemo.pending}
+              onClick={() => {
+                if (
+                  disabled
+                  || resetDemo.pending
+                  || resetDemo.command?.visible !== true
+                  || resetDemo.command.enabled !== true
+                ) return
+                void resetDemo.invoke()
+              }}
+              title="Reset Handover Demo"
+              type="button"
+            >
+              <RotateCcw aria-hidden="true" size={16} strokeWidth={1.75} />
+            </button>
+          )}
+          {activeHandover === null || resetDemo.error === null
+            ? null
+            : <p id="timeline-reset-error" role="alert">{resetDemo.error}</p>}
         </div>
       </div>
+      {activeHandover === null
+        ? null
+        : <HandoverDemoStatusStripV4 store={activeHandover.store} />}
       {runtime === null ? null : (
         <p aria-label="Timeline runtime" role="status">
           {runtime.state}

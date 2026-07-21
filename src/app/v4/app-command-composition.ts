@@ -9,6 +9,11 @@ import type { JobCommandServiceV4 } from '../../features/jobs/v4/job-command-ser
 import type { JobOperatorServiceV4 } from '../../features/jobs/v4/job-operator-service.js'
 import type { ProjectFileCommandPortV4 } from '../../features/project/v4/project-file-command-port.js'
 import type { ProjectStoreStateV4 } from '../../features/project/v4/project-store-v4.js'
+import type { BrowserHandoverRuntimeResourcesV4 } from '../../features/project/v4/browser-runtime-bundle-store-v4.js'
+import {
+  HACKATHON_HANDOVER_IDS_V4,
+  isHackathonHandoverSampleV4,
+} from '../../features/project/v4/hackathon-handover-sample-v4.js'
 import type { RuntimeGatewayPresentationV4 } from '../../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
 import type { UserPromptPortV4 } from '../../features/ui/v4/user-prompt-port.js'
 import type { LocalHelpControllerV4, LocalHelpTopicV4 } from '../../features/help/v4/local-help-controller.js'
@@ -38,6 +43,7 @@ export interface AppCommandActionPortsV4 {
     importProject(): Promise<'cancelled' | void>
     exportProject(): Promise<void>
     loadDualRobotSample(): void | Promise<void>
+    loadHackathonHandoverSample(): void | Promise<void>
   }
   readonly connectivity: { setMode(mode: WorkcellProjectV4['opcUa']['mode']): Promise<void> }
   readonly presentation: {
@@ -66,6 +72,7 @@ export interface AppCommandCompositionContextV4 {
   readonly projectFiles: ProjectFileCommandPortV4
   readonly robotOperator: RobotOperatorCommandServiceV4
   readonly jobOperator: JobOperatorServiceV4
+  readonly handover: BrowserHandoverRuntimeResourcesV4 | null
   readonly collision: CollisionValidationControllerV4
   readonly camera: AppCameraCommandPortV4
   readonly prompt: UserPromptPortV4
@@ -90,7 +97,7 @@ function placements(
 
 export const APP_COMMAND_PLACEMENTS_BY_SECTION_V4: PlacementMapV4 = Object.freeze({
   project: placements([
-    ['project.new', null, null], ['project.save', null, null], ['project.import', null, null], ['project.export', null, null], ['project.sample.dual', 'project.samples', 'Samples'],
+    ['project.new', null, null], ['project.save', null, null], ['project.import', null, null], ['project.export', null, null], ['project.sample.dual', 'project.samples', 'Samples'], ['project.sample.handover', 'project.samples', 'Samples'],
   ]),
   home: placements([
     ['view.focusSelection', null, null], ['scene.rename', null, null], ['scene.pose.copy', null, null], ['scene.pose.paste', null, null], ['scene.pose.reset', null, null], ['scene.visibility.toggle', null, null], ['scene.isolate', null, null], ['scene.showAll', null, null], ['scene.delete', null, null], ['robot.home', null, null], ['robot.gripper.open', null, null], ['robot.gripper.close', null, null],
@@ -99,10 +106,10 @@ export const APP_COMMAND_PLACEMENTS_BY_SECTION_V4: PlacementMapV4 = Object.freez
     ['model.importRobotStep', null, null], ['model.add.box', null, null], ['model.add.cylinder', null, null], ['model.add.group', null, null], ['scene.group.move', null, null], ['scene.group.remove', null, null], ['robot.base.edit', null, null], ['robot.mount.edit', null, null],
   ]),
   job: placements([
-    ['job.new', null, null], ['job.pose.save', null, null], ['job.start', null, null], ['job.cancel', null, null], ['job.rename', null, null], ['job.duplicate', null, null], ['job.delete', null, null], ['view.timeline.open', null, null],
+    ['job.new', null, null], ['job.pose.save', null, null], ['job.start', null, null], ['job.cancel', null, null], ['job.reset', null, null], ['job.rename', null, null], ['job.duplicate', null, null], ['job.delete', null, null], ['view.timeline.open', null, null],
   ]),
   simulation: placements([
-    ['job.start', null, null], ['job.cancel', null, null], ['view.timeline.open', null, null], ['collision.validate', null, null], ['view.collision.open', null, null],
+    ['job.start', null, null], ['job.cancel', null, null], ['view.timeline.open', null, null], ['collision.validate', null, null], ['view.collision.open', null, null], ['simulation.fault.gripConfirmTimeout', 'simulation.faults', 'Fault Injection'],
   ]),
   connectivity: placements([
     ['connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.details.open', null, null],
@@ -232,12 +239,30 @@ function activeJobCommand(
 }
 
 export function composeAppCommandsV4(context: AppCommandCompositionContextV4): AppCommandRegistryV4 {
+  const activeHandoverJob = () => (
+    context.handover !== null
+    && isHackathonHandoverSampleV4(context.project)
+    && activeJob(context)?.id === HACKATHON_HANDOVER_IDS_V4.jobId
+  )
+  const canResetHandover = () => {
+    const job = activeJob(context)
+    return activeHandoverJob()
+      && job !== null
+      && context.jobOperator.canReset(job.id)
+  }
+  const handoverAvailable = () => (
+    context.handover !== null && isHackathonHandoverSampleV4(context.project)
+  )
+  const gripConfirmTimeoutChecked = () => (
+    context.handover?.store.getState().injectGripConfirmTimeout === true
+  )
   const commands: AppCommandV4[] = [
     projectCommand(context, 'project.new', 'New Project', false, () => context.actions.project.newProject()),
     projectCommand(context, 'project.save', 'Save Project', true, () => context.actions.project.saveProject(), 'Ctrl+S'),
     projectCommand(context, 'project.import', 'Import Project', false, () => context.actions.project.importProject()),
     projectCommand(context, 'project.export', 'Export Project', true, () => context.actions.project.exportProject()),
     projectCommand(context, 'project.sample.dual', 'Dual-Robot Technical Demo', true, () => context.actions.project.loadDualRobotSample()),
+    projectCommand(context, 'project.sample.handover', 'NED2 Direct Handover Demo', true, () => context.actions.project.loadHackathonHandoverSample()),
     command('model.importRobotStep', 'Import Robot STEP', 'model', {
       kind: 'action', visible: true,
       get enabled() {
@@ -331,6 +356,25 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
       get disabledReason() { const robot = activeRobot(context); return robot !== null && context.jobOperator.canCancel(robot.id) ? undefined : activeRobotReason(context) ?? 'No active Job for the active Robot.' },
       execute() { const robot = activeRobot(context); if (robot === null || !context.jobOperator.canCancel(robot.id)) throw new Error(activeRobotReason(context) ?? 'No active Job for the active Robot.'); return context.jobOperator.cancel(robot.id) },
     }),
+    command('job.reset', 'Reset Handover Demo', 'job', {
+      kind: 'action',
+      get visible() { return activeHandoverJob() },
+      get enabled() { return canResetHandover() },
+      get disabledReason() {
+        return canResetHandover() ? undefined : 'Reset is available only for the active Handover demo.'
+      },
+      execute() {
+        const job = activeJob(context)
+        if (
+          !activeHandoverJob()
+          || job?.id !== HACKATHON_HANDOVER_IDS_V4.jobId
+          || !context.jobOperator.canReset(job.id)
+        ) {
+          throw new Error('Reset is available only for the active Handover demo.')
+        }
+        return context.jobOperator.reset(job.id)
+      },
+    }),
     activeJobCommand(context, 'job.rename', 'Rename Job', async (_robotId, jobId) => { const job = activeJob(context); if (job === null || job.id !== jobId) throw new Error('No active Job for the active Robot.'); const name = await context.prompt.requestText({ title: 'Job name', initialValue: job.name, required: true }); if (name === null) return 'cancelled'; await context.jobs.renameJob(jobId, name.trim()) }, (robotId) => context.jobOperator.canAuthor(robotId)),
     activeJobCommand(context, 'job.duplicate', 'Duplicate Job', async (robotId, jobId) => { const duplicate = await context.jobs.duplicateJob(jobId); context.interaction.getState().selectJob(robotId, duplicate) }, (robotId) => context.jobOperator.canAuthor(robotId)),
     activeJobCommand(context, 'job.delete', 'Delete Job', (_robotId, jobId) => context.jobs.deleteJob(jobId), (robotId) => context.jobOperator.canAuthor(robotId), true),
@@ -342,6 +386,20 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
       execute: () => context.collision.validate(),
     }),
     command('view.collision.open', 'Open Collision Findings', 'simulation', { kind: 'action', visible: true, enabled: true, execute: () => context.actions.presentation.openCollision(selectedSceneOrNull(context)) }),
+    command('simulation.fault.gripConfirmTimeout', 'Grip Confirm Timeout', 'simulation', {
+      kind: 'toggle',
+      get visible() { return handoverAvailable() },
+      get enabled() { return handoverAvailable() },
+      get checked() { return gripConfirmTimeoutChecked() },
+      execute() {
+        if (!handoverAvailable() || context.handover === null) {
+          throw new Error('Grip Confirm Timeout injection is unavailable.')
+        }
+        context.handover.coordinator.setGripConfirmTimeoutInjection(
+          !gripConfirmTimeoutChecked(),
+        )
+      },
+    }),
     command('connectivity.mode.off', 'Off', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'off' }, execute: () => context.actions.connectivity.setMode('off') }),
     command('connectivity.mode.client', 'OPC UA Client', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'client' }, execute: () => context.actions.connectivity.setMode('client') }),
     command('connectivity.mode.server', 'OPC UA Server', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'server' }, execute: () => context.actions.connectivity.setMode('server') }),

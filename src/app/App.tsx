@@ -52,6 +52,7 @@ import {
   type BrowserProjectResourcesV4,
 } from '../features/project/project-store-browser.js'
 import { createDualRobotSampleV4 } from '../features/project/v4/dual-robot-sample-v4.js'
+import { createHackathonHandoverSampleV4 } from '../features/project/v4/hackathon-handover-sample-v4.js'
 import { RobotImportDialogV4 } from '../features/robot/v4/RobotImportDialogV4.js'
 import type { RobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
 import {
@@ -136,6 +137,8 @@ const EMPTY_COLLISION_PROXIES_V4: readonly CollisionGeometryProxyV4[] = Object.f
 
 const getInactiveCommandRuntimeStateV4 = () => INACTIVE_COMMAND_RUNTIME_STATE_V4
 const subscribeInactiveCommandRuntimeV4 = () => () => undefined
+const getInactiveHandoverRuntimeStateV4 = () => null
+const subscribeInactiveHandoverRuntimeV4 = () => () => undefined
 
 interface AppCommandEnvironmentV4 {
   readonly resources: BrowserProjectResourcesV4
@@ -412,6 +415,16 @@ export function App({
 
   const project = projectState.activeProject
   const revisionId = project?.revisionId ?? null
+  const activeHandover = project !== null
+    && runtimeBundle.projectRevisionId === project.revisionId
+    && runtimeBundle.active?.project.revisionId === project.revisionId
+    ? runtimeBundle.active.jobs.handover
+    : null
+  const handoverState = useSyncExternalStore(
+    activeHandover?.store.subscribe ?? subscribeInactiveHandoverRuntimeV4,
+    activeHandover?.store.getState ?? getInactiveHandoverRuntimeStateV4,
+    activeHandover?.store.getState ?? getInactiveHandoverRuntimeStateV4,
+  )
   const publishedBundle = resources.mutations.readPublished()
   const objectRuntimeConfigRevision = project !== null
     && publishedBundle?.revisionId === project.revisionId
@@ -499,7 +512,8 @@ export function App({
     readProject: readPublishedProject,
     jobs: resources.jobs,
     playback,
-  }), [playback, readPublishedProject, resources.jobs])
+    handover: activeHandover?.coordinator ?? null,
+  }), [activeHandover, playback, readPublishedProject, resources.jobs])
   const registeredCollisionProxies: readonly CollisionGeometryProxyV4[] = (
     project !== null && registration?.projectRevisionId === project.revisionId
   ) ? registration.value.collisionProxies : EMPTY_COLLISION_PROXIES_V4
@@ -795,6 +809,16 @@ export function App({
             }),
           })
         },
+        loadHackathonHandoverSample: async () => {
+          await resources.mutations.replaceFromActive({
+            description: 'Load NED2 direct Handover demo',
+            mutate: (active) => createHackathonHandoverSampleV4({
+              projectId: active.projectId,
+              revisionId: active.revisionId,
+              nowIso: active.metadata.updatedAt,
+            }),
+          })
+        },
       }),
       connectivity: Object.freeze({
         setMode: async (mode: WorkcellProjectV4['opcUa']['mode']) => {
@@ -854,6 +878,7 @@ export function App({
       projectFiles: resources.projectFiles,
       robotOperator,
       jobOperator,
+      handover: activeHandover,
       collision: activeCommandEnvironment.collision,
       camera,
       prompt: resources.userPrompt,
@@ -863,6 +888,7 @@ export function App({
   }, [
     actions,
     activeCommandEnvironment,
+    activeHandover,
     camera,
     currentGatewayPresentation,
     jobOperator,
@@ -1023,6 +1049,10 @@ export function App({
                 jobs={resources.jobs}
                 project={project}
                 robotId={activeRobotId}
+                handover={activeHandover === null ? null : {
+                  projectRevisionId: project.revisionId,
+                  store: activeHandover.store,
+                }}
               />
             )}
           />
@@ -1075,6 +1105,8 @@ export function App({
               }}
               onStatusChange={handleSceneStatusChange}
               objectRuntime={objectRuntime}
+              poseOverride={handoverState}
+              handoverSharedZoneOwner={handoverState?.sharedZoneOwner ?? null}
               project={project}
               safeAreaInsets={safeAreaInsets}
               sceneRuntime={sceneRuntime}

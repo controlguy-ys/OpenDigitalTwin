@@ -7,6 +7,11 @@ import { createShellLayoutControllerV4 } from '../../features/ui/v4/shell-layout
 import { createShellLayoutStoreV4 } from '../../features/ui/v4/shell-layout-store.js'
 import { initialShellLayoutBoundsV4 } from '../../features/ui/v4/shell-layout-geometry.js'
 import { createViewportPreferenceStoreV4 } from '../../features/viewport/v4/viewport-preference-store.js'
+import { createHandoverDemoRuntimeStoreV4 } from '../../features/handover/v4/handover-demo-runtime-store.js'
+import {
+  HACKATHON_HANDOVER_IDS_V4,
+  createHackathonHandoverSampleV4,
+} from '../../features/project/v4/hackathon-handover-sample-v4.js'
 import type { AppCommandCompositionContextV4 } from './app-command-composition.js'
 import {
   APP_COMMAND_PLACEMENTS_BY_SECTION_V4,
@@ -30,8 +35,10 @@ function projectWithJob(): WorkcellProjectV4 {
 function context(project = projectWithJob()): AppCommandCompositionContextV4 {
   const interaction = createInteractionStoreV4()
   interaction.getState().replaceProject(project)
-  interaction.getState().activateRobot('robot-1')
-  interaction.getState().selectJob('robot-1', 'job-1')
+  const initialRobot = project.robots[0]!
+  const initialJob = project.jobs.find(({ robotId }) => robotId === initialRobot.id)
+  interaction.getState().activateRobot(initialRobot.id)
+  interaction.getState().selectJob(initialRobot.id, initialJob?.id ?? null)
   const shellLayoutController = createShellLayoutControllerV4({
     preferencesStore: createShellLayoutStoreV4({ storage: null }),
     initialBounds: initialShellLayoutBoundsV4(1440, 800),
@@ -55,12 +62,13 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
     projectFiles: { pickProject: vi.fn(async () => null), downloadProject: vi.fn() },
     robotOperator: { canHome: vi.fn(() => true), home: vi.fn(), setGripper: vi.fn(), canSavePose: vi.fn(() => true), savePose: vi.fn(async () => undefined) },
     jobOperator: { canAuthor: vi.fn(() => true), canStart: vi.fn(() => true), start: vi.fn(async () => undefined), canCancel: vi.fn(() => true), cancel: vi.fn(async () => undefined), canReset: vi.fn(() => false), reset: vi.fn(async () => undefined) },
+    handover: null,
     collision: { getState: vi.fn(() => ({ projectRevisionId: project.revisionId, pending: false, canValidate: true, error: null, result: null })), subscribe: vi.fn(() => () => undefined), replaceInput: vi.fn(), validate: vi.fn(async () => undefined), dispose: vi.fn() },
     camera: { home: vi.fn(), fitAll: vi.fn(), canFocusSelection: vi.fn(() => true), focusSelection: vi.fn(), setStandardView: vi.fn() },
     prompt: { requestText: vi.fn(async () => 'Job') },
     help: { getState: vi.fn(() => ({ openTopic: null })), subscribe: vi.fn(() => () => undefined), hasTopic: vi.fn((topic: string) => topic !== 'opcUaMapping'), open: vi.fn(), close: vi.fn(), dispose: vi.fn() },
     actions: {
-      project: { newProject: vi.fn(), saveProject: vi.fn(async () => undefined), importProject: vi.fn(async () => 'cancelled' as const), exportProject: vi.fn(async () => undefined), loadDualRobotSample: vi.fn() },
+      project: { newProject: vi.fn(), saveProject: vi.fn(async () => undefined), importProject: vi.fn(async () => 'cancelled' as const), exportProject: vi.fn(async () => undefined), loadDualRobotSample: vi.fn(), loadHackathonHandoverSample: vi.fn() },
       connectivity: { setMode: vi.fn(async () => undefined) },
       presentation: { canOpenRobotImport: vi.fn(() => true), openRobotImport: vi.fn(), openRobotBase: vi.fn(), openInspector: vi.fn(), openTimeline: vi.fn(), openCollision: vi.fn(), openGatewayDetails: vi.fn() },
     },
@@ -72,11 +80,11 @@ describe('composeAppCommandsV4', () => {
     const root = (commandId: string) => ({ commandId, submenu: null })
     const submenu = (commandId: string, id: string, label: string) => ({ commandId, submenu: { id, label } })
     expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).toEqual({
-      project: [root('project.new'), root('project.save'), root('project.import'), root('project.export'), submenu('project.sample.dual', 'project.samples', 'Samples')],
+      project: [root('project.new'), root('project.save'), root('project.import'), root('project.export'), submenu('project.sample.dual', 'project.samples', 'Samples'), submenu('project.sample.handover', 'project.samples', 'Samples')],
       home: ['view.focusSelection', 'scene.rename', 'scene.pose.copy', 'scene.pose.paste', 'scene.pose.reset', 'scene.visibility.toggle', 'scene.isolate', 'scene.showAll', 'scene.delete', 'robot.home', 'robot.gripper.open', 'robot.gripper.close'].map(root),
       model: ['model.importRobotStep', 'model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'].map(root),
-      job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'].map(root),
-      simulation: ['job.start', 'job.cancel', 'view.timeline.open', 'collision.validate', 'view.collision.open'].map(root),
+      job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.reset', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'].map(root),
+      simulation: [root('job.start'), root('job.cancel'), root('view.timeline.open'), root('collision.validate'), root('view.collision.open'), submenu('simulation.fault.gripConfirmTimeout', 'simulation.faults', 'Fault Injection')],
       connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.details.open')],
       view: [
         ...['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset'].map((id) => submenu(id, 'view.panels', 'Panels')),
@@ -116,7 +124,7 @@ describe('composeAppCommandsV4', () => {
       'scene.pose.edit', 'scene.parent.edit', 'scene.group.move', 'scene.status.edit', 'scene.visibility.toggle', 'scene.delete',
     ])
     expect(APP_COMMAND_PLACEMENTS_BY_SECTION_V4.project.map(({ commandId }) => commandId)).toEqual([
-      'project.new', 'project.save', 'project.import', 'project.export', 'project.sample.dual',
+      'project.new', 'project.save', 'project.import', 'project.export', 'project.sample.dual', 'project.sample.handover',
     ])
     const allReferencedIds = [
       ...Object.values(APP_COMMAND_PLACEMENTS_BY_SECTION_V4).flatMap((entries) => entries.map(({ commandId }) => commandId)),
@@ -307,16 +315,65 @@ describe('composeAppCommandsV4', () => {
     await registry.get('project.import')!.execute()
     await registry.get('project.export')!.execute()
     await registry.get('project.sample.dual')!.execute()
+    await registry.get('project.sample.handover')!.execute()
     expect(composed.actions.project.newProject).toHaveBeenCalledTimes(1)
     expect(composed.actions.project.saveProject).toHaveBeenCalledTimes(1)
     expect(composed.actions.project.importProject).toHaveBeenCalledTimes(1)
     expect(composed.actions.project.exportProject).toHaveBeenCalledTimes(1)
     expect(composed.actions.project.loadDualRobotSample).toHaveBeenCalledTimes(1)
+    expect(composed.actions.project.loadHackathonHandoverSample).toHaveBeenCalledTimes(1)
     expect(composed.projectFiles.pickProject).not.toHaveBeenCalled()
     expect(composed.projectFiles.downloadProject).not.toHaveBeenCalled()
     const failure = new Error('export failed')
     vi.mocked(composed.actions.project.exportProject).mockRejectedValueOnce(failure)
     await expect(registry.get('project.export')!.execute()).rejects.toBe(failure)
+  })
+
+  it('exposes Reset and Grip Confirm Timeout only for the active Handover runtime', async () => {
+    const project = createHackathonHandoverSampleV4({
+      projectId: 'project-command-handover',
+      revisionId: 'revision-command-handover',
+      nowIso: '2026-07-21T00:00:00.000Z',
+    })
+    const composed = context(project)
+    composed.interaction.getState().activateRobot(HACKATHON_HANDOVER_IDS_V4.robotAId)
+    composed.interaction.getState().selectJob(
+      HACKATHON_HANDOVER_IDS_V4.robotAId,
+      HACKATHON_HANDOVER_IDS_V4.jobId,
+    )
+    const store = createHandoverDemoRuntimeStoreV4(project)
+    const setGripConfirmTimeoutInjection = vi.fn((enabled: boolean) => {
+      store.getState().setFaultInjection(enabled)
+    })
+    const handover = {
+      store,
+      coordinator: {
+        canHandle: vi.fn(() => true), canStart: vi.fn(() => true), start: vi.fn(),
+        canCancel: vi.fn(() => false), cancel: vi.fn(), canReset: vi.fn(() => true),
+        reset: vi.fn(), setGripConfirmTimeoutInjection, dispose: vi.fn(),
+      },
+    }
+    vi.mocked(composed.jobOperator.canReset).mockReturnValue(true)
+    const registry = composeAppCommandsV4({ ...composed, handover })
+
+    expect(registry.get('job.reset')).toMatchObject({
+      kind: 'action', visible: true, enabled: true,
+    })
+    expect(registry.get('simulation.fault.gripConfirmTimeout')).toMatchObject({
+      kind: 'toggle', visible: true, enabled: true, checked: false,
+    })
+    await registry.get('job.reset')!.execute()
+    await registry.get('simulation.fault.gripConfirmTimeout')!.execute()
+    expect(composed.jobOperator.reset)
+      .toHaveBeenCalledWith(HACKATHON_HANDOVER_IDS_V4.jobId)
+    expect(setGripConfirmTimeoutInjection).toHaveBeenCalledWith(true)
+    expect(registry.get('simulation.fault.gripConfirmTimeout'))
+      .toMatchObject({ checked: true })
+
+    const ordinary = composeAppCommandsV4(context())
+    expect(ordinary.get('job.reset')).toMatchObject({ visible: false })
+    expect(ordinary.get('simulation.fault.gripConfirmTimeout'))
+      .toMatchObject({ visible: false })
   })
 
   it('uses live shell, camera, collision, and Help ports without capability placeholders', async () => {
@@ -427,7 +484,7 @@ describe('composeAppCommandsV4', () => {
       ['project.save', 'Ctrl+S'], ['view.home', 'H'], ['view.focusSelection', 'F'],
     ])
     expect(all.filter(({ section }) => section === 'project').map(({ id, label }) => [id, label])).toEqual([
-      ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Technical Demo'],
+      ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Technical Demo'], ['project.sample.handover', 'NED2 Direct Handover Demo'],
     ])
     expect(all.filter(({ section }) => section === 'connectivity').map(({ id, label }) => [id, label])).toEqual([
       ['connectivity.mode.off', 'Off'], ['connectivity.mode.client', 'OPC UA Client'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.mode.bridge', 'OPC UA Bridge'], ['connectivity.details.open', 'Gateway Details'],
@@ -442,6 +499,7 @@ describe('composeAppCommandsV4', () => {
       { id: 'project.import', label: 'Import Project', section: 'project' },
       { id: 'project.export', label: 'Export Project', section: 'project' },
       { id: 'project.sample.dual', label: 'Dual-Robot Technical Demo', section: 'project' },
+      { id: 'project.sample.handover', label: 'NED2 Direct Handover Demo', section: 'project' },
       { id: 'scene.rename', label: 'Rename', section: 'home' },
       { id: 'scene.pose.copy', label: 'Copy Pose', section: 'home' },
       { id: 'scene.pose.paste', label: 'Paste Pose', section: 'home' },
@@ -469,12 +527,14 @@ describe('composeAppCommandsV4', () => {
       { id: 'job.pose.save', label: 'Save Current Pose', section: 'job' },
       { id: 'job.start', label: 'Start Job', section: 'job' },
       { id: 'job.cancel', label: 'Cancel Active Robot Job', section: 'job' },
+      { id: 'job.reset', label: 'Reset Handover Demo', section: 'job' },
       { id: 'job.rename', label: 'Rename Job', section: 'job' },
       { id: 'job.duplicate', label: 'Duplicate Job', section: 'job' },
       { id: 'job.delete', label: 'Delete Job', section: 'job' },
       { id: 'view.timeline.open', label: 'Open Timeline', section: 'job' },
       { id: 'collision.validate', label: 'Validate Geometry Collision', section: 'simulation' },
       { id: 'view.collision.open', label: 'Open Collision Findings', section: 'simulation' },
+      { id: 'simulation.fault.gripConfirmTimeout', label: 'Grip Confirm Timeout', section: 'simulation' },
       { id: 'connectivity.mode.off', label: 'Off', section: 'connectivity' },
       { id: 'connectivity.mode.client', label: 'OPC UA Client', section: 'connectivity' },
       { id: 'connectivity.mode.server', label: 'OPC UA Server', section: 'connectivity' },
@@ -528,6 +588,7 @@ describe('composeAppCommandsV4', () => {
     expect(noActiveRegistry.get('project.save')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
     expect(noActiveRegistry.get('project.export')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
     expect(noActiveRegistry.get('project.sample.dual')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
+    expect(noActiveRegistry.get('project.sample.handover')).toMatchObject({ enabled: false, disabledReason: 'No active Project.' })
     for (const status of ['loading', 'importing'] as const) {
       const next = { ...initialEmpty, projectState: { ...initialEmpty.projectState, status } }
       expect(composeAppCommandsV4(next).get('project.new')).toMatchObject({ enabled: false, disabledReason: 'Project operation is in progress.' })
