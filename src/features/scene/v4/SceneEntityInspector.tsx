@@ -848,6 +848,7 @@ export function SceneEntityInspectorV4({
   sceneCommands,
   commandBindings,
   objectRuntime = null,
+  onBindOpcUaJoints,
   focusRequest = null,
 }: SceneEntityInspectorPropsV4): ReactNode {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -890,6 +891,7 @@ export function SceneEntityInspectorV4({
           runtime={runtime}
           sceneCommands={sceneCommands}
           selection={selection}
+          {...(onBindOpcUaJoints === undefined ? {} : { onBindOpcUaJoints })}
         />
       )
       break
