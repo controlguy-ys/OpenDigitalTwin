@@ -1,43 +1,273 @@
-# Task 5 Report: Attached Workpiece and Visual-Only Shared Zone
+# Task 5 Report: One Manual Linear Axis and Robot Mounting
 
-## Status
+## Outcome
 
-DONE
+- Added one Project V3-owned axis-aligned Linear Axis with X/Y/Z direction,
+  finite closed bounds, persisted Manual position, Move Home, one Object-or-Group
+  carriage, and optional Robot attachment.
+- Added the narrow `LinearAxisSourceV1` boundary and shipped only
+  `ManualLinearAxisSource`. Successful Manual writes publish `GOOD` scalar
+  frames after the durable command completes; rejected writes retain the last
+  committed state.
+- Added one-recipe Project V3 commands for create, position, Home, carriage,
+  Robot attach/detach, and detached-only deletion. Carriage replacement and
+  Robot mounting preserve World pose atomically.
+- Rejected non-Object/Group carriage targets and OPC-UA-owned Objects before
+  mutation. Fixed rail remains an ordinary MCP-level Object, while a carriage
+  Group keeps its member Objects Group-local.
+- Added the moving Frame visualization and same-animation-update World-matrix
+  synchronization for the carriage descendants and Robot before current-pose
+  collision sampling. Fixed rail geometry is not moved.
+- Made the scene runtime publish computed World matrices and made `RobotModel`
+  consume that matrix rather than any Robot configuration base coordinates.
+- Added selected-Axis Inspector composition with the common Transform Inspector,
+  bounded numeric/slider Manual position, uncommitted range diagnostics, Move
+  Home, carriage selection/clear, Robot attach/detach, and detached-only delete.
+- Corrected the existing scene validator to honor the normative closed relation
+  `min <= home/current <= max`, including a valid zero-travel range.
 
-## Behavior
+## RED Evidence
 
-- Added the optional `HandoverPoseOverrideV4` boundary through SceneCanvas, Workcell, and SpatialEntityScene.
-- Resolves a Handover World pose before OPC UA moving-frame and persisted Project poses and marks the entity dynamically driven.
-- Keeps offline frame-loop rendering and the existing live collision resolver on the same mutable effective-pose cache.
-- Added one transparent wireframe Shared Zone at the authored NED2 shared TCP pose.
-- Uses neutral gray, NED2-A cyan, and NED2-B amber ownership colors and stores the current owner only in `Object3D.userData.sharedZoneOwner`.
-- Keeps the Shared Zone outside Spatial Entity and Workcell registration and exposes an immutable empty collision-proxy list.
-- Owns and idempotently disposes its BoxGeometry and MeshBasicMaterial inside each committed React effect lifetime.
-- Added no App controls, status strip, sample loader, documentation, browser acceptance, deployment, or PLC behavior.
+1. Initial exact Task 5 RED:
 
-## TDD Evidence
+   `npm run test:run -- src/features/scene/LinearAxisRuntime.test.tsx src/features/scene/LinearAxisInspector.test.tsx src/features/scene/linear-axis-source.test.ts src/features/scene/scene-command-service.test.ts`
 
-- Initial RED: the focused renderer command failed because `HandoverDemoSceneLayer` did not exist and the effective transform returned persisted `[10, 0, 0]` instead of override `[0.2, 0.1, 1]`.
-- Initial GREEN: 2 files / 22 tests passed.
-- Offline dynamic RED: after mutating the override, the rendered root remained `[0.2, 0.1, 1]` instead of `[0.7, -0.2, 1.1]` because the no-OPC-UA frame path returned early.
-- Offline dynamic GREEN: the targeted test passed and the renderer/collision gate passed 4 files / 40 tests.
-- StrictMode lifecycle RED: memo-owned resources produced one disposal across two effect lifetimes.
-- StrictMode lifecycle GREEN: effect-owned resources produced two fresh, balanced disposal lifetimes; the final renderer/collision gate passed 4 files / 41 tests.
+   Result: 3 suites failed and 1 passed; 18 existing tests passed in 5.99s.
+   The Manual source, Axis runtime, and Axis Inspector modules did not exist.
 
-## Verification
+2. Durable commands and Robot matrix authority:
 
-- `npx vitest run src/features/scene/v4/SpatialEntityScene.test.tsx src/features/handover/v4/HandoverDemoSceneLayer.test.tsx src/features/collision/v4`: 4 files / 41 tests passed.
-- `npx vitest run src/features/scene/v4/SceneCanvas.test.tsx src/features/scene/v4/Workcell.test.tsx`: 1 existing file / 19 tests passed (`Workcell.test.tsx` is not present).
-- `npm run lint`: passed with zero diagnostics.
-- `npx tsc -b --pretty false`: passed with zero diagnostics.
-- Final `npm run test:run`: 170 files / 2,176 tests passed.
-- Task-scoped `git diff --check`: passed.
+   `npm run test:run -- src/features/scene/scene-command-service.test.ts src/features/robot/RobotModel.test.ts`
 
-## Self-Review and Risks
+   Result: 2 files failed; 7 expected tests failed and 28 passed in 4.62s.
+   Six durable Axis methods were absent, and `RobotModel` used a conflicting
+   World-pose fixture instead of the required computed World matrix.
 
-- Confirmed ordinary entities still use the existing OPC UA/persisted resolution order when no override is supplied.
-- Confirmed the Shared Zone is rendered separately from Workcell registration and therefore cannot add collision candidates.
-- Confirmed no `data-*` or unknown DOM props are spread onto an R3F Three object; only the supported `primitive object` prop is used.
-- Confirmed owner changes retain geometry, material, pose, and collision state; only color and the required `userData` inspection metadata change.
-- The Shared Zone pose intentionally depends on the bounded sample's representative shared Job step and NED2-A TCP; it is not a generic zone authoring system.
-- The active App does not pass the optional renderer state until planned Task 6 wiring.
+3. Workcell/App integration correction:
+
+   `npm run test:run -- src/features/scene/Workcell.test.tsx src/app/App.test.tsx`
+
+   With only the unverified wiring temporarily removed, result: 2 files failed;
+   2 expected tests failed and 4 passed in 6.79s. Workcell had no live Axis
+   bindings, and selected-Axis Manual controls were absent while the common
+   Transform Inspector remained present. Minimal wiring was then restored.
+
+4. Normative closed-bound correction:
+
+   `npm run test:run -- src/domain/project/scene-state-v1.test.ts`
+
+   Result: 1 test failed and 6 passed in 3.02s because the existing validator
+   rejected the spec-valid `min === home === current === max` range.
+
+## GREEN Evidence
+
+- Manual source, runtime, Inspector, commands, and Robot matrix slice:
+  5 files / 50 tests passed in 7.82s.
+- Workcell/App integration: 2 files / 6 tests passed in 6.67s.
+- Closed-bound validator plus Axis Inspector: 2 files / 10 tests passed in 5.73s.
+- Fresh required focused Task 5 suite: 20 files / 124 tests passed in 22.86s.
+- Fresh full serial suite: 107 files / 885 tests passed in 292.23s.
+
+## Exact Verification
+
+- `npm run test:run -- src/features/scene src/features/robot`: PASS,
+  20 files / 124 tests in 22.86s.
+- `npx vitest run --maxWorkers=1`: PASS,
+  107 files / 885 tests in 292.23s.
+- `npm run lint`: PASS, exit 0.
+- `npm run build`: PASS, exit 0. Vite retained the existing `path`/`crypto`
+  browser-externalization notices and chunk-size advisory.
+- `git diff --check`: PASS; line-ending conversion notices only.
+- `git diff --cached --check`: PASS after staging only Task 5 implementation,
+  tests, validator correction, integration wiring, and this report.
+
+## Files Outside the Brief
+
+- `src/app/App.tsx` and `src/app/App.test.tsx`: compose the existing common
+  Transform Inspector with Manual Axis controls for the selected Axis.
+- `src/features/scene/scene-runtime-selector.ts`: publish the computed World
+  matrix consumed by both the Robot and Axis collision synchronization path.
+- `src/domain/project/scene-state-v1.ts` and `scene-state-v1.test.ts`: align the
+  inherited range validator with the normative inclusive inequality.
+- `src/features/scene/Workcell.test.tsx`: prove Workcell supplies the published
+  runtime and live Object/Robot roots to the Axis updater.
+- `.superpowers/sdd/task-5-report.md`: replace the stale unrelated collision
+  report with the required Task 5 TDD and verification evidence.
+
+## Scope Boundary
+
+- No OPC UA Axis nodes, subscription UI, interpolation, middleware, PLC/live
+  writes, physics, motor dynamics, or collision mount-contact policy.
+- No primitives/camera work, Legacy mode, deploy, transfer, restart, push, or
+  merge.
+- Project V3 remains the sole durable placement/attachment authority; Robot
+  configuration base fields are not restored as a renderer transform owner.
+- Existing held/safe deletion, OPC UA Object ownership, hierarchy/world-pose
+  math, body portals, Jobs shell/keyboard behavior, and Robot Base Inspector
+  ownership remain unchanged.
+
+## Review Follow-up
+
+### Outcome
+
+- Preserved Object-owned non-unit scale while applying axis-driven World pose;
+  current-pose collision snapshots now observe that same scaled World matrix.
+- Made one stable App-owned `ManualLinearAxisSource` the shared renderer and
+  Inspector authority for the active Axis identity. Durable position/Home
+  changes synchronize in place without source recreation.
+- Added coherent initial `GOOD` publication, post-commit publication, isolated
+  subscriber failures, and an optional bounded subscriber-error callback.
+- Subscribed the production renderer to position, quality, and timestamp. Equal
+  timestamps remain valid, strictly older frames are ignored, and `STALE` or
+  `BAD` frames retain the last accepted `GOOD` pose.
+- Made animation ordering explicit: Axis transforms run at priority `-1`, then
+  current-pose collision sampling runs at priority `0`.
+- Rejected a held Object or a Group containing the held descendant both
+  reactively in the Inspector and authoritatively inside the queued Project V3
+  carriage recipe. No interaction state is written to durable Project data.
+- After successful Axis deletion, the App-owned callback clears Scene
+  selection, draft pose, and isolation. Failed deletion does not invoke it.
+- Rejected blank, whitespace, and nonfinite Manual position drafts without a
+  command while retaining the draft and diagnostic.
+
+### RED and Correction Evidence
+
+- Initial review RED: 8 files failed; 16 tests failed and 46 passed in 12.64s.
+  Failures covered all seven review findings.
+- The first full serial run found one compatibility regression in a minimal
+  Robot runtime fixture: 107 files passed and 1 failed; 899 tests passed and 1
+  failed in 298.72s. The matrix helper now defaults to Robot-safe unit scale,
+  while the carriage Object call explicitly preserves Object-owned scale.
+- Compatibility correction slice: 4 files / 28 tests passed in 6.96s.
+
+### Final Verification
+
+- Focused review suite: 8 files / 62 tests passed in 12.34s.
+- Expanded Scene, collision, Project, and App suite: 43 files / 406 tests
+  passed in 47.60s.
+- Fresh full serial suite: 108 files / 900 tests passed in 290.96s.
+- `npm run lint`: PASS.
+- `npm run build`: PASS; only the existing browser-externalization notices and
+  chunk-size advisory remain.
+- `git diff --check`: PASS with line-ending conversion notices only.
+
+## Final Lifecycle Follow-up
+
+### Outcome
+
+- Removed all `ManualLinearAxisSource` mutation and publication from App render.
+  The source is now created side-effect-free with identity keyed only by the
+  active Axis identity and stable command functions.
+- Committed position and Home synchronization now runs in the App parent's
+  layout effect. The renderer child establishes its layout-effect subscription
+  first, so replacement-state publication happens after subscription and still
+  before paint.
+- An abandoned same-identity render cannot mutate or publish through the live
+  committed source. An abandoned identity-changing render can create only an
+  unreachable, side-effect-free source instance.
+- `LinearAxisInspector` creates a fallback Manual source only when no override
+  is supplied. Standalone fallback synchronization now runs in a layout effect;
+  the production override path performs zero fallback constructions or syncs.
+
+### RED Evidence
+
+- Lifecycle RED: 2 files failed; 3 expected tests failed and 14 passed in
+  6.95s. Replacement publication occurred during render as `[0.75, 0.75]`
+  instead of subscription-before-publication `[0, 0.75]`; an abandoned render
+  leaked a `0.5` frame; and the override Inspector constructed and synchronized
+  one unused fallback source.
+
+### Final Verification
+
+- App and Inspector lifecycle slice: 2 files / 17 tests passed in 6.67s.
+- Focused source, App, Inspector, Runtime, SceneCanvas, and Workcell slice:
+  6 files / 38 tests passed in 9.92s.
+- Expanded Scene, Project, and App suite: 31 files / 325 tests passed in 36.54s.
+- Fresh full serial suite: 108 files / 903 tests passed in 287.73s.
+- `npm run lint`: PASS.
+- `npm run build`: PASS; only the existing browser-externalization notices and
+  chunk-size advisory remain.
+- `git diff --check`: PASS with line-ending conversion notices only.
+
+## Nested R3F Lifecycle Follow-up
+
+### Outcome
+
+- Removed committed position/Home synchronization from the outer App React
+  root. App now passes an immutable committed Axis state containing Entity id,
+  configuration identity, position, and Home through `SceneCanvas` and
+  `Workcell` to the nested R3F root.
+- `LinearAxisRuntime` now owns one commit-phase handshake: validate the nested
+  runtime/configuration match, subscribe, then synchronize the durable state.
+  No ordering assumption remains between the App and R3F reconcilers.
+- Runtime projection replacement, source replacement, configuration changes,
+  and committed position/Home changes invalidate the previous subscription.
+  React cleanup runs before the replacement setup.
+- Added an explicit subscription generation. Even a stale listener retained by
+  a faulty or delayed source cannot apply a frame after cleanup or against the
+  replacement hierarchy.
+- A committed-state/runtime identity mismatch leaves the Runtime unsubscribed
+  until the nested hierarchy reaches the same durable configuration. Manual
+  commands continue to publish only after their queued V3 mutation succeeds.
+
+### RED Evidence
+
+- Nested-root RED: 4 files failed; 4 expected tests failed and 22 passed in
+  8.36s. App supplied no committed-state prop, SceneCanvas and Workcell dropped
+  it, and Runtime logged only `subscribe` without durable `synchronize` or
+  hierarchy-replacement cleanup.
+
+### Final Verification
+
+- Nested production composition slice: 4 files / 26 tests passed in 8.37s.
+  The Runtime test proves `subscribe -> synchronize`, followed by
+  `cleanup old -> subscribe new -> synchronize new`; a retained stale listener
+  cannot move the replacement carriage.
+- Focused source, App, Inspector, Runtime, SceneCanvas, and Workcell slice:
+  6 files / 39 tests passed in 9.34s.
+- Expanded Scene, Project, and App suite: 31 files / 326 tests passed in 33.48s.
+- Fresh full serial suite: 108 files / 904 tests passed in 289.62s.
+- `npm run lint`: PASS.
+- `npm run build`: PASS; only the existing browser-externalization notices and
+  chunk-size advisory remain.
+- `git diff --check`: PASS with line-ending conversion notices only.
+
+## Motion Hierarchy Identity Follow-up
+
+### Outcome
+
+- Replaced the shallow Axis identity with a deterministic motion identity that
+  covers every Axis field consumed by synchronization, the carriage root and
+  complete descendant hierarchy, and the attached Robot identity and matrix.
+- Carriage members are serialized in canonical entity-id order using ordinal
+  comparisons. Each motion entity records its kind, parent, local pose, and
+  world matrix, so same-id parent, pose, or matrix changes cannot validate a
+  stale nested runtime.
+- Included committed/runtime Axis position and Home state in the handshake.
+  Runtime A remains unsubscribed when committed identity B is staged; once
+  runtime B arrives, Runtime subscribes first and then synchronizes B.
+- Excluded unrelated runtime entities and caches from the identity. Projection
+  updates outside the motion hierarchy leave the token unchanged and do not
+  tear down or recreate the source subscription.
+- The Runtime effect now depends on the canonical motion identity instead of
+  the whole runtime projection, while preserving the existing generation guard,
+  cleanup ordering, and stale-listener protection.
+
+### RED Evidence
+
+- Motion-identity RED: 1 file failed; 5 expected tests failed and 13 passed in
+  4.61s. Committed identity B falsely subscribed and synchronized runtime A;
+  same-id carriage parent/local/world and Robot world changes were missed; and
+  an unrelated entity update caused a resubscription.
+
+### Final Verification
+
+- Runtime and App identity slice: 2 files / 26 tests passed in 7.10s.
+- Focused source, App, Inspector, Runtime, SceneCanvas, and Workcell slice:
+  6 files / 44 tests passed in 10.26s.
+- Expanded Scene, Project, and App suite: 31 files / 331 tests passed in 37.13s.
+- Fresh full serial suite: 108 files / 909 tests passed in 232.11s.
+- `npm run lint`: PASS.
+- `npm run build`: PASS; only the existing browser-externalization notices and
+  chunk-size advisory remain.
+- `git diff --check`: PASS with line-ending conversion notices only.
