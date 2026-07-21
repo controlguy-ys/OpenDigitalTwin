@@ -7,7 +7,7 @@ import {
 export type RuntimeGatewayStatusV4 = RuntimeGatewayStatusV1
 
 export interface RuntimeGatewayPresentationV4 {
-  readonly phase: 'idle' | 'activating' | 'ready' | 'error'
+  readonly phase: 'idle' | 'activating' | 'ready' | 'offline' | 'error'
   readonly projectRevisionId: string | null
   readonly mode: 'off' | 'server' | 'client' | 'bridge' | null
   readonly endpointUrl: string | null
@@ -69,6 +69,17 @@ export function runtimeGatewayStatePublicationRequiresReactivationV4(
   if (!(error instanceof RuntimeGatewayPublisherV4Error)) return false
   return error.code === 'NO_ACTIVE_REVISION'
     || error.code === 'OPC_UA_SERVER_NOT_ACTIVE'
+}
+
+export function runtimeGatewayFailureRepresentsOfflineV4(
+  error: unknown,
+): boolean {
+  if (!(error instanceof RuntimeGatewayPublisherV4Error)) return false
+  return error.code === 'RUNTIME_GATEWAY_UNAVAILABLE'
+    || (
+      error.code === 'RUNTIME_GATEWAY_HTTP_502'
+      && error.statusCode === 502
+    )
 }
 
 interface PendingStateResultV4 {

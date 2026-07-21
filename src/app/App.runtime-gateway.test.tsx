@@ -24,7 +24,10 @@ import type {
   RuntimeGatewayStatePayloadV4,
   RuntimeGatewayStatusV4,
 } from '../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
-import { RuntimeGatewayPublisherV4Error } from '../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
+import {
+  RuntimeGatewayPublisherV4Error,
+  createRuntimeGatewayPublisherV4,
+} from '../features/runtime-gateway/v4/runtime-gateway-publisher-v4.js'
 import { validateRuntimeGatewayStatusV1 } from '../core/runtime-protocol/gateway-status-v1.js'
 import { selectSceneRuntimeV4 } from '../features/scene/v4/scene-runtime-selector.js'
 import { createSceneRuntimeStoreV4 } from '../features/scene/v4/scene-runtime-store.js'
@@ -515,6 +518,44 @@ describe('App Runtime Gateway V4 integration', () => {
       screen.getByRole('button', { name: /Gateway details: OPC UA Server.*Gateway is offline/ }),
     ).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Save Project' })).toBeEnabled()
+  })
+
+  it.each([
+    ['a rejected transport', vi.fn(async () => { throw new Error('ECONNREFUSED') })],
+    ['a non-JSON proxy 502', vi.fn(async () => new Response('Bad Gateway', { status: 502 }))],
+  ])('reports Offline for %s without disabling local Project controls', async (_case, fetchV4) => {
+    const active = project(`revision-offline-${_case.replaceAll(' ', '-')}`)
+    const resources = resourcesForProject(active)
+    const gateway = createRuntimeGatewayPublisherV4({ fetch: fetchV4 })
+
+    render(<App gatewayPublisher={gateway} resources={resources} />)
+
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: 'Gateway details: OPC UA Server · Offline' }),
+    ).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Save Project' })).toBeEnabled()
+  })
+
+  it('keeps a structured Gateway application failure distinguishable from Offline', async () => {
+    const active = project('revision-structured-gateway-error')
+    const resources = resourcesForProject(active)
+    const gateway = createRuntimeGatewayPublisherV4({
+      fetch: vi.fn(async () => new Response(JSON.stringify({
+        errorCode: 'GATEWAY_CONFIGURATION_INVALID',
+        message: 'Configured Gateway endpoint is invalid.',
+      }), {
+        status: 502,
+        headers: { 'content-type': 'application/json' },
+      })),
+    })
+
+    render(<App gatewayPublisher={gateway} resources={resources} />)
+
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: /Gateway details: OPC UA Server.*GATEWAY_CONFIGURATION_INVALID: Configured Gateway endpoint is invalid/,
+    })).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Gateway details:.*Offline/ }))
+      .not.toBeInTheDocument()
   })
 
   it('single-flights same-revision reactivation and retries only the latest Robot state', async () => {

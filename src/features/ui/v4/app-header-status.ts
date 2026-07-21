@@ -53,6 +53,7 @@ function gatewayStatusLabel(gateway: RuntimeGatewayPresentationV4): string {
   if (gateway.message !== null) return gateway.message
   if (gateway.phase === 'activating') return 'Activating'
   if (gateway.phase === 'ready') return 'Ready'
+  if (gateway.phase === 'offline') return 'Offline'
   if (gateway.phase === 'error') return 'Error'
   return 'Idle'
 }

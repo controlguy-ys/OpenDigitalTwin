@@ -73,4 +73,25 @@ describe('composeAppHeaderStatusV4', () => {
     })
     expect(result.gateway.modeLabel).toBe(modeLabel)
   })
+
+  it('labels an unavailable Runtime Gateway as Offline', () => {
+    const result = composeAppHeaderStatusV4({
+      projectState: projectState('ready'),
+      jobRuntime: { byRobotId: {} },
+      robotRuntime: runtime(),
+      activeRobotId: null,
+      gateway: {
+        ...gateway,
+        phase: 'offline',
+        endpointUrl: null,
+        message: null,
+      },
+    })
+
+    expect(result.gateway).toEqual({
+      modeLabel: 'OPC UA Server',
+      statusLabel: 'Offline',
+      endpoint: null,
+    })
+  })
 })

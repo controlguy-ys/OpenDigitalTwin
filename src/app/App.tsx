@@ -58,6 +58,7 @@ import { RobotImportDialogV4 } from '../features/robot/v4/RobotImportDialogV4.js
 import type { RobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
 import {
   createRuntimeGatewayPublisherV4,
+  runtimeGatewayFailureRepresentsOfflineV4,
   runtimeGatewayStatePublicationRequiresReactivationV4,
   type RuntimeGatewayPresentationV4,
   type RuntimeGatewayPublisherV4,
@@ -567,12 +568,15 @@ export function App({
     )
     const publishFailure = (error: unknown): void => {
       if (!active) return
+      const offline = runtimeGatewayFailureRepresentsOfflineV4(error)
       setGatewayPresentation({
-        phase: 'error',
+        phase: offline ? 'offline' : 'error',
         projectRevisionId,
         mode: project.opcUa.mode,
         endpointUrl: null,
-        message: error instanceof Error ? error.message : String(error),
+        message: offline
+          ? null
+          : error instanceof Error ? error.message : String(error),
       })
     }
     const publishStatus = (status: RuntimeGatewayStatusV4): boolean => {
