@@ -195,7 +195,7 @@ async function activateSubmenuCommand(page: Page, section: string, submenu: stri
     .click()
 }
 
-async function selectRobot(page: Page, robotName = 'CRB15000'): Promise<void> {
+async function selectRobot(page: Page, robotName = 'NED2'): Promise<void> {
   await ensureDrawerVisible(page, 'Scene Assets drawer', 'Scene Assets')
   const robot = page.getByRole('tree', { name: 'Scene Objects' }).getByRole('treeitem', { name: robotName, exact: true })
   await robot.getByRole('button', { name: robotName, exact: true }).click()
@@ -216,6 +216,16 @@ test('keeps dock defaults and bounded viewport geometry across the approved resp
       await expect(page.getByRole('toolbar', { name: 'Context commands' })).toBeVisible()
       await expect(page.getByRole('separator', { name: 'Resize Scene Assets' })).toBeVisible()
       await expect(page.getByRole('separator', { name: 'Resize Inspector' })).toBeVisible()
+      const drawerBox = await page.getByRole('button', { name: 'Scene Assets drawer' }).boundingBox()
+      const headingBox = await page.getByRole('heading', { name: 'Scene Explorer' }).boundingBox()
+      expect(drawerBox).not.toBeNull()
+      expect(headingBox).not.toBeNull()
+      expect(
+        drawerBox!.x + drawerBox!.width <= headingBox!.x
+          || drawerBox!.x >= headingBox!.x + headingBox!.width
+          || drawerBox!.y + drawerBox!.height <= headingBox!.y
+          || drawerBox!.y >= headingBox!.y + headingBox!.height,
+      ).toBe(true)
     } else if (size.mode === 'compact') {
       await expect(page.getByRole('button', { name: 'Menu', exact: true })).toBeVisible()
       await expect(page.getByRole('complementary', { name: 'Scene Assets' })).toBeVisible()
@@ -772,7 +782,7 @@ test('keeps selection context, menus, commands, and OPC UA mode available on the
   await expect(ribbon).toHaveAttribute('data-context-kind', 'object')
   expect(await ribbonLabels(page)).toEqual(['XYZRPY', 'Move to Group', 'Numeric Status', 'Hide', 'Delete'])
   await expect(ribbon.getByRole('button', { name: 'Parent', exact: true })).toHaveCount(0)
-  await expect(page.getByLabel('Application status')).toContainText('CRB15000')
+  await expect(page.getByLabel('Application status')).toContainText('NED2')
 
   const job = page.getByRole('tree', { name: 'Robot Jobs' }).getByRole('treeitem', { name: /Default Job/ })
   await job.click()

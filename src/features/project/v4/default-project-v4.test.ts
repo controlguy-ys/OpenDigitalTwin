@@ -5,15 +5,15 @@ import {
   validateWorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import {
-  BUILTIN_CRB_DEFINITION_ID_V4,
-  createBuiltinCrbDefinitionV4,
-} from '../../robot/v4/builtin-crb-definition.js'
+  BUILTIN_NED2_DEFINITION_ID_V4,
+  createBuiltinNed2DefinitionV4,
+} from '../../robot/v4/builtin-ned2-definition.js'
 import { createDefaultProjectV4 } from './default-project-v4.js'
 
 const NOW = '2026-07-17T01:02:03.004Z'
 
 describe('createDefaultProjectV4', () => {
-  it('creates one valid built-in CRB workcell with explicit independent identities', () => {
+  it('creates one valid built-in NED2 workcell with explicit independent identities', () => {
     const project = createDefaultProjectV4({
       projectId: 'project-new',
       revisionId: 'revision-new',
@@ -34,9 +34,9 @@ describe('createDefaultProjectV4', () => {
     })
     expect(project.projectId).not.toBe(project.revisionId)
     expect(project.robotDefinitions).toHaveLength(1)
-    const builtin = createBuiltinCrbDefinitionV4()
+    const builtin = createBuiltinNed2DefinitionV4()
     expect(project.robotDefinitions[0]).toMatchObject({
-      id: BUILTIN_CRB_DEFINITION_ID_V4,
+      id: BUILTIN_NED2_DEFINITION_ID_V4,
       manufacturer: builtin.manufacturer,
       model: builtin.model,
     })
@@ -44,8 +44,8 @@ describe('createDefaultProjectV4', () => {
       .toEqual(builtin.links.map(({ id }) => id))
     expect(project.robotDefinitions[0]?.joints.map(({ id }) => id))
       .toEqual(builtin.joints.map(({ id }) => id))
-    expect(project.assetReferences).toHaveLength(7)
-    expect(project.assetReferences.every(({ uri }) => uri.startsWith('builtin://abb/')))
+    expect(project.assetReferences).toHaveLength(1)
+    expect(project.assetReferences.every(({ uri }) => uri.startsWith('builtin://niryo/')))
       .toBe(true)
   })
 

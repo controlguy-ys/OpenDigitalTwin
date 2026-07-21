@@ -48,10 +48,10 @@ export function SelectedTcpFrameMarkerV4({
 
   return (
     <group
-      data-selected-tcp-marker={robotId}
       name={`selected-tcp-${markerIdentitySegmentV4(robotId)}`}
       position={tcpFrame.worldPose.positionM}
       quaternion={tcpFrame.worldPose.quaternion}
+      userData={{ markerKind: 'selected-tcp', robotId }}
     >
       <TcpFrameMarker
         frameName="Actual TCP"

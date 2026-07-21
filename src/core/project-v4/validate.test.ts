@@ -16,6 +16,11 @@ import {
   preflightWorkcellProjectShapeV4,
   validateWorkcellProjectV4,
 } from './validate'
+import {
+  MAX_ROBOT_DEFINITIONS_V4,
+  MAX_ROBOT_INSTANCES_V4,
+  MAX_VISIBLE_SCENE_TRIANGLES_V4,
+} from './limits'
 import type { OpcUaDataTypeV4, ProjectScalarDataTypeV4, WorkcellProjectV4 } from './types'
 
 function projectWithScalarMapping(
@@ -85,8 +90,18 @@ function projectWithLeafPaths(
 
 describe('Project V4 aggregate validation', () => {
   it.each([
-    ['robots', 8, 9, 'ROBOT_INSTANCE_LIMIT_EXCEEDED'],
-    ['robotDefinitions', 8, 9, 'ROBOT_DEFINITION_LIMIT_EXCEEDED'],
+    [
+      'robots',
+      MAX_ROBOT_INSTANCES_V4,
+      MAX_ROBOT_INSTANCES_V4 + 1,
+      'ROBOT_INSTANCE_LIMIT_EXCEEDED',
+    ],
+    [
+      'robotDefinitions',
+      MAX_ROBOT_DEFINITIONS_V4,
+      MAX_ROBOT_DEFINITIONS_V4 + 1,
+      'ROBOT_DEFINITION_LIMIT_EXCEEDED',
+    ],
     ['joints', 16, 17, 'ROBOT_JOINT_LIMIT_EXCEEDED'],
     ['robotSources', 7, 8, 'ROBOT_STEP_SOURCE_LIMIT_EXCEEDED'],
     ['spatialEntities', 256, 257, 'SPATIAL_ENTITY_LIMIT_EXCEEDED'],
@@ -128,8 +143,8 @@ describe('Project V4 aggregate validation', () => {
   })
 
   it('accepts the exact visible-triangle budget and rejects plus one', () => {
-    expect(() => validateWorkcellProjectV4(projectWithVisibleTriangleCount(1_500_000))).not.toThrow()
-    expect(() => validateWorkcellProjectV4(projectWithVisibleTriangleCount(1_500_001))).toThrow(
+    expect(() => validateWorkcellProjectV4(projectWithVisibleTriangleCount(MAX_VISIBLE_SCENE_TRIANGLES_V4))).not.toThrow()
+    expect(() => validateWorkcellProjectV4(projectWithVisibleTriangleCount(MAX_VISIBLE_SCENE_TRIANGLES_V4 + 1))).toThrow(
       'VISIBLE_SCENE_TRIANGLE_LIMIT_EXCEEDED',
     )
   })

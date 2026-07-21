@@ -364,7 +364,7 @@ describe('App Project V4 production composition', () => {
     expect(screen.getByTestId('collision-v4')).toBeInTheDocument()
     expect(screen.queryByTestId('timeline-v4')).not.toBeInTheDocument()
     expect(screen.getByText((content) => (
-      content.includes('CRB15000') && content.includes('Simulation')
+      content.includes('NED2') && content.includes('Simulation')
     ))).toBeVisible()
     expect(screen.queryByText('Import STEP')).not.toBeInTheDocument()
     expect(screen.queryByText('Import Robot')).not.toBeInTheDocument()

@@ -6,9 +6,9 @@ import {
   type WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
 import {
-  createBuiltinCrbAssetReferencesV4,
-  createBuiltinCrbDefinitionV4,
-} from '../../robot/v4/builtin-crb-definition.js'
+  createBuiltinNed2AssetReferencesV4,
+  createBuiltinNed2DefinitionV4,
+} from '../../robot/v4/builtin-ned2-definition.js'
 
 const IDENTITY_POSE_V4: RigidTransformV4 = {
   positionM: [0, 0, 0],
@@ -33,10 +33,10 @@ export interface DefaultProjectV4Options {
 export function createDefaultProjectV4(
   options: DefaultProjectV4Options,
 ): WorkcellProjectV4 {
-  const definition = createBuiltinCrbDefinitionV4()
+  const definition = createBuiltinNed2DefinitionV4()
   const robot: RobotInstanceV4 = {
     id: 'robot-default',
-    name: 'CRB15000',
+    name: 'NED2',
     definitionId: definition.id,
     visible: true,
     baseParentFrameId: 'mcp',
@@ -64,7 +64,7 @@ export function createDefaultProjectV4(
       createdAt: options.nowIso,
       updatedAt: options.nowIso,
     },
-    assetReferences: createBuiltinCrbAssetReferencesV4(),
+    assetReferences: createBuiltinNed2AssetReferencesV4(),
     scene: {
       frames: [
         sceneFrameV4('world', 'World', null, 'world'),

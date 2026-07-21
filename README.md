@@ -13,22 +13,32 @@ or safety-rated system.
 
 - Project V4 is the only active browser Project format. New, Save, Export,
   Import, reload, and runtime publication use validated canonical JSON.
-- A Project can describe up to eight Robot Instances. Each reusable Robot
+- A Project can describe up to 16 Robot Instances. Each reusable Robot
   Definition has one through sixteen named revolute or prismatic Joints; runtime
   state, selection, Jobs, rendering, and collision identity are keyed by Robot
   ID rather than a global active Robot.
 - Robot STEP source count and Joint count are independent. A Definition may
   reference one through seven Robot STEP sources, including one assembly source,
-  and **Model → Import Robot STEP** maps them to LINK00–LINK06. Imported Robots
-  use the deterministic six-axis mechanical template; this release does not
-  infer Links or Joints from STEP topology.
-- The default Project renders the built-in ABB CRB15000 geometry. The V4 Scene
+  and **Model → Import Robot STEP** maps them to `LINK00` through `LINK06`.
+  A single assembly STEP is split deterministically from seven primary assembly
+  nodes when possible. Imported Robots use an estimated six-axis mechanical
+  template; STEP alone does not provide authoritative Joint axes, pivots, limits,
+  or zero calibration. There is no per-source 25 MiB or per-Link
+  150,000-triangle cap; the aggregate Definition budgets remain
+  100 MiB and 600,000 triangles. A Project supports up to 16 Robot instances
+  and 16 Robot definitions while retaining the global 512 MiB referenced STEP
+  and 3,000,000 visible-triangle budgets.
+- The default Project renders the bundled Niryo NED2 Geometry as one Robot with
+  `J1` through `J6`. ABB CRB15000 remains available in the Dual-Robot Technical
+  Demo sample. The V4 Scene
   also supports primitive Boxes/Cylinders, Groups, visibility, transforms, and
   geometry-proxy collision inspection. Boxes, Cylinders, and imported STEP
   objects have manual XYZ/RPY placement when their transform is manually owned.
 - Simulation Jobs belong to one Robot and contain ordered Joint Poses with a
   speed percentage to the next Pose. Different Robots keep independent state and
-  execution sessions.
+  execution sessions. Robot STEP import creates and selects an empty Robot-owned
+  Job. **Save Current Pose** also creates that Job on demand for older Projects
+  whose imported Robot has no Job.
 - The browser publishes only a fully matched Project revision and matching
   multi-Robot state to the Runtime Gateway. A missing Gateway does not disable
   local Simulation.
@@ -63,6 +73,8 @@ seven `.step`/`.stp` sources, confirm the LINK mapping, and choose the source
 X/Y/Z-Up convention. Files named with `LINK00` through `LINK06` map explicitly;
 other filenames fill the first free Link. Raw sources are retained in the local
 browser asset database so the imported Geometry can be restored after reload.
+See [Working Demo known limitations](docs/operator/working-demo-known-limitations.md)
+before using an inferred Robot definition for TCP or mechanical-dimension work.
 
 Build and run the Runtime Gateway directly for HTTP/OPC UA integration tests:
 

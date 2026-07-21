@@ -1,4 +1,5 @@
 import type { RigidTransformV4 } from './rigid-transform'
+import { MAX_ROBOT_DEFINITION_TRIANGLES_V4 } from './limits'
 import type {
   AssetReferenceV4,
   FrameDefinitionV4,
@@ -351,7 +352,13 @@ export function projectWithDuplicateTopLevelId(): WorkcellProjectV4 {
 
 export function projectWithVisibleTriangleCount(triangleCount: number): WorkcellProjectV4 {
   const project = cloneProject(makeMinimalWorkcellProjectV4())
-  const triangleCounts = [600_000, 600_000, triangleCount - 1_200_000]
+  const triangleCounts: number[] = []
+  let remaining = triangleCount
+  while (remaining > 0) {
+    const count = Math.min(remaining, MAX_ROBOT_DEFINITION_TRIANGLES_V4)
+    triangleCounts.push(count)
+    remaining -= count
+  }
   return {
     ...project,
     robotDefinitions: triangleCounts.map((count, index) => makeDefinition(index + 1, 1, count)),

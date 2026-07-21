@@ -24,6 +24,10 @@ import {
   prepareBuiltinCrbGeometryV4,
 } from '../robot/v4/builtin-crb-definition.js'
 import {
+  BUILTIN_NED2_DEFINITION_ID_V4,
+  prepareBuiltinNed2GeometryV4,
+} from '../robot/v4/builtin-ned2-definition.js'
+import {
   createRobotDefinitionGeometryRepositoryV4,
   type PreparedRobotDefinitionGeometryV4,
   type RobotDefinitionGeometryRepositoryV4,
@@ -194,6 +198,8 @@ export function createBrowserProjectResourcesV4(
     ): Promise<PreparedRobotDefinitionGeometryV4 | null> => (
       definition.id === BUILTIN_CRB_DEFINITION_ID_V4
         ? prepareBuiltinCrbGeometryV4(definition)
+        : definition.id === BUILTIN_NED2_DEFINITION_ID_V4
+          ? prepareBuiltinNed2GeometryV4(definition)
         : importedGeometry.resolve(_project, definition)
     ))
 

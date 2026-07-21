@@ -53,7 +53,7 @@ describe('SelectedTcpFrameMarkerV4', () => {
       />,
     )
 
-    const first = container.querySelector('[data-selected-tcp-marker]')
+    const first = container.querySelector('[name="selected-tcp-robot-1"]')
     expect(first).toHaveAttribute('position', '1,0,0')
     expect(screen.getByText('marker')).toHaveAttribute('data-frame-name', 'Actual TCP')
     expect(screen.getByText('marker')).toHaveAttribute(
@@ -69,8 +69,8 @@ describe('SelectedTcpFrameMarkerV4', () => {
         visible
       />,
     )
-    expect(container.querySelectorAll('[data-selected-tcp-marker]')).toHaveLength(1)
-    expect(container.querySelector('[data-selected-tcp-marker]')).toHaveAttribute(
+    expect(container.querySelectorAll('[name^="selected-tcp-"]')).toHaveLength(1)
+    expect(container.querySelector('[name="selected-tcp-robot-2"]')).toHaveAttribute(
       'position',
       '2,0,0',
     )
@@ -91,7 +91,7 @@ describe('SelectedTcpFrameMarkerV4', () => {
         visible
       />,
     )
-    expect(view.container.querySelector('[data-selected-tcp-marker]')).toBeNull()
+    expect(view.container.querySelector('[name^="selected-tcp-"]')).toBeNull()
 
     view.rerender(
       <SelectedTcpFrameMarkerV4
@@ -101,7 +101,7 @@ describe('SelectedTcpFrameMarkerV4', () => {
         visible={false}
       />,
     )
-    expect(view.container.querySelector('[data-selected-tcp-marker]')).toBeNull()
+    expect(view.container.querySelector('[name^="selected-tcp-"]')).toBeNull()
 
     view.rerender(
       <SelectedTcpFrameMarkerV4
@@ -111,7 +111,7 @@ describe('SelectedTcpFrameMarkerV4', () => {
         visible
       />,
     )
-    expect(view.container.querySelector('[data-selected-tcp-marker]')).toBeNull()
+    expect(view.container.querySelector('[name^="selected-tcp-"]')).toBeNull()
   })
 
   it('fails closed for unresolved Robot or selected TCP identity', () => {
@@ -125,7 +125,7 @@ describe('SelectedTcpFrameMarkerV4', () => {
         visible
       />,
     )
-    expect(view.container.querySelector('[data-selected-tcp-marker]')).toBeNull()
+    expect(view.container.querySelector('[name^="selected-tcp-"]')).toBeNull()
 
     const robot = runtime.entities.get('robot-1')
     if (robot?.kind !== 'robot') throw new Error('Expected Robot runtime fixture.')
@@ -143,6 +143,6 @@ describe('SelectedTcpFrameMarkerV4', () => {
         visible
       />,
     )
-    expect(view.container.querySelector('[data-selected-tcp-marker]')).toBeNull()
+    expect(view.container.querySelector('[name^="selected-tcp-"]')).toBeNull()
   })
 })

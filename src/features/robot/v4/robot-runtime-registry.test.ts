@@ -208,20 +208,20 @@ describe('RobotRuntimeRegistryV4', () => {
     )
   })
 
-  it.each([1, 8])('publishes %i Robot Instances atomically', (count) => {
+  it.each([1, 16])('publishes %i Robot Instances atomically', (count) => {
     const registry = createRobotRuntimeRegistryV4()
     registry.getState().replaceProject(projectAtLimit('robots', count))
     expect(Object.keys(registry.getState().robots)).toHaveLength(count)
   })
 
-  it('rejects a ninth Robot before replacing or notifying the prior registry', () => {
+  it('rejects a seventeenth Robot before replacing or notifying the prior registry', () => {
     const registry = createRobotRuntimeRegistryV4()
     registry.getState().replaceProject(makeMinimalWorkcellProjectV4())
     const priorRevision = registry.getState().projectRevisionId
 
     expectRejectedWithoutPublication(
       registry,
-      () => registry.getState().replaceProject(projectAtLimit('robots', 9)),
+      () => registry.getState().replaceProject(projectAtLimit('robots', 17)),
       'ROBOT_INSTANCE_LIMIT_EXCEEDED',
     )
     expect(registry.getState().projectRevisionId).toBe(priorRevision)

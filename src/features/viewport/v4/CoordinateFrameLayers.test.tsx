@@ -74,11 +74,11 @@ describe('CoordinateFrameLayersV4', () => {
       />,
     )
 
-    expect(container.querySelectorAll('[data-viewport-grid]')).toHaveLength(1)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="worldFrame"]')).toHaveLength(1)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="mcpFrame"]')).toHaveLength(2)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="baseFrame"]')).toHaveLength(1)
-    expect(container.querySelector('[data-coordinate-frame-layer="baseFrame"]'))
+    expect(container.querySelectorAll('[name="workcell-grid-v4"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[name^="world-"][name$="-anchor"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[name^="mcp-"][name$="-anchor"]')).toHaveLength(2)
+    expect(container.querySelectorAll('[name^="robot-base-"][name$="-anchor"]')).toHaveLength(1)
+    expect(container.querySelector('[name^="robot-base-"][name$="-anchor"]'))
       .toHaveAttribute('position', '3,0,0')
     expect(screen.getAllByText('triad')).toHaveLength(4)
     expect(screen.queryByText('Actual TCP')).not.toBeInTheDocument()
@@ -95,10 +95,10 @@ describe('CoordinateFrameLayersV4', () => {
         selection={{ kind: 'robot', robotId: 'robot-1' }}
       />,
     )
-    expect(container.querySelectorAll('[data-viewport-grid]')).toHaveLength(1)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="worldFrame"]')).toHaveLength(1)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="mcpFrame"]')).toHaveLength(0)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="baseFrame"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[name="workcell-grid-v4"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[name^="world-"][name$="-anchor"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[name^="mcp-"][name$="-anchor"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[name^="robot-base-"][name$="-anchor"]')).toHaveLength(0)
 
     rerender(
       <CoordinateFrameLayersV4
@@ -108,10 +108,10 @@ describe('CoordinateFrameLayersV4', () => {
         selection={{ kind: 'spatial-entity', entityId: 'anything' }}
       />,
     )
-    expect(container.querySelectorAll('[data-viewport-grid]')).toHaveLength(0)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="worldFrame"]')).toHaveLength(0)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="mcpFrame"]')).toHaveLength(2)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="baseFrame"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[name="workcell-grid-v4"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[name^="world-"][name$="-anchor"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[name^="mcp-"][name$="-anchor"]')).toHaveLength(2)
+    expect(container.querySelectorAll('[name^="robot-base-"][name$="-anchor"]')).toHaveLength(0)
   })
 
   it('keeps global layers safe with zero Robots and omits Base', () => {
@@ -131,9 +131,9 @@ describe('CoordinateFrameLayersV4', () => {
         selection={null}
       />,
     )
-    expect(container.querySelectorAll('[data-viewport-grid]')).toHaveLength(1)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="worldFrame"]')).toHaveLength(1)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="mcpFrame"]')).toHaveLength(1)
-    expect(container.querySelectorAll('[data-coordinate-frame-layer="baseFrame"]')).toHaveLength(0)
+    expect(container.querySelectorAll('[name="workcell-grid-v4"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[name^="world-"][name$="-anchor"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[name^="mcp-"][name$="-anchor"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[name^="robot-base-"][name$="-anchor"]')).toHaveLength(0)
   })
 })

@@ -37,10 +37,10 @@ function FrameLayerMarkerV4({
 }: FrameLayerMarkerPropsV4): ReactNode {
   return (
     <group
-      data-coordinate-frame-layer={layer}
       name={`${markerName}-anchor`}
       position={pose.positionM}
       quaternion={pose.quaternion}
+      userData={{ frameLayer: layer }}
     >
       <TcpFrameMarker frameName={frameName} name={markerName} visible />
     </group>
@@ -82,10 +82,10 @@ export function CoordinateFrameLayersV4({
       {layers.grid ? (
         <gridHelper
           args={[6, 60, '#344754', '#1d2a33']}
-          data-viewport-grid="world"
           name="workcell-grid-v4"
           position={[0, 0, 0.002]}
           rotation={[Math.PI / 2, 0, 0]}
+          userData={{ frameLayer: 'grid' }}
         />
       ) : null}
       {layers.worldFrame && worldDefinition !== undefined && worldFrame !== undefined ? (

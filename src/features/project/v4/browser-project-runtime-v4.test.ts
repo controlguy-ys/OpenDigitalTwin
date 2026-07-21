@@ -10,6 +10,7 @@ import type {
   RobotDefinitionV4,
   WorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
+import { MAX_VISIBLE_SCENE_TRIANGLES_V4 } from '../../../core/project-v4/limits.js'
 import { createCoordinateDisplayStoreV4 } from '../../frames/v4/coordinate-display-store.js'
 import { createInteractionStoreV4 } from '../../interaction/v4/interaction-store.js'
 import type { RobotJobExecutorV4 } from '../../jobs/v4/job-executor.js'
@@ -228,14 +229,14 @@ describe('Browser Project runtime V4', () => {
     expect(harness.bundles.getState().active).toBeNull()
   })
 
-  it('accepts 1,500,000 visible triangles and rejects 1,500,001 before apply', async () => {
+  it('accepts the visible-triangle budget and rejects plus one before apply', async () => {
     const harness = runtimeHarness()
     const accepted = revision(
-      projectWithVisibleTriangleCount(1_500_000),
+      projectWithVisibleTriangleCount(MAX_VISIBLE_SCENE_TRIANGLES_V4),
       'revision-triangle-pass',
     )
     const rejected = revision(
-      projectWithVisibleTriangleCount(1_500_001),
+      projectWithVisibleTriangleCount(MAX_VISIBLE_SCENE_TRIANGLES_V4 + 1),
       'revision-triangle-fail',
     )
 
@@ -510,7 +511,7 @@ describe('Browser Project runtime V4', () => {
     const sources: PreparedGeometryHarness[] = []
     const harness = runtimeHarness({
       resolve: async (_project, definition) => {
-        const source = preparedGeometry(definition, 750_001)
+        const source = preparedGeometry(definition, 1_500_001)
         sources.push(source)
         if (sources.length === 1) {
           source.dispose.mockImplementationOnce(() => {

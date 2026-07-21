@@ -166,6 +166,34 @@ describe('composeAppCommandsV4', () => {
     expect(registry.get('job.rename')).toMatchObject({ enabled: false, disabledReason: 'No active Job for the active Robot.' })
   })
 
+  it('creates and selects a Robot-owned Job before saving when an imported Robot has no Job yet', async () => {
+    const project = projectWithJob()
+    const withoutRobotTwoJob = {
+      ...project,
+      jobs: project.jobs.filter(({ robotId }) => robotId !== 'robot-2'),
+    }
+    const composed = context(withoutRobotTwoJob)
+    const registry = composeAppCommandsV4(composed)
+    composed.interaction.getState().activateRobot('robot-2')
+    const withCreatedJob = {
+      ...withoutRobotTwoJob,
+      jobs: [...withoutRobotTwoJob.jobs, {
+        id: 'job-new', name: 'Robot 2 Job', robotId: 'robot-2', steps: [],
+      }],
+    }
+    vi.mocked(composed.jobs.createJob).mockImplementation(async () => {
+      composed.interaction.getState().replaceProject(withCreatedJob)
+      return 'job-new'
+    })
+
+    expect(registry.get('job.pose.save')).toMatchObject({ enabled: true })
+    await registry.get('job.pose.save')!.execute()
+
+    expect(composed.jobs.createJob).toHaveBeenCalledWith('robot-2', 'Robot 2 Job')
+    expect(composed.interaction.getState().selectedJobIdsByRobotId.get('robot-2')).toBe('job-new')
+    expect(composed.robotOperator.savePose).toHaveBeenCalledWith('robot-2', 'job-new')
+  })
+
   it('publishes one RUNNING authoring gate to every Job command surface', async () => {
     const composed = context()
     vi.mocked(composed.jobOperator.canAuthor).mockReturnValue(false)

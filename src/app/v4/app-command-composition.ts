@@ -283,7 +283,47 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
         context.interaction.getState().selectJob(robot.id, id)
       },
     }),
-    activeJobCommand(context, 'job.pose.save', 'Save Current Pose', (robotId, jobId) => context.robotOperator.savePose(robotId, jobId), (robotId, jobId) => context.robotOperator.canSavePose(robotId, jobId)),
+    command('job.pose.save', 'Save Current Pose', 'job', {
+      kind: 'action', visible: true,
+      get enabled() {
+        const robot = activeRobot(context)
+        if (robot === null) return false
+        const job = activeJob(context)
+        return job === null
+          ? context.jobOperator.canAuthor(robot.id)
+          : context.robotOperator.canSavePose(robot.id, job.id)
+      },
+      get disabledReason() {
+        const robot = activeRobot(context)
+        if (robot === null) return 'No active Robot.'
+        const job = activeJob(context)
+        if (job === null && !context.jobOperator.canAuthor(robot.id)) {
+          return 'Job authoring is unavailable while this Robot is running or stale.'
+        }
+        if (job !== null && !context.robotOperator.canSavePose(robot.id, job.id)) {
+          return 'Save Current Pose is unavailable while this Robot is running or stale.'
+        }
+        return undefined
+      },
+      async execute() {
+        const robot = activeRobot(context)
+        if (robot === null) throw new Error('No active Robot.')
+        let job = activeJob(context)
+        if (job === null) {
+          if (!context.jobOperator.canAuthor(robot.id)) {
+            throw new Error('Job authoring is unavailable while this Robot is running or stale.')
+          }
+          const jobId = await context.jobs.createJob(robot.id, `${robot.name} Job`)
+          context.interaction.getState().selectJob(robot.id, jobId)
+          await context.robotOperator.savePose(robot.id, jobId)
+          return
+        }
+        if (!context.robotOperator.canSavePose(robot.id, job.id)) {
+          throw new Error('Save Current Pose is unavailable while this Robot is running or stale.')
+        }
+        await context.robotOperator.savePose(robot.id, job.id)
+      },
+    }),
     activeJobCommand(context, 'job.start', 'Start Job', (robotId, jobId) => context.jobOperator.start(robotId, jobId), (robotId, jobId) => context.jobOperator.canStart(robotId, jobId)),
     command('job.cancel', 'Cancel Active Robot Job', 'job', {
       kind: 'action', visible: true,

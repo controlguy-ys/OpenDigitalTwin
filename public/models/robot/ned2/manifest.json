@@ -1,0 +1,661 @@
+{
+  "assetReference": {
+    "id": "builtin-niryo-ned2-assembly-v1",
+    "uri": "builtin://niryo/ned2-assembly@v1",
+    "sha256": "94598f79781e8756c1e79cd9ed56f1f43ecb507263db3a2ed2e752e0c4c88752",
+    "byteLength": 7250770,
+    "sourceFileName": "NED2_STEP.step",
+    "mediaType": "model/step"
+  },
+  "definition": {
+    "id": "builtin-niryo-ned2-v1",
+    "name": "Niryo NED2",
+    "manufacturer": "Niryo",
+    "model": "NED2",
+    "assetReferenceIds": [
+      "builtin-niryo-ned2-assembly-v1"
+    ],
+    "sourceConventions": {
+      "builtin-niryo-ned2-assembly-v1": {
+        "linearUnit": "millimeter",
+        "sourceToMeters": 0.001,
+        "orientation": {
+          "mode": "up-axis",
+          "upAxis": "z"
+        }
+      }
+    },
+    "links": [
+      {
+        "id": "LINK00",
+        "name": "LINK00",
+        "geometryOccurrences": [
+          {
+            "occurrenceKey": "whole-source:LINK00",
+            "assetReferenceId": "builtin-niryo-ned2-assembly-v1",
+            "linkLocalPose": {
+              "positionM": [
+                0,
+                0,
+                0
+              ],
+              "quaternion": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "statistics": {
+              "vertices": 55557,
+              "triangles": 74382,
+              "meshes": 1,
+              "materials": 1
+            },
+            "collisionBoxes": [
+              {
+                "id": "generated-local-bounds",
+                "centerM": [
+                  -0.0011493004858493805,
+                  0,
+                  0.04989999905228614
+                ],
+                "halfExtentsM": [
+                  0.09383106604218483,
+                  0.09080000221729279,
+                  0.049899999052286155
+                ],
+                "quaternion": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "LINK01",
+        "name": "LINK01",
+        "geometryOccurrences": [
+          {
+            "occurrenceKey": "whole-source:LINK01",
+            "assetReferenceId": "builtin-niryo-ned2-assembly-v1",
+            "linkLocalPose": {
+              "positionM": [
+                0,
+                0,
+                0
+              ],
+              "quaternion": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "statistics": {
+              "vertices": 4399,
+              "triangles": 4444,
+              "meshes": 1,
+              "materials": 1
+            },
+            "collisionBoxes": [
+              {
+                "id": "generated-local-bounds",
+                "centerM": [
+                  -0.007109818395893586,
+                  4.053115759683479e-10,
+                  0.05720000169873238
+                ],
+                "halfExtentsM": [
+                  0.08762500062584877,
+                  0.06937500089406967,
+                  0.05895000323653221
+                ],
+                "quaternion": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "LINK02",
+        "name": "LINK02",
+        "geometryOccurrences": [
+          {
+            "occurrenceKey": "whole-source:LINK02",
+            "assetReferenceId": "builtin-niryo-ned2-assembly-v1",
+            "linkLocalPose": {
+              "positionM": [
+                0,
+                0,
+                0
+              ],
+              "quaternion": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "statistics": {
+              "vertices": 4860,
+              "triangles": 6376,
+              "meshes": 1,
+              "materials": 1
+            },
+            "collisionBoxes": [
+              {
+                "id": "generated-local-bounds",
+                "centerM": [
+                  8.225441022746693e-10,
+                  9.626152930319876e-10,
+                  0.10855000774553542
+                ],
+                "halfExtentsM": [
+                  0.0515500009059906,
+                  0.060350002720952034,
+                  0.15596957132220268
+                ],
+                "quaternion": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "LINK03",
+        "name": "LINK03",
+        "geometryOccurrences": [
+          {
+            "occurrenceKey": "whole-source:LINK03",
+            "assetReferenceId": "builtin-niryo-ned2-assembly-v1",
+            "linkLocalPose": {
+              "positionM": [
+                0,
+                0,
+                0
+              ],
+              "quaternion": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "statistics": {
+              "vertices": 1572,
+              "triangles": 1590,
+              "meshes": 1,
+              "materials": 1
+            },
+            "collisionBoxes": [
+              {
+                "id": "generated-local-bounds",
+                "centerM": [
+                  0.010499999687075587,
+                  -1.3877787807814457e-17,
+                  0.0118749921090604
+                ],
+                "halfExtentsM": [
+                  0.05049999989569187,
+                  0.03099999949336052,
+                  0.05187109112739563
+                ],
+                "quaternion": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "LINK04",
+        "name": "LINK04",
+        "geometryOccurrences": [
+          {
+            "occurrenceKey": "whole-source:LINK04",
+            "assetReferenceId": "builtin-niryo-ned2-assembly-v1",
+            "linkLocalPose": {
+              "positionM": [
+                0,
+                0,
+                0
+              ],
+              "quaternion": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "statistics": {
+              "vertices": 5077,
+              "triangles": 6064,
+              "meshes": 1,
+              "materials": 1
+            },
+            "collisionBoxes": [
+              {
+                "id": "generated-local-bounds",
+                "centerM": [
+                  0.09750000756979005,
+                  -0.01399999856948854,
+                  -1.5974043754418688e-9
+                ],
+                "halfExtentsM": [
+                  0.10650000721216202,
+                  0.04600000008940697,
+                  0.028000012040138245
+                ],
+                "quaternion": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "LINK05",
+        "name": "LINK05",
+        "geometryOccurrences": [
+          {
+            "occurrenceKey": "whole-source:LINK05",
+            "assetReferenceId": "builtin-niryo-ned2-assembly-v1",
+            "linkLocalPose": {
+              "positionM": [
+                0,
+                0,
+                0
+              ],
+              "quaternion": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "statistics": {
+              "vertices": 2145,
+              "triangles": 2220,
+              "meshes": 1,
+              "materials": 1
+            },
+            "collisionBoxes": [
+              {
+                "id": "generated-local-bounds",
+                "centerM": [
+                  -7.510184141246157e-10,
+                  6.705517391347726e-11,
+                  4.243850826313178e-9
+                ],
+                "halfExtentsM": [
+                  0.03435000032186508,
+                  0.02625000011175871,
+                  0.01812499761581421
+                ],
+                "quaternion": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "LINK06",
+        "name": "LINK06",
+        "geometryOccurrences": [
+          {
+            "occurrenceKey": "whole-source:LINK06",
+            "assetReferenceId": "builtin-niryo-ned2-assembly-v1",
+            "linkLocalPose": {
+              "positionM": [
+                0,
+                0,
+                0
+              ],
+              "quaternion": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "statistics": {
+              "vertices": 1710,
+              "triangles": 1692,
+              "meshes": 2,
+              "materials": 1
+            },
+            "collisionBoxes": [
+              {
+                "id": "generated-local-bounds",
+                "centerM": [
+                  0.014249992060661465,
+                  -5.204170427930421e-18,
+                  0.0007117178043504757
+                ],
+                "halfExtentsM": [
+                  0.017499998211860657,
+                  0.010499999858438969,
+                  0.01045440137386322
+                ],
+                "quaternion": [
+                  0,
+                  0,
+                  0,
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "joints": [
+      {
+        "id": "J1",
+        "type": "revolute",
+        "parentLinkId": "LINK00",
+        "childLinkId": "LINK01",
+        "origin": {
+          "positionM": [
+            -0.014465181741197104,
+            0.0033250000000000085,
+            0.09805
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "min": -270,
+        "max": 270,
+        "home": 0,
+        "zeroOffset": 0,
+        "direction": 1,
+        "maximumVelocity": 180
+      },
+      {
+        "id": "J2",
+        "type": "revolute",
+        "parentLinkId": "LINK01",
+        "childLinkId": "LINK02",
+        "origin": {
+          "positionM": [
+            0.018915181741197096,
+            0.006524999999999715,
+            0.06873043518969293
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -180,
+        "max": 180,
+        "home": 0,
+        "zeroOffset": 0,
+        "direction": 1,
+        "maximumVelocity": 180
+      },
+      {
+        "id": "J3",
+        "type": "revolute",
+        "parentLinkId": "LINK02",
+        "childLinkId": "LINK03",
+        "origin": {
+          "positionM": [
+            0.011550000000000032,
+            -0.00984999999999971,
+            0.22452347318151705
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -225,
+        "max": 85,
+        "home": 0,
+        "zeroOffset": 0,
+        "direction": 1,
+        "maximumVelocity": 180
+      },
+      {
+        "id": "J4",
+        "type": "revolute",
+        "parentLinkId": "LINK03",
+        "childLinkId": "LINK04",
+        "origin": {
+          "positionM": [
+            0.051999999999999824,
+            0,
+            0.02849609162878991
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "min": -180,
+        "max": 180,
+        "home": 0,
+        "zeroOffset": 0,
+        "direction": 1,
+        "maximumVelocity": 320
+      },
+      {
+        "id": "J5",
+        "type": "revolute",
+        "parentLinkId": "LINK04",
+        "childLinkId": "LINK05",
+        "origin": {
+          "positionM": [
+            0.16435000000000005,
+            0.0032500000000000376,
+            0.00012499999999998623
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "axis": [
+          0,
+          1,
+          0
+        ],
+        "min": -180,
+        "max": 180,
+        "home": 0,
+        "zeroOffset": 0,
+        "direction": 1,
+        "maximumVelocity": 320
+      },
+      {
+        "id": "J6",
+        "type": "revolute",
+        "parentLinkId": "LINK05",
+        "childLinkId": "LINK06",
+        "origin": {
+          "positionM": [
+            0.03109999999999996,
+            -0.0032500000000000463,
+            0.00838233100565483
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "axis": [
+          1,
+          0,
+          0
+        ],
+        "min": -270,
+        "max": 270,
+        "home": 0,
+        "zeroOffset": 0,
+        "direction": 1,
+        "maximumVelocity": 420
+      }
+    ],
+    "frames": [
+      {
+        "id": "Base",
+        "name": "Base",
+        "parentFrameId": "LINK00",
+        "localPose": {
+          "positionM": [
+            0,
+            0,
+            0
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "role": "base"
+      },
+      {
+        "id": "Flange",
+        "name": "Flange",
+        "parentFrameId": "LINK06",
+        "localPose": {
+          "positionM": [
+            0,
+            0,
+            0
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "role": "flange"
+      },
+      {
+        "id": "Tool0",
+        "name": "Tool0",
+        "parentFrameId": "Flange",
+        "localPose": {
+          "positionM": [
+            0,
+            0,
+            0
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "role": "tool0"
+      },
+      {
+        "id": "Tool",
+        "name": "Tool",
+        "parentFrameId": "Tool0",
+        "localPose": {
+          "positionM": [
+            0,
+            0,
+            0
+          ],
+          "quaternion": [
+            0,
+            0.7071067811865476,
+            0,
+            0.7071067811865476
+          ]
+        },
+        "role": "tool"
+      },
+      {
+        "id": "TCP",
+        "name": "TCP",
+        "parentFrameId": "Tool",
+        "localPose": {
+          "positionM": [
+            0,
+            0,
+            0
+          ],
+          "quaternion": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "role": "tcp"
+      }
+    ],
+    "excludedGeometryOccurrenceKeys": []
+  }
+}

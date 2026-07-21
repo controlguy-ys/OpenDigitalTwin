@@ -85,6 +85,13 @@ const forbiddenViewportModules = new Set([
   'viewport-preference-store.ts',
 ])
 
+const neutralSharedImportModules = new Set([
+  'src/features/import/StepImportClient.ts',
+  'src/features/import/detect-step-unit.ts',
+  'src/features/import/occt-to-three.ts',
+  'src/features/import/step-worker-protocol.ts',
+])
+
 interface ImportGraph {
   readonly modules: ReadonlyMap<string, string>
   readonly paths: ReadonlyMap<string, readonly string[]>
@@ -264,10 +271,12 @@ function isForbiddenProductionLane(modulePath: string): boolean {
   }
   if (
     modulePath.startsWith('src/features/equipment/')
-    || modulePath.startsWith('src/features/import/')
     || modulePath.startsWith('src/features/objects/')
   ) {
     return true
+  }
+  if (modulePath.startsWith('src/features/import/')) {
+    return !neutralSharedImportModules.has(modulePath)
   }
   if (
     modulePath.startsWith('src/features/frames/')

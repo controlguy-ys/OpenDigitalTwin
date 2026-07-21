@@ -2368,6 +2368,11 @@ button {
 .drawer-control-right { top: calc(var(--top-bar-height) + var(--ribbon-height, 0px) + 8px); right: 8px; }
 .sheet-control { right: 8px; bottom: 8px; }
 
+/* Keep open-drawer controls on the dock edge instead of covering the first
+   heading and tree row inside each panel. Closed controls remain at the
+   viewport edge so the drawer can always be reopened. */
+.drawer-control-left.is-open { left: calc(var(--sidebar-width) - 40px); }
+
 /* Task 8: reusable application-menu presentation.  Shell placement remains Task 10 owned. */
 .app-menu-bar-v4,
 .compact-app-menu-v4 {

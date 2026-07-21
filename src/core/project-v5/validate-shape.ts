@@ -122,8 +122,8 @@ function validateLogicalUri(value: unknown, path: string): string {
     }
     return uri
   }
-  if (!/^builtin:\/\/abb\/[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(uri)) {
-    invalidProjectV5(path, 'Expected canonical asset://alias/path or builtin://abb/asset@version syntax.')
+  if (!/^builtin:\/\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\/[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(uri)) {
+    invalidProjectV5(path, 'Expected canonical asset://alias/path or builtin://vendor/asset@version syntax.')
   }
   return uri
 }
