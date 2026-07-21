@@ -26,6 +26,7 @@ import type { SceneIsolationTargetV4 } from '../../interaction/v4/scene-selectio
 import type { SceneSelectionV4 } from '../../interaction/v4/scene-selection.js'
 import type { GizmoFramePreferenceV4 } from '../../viewport/v4/viewport-preference-store.js'
 import type { ObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4.js'
+import type { HandoverPoseOverrideV4 } from '../../handover/v4/handover-demo-runtime-store.js'
 import type { RigidTransformV4 } from '../../../core/project-v4/rigid-transform.js'
 import {
   RobotFleetV4,
@@ -64,6 +65,7 @@ export interface WorkcellPropsV4 {
   ) => Promise<void>
   readonly onDraggingChange?: (dragging: boolean) => void
   readonly objectRuntime?: ObjectRuntimeStateV4 | null
+  readonly poseOverride?: HandoverPoseOverrideV4 | null
 }
 
 interface WorkcellChildRegistrationV4<T> {
@@ -164,6 +166,7 @@ export function WorkcellV4({
   onCommitLocalPose,
   onDraggingChange,
   objectRuntime = null,
+  poseOverride = null,
 }: WorkcellPropsV4): ReactNode {
   const repositoryVersion = useSyncExternalStore(
     geometryRepository.subscribe,
@@ -284,6 +287,7 @@ export function WorkcellV4({
         {...(onDraggingChange === undefined ? {} : { onDraggingChange })}
         onRegister={handleSpatialRegistration}
         objectRuntime={objectRuntime}
+        poseOverride={poseOverride}
         project={project}
         sceneRuntime={sceneRuntime}
         selection={selection}

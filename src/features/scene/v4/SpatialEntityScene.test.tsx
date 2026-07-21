@@ -29,6 +29,7 @@ import {
   type SceneRuntimeSpatialEntityV4,
 } from './scene-runtime-selector'
 import {
+  createSpatialEntityEffectiveTransformRuntimeV4,
   resolveSpatialEntityWorldPoseV4,
   SpatialEntitySceneV4,
   type SpatialEntitySceneRegistrationV4,
@@ -327,6 +328,72 @@ function expectRuntimeReadonlyMap(map: ReadonlyMap<unknown, unknown>): void {
 }
 
 describe('SpatialEntitySceneV4', () => {
+  it('uses a Handover World-pose override before runtime and persisted poses', () => {
+    const project = spatialProject()
+    const overridePose = {
+      positionM: [0.2, 0.1, 1] as const,
+      quaternion: [0, 0, 0, 1] as const,
+    }
+    const effective = createSpatialEntityEffectiveTransformRuntimeV4(
+      project,
+      runtimeFor(project),
+      null,
+      {
+        readWorldPose: (entityId) => (
+          entityId === 'box-entity' ? overridePose : null
+        ),
+      },
+    )
+
+    effective.update(0)
+
+    expect(effective.readEntityWorldPose('box-entity')).toEqual(overridePose)
+    expect(effective.isEntityDynamicallyDriven('box-entity')).toBe(true)
+    expect(effective.readEntityWorldPose('cylinder-entity').positionM).toEqual([
+      'cylinder-entity'.length,
+      0,
+      0,
+    ])
+  })
+
+  it('keeps the rendered Workpiece and collision proxy on the offline Handover pose', async () => {
+    fiberCapture.frame = null
+    const project = spatialProject()
+    let overridePose = {
+      positionM: [0.2, 0.1, 1] as readonly [number, number, number],
+      quaternion: [0, 0, 0, 1] as readonly [number, number, number, number],
+    }
+    let registration: SpatialEntitySceneRegistrationV4 | null = null
+    render(
+      <SpatialEntitySceneV4
+        onRegister={(value) => { if (value !== null) registration = value }}
+        poseOverride={{
+          readWorldPose: (entityId) => (
+            entityId === 'box-entity' ? overridePose : null
+          ),
+        }}
+        project={project}
+        sceneRuntime={runtimeFor(project)}
+      />,
+    )
+    await waitFor(() => expect(registration?.roots.size).toBe(3))
+    const root = registration!.roots.get('box-entity')!
+    const proxy = registration!.collisionProxies.find(
+      ({ entity }) => entity.name === 'box-entity',
+    )!
+    expect(root.position.toArray()).toEqual([0.2, 0.1, 1])
+    expect(proxy.resolveEntity!().worldMatrix.slice(12, 15)).toEqual([0.2, 0.1, 1])
+
+    overridePose = {
+      positionM: [0.7, -0.2, 1.1],
+      quaternion: [0, 0, 0, 1],
+    }
+    act(() => { fiberCapture.frame?.() })
+
+    expect(root.position.toArray()).toEqual([0.7, -0.2, 1.1])
+    expect(proxy.resolveEntity!().worldMatrix.slice(12, 15)).toEqual([0.7, -0.2, 1.1])
+  })
+
   it('shows a translate gizmo only for the selected manually owned Spatial Entity', async () => {
     transformControlsCapture.instances.clear()
     const project = spatialProject()

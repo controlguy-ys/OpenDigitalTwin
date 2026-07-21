@@ -22,6 +22,13 @@ import type { InteractionStoreStateV4 } from '../../interaction/v4/interaction-s
 import type { SceneSelectionTargetV4 } from '../../interaction/v4/scene-selection.js'
 import type { RobotDefinitionGeometryRepositoryV4 } from '../../robot/v4/robot-definition-geometry-repository.js'
 import type { ObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4.js'
+import {
+  HandoverDemoSceneLayerV4,
+} from '../../handover/v4/HandoverDemoSceneLayer.js'
+import type {
+  HandoverPoseOverrideV4,
+  HandoverZoneOwnerV4,
+} from '../../handover/v4/handover-demo-runtime-store.js'
 import { CoordinateFrameLayersV4 } from '../../viewport/v4/CoordinateFrameLayers.js'
 import { SelectedTcpFrameMarkerV4 } from '../../viewport/v4/SelectedTcpFrameMarker.js'
 import type { ViewportPreferenceStoreV4 } from '../../viewport/v4/viewport-preference-store.js'
@@ -85,6 +92,8 @@ export interface SceneCanvasPropsV4 {
     localPose: RigidTransformV4,
   ) => Promise<void>
   readonly objectRuntime?: ObjectRuntimeStateV4 | null
+  readonly poseOverride?: HandoverPoseOverrideV4 | null
+  readonly handoverSharedZoneOwner?: HandoverZoneOwnerV4 | null
 }
 
 interface RevisionRegistrationV4 {
@@ -108,6 +117,8 @@ export function SceneCanvasV4({
   onRegistration,
   onCommitSpatialEntityLocalPose,
   objectRuntime = null,
+  poseOverride = null,
+  handoverSharedZoneOwner = null,
 }: SceneCanvasPropsV4): ReactNode {
   const selection = useStore(interaction, (state) => state.selection)
   const viewIsolation = useStore(interaction, (state) => state.isolation)
@@ -347,6 +358,7 @@ export function SceneCanvasV4({
                 onDraggingChange={setTransformDragging}
                 onRegister={handleRegistration}
                 objectRuntime={objectRuntime}
+                poseOverride={poseOverride}
                 project={project}
                 sceneRuntime={sceneRuntime}
                 selection={selection}
@@ -355,6 +367,12 @@ export function SceneCanvasV4({
                   ? {}
                   : { onCommitLocalPose: onCommitSpatialEntityLocalPose })}
               />
+              {handoverSharedZoneOwner === null ? null : (
+                <HandoverDemoSceneLayerV4
+                  owner={handoverSharedZoneOwner}
+                  project={project}
+                />
+              )}
               <CoordinateFrameLayersV4
                 layers={layers}
                 project={project}

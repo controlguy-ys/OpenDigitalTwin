@@ -43,6 +43,7 @@ import type {
 } from '../../interaction/v4/scene-selection.js'
 import type { GizmoFramePreferenceV4 } from '../../viewport/v4/viewport-preference-store.js'
 import type { ObjectRuntimeStateV4 } from '../../runtime-gateway/v4/object-runtime-state-v4.js'
+import type { HandoverPoseOverrideV4 } from '../../handover/v4/handover-demo-runtime-store.js'
 import { SpatialEntityTransformControlsV4 } from './SpatialEntityTransformControls.js'
 import type { WorkcellInteractionHandlersV4 } from './scene-context-request.js'
 import type {
@@ -71,6 +72,7 @@ export interface SpatialEntityScenePropsV4 {
   ) => Promise<void>
   readonly onDraggingChange?: (dragging: boolean) => void
   readonly objectRuntime?: ObjectRuntimeStateV4 | null
+  readonly poseOverride?: HandoverPoseOverrideV4 | null
 }
 
 interface LocalBoundsV4 {
@@ -370,6 +372,7 @@ export function createSpatialEntityEffectiveTransformRuntimeV4(
   project: WorkcellProjectV4,
   sceneRuntime: SceneRuntimeProjectionV4,
   objectRuntime: ObjectRuntimeStateV4 | null,
+  poseOverride: HandoverPoseOverrideV4 | null = null,
 ): SpatialEntityEffectiveTransformRuntimeV4 {
   if (sceneRuntime.projectRevisionId !== project.revisionId) {
     throw new Error('Spatial Entity Scene runtime and Project revisions must match.')
@@ -400,6 +403,12 @@ export function createSpatialEntityEffectiveTransformRuntimeV4(
     const resolveEntity = (entityId: SpatialEntityIdV4, depth: number): ResolvedPoseV4 => {
       const cached = entityWorldPoses.get(entityId)
       if (cached !== undefined) return cached
+      const override = poseOverride?.readWorldPose(entityId) ?? null
+      if (override !== null) {
+        const resolved = { pose: override, dynamic: true } as const
+        entityWorldPoses.set(entityId, resolved)
+        return resolved
+      }
       if (depth > maximumDepth || resolvingEntities.has(entityId)) {
         return { pose: persistedEntityPose(entityId), dynamic: false }
       }
@@ -604,6 +613,7 @@ export function SpatialEntitySceneV4({
   onCommitLocalPose,
   onDraggingChange,
   objectRuntime = null,
+  poseOverride = null,
 }: SpatialEntityScenePropsV4): ReactNode {
   const [resources, setResources] = useState<SpatialSceneResourcesV4 | null>(null)
   const [renderState, setRenderState] = useState<SpatialRenderStateV4 | null>(null)
@@ -617,21 +627,26 @@ export function SpatialEntitySceneV4({
     project,
     sceneRuntime,
     objectRuntime,
-  ), [objectRuntime, project, sceneRuntime])
+    poseOverride,
+  ), [objectRuntime, poseOverride, project, sceneRuntime])
 
   useFrame(() => {
-    if (objectRuntime === null || renderState === null || renderState.resources.disposed) return
+    if (
+      (objectRuntime === null && poseOverride === null)
+      || renderState === null
+      || renderState.resources.disposed
+    ) return
     const nowMs = Date.now()
     effectiveTransforms.update(nowMs)
     const signature: string[] = []
     for (const entity of project.spatialEntities) {
       const record = renderState.resources.records.get(entity.id)
       if (record === undefined) continue
-      const status = objectRuntime.readEntityStatus(entity.id, nowMs)
+      const status = objectRuntime?.readEntityStatus(entity.id, nowMs) ?? null
       if (effectiveTransforms.isEntityDynamicallyDriven(entity.id)) {
         applyPoseV4(record.root, effectiveTransforms.readEntityWorldPose(entity.id))
       }
-      if (entity.transformOwner.startsWith('opcua:')) {
+      if (objectRuntime !== null && entity.transformOwner.startsWith('opcua:')) {
         const pose = objectRuntime.sampleEntityFrame(entity.id, entity.parentFrameId, nowMs)
         signature.push(
           entity.id,
