@@ -24,8 +24,17 @@ DONE
 
 - `npm run lint`: passed with zero diagnostics.
 - `npx tsc -b --pretty false`: passed with zero diagnostics.
-- `npm run test:run`: 169 files passed, 2,170 tests passed.
+- `npm run test:run`: 169 files passed, 2,171 tests passed after the review fix.
 - Targeted `git diff --check`: passed for every staged Task 4 file.
+
+## Review Fix Evidence
+
+- Confirmed the rejected lifecycle path: successful replacement calls the committed Job resource's `dispose()` directly, so the prepared-resource helper could not stop the prior Coordinator.
+- RED: the committed running Handover replacement test invoked a captured old RAF after replacement and received `ROBOT_INSTANCE_NOT_FOUND`; the contract test also proved a Coordinator missing `canStart` was accepted.
+- GREEN: the Job resource disposer now owns Coordinator-first cleanup, then playback and executor cleanup, retaining the first error while exhausting all three operations.
+- GREEN: the bundle validator now checks `canHandle`, `canStart`, `start`, `canCancel`, `cancel`, `canReset`, `reset`, `setGripConfirmTimeoutInjection`, and `dispose`.
+- Review-focused gate: 4 files passed, 32 tests passed.
+- Full post-fix gate: 169 files passed, 2,171 tests passed; lint and strict TypeScript passed.
 
 ## Self-Review and Risks
 

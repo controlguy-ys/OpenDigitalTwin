@@ -1,13 +1,40 @@
 import { describe, expect, it } from 'vitest'
 import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-support.js'
 import { deriveCollisionPolicyV4 } from '../../../domain/collision/collision-policy-v4.js'
+import type { HandoverDemoCoordinatorV4 } from '../../handover/v4/handover-demo-coordinator.js'
+import { createHandoverDemoRuntimeStoreV4 } from '../../handover/v4/handover-demo-runtime-store.js'
 import { buildInitialRobotRuntimeStatesV4 } from '../../robot/v4/robot-runtime-registry.js'
 import { selectSceneRuntimeV4 } from '../../scene/v4/scene-runtime-selector.js'
 import {
   createBrowserRuntimeBundleStoreV4,
   type ActiveBrowserRuntimeBundleV4,
+  type BrowserHandoverRuntimeResourcesV4,
   type BrowserJobRuntimeResourcesV4,
 } from './browser-runtime-bundle-store-v4.js'
+import { createHackathonHandoverSampleV4 } from './hackathon-handover-sample-v4.js'
+
+function handover(): BrowserHandoverRuntimeResourcesV4 {
+  const project = createHackathonHandoverSampleV4({
+    projectId: 'project-runtime-bundle-handover',
+    revisionId: 'revision-runtime-bundle-handover',
+    nowIso: '2026-07-21T06:00:00.000Z',
+  })
+  const coordinator: HandoverDemoCoordinatorV4 = {
+    canHandle: () => true,
+    canStart: () => true,
+    start: () => ({ runId: 'handover-run' }),
+    canCancel: () => true,
+    cancel: () => undefined,
+    canReset: () => true,
+    reset: () => undefined,
+    setGripConfirmTimeoutInjection: () => undefined,
+    dispose: () => undefined,
+  }
+  return {
+    store: createHandoverDemoRuntimeStoreV4(project),
+    coordinator,
+  }
+}
 
 function jobs(): BrowserJobRuntimeResourcesV4 {
   return {
@@ -88,20 +115,40 @@ describe('Browser runtime bundle store V4', () => {
     expect(store.getState()).toBe(before)
   })
 
-  it('rejects an incomplete optional Handover resource boundary', () => {
-    const store = createBrowserRuntimeBundleStoreV4()
-    const invalid = active('revision-handover-invalid')
-    const candidate = {
-      ...invalid,
-      jobs: {
-        ...invalid.jobs,
-        handover: {},
-      },
-    }
+  it('validates every required optional Handover Coordinator capability', () => {
+    const requiredMethods = [
+      'canHandle',
+      'canStart',
+      'start',
+      'canCancel',
+      'cancel',
+      'canReset',
+      'reset',
+      'setGripConfirmTimeoutInjection',
+      'dispose',
+    ] as const
 
-    expect(() => store.getState().replaceActive(
-      candidate as ActiveBrowserRuntimeBundleV4,
-    )).toThrow(/BROWSER_RUNTIME_BUNDLE_INVALID/)
-    expect(store.getState().active).toBeNull()
+    for (const method of requiredMethods) {
+      const store = createBrowserRuntimeBundleStoreV4()
+      const invalid = active(`revision-handover-missing-${method}`)
+      const validHandover = handover()
+      const coordinator = { ...validHandover.coordinator } as Record<string, unknown>
+      delete coordinator[method]
+      const candidate = {
+        ...invalid,
+        jobs: {
+          ...invalid.jobs,
+          handover: {
+            ...validHandover,
+            coordinator,
+          },
+        },
+      }
+
+      expect(() => store.getState().replaceActive(
+        candidate as unknown as ActiveBrowserRuntimeBundleV4,
+      )).toThrow(/BROWSER_RUNTIME_BUNDLE_INVALID/)
+      expect(store.getState().active).toBeNull()
+    }
   })
 })

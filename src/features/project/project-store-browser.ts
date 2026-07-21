@@ -326,11 +326,18 @@ export function createBrowserProjectResourcesV4(
         dispose() {
           if (disposed) return
           disposed = true
-          try {
-            playback.dispose()
-          } finally {
-            executor.shutdown('Project runtime disposed.')
+          let cleanupError: unknown
+          const cleanup = (operation: () => void): void => {
+            try {
+              operation()
+            } catch (error) {
+              cleanupError ??= error
+            }
           }
+          cleanup(() => handover?.coordinator.dispose())
+          cleanup(() => playback.dispose())
+          cleanup(() => executor.shutdown('Project runtime disposed.'))
+          if (cleanupError !== undefined) throw cleanupError
         },
       })
     },

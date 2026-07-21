@@ -90,9 +90,13 @@ function inspectActiveBundleV4(active: ActiveBrowserRuntimeBundleV4): void {
       || typeof handover.store?.getState !== 'function'
       || typeof handover.store?.subscribe !== 'function'
       || typeof handover.coordinator?.canHandle !== 'function'
+      || typeof handover.coordinator?.canStart !== 'function'
       || typeof handover.coordinator?.start !== 'function'
+      || typeof handover.coordinator?.canCancel !== 'function'
       || typeof handover.coordinator?.cancel !== 'function'
+      || typeof handover.coordinator?.canReset !== 'function'
       || typeof handover.coordinator?.reset !== 'function'
+      || typeof handover.coordinator?.setGripConfirmTimeoutInjection !== 'function'
       || typeof handover.coordinator?.dispose !== 'function'
     )
   ) {
