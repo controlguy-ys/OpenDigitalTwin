@@ -96,7 +96,8 @@ function robotInstanceV5(
 
 function readMappingsV5(project: WorkcellProjectV4): WorkcellProjectV5['opcUa']['mappings'] {
   if (project.opcUa.mode !== 'client' && project.opcUa.mode !== 'bridge') return []
-  return project.opcUa.mappings.flatMap((mapping) => {
+  type GatewayMappingV5 = WorkcellProjectV5['opcUa']['mappings'][number]
+  return project.opcUa.mappings.flatMap((mapping): readonly GatewayMappingV5[] => {
     if (mapping.direction !== 'read' && mapping.direction !== 'readWrite') return []
     const leaf = mapping.leaves.length === 1 ? mapping.leaves[0] : undefined
     if (leaf?.projectTarget.type === 'robot-joint') {

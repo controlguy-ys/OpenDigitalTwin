@@ -6,6 +6,7 @@ import {
   compileOpcUaClientReadPlanV1,
 } from './opcua-client-read-plan.js'
 import { createOpcUaClientSnapshotAssemblerV1 } from './opcua-client-adapter.js'
+import type { UnsequencedOpcUaClientSnapshotV1 } from './opcua-client-adapter.js'
 
 function objectPosProject() {
   const base = makeMinimalWorkcellProjectV5()
@@ -99,21 +100,22 @@ describe('OPC UA ObjectPos scalar-root assembly', () => {
 
     const assembler = createOpcUaClientSnapshotAssemblerV1({ project, endpoint: plan })
     const values = [1, 2, 3, 0, 0, 90]
-    let snapshot = null
+    let snapshot: UnsequencedOpcUaClientSnapshotV1 | null = null
     plan.monitoredRoots.forEach((root, index) => {
       snapshot = assembler.accept(root.rootKey, values[index], 'Good (0x00000000)', 100 + index)
     })
 
     expect(snapshot).not.toBeNull()
-    expect(snapshot?.values).toHaveLength(1)
-    expect(snapshot?.values[0]).toMatchObject({
+    const completeSnapshot = snapshot!
+    expect(completeSnapshot.values).toHaveLength(1)
+    expect(completeSnapshot.values[0]).toMatchObject({
       mappingId: 'mapping-object-pos-00',
       quality: 'GOOD',
       value: {
         positionM: [1, 2, 3],
       },
     })
-    const quaternion = snapshot?.values[0]?.value
+    const quaternion = completeSnapshot.values[0]?.value
     expect(quaternion).toMatchObject({ quaternion: [0, 0, expect.closeTo(Math.SQRT1_2, 1e-12), expect.closeTo(Math.SQRT1_2, 1e-12)] })
   })
 })
