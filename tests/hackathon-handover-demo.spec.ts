@@ -111,12 +111,9 @@ test('keeps NED2-A ownership on grip-confirm timeout and clears the fault on res
   await expect(startJob(page)).toBeEnabled()
   await startJob(page).click()
   await expect(handoverStatus(page)).toContainText(
-    'Step HANDOVER_CONFIRM | Part NED2-A | Shared Zone NED2-A',
+    /Step HANDOVER_CONFIRM \| Part NED2-A \| Shared Zone NED2-A \| Failure GRIP_CONFIRM_TIMEOUT/,
     { timeout: 30_000 },
   )
-  await expect(handoverStatus(page)).toContainText('Failure GRIP_CONFIRM_TIMEOUT', {
-    timeout: 5_000,
-  })
 
   await page.getByRole('button', { name: 'Reset Handover Demo' }).click()
   await expect(handoverStatus(page)).toContainText(

@@ -4,7 +4,10 @@
 
 DONE
 
-Commit subject: `test: verify offline NED2 handover demo`
+Commit subjects:
+
+- `test: verify offline NED2 handover demo`
+- `test: assert terminal handover fault ownership`
 
 ## Scope delivered
 
@@ -61,6 +64,13 @@ happy and fault paths reached their intended states. A subsequent strict Header
 Offline RED exposed the gateway presentation issue; its owning correction was
 routed outside Task 7 and retained here as a strict regression assertion.
 
+Review closure replaced the two sequential fault-state checks with one terminal
+status assertion covering HANDOVER_CONFIRM, Part NED2-A, Shared Zone NED2-A,
+and Failure GRIP_CONFIRM_TIMEOUT together. The first exact-status RED exposed
+the rendered `| Failure` delimiter; the corrected assertion then passed both
+targeted scenarios (2/2 in 46.1s), while retaining READY Reset and fault-toggle
+clearing checks.
+
 ## Required verification, in order
 
 ```text
@@ -100,6 +110,7 @@ the Header now presents the state as Offline.
 
 ## Self-review
 
-The commit contains only the acceptance spec and two operator-document updates.
-No sample pose, application source, STEP asset, backup, package artifact, raw
-log, PLC write, push, merge, or unrelated Task 4 edit is included.
+The Task 7 commits contain the acceptance spec, two operator-document updates,
+and this evidence report. No sample pose, application source, STEP asset,
+backup, package artifact, raw log, PLC write, push, merge, or unrelated Task 4
+edit is included.
