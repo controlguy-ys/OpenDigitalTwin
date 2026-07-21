@@ -558,6 +558,31 @@ describe('App Runtime Gateway V4 integration', () => {
       .not.toBeInTheDocument()
   })
 
+  it.each([
+    ['without an explicit code', { message: 'Configuration failed.' }],
+    ['with the fallback-shaped code', {
+      errorCode: 'RUNTIME_GATEWAY_HTTP_502',
+      message: 'Configuration failed.',
+    }],
+  ])('preserves a structured HTTP 502 error %s', async (_case, payload) => {
+    const active = project(`revision-structured-502-${_case.replaceAll(' ', '-')}`)
+    const resources = resourcesForProject(active)
+    const gateway = createRuntimeGatewayPublisherV4({
+      fetch: vi.fn(async () => new Response(JSON.stringify(payload), {
+        status: 502,
+        headers: { 'content-type': 'application/json' },
+      })),
+    })
+
+    render(<App gatewayPublisher={gateway} resources={resources} />)
+
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: /Gateway details: OPC UA Server.*RUNTIME_GATEWAY_HTTP_502: Configuration failed/,
+    })).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Gateway details:.*Offline/ }))
+      .not.toBeInTheDocument()
+  })
+
   it('single-flights same-revision reactivation and retries only the latest Robot state', async () => {
     const active = project('revision-gateway-recovery-v4')
     const resources = resourcesForProject(active)

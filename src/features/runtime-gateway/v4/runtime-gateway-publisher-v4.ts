@@ -45,20 +45,32 @@ export interface RuntimeGatewayPublisherOptionsV4 {
   readonly basePath?: string
 }
 
+export type RuntimeGatewayPublisherV4FailureSource =
+  | 'local'
+  | 'transport'
+  | 'structured-http'
+  | 'unstructured-http'
+
 export class RuntimeGatewayPublisherV4Error extends Error {
   readonly code: string
   readonly statusCode: number | null
+  readonly failureSource: RuntimeGatewayPublisherV4FailureSource
   readonly cause?: unknown
 
   constructor(
     code: string,
     message: string,
-    options: { readonly statusCode?: number; readonly cause?: unknown } = {},
+    options: {
+      readonly statusCode?: number
+      readonly failureSource?: RuntimeGatewayPublisherV4FailureSource
+      readonly cause?: unknown
+    } = {},
   ) {
     super(`${code}: ${message}`)
     this.name = 'RuntimeGatewayPublisherV4Error'
     this.code = code
     this.statusCode = options.statusCode ?? null
+    this.failureSource = options.failureSource ?? 'local'
     if (options.cause !== undefined) this.cause = options.cause
   }
 }
@@ -75,9 +87,13 @@ export function runtimeGatewayFailureRepresentsOfflineV4(
   error: unknown,
 ): boolean {
   if (!(error instanceof RuntimeGatewayPublisherV4Error)) return false
-  return error.code === 'RUNTIME_GATEWAY_UNAVAILABLE'
+  return (
+    error.failureSource === 'transport'
+    && error.code === 'RUNTIME_GATEWAY_UNAVAILABLE'
+  )
     || (
-      error.code === 'RUNTIME_GATEWAY_HTTP_502'
+      error.failureSource === 'unstructured-http'
+      && error.code === 'RUNTIME_GATEWAY_HTTP_502'
       && error.statusCode === 502
     )
 }
@@ -97,7 +113,11 @@ interface QueuedStateV4 {
 function gatewayFailureV4(
   code: string,
   message: string,
-  options?: { readonly statusCode?: number; readonly cause?: unknown },
+  options?: {
+    readonly statusCode?: number
+    readonly failureSource?: RuntimeGatewayPublisherV4FailureSource
+    readonly cause?: unknown
+  },
 ): never {
   throw new RuntimeGatewayPublisherV4Error(code, message, options)
 }
@@ -277,7 +297,7 @@ export function createRuntimeGatewayPublisherV4(
       return gatewayFailureV4(
         'RUNTIME_GATEWAY_UNAVAILABLE',
         'Runtime Gateway could not be reached.',
-        { cause: error },
+        { cause: error, failureSource: 'transport' },
       )
     }
 
@@ -289,7 +309,11 @@ export function createRuntimeGatewayPublisherV4(
         return gatewayFailureV4(
           `RUNTIME_GATEWAY_HTTP_${response.status}`,
           `Runtime Gateway request failed with HTTP ${response.status}.`,
-          { statusCode: response.status, cause: error },
+          {
+            statusCode: response.status,
+            failureSource: 'unstructured-http',
+            cause: error,
+          },
         )
       }
       return gatewayFailureV4(
@@ -303,7 +327,7 @@ export function createRuntimeGatewayPublisherV4(
         errorCodeFromPayloadV4(payload) ?? `RUNTIME_GATEWAY_HTTP_${response.status}`,
         errorMessageFromPayloadV4(payload)
           ?? `Runtime Gateway request failed with HTTP ${response.status}.`,
-        { statusCode: response.status },
+        { statusCode: response.status, failureSource: 'structured-http' },
       )
     }
     return decodeStatusV4(payload)
