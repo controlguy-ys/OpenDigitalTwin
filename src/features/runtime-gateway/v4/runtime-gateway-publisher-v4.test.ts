@@ -8,6 +8,7 @@ import {
   type RuntimeGatewayStatusV4,
 } from './runtime-gateway-publisher-v4.js'
 import { validateRuntimeGatewayStatusV1 } from '../../../core/runtime-protocol/gateway-status-v1.js'
+import { projectV4ToV5Gateway } from './project-v4-to-v5-gateway.js'
 
 function status(
   revisionId = 'revision-test-v4',
@@ -117,7 +118,7 @@ describe('RuntimeGatewayPublisherV4', () => {
     expect(runtimeGatewayStatePublicationRequiresReactivationV4(error)).toBe(false)
   })
 
-  it('PUTs the exact Project V4 revision directly and rejects a mismatched response', async () => {
+  it('adapts the V4 revision to the V5 Gateway contract and rejects a mismatched response', async () => {
     const project = {
       ...makeMinimalWorkcellProjectV4(),
       projectId: 'project-test-v4',
@@ -140,7 +141,7 @@ describe('RuntimeGatewayPublisherV4', () => {
     expect(fetchV4).toHaveBeenCalledOnce()
     expect(fetchV4.mock.calls[0]![0]).toBe('/runtime/project')
     expect(fetchV4.mock.calls[0]![1]).toMatchObject({ method: 'PUT' })
-    expect(JSON.parse(String(fetchV4.mock.calls[0]![1]?.body))).toEqual(project)
+    expect(JSON.parse(String(fetchV4.mock.calls[0]![1]?.body))).toEqual(projectV4ToV5Gateway(project))
 
     fetchV4.mockResolvedValueOnce(jsonResponse(status('revision-stale')))
     await expect(publisher.activateProject(project)).rejects.toMatchObject({

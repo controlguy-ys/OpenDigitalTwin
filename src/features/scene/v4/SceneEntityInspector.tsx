@@ -47,6 +47,7 @@ export interface SceneEntityInspectorPropsV4 {
   readonly sceneCommands: SceneCommandServiceV4
   readonly commandBindings: AppCommandBindingsV4
   readonly objectRuntime?: ObjectRuntimeStateV4 | null
+  readonly onBindOpcUaJoints?: (robotId: RobotIdV4) => Promise<void>
   readonly focusRequest?: SceneEntityInspectorFocusRequestV4 | null
 }
 
@@ -81,6 +82,7 @@ function RobotSelectionInspectorV4({
   jobs,
   sceneCommands,
   commandBindings,
+  onBindOpcUaJoints,
 }: RobotInspectorPropsV4): ReactNode {
   const robot = project.robots.find(({ id }) => id === robotId)
   const definition = robot === undefined
@@ -253,6 +255,7 @@ function RobotSelectionInspectorV4({
         project={project}
         robotId={robotId}
         robots={robots}
+        {...(onBindOpcUaJoints === undefined ? {} : { onBindOpcUaJoints })}
       />
       </div>
     </div>

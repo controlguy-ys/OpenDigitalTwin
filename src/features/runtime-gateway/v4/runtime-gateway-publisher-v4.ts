@@ -3,6 +3,7 @@ import {
   validateRuntimeGatewayStatusV1,
   type RuntimeGatewayStatusV1,
 } from '../../../core/runtime-protocol/gateway-status-v1.js'
+import { projectV4ToV5Gateway } from './project-v4-to-v5-gateway.js'
 
 export type RuntimeGatewayStatusV4 = RuntimeGatewayStatusV1
 
@@ -337,8 +338,9 @@ export function createRuntimeGatewayPublisherV4(
     project: WorkcellProjectV4,
     signal?: AbortSignal,
   ): Promise<RuntimeGatewayStatusV4> => enqueueCommand(async () => {
+    const gatewayProject = projectV4ToV5Gateway(project)
     const status = assertExpectedRevisionV4(
-      await requestStatus('PUT', '/project', project, signal),
+      await requestStatus('PUT', '/project', gatewayProject, signal),
       project,
     )
     if (status.opcUa.mode !== project.opcUa.mode) {

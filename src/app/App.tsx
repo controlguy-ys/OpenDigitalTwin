@@ -54,6 +54,7 @@ import {
 } from '../features/project/project-store-browser.js'
 import { createDualRobotSampleV4 } from '../features/project/v4/dual-robot-sample-v4.js'
 import { createHackathonHandoverSampleV4 } from '../features/project/v4/hackathon-handover-sample-v4.js'
+import { bindBrRobotJointsV4 } from '../features/project/v4/robot-joint-opcua-binding-v4.js'
 import { RobotImportDialogV4 } from '../features/robot/v4/RobotImportDialogV4.js'
 import type { RobotRuntimeRegistryV4 } from '../features/robot/v4/robot-runtime-registry.js'
 import {
@@ -69,6 +70,10 @@ import {
   createObjectRuntimeStateV4,
   type ObjectRuntimeStateV4,
 } from '../features/runtime-gateway/v4/object-runtime-state-v4.js'
+import {
+  createRobotJointRuntimeStateV4,
+  type RobotJointRuntimeStateV4,
+} from '../features/runtime-gateway/v4/robot-joint-runtime-state-v4.js'
 import {
   createRuntimeGatewayStreamV4,
   type RuntimeGatewayStreamV4,
@@ -111,13 +116,20 @@ export interface AppPropsV4 {
 
 export type RuntimeGatewayStreamFactoryV4 = (
   runtime: ObjectRuntimeStateV4,
+  robotRuntime?: RobotJointRuntimeStateV4,
 ) => RuntimeGatewayStreamV4
 
 const browserRuntimeGatewayPublisherV4 = createRuntimeGatewayPublisherV4()
-const browserRuntimeGatewayStreamFactoryV4: RuntimeGatewayStreamFactoryV4 = (runtime) => (
+const browserRuntimeGatewayStreamFactoryV4: RuntimeGatewayStreamFactoryV4 = (runtime, robotRuntime) => (
   createRuntimeGatewayStreamV4({
-    ingest: runtime.ingest,
-    onSessionStart: runtime.resetGatewaySession,
+    ingest: (value, receivedTimestampMs) => (
+      runtime.ingest(value, receivedTimestampMs)
+      || robotRuntime?.ingest(value, receivedTimestampMs) === true
+    ),
+    onSessionStart: () => {
+      runtime.resetGatewaySession()
+      robotRuntime?.resetGatewaySession()
+    },
   })
 )
 
@@ -339,6 +351,7 @@ export function App({
   const [commandError, setCommandError] = useState<string | null>(null)
   const [gatewayPresentation, setGatewayPresentation] =
     useState<RuntimeGatewayPresentationV4>(IDLE_GATEWAY_PRESENTATION_V4)
+  const [gatewayConfigRevision, setGatewayConfigRevision] = useState<string | null>(null)
   const bootstrap = useMemo(
     () => createInitialProjectBootstrapV4(resources.projectStore),
     [resources.projectStore],
@@ -438,24 +451,30 @@ export function App({
   const publishedBundle = resources.mutations.readPublished()
   const objectRuntimeConfigRevision = project !== null
     && publishedBundle?.revisionId === project.revisionId
-    ? publishedBundle.configRevision
+    ? gatewayConfigRevision ?? publishedBundle.configRevision
     : null
   const objectRuntime = useMemo(() => (
     project === null || objectRuntimeConfigRevision === null
       ? null
       : createObjectRuntimeStateV4(project, objectRuntimeConfigRevision)
   ), [objectRuntimeConfigRevision, project])
+  const robotJointRuntime = useMemo(() => (
+    project === null || objectRuntimeConfigRevision === null
+      ? null
+      : createRobotJointRuntimeStateV4(project, resources.robots, objectRuntimeConfigRevision)
+  ), [objectRuntimeConfigRevision, project, resources.robots])
   useEffect(() => {
     if (
       gatewayStreamFactory === null
       || objectRuntime === null
+      || robotJointRuntime === null
       || project === null
       || (project.opcUa.mode !== 'client' && project.opcUa.mode !== 'bridge')
     ) return
-    const stream = gatewayStreamFactory(objectRuntime)
+    const stream = gatewayStreamFactory(objectRuntime, robotJointRuntime)
     stream.start()
     return () => stream.stop()
-  }, [gatewayStreamFactory, objectRuntime, project])
+  }, [gatewayStreamFactory, objectRuntime, project, robotJointRuntime])
   const setCurrentContextRequest = useCallback((
     request: SceneContextRequestV4 | null,
   ): void => {
@@ -548,6 +567,7 @@ export function App({
       ...IDLE_GATEWAY_PRESENTATION_V4,
       projectRevisionId: revisionId,
     })
+    setGatewayConfigRevision(null)
   }, [revisionId])
 
   useEffect(() => {
@@ -585,6 +605,7 @@ export function App({
         publishFailure(new Error('Runtime Gateway returned a stale Project revision.'))
         return false
       }
+      setGatewayConfigRevision(status.project.configRevision)
       setGatewayPresentation(readyGatewayPresentationV4(status))
       return true
     }
@@ -1082,6 +1103,12 @@ export function App({
             sceneCommands={resources.sceneCommands}
             selection={interaction.selection}
             objectRuntime={objectRuntime}
+            onBindOpcUaJoints={async (robotId) => {
+              await resources.mutations.replaceFromActive({
+                description: 'Bind Robot Joints to B&R Rob Q1-Q6',
+                mutate: (active) => bindBrRobotJointsV4(active, robotId),
+              })
+            }}
           />
         )}
         jobTree={(

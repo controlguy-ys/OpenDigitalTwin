@@ -32,6 +32,7 @@ export interface JointInspectorPropsV4 {
   readonly robots: StoreApi<RobotRuntimeRegistryV4>
   readonly jobs: StoreApi<JobRuntimeStoreV4>
   readonly commandBindings: AppCommandBindingsV4
+  readonly onBindOpcUaJoints?: (robotId: RobotIdV4) => Promise<void>
 }
 
 type JointDraftsV4 = Record<string, string>
@@ -162,6 +163,7 @@ export function JointInspectorV4({
   robots,
   jobs,
   commandBindings,
+  onBindOpcUaJoints,
 }: JointInspectorPropsV4): ReactNode {
   const runtimeSelector = useCallback(
     (state: RobotRuntimeRegistryV4) => selectedRuntimeV4(state, robotId),
@@ -193,6 +195,8 @@ export function JointInspectorV4({
   const dirtyJointId = useRef<string | null>(null)
   const draftRobotId = useRef(robotId)
   const [commandError, setCommandError] = useState<string | null>(null)
+  const [bindingPending, setBindingPending] = useState(false)
+  const [bindingError, setBindingError] = useState<string | null>(null)
   const selectedRobotRunning = selectedJobRuntime?.state === 'RUNNING'
   const liveWriter = selectedRuntime?.jointSource ?? null
   const allowedWriter: RobotJointWriterV4 | null = liveWriter === 'manual'
@@ -259,6 +263,18 @@ export function JointInspectorV4({
   }
 
   const robotLabel = robot?.name ?? robotId
+  const bindOpcUaJoints = async (): Promise<void> => {
+    if (onBindOpcUaJoints === undefined || bindingPending) return
+    setBindingPending(true)
+    setBindingError(null)
+    try {
+      await onBindOpcUaJoints(robotId)
+    } catch (error) {
+      setBindingError(errorMessageV4(error))
+    } finally {
+      setBindingPending(false)
+    }
+  }
 
   return (
     <section className="joint-inspector-v4" aria-label={`${robotLabel} Joint inspector`}>
@@ -269,6 +285,21 @@ export function JointInspectorV4({
           <p role="status">Running Job owns Robot {robotId}; Jog is read-only.</p>
         ) : null}
       </header>
+
+      {onBindOpcUaJoints === undefined ? null : (
+        <details className="robot-joint-opcua-binding-v4">
+          <summary>OPC UA Robot Joint Binding</summary>
+          <p>Bind the first six Joints to B&amp;R Rob.Q1-Q6.</p>
+          <p>Endpoint: opc.tcp://127.0.0.1:4840</p>
+          <p>Nodes: ns=5;s=::Sample6X:Rob.Q1 ... Q6</p>
+          <button
+            disabled={bindingPending}
+            onClick={() => { void bindOpcUaJoints() }}
+            type="button"
+          >{bindingPending ? 'Binding Rob.Q1-Q6…' : 'Bind B&R Rob Q1-Q6'}</button>
+          {bindingError === null ? null : <p role="alert">{bindingError}</p>}
+        </details>
+      )}
 
       {definition === null || selectedRuntime === null ? (
         <p role="status">Robot runtime is unavailable.</p>
