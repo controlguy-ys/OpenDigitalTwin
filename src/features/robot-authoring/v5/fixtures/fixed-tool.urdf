@@ -1,0 +1,9 @@
+<robot name="fixed-tool">
+  <link name="LINK00"/>
+  <link name="LINK01"/>
+  <link name="LINK02"/>
+  <link name="TOOL"/>
+  <joint name="J1" type="revolute"><parent link="LINK00"/><child link="LINK01"/><origin xyz="0 0 0.12" rpy="0 0 0"/><axis xyz="0 0 1"/><limit lower="-1.5707963267948966" upper="1.5707963267948966" velocity="3.141592653589793"/></joint>
+  <joint name="J2" type="revolute"><parent link="LINK01"/><child link="LINK02"/><origin xyz="0 0 0.31" rpy="0 0 0"/><axis xyz="0 1 0"/><limit lower="-1.2" upper="1.2" velocity="2"/></joint>
+  <joint name="tool-mount" type="fixed"><parent link="LINK02"/><child link="TOOL"/><origin xyz="0 0 0.08" rpy="0 0 0"/></joint>
+</robot>
