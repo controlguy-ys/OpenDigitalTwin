@@ -54,6 +54,13 @@ function createSourceOnlyRobotDefinition(): RobotDefinitionV5 {
       serialNumberTemplate: 'LOGICAL-2R-{serial}',
       motionDeviceCategory: 'ARTICULATED_ROBOT',
     },
+    mechanics: {
+      schemaVersion: 1,
+      status: 'estimated',
+      sourceKind: 'manual',
+      sourceName: 'logical-io-job-sample-v5',
+      calibrationRevision: 'logical-2r-r1',
+    },
     assetReferenceIds: [LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotSourceId],
     sourceConventions: {
       [LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotSourceId]: {

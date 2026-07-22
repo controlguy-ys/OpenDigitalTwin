@@ -224,14 +224,30 @@ function validateRobotIdentification(value: unknown, path: string): void {
   ] as const)
 }
 
+function validateRobotMechanicsMetadata(value: unknown, path: string): void {
+  const record = expectClosedRecord(value, path, [
+    'schemaVersion', 'status', 'sourceKind', 'sourceName', 'calibrationRevision',
+  ])
+  if (record.schemaVersion !== 1) {
+    invalidProjectV5(`${path}.schemaVersion`, 'Expected schema version 1.')
+  }
+  expectEnum(record.status, `${path}.status`, ['estimated', 'confirmed'] as const)
+  expectEnum(record.sourceKind, `${path}.sourceKind`, [
+    'manual', 'manifest', 'resolved-urdf', 'datasheet', 'step-estimate',
+  ] as const)
+  validateName(record.sourceName, `${path}.sourceName`)
+  validateName(record.calibrationRevision, `${path}.calibrationRevision`)
+}
+
 function validateRobotDefinition(value: unknown, path: string): void {
   const record = expectClosedRecord(value, path, [
-    'id', 'name', 'identification', 'assetReferenceIds', 'sourceConventions', 'links', 'joints', 'frames',
+    'id', 'name', 'identification', 'mechanics', 'assetReferenceIds', 'sourceConventions', 'links', 'joints', 'frames',
     'excludedGeometryOccurrenceKeys',
   ])
   validateId(record.id, `${path}.id`)
   validateName(record.name, `${path}.name`)
   validateRobotIdentification(record.identification, `${path}.identification`)
+  validateRobotMechanicsMetadata(record.mechanics, `${path}.mechanics`)
 
   const assetReferenceIds = expectDenseArray(record.assetReferenceIds, `${path}.assetReferenceIds`)
   assetReferenceIds.forEach((assetId, index) => validateId(assetId, `${path}.assetReferenceIds[${index}]`))

@@ -121,10 +121,19 @@ export interface RobotIdentificationV1 {
   readonly motionDeviceCategory: 'ARTICULATED_ROBOT' | 'SCARA_ROBOT' | 'DELTA_ROBOT' | 'OTHER'
 }
 
+export interface RobotMechanicsMetadataV1 {
+  readonly schemaVersion: 1
+  readonly status: 'estimated' | 'confirmed'
+  readonly sourceKind: 'manual' | 'manifest' | 'resolved-urdf' | 'datasheet' | 'step-estimate'
+  readonly sourceName: string
+  readonly calibrationRevision: string
+}
+
 export interface RobotDefinitionV5 {
   readonly id: RobotDefinitionIdV5
   readonly name: string
   readonly identification: RobotIdentificationV1
+  readonly mechanics: RobotMechanicsMetadataV1
   readonly assetReferenceIds: readonly AssetReferenceIdV5[]
   readonly sourceConventions: Readonly<Record<AssetReferenceIdV5, SourceConventionV5>>
   readonly links: readonly RobotLinkDefinitionV5[]

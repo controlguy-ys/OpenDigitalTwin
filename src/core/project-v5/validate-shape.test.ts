@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { ProjectV5Error } from './errors'
 import { validateLogicalSignalValueV1 } from './logical-signal'
+import type { RobotMechanicsMetadataV1 } from './types'
 import {
   cloneWorkcellProjectV5,
   makeMinimalWorkcellProjectV5,
@@ -9,6 +10,41 @@ import {
 import { validateWorkcellProjectV5 } from './validate'
 
 describe('Project V5 aggregate shape validation', () => {
+  function projectWithMechanics(mechanics: RobotMechanicsMetadataV1 | Record<string, unknown>): unknown {
+    const project = makeMinimalWorkcellProjectV5()
+    const definition = project.robotDefinitions[0]!
+    return {
+      ...project,
+      robotDefinitions: [{ ...definition, mechanics }],
+    }
+  }
+
+  it('accepts confirmed manifest mechanics and rejects unknown provenance fields', () => {
+    const mechanics: RobotMechanicsMetadataV1 = {
+      schemaVersion: 1,
+      status: 'confirmed',
+      sourceKind: 'manifest',
+      sourceName: 'ned2.robot.json',
+      calibrationRevision: 'ned2-r1',
+    }
+    expect(validateWorkcellProjectV5(projectWithMechanics(mechanics))).toBeDefined()
+    expect(() => validateWorkcellProjectV5(projectWithMechanics({
+      ...mechanics,
+      unexpected: true,
+    }))).toThrow(/closed|unexpected/i)
+  })
+
+  it('rejects an empty calibration revision', () => {
+    const project = projectWithMechanics({
+      schemaVersion: 1,
+      status: 'estimated',
+      sourceKind: 'step-estimate',
+      sourceName: 'robot.step',
+      calibrationRevision: '',
+    })
+    expect(() => validateWorkcellProjectV5(project)).toThrow(/calibrationRevision/)
+  })
+
   it.each([1, 2, 3, 4])('rejects schema V%i without conversion', (schemaVersion) => {
     expect(() => validateWorkcellProjectV5({ schemaVersion })).toThrowError(
       expect.objectContaining({ code: 'PROJECT_SCHEMA_UNSUPPORTED', path: '$.schemaVersion' }),

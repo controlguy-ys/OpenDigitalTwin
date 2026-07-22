@@ -43,6 +43,13 @@ function makeRobotDefinition(): RobotDefinitionV5 {
       serialNumberTemplate: null,
       motionDeviceCategory: 'ARTICULATED_ROBOT',
     },
+    mechanics: {
+      schemaVersion: 1,
+      status: 'confirmed',
+      sourceKind: 'manifest',
+      sourceName: 'crb15000.robot.json',
+      calibrationRevision: 'crb15000-r1',
+    },
     assetReferenceIds: ['asset-robot'],
     sourceConventions: {
       'asset-robot': {
