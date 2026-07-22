@@ -29,6 +29,10 @@ function attributes(element: Element, allowed: readonly string[], path: string):
   for (const attribute of Array.from(element.attributes)) if (!allowed.includes(attribute.name)) invalid('URDF_UNSUPPORTED', path, `Unsupported attribute ${attribute.name}.`)
 }
 
+function closedLeaf(element: Element, path: string): void {
+  if (children(element).length !== 0) invalid('URDF_UNSUPPORTED', path, 'Recognized URDF leaf elements cannot contain nested content.')
+}
+
 function namedAttribute(element: Element, name: string, path: string): string {
   const value = element.getAttribute(name)
   if (value === null || value.length === 0 || value.includes('/') || value.includes('\\') || value.includes('..')) invalid('URDF_UNSUPPORTED', path, `Missing or unsafe ${name} attribute.`)
@@ -43,6 +47,7 @@ function numbers(value: string, count: number, path: string): number[] {
 
 function optionalPose(element: Element | undefined, path: string): RigidTransformV5 {
   if (element === undefined) return { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }
+  closedLeaf(element, path)
   attributes(element, ['xyz', 'rpy'], path)
   const xyzValues = numbers(element.getAttribute('xyz') ?? '0 0 0', 3, `${path}.xyz`)
   const xyz: Vector3V5 = [xyzValues[0]!, xyzValues[1]!, xyzValues[2]!]
@@ -89,6 +94,7 @@ function parseJoint(element: Element, linkNames: ReadonlySet<string>): RobotMech
   const parent = sole(grouped, 'parent', `$.joint.${id}.parent`)!
   const child = sole(grouped, 'child', `$.joint.${id}.child`)!
   attributes(parent, ['link'], `$.joint.${id}.parent`); attributes(child, ['link'], `$.joint.${id}.child`)
+  closedLeaf(parent, `$.joint.${id}.parent`); closedLeaf(child, `$.joint.${id}.child`)
   const parentLinkId = namedAttribute(parent, 'link', `$.joint.${id}.parent.link`)
   const childLinkId = namedAttribute(child, 'link', `$.joint.${id}.child.link`)
   if (!linkNames.has(parentLinkId) || !linkNames.has(childLinkId)) invalid('URDF_LINK_NOT_FOUND', `$.joint.${id}`, 'Joint parent and child must be declared URDF Links.')
@@ -99,17 +105,24 @@ function parseJoint(element: Element, linkNames: ReadonlySet<string>): RobotMech
   }
   const axisElement = sole(grouped, 'axis', `$.joint.${id}.axis`)!
   attributes(axisElement, ['xyz'], `$.joint.${id}.axis`)
+  closedLeaf(axisElement, `$.joint.${id}.axis`)
   const axisValues = numbers(namedAttribute(axisElement, 'xyz', `$.joint.${id}.axis.xyz`), 3, `$.joint.${id}.axis.xyz`)
   const axis: Vector3V5 = [axisValues[0]!, axisValues[1]!, axisValues[2]!]
   const limit = sole(grouped, 'limit', `$.joint.${id}.limit`)!
   attributes(limit, ['lower', 'upper', 'velocity', 'effort'], `$.joint.${id}.limit`)
-  const lower = Number(limit.getAttribute('lower')); const upper = Number(limit.getAttribute('upper')); const velocity = Number(limit.getAttribute('velocity'))
+  closedLeaf(limit, `$.joint.${id}.limit`)
+  const lowerText = limit.getAttribute('lower'); const upperText = limit.getAttribute('upper'); const velocityText = limit.getAttribute('velocity')
+  if (lowerText === null || upperText === null || velocityText === null) invalid('URDF_UNSUPPORTED', `$.joint.${id}.limit`, 'Movable Joints require lower, upper, and velocity attributes.')
+  const lower = Number(lowerText); const upper = Number(upperText); const velocity = Number(velocityText)
   if (![lower, upper, velocity].every(Number.isFinite)) invalid('URDF_UNSUPPORTED', `$.joint.${id}.limit`, 'Movable Joints require finite lower, upper, and velocity limits.')
   const radiansToDegrees = jointType === 'revolute' ? 180 / Math.PI : 1
   return { id, type: jointType, parentLinkId, childLinkId, origin, axis, min: lower * radiansToDegrees, max: upper * radiansToDegrees, home: 0, zeroOffset: 0, direction: 1, maximumVelocity: velocity * radiansToDegrees }
 }
 
 export function parseResolvedUrdfV1(xml: string, assetBindings: ResolvedUrdfAssetBindingsV1): RobotMechanicsImportCandidateV1 {
+  if (assetBindings === null || typeof assetBindings !== 'object' || assetBindings.mechanics === null || typeof assetBindings.mechanics !== 'object' || assetBindings.mechanics.sourceKind !== 'resolved-urdf') {
+    invalid('URDF_BINDING_PROVENANCE_INVALID', '$.assetBindings.mechanics.sourceKind', 'Resolved URDF bindings must declare resolved-urdf provenance.')
+  }
   if (typeof xml !== 'string' || xml.includes('<!') || xml.includes('<?')) invalid('URDF_UNSUPPORTED', '$.xml', 'URDF must not contain declarations, entities, or processing instructions.')
   const document = new DOMParser().parseFromString(xml, 'application/xml')
   if (document.querySelector('parsererror') !== null) invalid('URDF_UNSUPPORTED', '$.xml', 'URDF XML is malformed.')

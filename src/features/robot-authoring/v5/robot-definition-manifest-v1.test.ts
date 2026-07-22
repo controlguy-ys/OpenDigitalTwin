@@ -18,4 +18,25 @@ describe('Robot definition Manifest V1', () => {
     const bytes = new TextEncoder().encode('{"schema":"open-digital-twin/robot-definition-manifest/1","unexpected":true}')
     expect(() => decodeRobotDefinitionManifestV1(bytes)).toThrow(/PROJECT_RECORD_NOT_CLOSED|PROJECT_VALUE_INVALID/)
   })
+
+  it.each([
+    ['zero', 0],
+    ['negative', -1],
+    ['unit mismatch', 0.001],
+  ])('rejects %s sourceToMeters values', (_name, sourceToMeters) => {
+    const manifest = JSON.parse(readRobotAuthoringFixtureBytesV1('two-offset-six-axis.robot.json').toString())
+    manifest.definition.sourceConventions['asset-robot'].sourceToMeters = sourceToMeters
+    expect(() => decodeRobotDefinitionManifestV1(new TextEncoder().encode(JSON.stringify(manifest)))).toThrow(/PROJECT_VALUE_INVALID/)
+  })
+
+  it('rejects traversal source fields and duplicate collision box IDs', () => {
+    const manifest = JSON.parse(readRobotAuthoringFixtureBytesV1('two-offset-six-axis.robot.json').toString())
+    manifest.mechanics.sourceName = '../robot.json'
+    expect(() => decodeRobotDefinitionManifestV1(new TextEncoder().encode(JSON.stringify(manifest)))).toThrow(/PROJECT_VALUE_INVALID/)
+    manifest.mechanics.sourceName = 'robot.json'
+    const box = { id: 'duplicate-box', centerM: [0, 0, 0], halfExtentsM: [1, 1, 1], quaternion: [0, 0, 0, 1] }
+    manifest.draft.links[0].geometryOccurrences[0].collisionBoxes = [box]
+    manifest.draft.links[1].geometryOccurrences[0].collisionBoxes = [box]
+    expect(() => decodeRobotDefinitionManifestV1(new TextEncoder().encode(JSON.stringify(manifest)))).toThrow(/PROJECT_ID_DUPLICATE/)
+  })
 })

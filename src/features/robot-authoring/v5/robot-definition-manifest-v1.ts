@@ -3,6 +3,13 @@ import type { RobotMechanicsImportCandidateV1 } from '../../../core/robot-runtim
 import { failProjectV5 } from '../../../core/project-v5/errors.js'
 
 const MANIFEST_SCHEMA_V1 = 'open-digital-twin/robot-definition-manifest/1'
+const SOURCE_TO_METERS_BY_LINEAR_UNIT: Readonly<Record<string, number>> = {
+  millimeter: 0.001,
+  centimeter: 0.01,
+  meter: 1,
+  inch: 0.0254,
+  foot: 0.3048,
+}
 
 function invalid(path: string, message: string): never {
   return failProjectV5('PROJECT_VALUE_INVALID', path, message, 'Correct the Robot Definition Manifest and try again.')
@@ -46,7 +53,7 @@ function pose(value: unknown, path: string): void {
   quaternion.forEach((component, index) => finite(component, `${path}.quaternion[${index}]`))
 }
 
-function occurrence(value: unknown, path: string): void {
+function occurrence(value: unknown, path: string, collisionBoxIds: Set<string>): void {
   const valueRecord = record(value, path, ['occurrenceKey', 'assetReferenceId', 'linkLocalPose', 'statistics', 'collisionBoxes'])
   text(valueRecord.occurrenceKey, `${path}.occurrenceKey`)
   text(valueRecord.assetReferenceId, `${path}.assetReferenceId`)
@@ -56,7 +63,9 @@ function occurrence(value: unknown, path: string): void {
   const boxes = array(valueRecord.collisionBoxes, `${path}.collisionBoxes`)
   boxes.forEach((box, index) => {
     const boxRecord = record(box, `${path}.collisionBoxes[${index}]`, ['id', 'centerM', 'halfExtentsM', 'quaternion'])
-    text(boxRecord.id, `${path}.collisionBoxes[${index}].id`)
+    const id = text(boxRecord.id, `${path}.collisionBoxes[${index}].id`)
+    if (collisionBoxIds.has(id)) failProjectV5('PROJECT_ID_DUPLICATE', `${path}.collisionBoxes[${index}].id`, 'Collision box id is duplicated.', 'Use each collision box id once.')
+    collisionBoxIds.add(id)
     const center = array(boxRecord.centerM, `${path}.collisionBoxes[${index}].centerM`)
     const extents = array(boxRecord.halfExtentsM, `${path}.collisionBoxes[${index}].halfExtentsM`)
     const quaternion = array(boxRecord.quaternion, `${path}.collisionBoxes[${index}].quaternion`)
@@ -79,7 +88,11 @@ function validateClosedCandidate(value: unknown): asserts value is RobotMechanic
   Object.entries(conventions as Record<string, unknown>).forEach(([assetId, convention]) => {
     text(assetId, `$.definition.sourceConventions.${assetId}`)
     const item = record(convention, `$.definition.sourceConventions.${assetId}`, ['linearUnit', 'sourceToMeters', 'orientation'])
-    finite(item.sourceToMeters, `$.definition.sourceConventions.${assetId}.sourceToMeters`)
+    const sourceToMeters = finite(item.sourceToMeters, `$.definition.sourceConventions.${assetId}.sourceToMeters`)
+    const expectedSourceToMeters = SOURCE_TO_METERS_BY_LINEAR_UNIT[item.linearUnit as string]
+    if (expectedSourceToMeters === undefined || sourceToMeters <= 0 || sourceToMeters !== expectedSourceToMeters) {
+      invalid(`$.definition.sourceConventions.${assetId}`, 'Source unit and sourceToMeters must use the canonical V5 conversion.')
+    }
     const orientation = item.orientation as Record<string, unknown>
     if (orientation?.mode === 'up-axis') record(orientation, `$.definition.sourceConventions.${assetId}.orientation`, ['mode', 'upAxis'])
     else if (orientation?.mode === 'root-rotation') { const root = record(orientation, `$.definition.sourceConventions.${assetId}.orientation`, ['mode', 'quaternion']); const quaternion = array(root.quaternion, `$.definition.sourceConventions.${assetId}.orientation.quaternion`); if (quaternion.length !== 4) invalid(`$.definition.sourceConventions.${assetId}.orientation.quaternion`, 'Expected a quaternion.') }
@@ -90,7 +103,8 @@ function validateClosedCandidate(value: unknown): asserts value is RobotMechanic
   if (mechanics.schemaVersion !== 1 || mechanics.sourceKind !== 'manifest') invalid('$.mechanics', 'Manifest mechanics provenance is invalid.')
   text(mechanics.sourceName, '$.mechanics.sourceName'); text(mechanics.calibrationRevision, '$.mechanics.calibrationRevision')
   const draft = record(candidate.draft, '$.draft', ['links', 'joints', 'frames'])
-  array(draft.links, '$.draft.links').forEach((link, index) => { const item = record(link, `$.draft.links[${index}]`, ['id', 'name', 'geometryOccurrences']); text(item.id, `$.draft.links[${index}].id`); text(item.name, `$.draft.links[${index}].name`); array(item.geometryOccurrences, `$.draft.links[${index}].geometryOccurrences`).forEach((geometry, geometryIndex) => occurrence(geometry, `$.draft.links[${index}].geometryOccurrences[${geometryIndex}]`)) })
+  const collisionBoxIds = new Set<string>()
+  array(draft.links, '$.draft.links').forEach((link, index) => { const item = record(link, `$.draft.links[${index}]`, ['id', 'name', 'geometryOccurrences']); text(item.id, `$.draft.links[${index}].id`); text(item.name, `$.draft.links[${index}].name`); array(item.geometryOccurrences, `$.draft.links[${index}].geometryOccurrences`).forEach((geometry, geometryIndex) => occurrence(geometry, `$.draft.links[${index}].geometryOccurrences[${geometryIndex}]`, collisionBoxIds)) })
   array(draft.joints, '$.draft.joints').forEach((joint, index) => { const item = record(joint, `$.draft.joints[${index}]`, ['id', 'type', 'parentLinkId', 'childLinkId', 'origin', 'axis', 'min', 'max', 'home', 'zeroOffset', 'direction', 'maximumVelocity']); text(item.id, `$.draft.joints[${index}].id`); text(item.parentLinkId, `$.draft.joints[${index}].parentLinkId`); text(item.childLinkId, `$.draft.joints[${index}].childLinkId`); pose(item.origin, `$.draft.joints[${index}].origin`); finite(item.zeroOffset, `$.draft.joints[${index}].zeroOffset`) })
   array(draft.frames, '$.draft.frames').forEach((frame, index) => { const item = record(frame, `$.draft.frames[${index}]`, ['id', 'name', 'parentFrameId', 'localPose', 'role']); text(item.id, `$.draft.frames[${index}].id`); text(item.name, `$.draft.frames[${index}].name`); if (item.parentFrameId !== null) text(item.parentFrameId, `$.draft.frames[${index}].parentFrameId`); pose(item.localPose, `$.draft.frames[${index}].localPose`) })
   const alignment = candidate.geometryAlignment as Record<string, unknown>
