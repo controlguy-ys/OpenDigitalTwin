@@ -85,4 +85,36 @@ describe('Robot mechanics import materialization', () => {
 
     expect(() => materializeRobotMechanicsImportCandidateV5({ ...candidate, geometryAlignment: alignment as RobotMechanicsImportCandidateV1['geometryAlignment'] })).toThrow(/PROJECT_VALUE_INVALID/)
   })
+
+  it('rejects invalid Definition envelope and draft Geometry payloads before returning a runtime Definition', () => {
+    const candidate = makeAssembledHomeCandidate()
+
+    expect(() => materializeRobotMechanicsImportCandidateV5({ ...candidate, definition: { ...candidate.definition, id: 'robot/definition' } })).toThrow(/PROJECT_VALUE_INVALID/)
+    expect(() => materializeRobotMechanicsImportCandidateV5({ ...candidate, definition: { ...candidate.definition, assetReferenceIds: ['asset-robot', 'asset-robot'] } })).toThrow(/PROJECT_ID_DUPLICATE/)
+    expect(() => materializeRobotMechanicsImportCandidateV5({ ...candidate, definition: { ...candidate.definition, excludedGeometryOccurrenceKeys: ['hidden', 'hidden'] } })).toThrow(/PROJECT_ID_DUPLICATE/)
+    expect(() => materializeRobotMechanicsImportCandidateV5({
+      ...candidate,
+      draft: { ...candidate.draft, links: candidate.draft.links.map((link, index) => index === 0
+        ? { ...link, geometryOccurrences: [{ ...link.geometryOccurrences[0]!, statistics: { vertices: 0, triangles: -1, meshes: 0, materials: 0 } }] }
+        : link) },
+    })).toThrow(/PROJECT_VALUE_INVALID/)
+  })
+
+  it('preserves assembled placement at signed, offset Home values', () => {
+    const candidate = makeAssembledHomeCandidate()
+    const signedHome = {
+      ...candidate,
+      draft: { ...candidate.draft, joints: candidate.draft.joints.map((joint) => joint.id === 'J2' ? { ...joint, direction: -1 as const, zeroOffset: 10 } : joint) },
+    }
+    const aligned = materializeRobotMechanicsImportCandidateV5(signedHome)
+    const assembled = (signedHome.geometryAlignment as Extract<typeof signedHome.geometryAlignment, { readonly kind: 'assembled-home' }>).occurrenceWorldPoses
+    const home = computeSerialRobotPoseV5(aligned, homeJointValuesV5(aligned))
+
+    for (const link of aligned.links) for (const geometry of link.geometryOccurrences) {
+      const actual = composeRigidTransformV5(home.linkWorldPoses[link.id]!, geometry.linkLocalPose)
+      const expected = assembled[geometry.occurrenceKey]!
+      actual.positionM.forEach((component, index) => expect(component).toBeCloseTo(expected.positionM[index]!, 9))
+      actual.quaternion.forEach((component, index) => expect(component).toBeCloseTo(expected.quaternion[index]!, 9))
+    }
+  })
 })

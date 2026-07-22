@@ -1,5 +1,7 @@
 import { failProjectV5 } from '../project-v5/errors.js'
 import type { RobotDefinitionV5, RobotMechanicsMetadataV1 } from '../project-v5/types.js'
+import { clonePlainDataV5 } from '../project-v5/validation-support.js'
+import { validateRobotDefinitionShapeV5 } from '../project-v5/validate-shape.js'
 import { alignAssembledGeometryV5 } from './align-assembled-geometry.js'
 import { canonicalizeRobotMechanicsV5 } from './canonicalize-robot-mechanics.js'
 import type { RobotMechanicsImportCandidateV1 } from './robot-mechanics-import-candidate.js'
@@ -67,19 +69,40 @@ function validateCandidate(candidate: RobotMechanicsImportCandidateV1): void {
   }
 }
 
+function validateMaterializedDefinition(definition: RobotDefinitionV5): RobotDefinitionV5 {
+  const validated = validateRobotDefinitionShapeV5(clonePlainDataV5(definition))
+  const assetReferenceIds = new Set(validated.assetReferenceIds)
+  if (assetReferenceIds.size === 0) {
+    failProjectV5('ROBOT_STEP_SOURCE_LIMIT_EXCEEDED', '$.assetReferenceIds', 'At least one Robot STEP source is required.', 'Declare at least one STEP asset source.')
+  }
+  if (assetReferenceIds.size !== validated.assetReferenceIds.length) {
+    failProjectV5('PROJECT_ID_DUPLICATE', '$.assetReferenceIds', 'Robot STEP source IDs must be unique.', 'Use each STEP asset source once.')
+  }
+  const conventionKeys = Object.keys(validated.sourceConventions)
+  if (conventionKeys.length !== assetReferenceIds.size || conventionKeys.some((id) => !assetReferenceIds.has(id))) {
+    failProjectV5('SOURCE_CONVENTION_KEY_MISMATCH', '$.sourceConventions', 'Source conventions must match declared STEP source IDs exactly.', 'Declare one source convention for each STEP asset source.')
+  }
+  const excluded = new Set(validated.excludedGeometryOccurrenceKeys)
+  if (excluded.size !== validated.excludedGeometryOccurrenceKeys.length) {
+    failProjectV5('PROJECT_ID_DUPLICATE', '$.excludedGeometryOccurrenceKeys', 'Excluded Geometry occurrence keys must be unique.', 'List each excluded Geometry occurrence once.')
+  }
+  return validated
+}
+
 export function materializeRobotMechanicsImportCandidateV5(
   candidate: RobotMechanicsImportCandidateV1,
 ): RobotDefinitionV5 {
   validateCandidate(candidate)
   const canonical = canonicalizeRobotMechanicsV5(candidate.draft)
-  const definition: RobotDefinitionV5 = Object.freeze({
+  const definition: RobotDefinitionV5 = {
     ...candidate.definition,
     mechanics: candidate.mechanics,
     links: canonical.links,
     joints: canonical.joints,
     frames: canonical.frames,
-  })
-  return candidate.geometryAlignment.kind === 'assembled-home'
+  }
+  const aligned = candidate.geometryAlignment.kind === 'assembled-home'
     ? alignAssembledGeometryV5(definition, candidate.geometryAlignment.occurrenceWorldPoses)
     : definition
+  return Object.freeze(validateMaterializedDefinition(aligned))
 }

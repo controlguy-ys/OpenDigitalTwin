@@ -22,7 +22,7 @@ import {
   invalidProjectV5,
   validateBoundedText,
 } from './validation-support.js'
-import type { WorkcellProjectV5 } from './types.js'
+import type { RobotDefinitionV5, WorkcellProjectV5 } from './types.js'
 
 const ROOT_KEYS = [
   'schemaVersion',
@@ -303,6 +303,11 @@ function validateRobotDefinition(value: unknown, path: string): void {
   frames.forEach((frame, frameIndex) => validateFrame(frame, `${path}.frames[${frameIndex}]`))
   const excluded = expectDenseArray(record.excludedGeometryOccurrenceKeys, `${path}.excludedGeometryOccurrenceKeys`)
   excluded.forEach((key, index) => validateId(key, `${path}.excludedGeometryOccurrenceKeys[${index}]`))
+}
+
+export function validateRobotDefinitionShapeV5(value: unknown): RobotDefinitionV5 {
+  validateRobotDefinition(value, '$')
+  return value as RobotDefinitionV5
 }
 
 function validateAssetReference(value: unknown, path: string): void {

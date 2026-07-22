@@ -4,6 +4,7 @@ import {
   relativeRigidTransformV5,
   type RigidTransformV5,
 } from '../project-v5/rigid-transform.js'
+import { expectClosedRecord, expectDenseArray } from '../project-v5/validation-support.js'
 import type { RobotDefinitionV5, RobotLinkDefinitionV5 } from '../project-v5/types.js'
 import { computeSerialRobotPoseV5 } from './serial-kinematics.js'
 
@@ -12,18 +13,17 @@ function invalid(code: string, path: string, message: string): never {
 }
 
 function normalizedAssembledPose(value: unknown, path: string): RigidTransformV5 {
-  if (value === null || typeof value !== 'object') {
-    invalid('PROJECT_VALUE_INVALID', path, 'Assembled Geometry pose must be an object.')
-  }
-  const record = value as { positionM?: unknown; quaternion?: unknown }
-  if (!Array.isArray(record.positionM) || record.positionM.length !== 3 || !Array.isArray(record.quaternion) || record.quaternion.length !== 4
-    || record.positionM.some((component) => typeof component !== 'number')
-    || record.quaternion.some((component) => typeof component !== 'number')) {
+  const record = expectClosedRecord(value, path, ['positionM', 'quaternion'])
+  const positionM = expectDenseArray(record.positionM, `${path}.positionM`)
+  const quaternion = expectDenseArray(record.quaternion, `${path}.quaternion`)
+  if (positionM.length !== 3 || quaternion.length !== 4
+    || positionM.some((component) => typeof component !== 'number')
+    || quaternion.some((component) => typeof component !== 'number')) {
     invalid('PROJECT_VALUE_INVALID', path, 'Assembled Geometry pose must contain position and quaternion tuples.')
   }
   return normalizeRigidTransformV5({
-    positionM: [record.positionM[0] as number, record.positionM[1] as number, record.positionM[2] as number],
-    quaternion: [record.quaternion[0] as number, record.quaternion[1] as number, record.quaternion[2] as number, record.quaternion[3] as number],
+    positionM: [positionM[0] as number, positionM[1] as number, positionM[2] as number],
+    quaternion: [quaternion[0] as number, quaternion[1] as number, quaternion[2] as number, quaternion[3] as number],
   }, path)
 }
 

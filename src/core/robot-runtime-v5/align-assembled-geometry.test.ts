@@ -87,4 +87,16 @@ describe('assembled Geometry alignment', () => {
 
     expect(() => alignAssembledGeometryV5(duplicate, occurrenceWorldPoses(source))).toThrow(/GEOMETRY_OCCURRENCE_DUPLICATE/)
   })
+
+  it('rejects accessor-backed, inherited, and extra fields in assembled pose records', () => {
+    const source = definition()
+    const assembled = occurrenceWorldPoses(source)
+    const accessorPose = {} as Record<string, unknown>
+    Object.defineProperty(accessorPose, 'positionM', { enumerable: true, get: () => { throw new Error('must not invoke') } })
+    Object.defineProperty(accessorPose, 'quaternion', { enumerable: true, value: [0, 0, 0, 1] })
+
+    expect(() => alignAssembledGeometryV5(source, { ...assembled, 'LINK02-body': accessorPose as unknown as RigidTransformV5 })).toThrow(/PROJECT_RECORD_NOT_CLOSED/)
+    expect(() => alignAssembledGeometryV5(source, { ...assembled, 'LINK02-body': { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1], extra: true } as RigidTransformV5 })).toThrow(/PROJECT_RECORD_NOT_CLOSED/)
+    expect(() => alignAssembledGeometryV5(source, { ...assembled, 'LINK02-body': Object.assign(Object.create({ quaternion: [0, 0, 0, 1] }), { positionM: [0, 0, 0] }) as RigidTransformV5 })).toThrow(/PROJECT_RECORD_PROTOTYPE_INVALID/)
+  })
 })
