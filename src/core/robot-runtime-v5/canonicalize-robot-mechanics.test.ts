@@ -137,4 +137,82 @@ describe('V5 Robot mechanics canonicalization', () => {
     expect(() => canonicalizeRobotMechanicsV5({ ...draft, joints: [{ ...draft.joints[0]!, home: 181 }] })).toThrow(/ROBOT_JOINT_LIMIT_INVALID/)
     expect(() => canonicalizeRobotMechanicsV5({ ...draft, joints: [{ ...draft.joints[0]!, type: 'fixed', axis: [0, 0, 1] }] })).toThrow(/FIXED_JOINT_FIELDS_INVALID/)
   })
+
+  it('rejects duplicate geometry occurrence keys before fixed-segment collapse', () => {
+    const draft = makeSixAxisDraft({ j2OriginM: [0, 0, 0.2] })
+    expect(() => canonicalizeRobotMechanicsV5({
+      ...draft,
+      links: [link('LINK00', 'shared-occurrence'), link('LINK01', 'shared-occurrence'), ...draft.links.slice(2)],
+    })).toThrow(/GEOMETRY_OCCURRENCE_DUPLICATE/)
+  })
+
+  it('rejects an axis whose finite components have a non-finite magnitude', () => {
+    const draft = makeSixAxisDraft({ j2OriginM: [0, 0, 0.2] })
+    expect(() => canonicalizeRobotMechanicsV5({
+      ...draft,
+      joints: [{ ...draft.joints[0]!, axis: [Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE] }, ...draft.joints.slice(1)],
+    })).toThrow(/JOINT_AXIS_NOT_NORMALIZABLE/)
+  })
+
+  it('rejects empty Frame ids and uses the runtime movable-Joint count diagnostics', () => {
+    const draft = makeSixAxisDraft({ j2OriginM: [0, 0, 0.2] })
+    expect(() => canonicalizeRobotMechanicsV5({
+      ...draft,
+      frames: [{ id: '', name: 'invalid', parentFrameId: 'LINK00', localPose: identity(), role: 'custom' }],
+    })).toThrow(/PROJECT_ID_INVALID/)
+    expect(() => canonicalizeRobotMechanicsV5({
+      links: [link('LINK00'), link('LINK01')],
+      joints: [fixed('F1', 'LINK00', 'LINK01')],
+      frames: [],
+    })).toThrow(/ROBOT_JOINT_COUNT_TOO_SMALL/)
+    expect(() => canonicalizeRobotMechanicsV5({
+      links: Array.from({ length: 18 }, (_, index) => link(`LINK${index}`)),
+      joints: Array.from({ length: 17 }, (_, index) => movable(`J${index}`, `LINK${index}`, `LINK${index + 1}`)),
+      frames: [],
+    })).toThrow(/ROBOT_JOINT_LIMIT_EXCEEDED/)
+  })
+
+  it('composes rotation and translation into geometry, direct Frames, and the next movable Joint only', () => {
+    const halfSqrt = Math.SQRT1_2
+    const result = canonicalizeRobotMechanicsV5({
+      links: [
+        link('LINK00'),
+        link('LINK01'),
+        {
+          id: 'ADAPTER',
+          name: 'ADAPTER',
+          geometryOccurrences: [{
+            occurrenceKey: 'adapter-body',
+            assetReferenceId: 'asset-robot',
+            linkLocalPose: { positionM: [1, 0, 0], quaternion: [0, 0, 0, 1] },
+            statistics: { vertices: 0, triangles: 0, meshes: 0, materials: 0 },
+            collisionBoxes: [],
+          }],
+        },
+        link('LINK02'),
+      ],
+      joints: [
+        movable('J1', 'LINK00', 'LINK01'),
+        fixed('F1', 'LINK01', 'ADAPTER', { positionM: [1, 0, 0], quaternion: [0, 0, halfSqrt, halfSqrt] }),
+        movable('J2', 'ADAPTER', 'LINK02', { positionM: [1, 0, 0], quaternion: [0, 0, 0, 1] }),
+      ],
+      frames: [
+        { id: 'Direct', name: 'Direct', parentFrameId: 'ADAPTER', localPose: { positionM: [1, 0, 0], quaternion: [0, 0, 0, 1] }, role: 'custom' },
+        { id: 'Nested', name: 'Nested', parentFrameId: 'Direct', localPose: { positionM: [0, 1, 0], quaternion: [0, 0, 0, 1] }, role: 'tcp' },
+      ],
+    })
+
+    const geometryPose = result.links[1]!.geometryOccurrences[0]!.linkLocalPose
+    const direct = result.frames.find(({ id }) => id === 'Direct')!
+    expect(geometryPose.positionM[0]).toBeCloseTo(1, 12)
+    expect(geometryPose.positionM[1]).toBeCloseTo(1, 12)
+    expect(geometryPose.positionM[2]).toBeCloseTo(0, 12)
+    expect(direct.parentFrameId).toBe('LINK01')
+    expect(direct.localPose.positionM[0]).toBeCloseTo(1, 12)
+    expect(direct.localPose.positionM[1]).toBeCloseTo(1, 12)
+    expect(result.frames.find(({ id }) => id === 'Nested')).toMatchObject({ parentFrameId: 'Direct', localPose: { positionM: [0, 1, 0] } })
+    expect(result.joints[1]!.origin.positionM[0]).toBeCloseTo(1, 12)
+    expect(result.joints[1]!.origin.positionM[1]).toBeCloseTo(1, 12)
+    expect(result.joints[1]!.origin.positionM[2]).toBeCloseTo(0, 12)
+  })
 })

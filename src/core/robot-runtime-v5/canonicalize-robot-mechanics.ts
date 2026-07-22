@@ -59,7 +59,8 @@ function finiteAxis(value: unknown, path: string): Vector3V5 {
     invalid('JOINT_AXIS_NOT_NORMALIZABLE', path, 'Joint axis must be a finite three-component vector.')
   }
   const axis: Vector3V5 = [value[0] as number, value[1] as number, value[2] as number]
-  if (Math.hypot(...axis) === 0) invalid('JOINT_AXIS_NOT_NORMALIZABLE', path, 'Joint axis must be non-zero.')
+  const magnitude = Math.hypot(...axis)
+  if (!Number.isFinite(magnitude) || magnitude === 0) invalid('JOINT_AXIS_NOT_NORMALIZABLE', path, 'Joint axis must have finite, non-zero magnitude.')
   return axis
 }
 
@@ -99,9 +100,20 @@ function validateJoint(joint: RobotMechanicsDraftJointV1, index: number): RobotM
 
 function validateDraftGraph(draft: RobotMechanicsDraftV1): DraftGraph {
   const linksById = new Map<string, RobotLinkDefinitionV5>()
+  const occurrenceKeys = new Set<string>()
   draft.links.forEach((link, index) => {
     if (typeof link.id !== 'string' || link.id.length === 0) invalid('PROJECT_ID_INVALID', `$.draft.links[${index}].id`, 'Link id must be a non-empty string.')
     if (linksById.has(link.id)) invalid('PROJECT_ID_DUPLICATE', `$.draft.links[${index}].id`, `Link id ${link.id} is duplicated.`)
+    link.geometryOccurrences.forEach((occurrence, occurrenceIndex) => {
+      const path = `$.draft.links[${index}].geometryOccurrences[${occurrenceIndex}].occurrenceKey`
+      if (typeof occurrence.occurrenceKey !== 'string' || occurrence.occurrenceKey.length === 0) {
+        invalid('PROJECT_ID_INVALID', path, 'Geometry occurrence key must be a non-empty string.')
+      }
+      if (occurrenceKeys.has(occurrence.occurrenceKey)) {
+        invalid('GEOMETRY_OCCURRENCE_DUPLICATE', path, 'Geometry occurrence is included more than once.')
+      }
+      occurrenceKeys.add(occurrence.occurrenceKey)
+    })
     linksById.set(link.id, link)
   })
   if (linksById.size === 0) invalid('ROBOT_JOINT_CHAIN_INVALID', '$.draft.links', 'Robot mechanics draft must include Links.')
@@ -151,6 +163,7 @@ function validateDraftGraph(draft: RobotMechanicsDraftV1): DraftGraph {
 
   const framesById = new Map<string, FrameDefinitionV5>()
   draft.frames.forEach((frame, index) => {
+    if (typeof frame.id !== 'string' || frame.id.length === 0) invalid('PROJECT_ID_INVALID', `$.draft.frames[${index}].id`, 'Frame id must be a non-empty string.')
     if (ids.has(frame.id)) invalid('PROJECT_ID_DUPLICATE', `$.draft.frames[${index}].id`, `Definition-local id ${frame.id} is duplicated.`)
     ids.add(frame.id); framesById.set(frame.id, frame)
     finitePose(frame.localPose, `$.draft.frames[${index}].localPose`)
@@ -239,8 +252,11 @@ function collapseFixedOnlySegments(graph: DraftGraph): CollapsedMechanics {
 
   addRetainedLink(graph.rootLinkId)
   traverse(graph.rootLinkId, graph.rootLinkId, identity())
-  if (movableJoints.length < MIN_ROBOT_JOINTS_V5 || movableJoints.length > MAX_ROBOT_JOINTS_V5) {
-    invalid('ROBOT_JOINT_CHAIN_INVALID', '$.draft.joints', `A serial Robot requires ${MIN_ROBOT_JOINTS_V5} to ${MAX_ROBOT_JOINTS_V5} movable Joints.`)
+  if (movableJoints.length < MIN_ROBOT_JOINTS_V5) {
+    invalid('ROBOT_JOINT_COUNT_TOO_SMALL', '$.draft.joints', `At least ${MIN_ROBOT_JOINTS_V5} movable Joint is required.`)
+  }
+  if (movableJoints.length > MAX_ROBOT_JOINTS_V5) {
+    invalid('ROBOT_JOINT_LIMIT_EXCEEDED', '$.draft.joints', `At most ${MAX_ROBOT_JOINTS_V5} movable Joints are supported.`)
   }
   const frames = [...graph.framesById.values()].map((frame) => {
     const location = locations.get(frame.parentFrameId ?? '')
