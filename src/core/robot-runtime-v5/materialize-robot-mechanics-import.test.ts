@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { composeRigidTransformV5, type RigidTransformV5 } from '../project-v5/rigid-transform.js'
+import { MAX_ROBOT_DEFINITION_TRIANGLES_V5, MAX_ROBOT_STEP_SOURCES_V5 } from '../project-v5/limits.js'
 import type { RobotMechanicsImportCandidateV1 } from './robot-mechanics-import-candidate.js'
 import { homeJointValuesV5 } from './align-assembled-geometry.js'
 import { materializeRobotMechanicsImportCandidateV5 } from './materialize-robot-mechanics-import.js'
@@ -116,5 +117,51 @@ describe('Robot mechanics import materialization', () => {
       actual.positionM.forEach((component, index) => expect(component).toBeCloseTo(expected.positionM[index]!, 9))
       actual.quaternion.forEach((component, index) => expect(component).toBeCloseTo(expected.quaternion[index]!, 9))
     }
+  })
+
+  it('rejects Definition-local source ownership and import-size limits', () => {
+    const candidate = makeAssembledHomeCandidate()
+    const assetReferenceIds = Array.from({ length: MAX_ROBOT_STEP_SOURCES_V5 + 1 }, (_, index) => `asset-${index}`)
+    const sourceConventions = Object.fromEntries(assetReferenceIds.map((id) => [id, { linearUnit: 'meter', sourceToMeters: 1, orientation: { mode: 'up-axis', upAxis: 'z' } } as const]))
+
+    expect(() => materializeRobotMechanicsImportCandidateV5({
+      ...candidate,
+      draft: { ...candidate.draft, links: candidate.draft.links.map((link, index) => index === 0
+        ? { ...link, geometryOccurrences: [{ ...link.geometryOccurrences[0]!, assetReferenceId: 'undeclared-asset' }] }
+        : link) },
+    })).toThrow(/ASSET_REFERENCE_NOT_FOUND/)
+    expect(() => materializeRobotMechanicsImportCandidateV5({ ...candidate, definition: { ...candidate.definition, assetReferenceIds, sourceConventions } })).toThrow(/ROBOT_STEP_SOURCE_LIMIT_EXCEEDED/)
+    expect(() => materializeRobotMechanicsImportCandidateV5({
+      ...candidate,
+      draft: { ...candidate.draft, links: candidate.draft.links.map((link, index) => index === 0
+        ? { ...link, geometryOccurrences: [{ ...link.geometryOccurrences[0]!, statistics: { vertices: 0, triangles: MAX_ROBOT_DEFINITION_TRIANGLES_V5 + 1, meshes: 0, materials: 0 } }] }
+        : link) },
+    })).toThrow(/ROBOT_DEFINITION_TRIANGLE_LIMIT_EXCEEDED/)
+  })
+
+  it('returns a deeply frozen materialized Definition without retaining candidate records', () => {
+    const candidate = makeAssembledHomeCandidate()
+    const materialized = materializeRobotMechanicsImportCandidateV5(candidate)
+    const occurrence = materialized.links[0]!.geometryOccurrences[0]!
+
+    expect(materialized).not.toBe(candidate.definition)
+    expect(Object.isFrozen(materialized)).toBe(true)
+    expect(Object.isFrozen(materialized.assetReferenceIds)).toBe(true)
+    expect(Object.isFrozen(materialized.identification)).toBe(true)
+    expect(Object.isFrozen(materialized.mechanics)).toBe(true)
+    expect(Object.isFrozen(materialized.sourceConventions)).toBe(true)
+    expect(Object.isFrozen(materialized.sourceConventions['asset-robot']!)).toBe(true)
+    expect(Object.isFrozen(materialized.links)).toBe(true)
+    expect(Object.isFrozen(materialized.links[0]!)).toBe(true)
+    expect(Object.isFrozen(materialized.links[0]!.geometryOccurrences)).toBe(true)
+    expect(Object.isFrozen(occurrence)).toBe(true)
+    expect(Object.isFrozen(occurrence.linkLocalPose)).toBe(true)
+    expect(Object.isFrozen(occurrence.statistics)).toBe(true)
+    expect(Object.isFrozen(occurrence.collisionBoxes)).toBe(true)
+    expect(Object.isFrozen(materialized.joints)).toBe(true)
+    expect(Object.isFrozen(materialized.joints[0]!)).toBe(true)
+    expect(Object.isFrozen(materialized.joints[0]!.origin)).toBe(true)
+    expect(Object.isFrozen(materialized.frames)).toBe(true)
+    expect(Object.isFrozen(materialized.excludedGeometryOccurrenceKeys)).toBe(true)
   })
 })

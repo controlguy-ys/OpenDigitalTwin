@@ -1,6 +1,7 @@
 import { failProjectV5 } from '../project-v5/errors.js'
+import { MAX_ROBOT_DEFINITION_TRIANGLES_V5, MAX_ROBOT_STEP_SOURCES_V5 } from '../project-v5/limits.js'
 import type { RobotDefinitionV5, RobotMechanicsMetadataV1 } from '../project-v5/types.js'
-import { clonePlainDataV5 } from '../project-v5/validation-support.js'
+import { clonePlainDataV5, deepFreezeV5 } from '../project-v5/validation-support.js'
 import { validateRobotDefinitionShapeV5 } from '../project-v5/validate-shape.js'
 import { alignAssembledGeometryV5 } from './align-assembled-geometry.js'
 import { canonicalizeRobotMechanicsV5 } from './canonicalize-robot-mechanics.js'
@@ -75,6 +76,9 @@ function validateMaterializedDefinition(definition: RobotDefinitionV5): RobotDef
   if (assetReferenceIds.size === 0) {
     failProjectV5('ROBOT_STEP_SOURCE_LIMIT_EXCEEDED', '$.assetReferenceIds', 'At least one Robot STEP source is required.', 'Declare at least one STEP asset source.')
   }
+  if (assetReferenceIds.size > MAX_ROBOT_STEP_SOURCES_V5) {
+    failProjectV5('ROBOT_STEP_SOURCE_LIMIT_EXCEEDED', '$.assetReferenceIds', `At most ${MAX_ROBOT_STEP_SOURCES_V5} Robot STEP sources are supported.`, 'Reduce the declared STEP asset sources.')
+  }
   if (assetReferenceIds.size !== validated.assetReferenceIds.length) {
     failProjectV5('PROJECT_ID_DUPLICATE', '$.assetReferenceIds', 'Robot STEP source IDs must be unique.', 'Use each STEP asset source once.')
   }
@@ -86,7 +90,18 @@ function validateMaterializedDefinition(definition: RobotDefinitionV5): RobotDef
   if (excluded.size !== validated.excludedGeometryOccurrenceKeys.length) {
     failProjectV5('PROJECT_ID_DUPLICATE', '$.excludedGeometryOccurrenceKeys', 'Excluded Geometry occurrence keys must be unique.', 'List each excluded Geometry occurrence once.')
   }
-  return validated
+  let triangleCount = 0
+  validated.links.forEach((link, linkIndex) => link.geometryOccurrences.forEach((occurrence, occurrenceIndex) => {
+    const occurrencePath = `$.links[${linkIndex}].geometryOccurrences[${occurrenceIndex}]`
+    if (!assetReferenceIds.has(occurrence.assetReferenceId)) {
+      failProjectV5('ASSET_REFERENCE_NOT_FOUND', `${occurrencePath}.assetReferenceId`, 'Geometry occurrence must use a declared Robot STEP source.', 'Declare the Geometry asset source on this Robot Definition.')
+    }
+    triangleCount += occurrence.statistics.triangles
+  }))
+  if (triangleCount > MAX_ROBOT_DEFINITION_TRIANGLES_V5) {
+    failProjectV5('ROBOT_DEFINITION_TRIANGLE_LIMIT_EXCEEDED', '$.links', 'Robot Definition triangles exceed the configured budget.', 'Reduce Robot Geometry complexity.')
+  }
+  return deepFreezeV5(validated)
 }
 
 export function materializeRobotMechanicsImportCandidateV5(
@@ -104,5 +119,5 @@ export function materializeRobotMechanicsImportCandidateV5(
   const aligned = candidate.geometryAlignment.kind === 'assembled-home'
     ? alignAssembledGeometryV5(definition, candidate.geometryAlignment.occurrenceWorldPoses)
     : definition
-  return Object.freeze(validateMaterializedDefinition(aligned))
+  return validateMaterializedDefinition(aligned)
 }
