@@ -166,6 +166,25 @@ function candidateDefinitionWithoutToolV5(): RobotDefinitionV5 {
   }
 }
 
+function candidateDefinitionWithExtraFrameV5(): RobotDefinitionV5 {
+  const definition = makeMinimalWorkcellProjectV5().robotDefinitions[0]!
+  return {
+    ...definition,
+    frames: [...definition.frames, {
+      id: 'Inspection', name: 'Inspection', parentFrameId: 'L1',
+      localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, role: 'custom',
+    }],
+  }
+}
+
+function candidateDefinitionWithInvalidSelectedTcpV5(): RobotDefinitionV5 {
+  const definition = makeMinimalWorkcellProjectV5().robotDefinitions[0]!
+  return {
+    ...definition,
+    frames: definition.frames.map((frame) => frame.id === 'TCP' ? { ...frame, role: 'tool' } : frame),
+  }
+}
+
 describe('analyzeRobotDefinitionImpactV5', () => {
   it('reports every affected Instance, Job, OPC UA mapping, and Frame', () => {
     const report = analyzeRobotDefinitionImpactV5(projectWithSharedDefinitionV5(), changedDefinitionV5())
@@ -176,6 +195,12 @@ describe('analyzeRobotDefinitionImpactV5', () => {
     expect(report.frameIds).toEqual(['TCP', 'Tool'])
     expect(report.requiresMotionRevalidation).toBe(true)
     expect(report.blockingCodes).toEqual([])
+    expect(Object.isFrozen(report)).toBe(true)
+    expect(Object.isFrozen(report.robotIds)).toBe(true)
+    expect(Object.isFrozen(report.jobIds)).toBe(true)
+    expect(Object.isFrozen(report.mappingIds)).toBe(true)
+    expect(Object.isFrozen(report.frameIds)).toBe(true)
+    expect(Object.isFrozen(report.blockingCodes)).toBe(true)
   })
 
   it('reports removed Joint IDs referenced by Jobs or mappings as blocking', () => {
@@ -200,5 +225,53 @@ describe('analyzeRobotDefinitionImpactV5', () => {
     expect(report.blockingCodes).toEqual(['FRAME_DEPENDENCY_CONFLICT'])
     expect(JSON.stringify(project)).toBe(projectBefore)
     expect(JSON.stringify(candidate)).toBe(candidateBefore)
+  })
+
+  it('treats candidate-only Joint and Link additions as revalidation and exact-set conflicts', () => {
+    const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    const candidate = projectWithJ6ReferencesV5().robotDefinitions[0]!
+
+    const report = analyzeRobotDefinitionImpactV5(project, candidate)
+
+    expect(report.frameIds).toEqual(['TCP', 'Tool'])
+    expect(report.requiresMotionRevalidation).toBe(true)
+    expect(report.blockingCodes).toEqual(['JOINT_DEPENDENCY_CONFLICT'])
+  })
+
+  it('reports candidate-only Frames and blocks the missing Frame-source contract', () => {
+    const report = analyzeRobotDefinitionImpactV5(
+      validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()),
+      candidateDefinitionWithExtraFrameV5(),
+    )
+
+    expect(report.frameIds).toEqual(['Inspection'])
+    expect(report.requiresMotionRevalidation).toBe(true)
+    expect(report.blockingCodes).toEqual(['FRAME_DEPENDENCY_CONFLICT'])
+  })
+
+  it('blocks a selected TCP that remains present but loses its tcp role', () => {
+    const report = analyzeRobotDefinitionImpactV5(
+      validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()),
+      candidateDefinitionWithInvalidSelectedTcpV5(),
+    )
+
+    expect(report.frameIds).toEqual(['TCP'])
+    expect(report.blockingCodes).toEqual(['FRAME_DEPENDENCY_CONFLICT'])
+  })
+
+  it('deep-freezes reports and does not allow shared empty-report corruption', () => {
+    const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    const empty = analyzeRobotDefinitionImpactV5(project, { ...project.robotDefinitions[0]!, id: 'other-definition' })
+
+    expect(Object.isFrozen(empty)).toBe(true)
+    expect(Object.isFrozen(empty.robotIds)).toBe(true)
+    expect(Object.isFrozen(empty.jobIds)).toBe(true)
+    expect(Object.isFrozen(empty.mappingIds)).toBe(true)
+    expect(Object.isFrozen(empty.frameIds)).toBe(true)
+    expect(Object.isFrozen(empty.blockingCodes)).toBe(true)
+    expect(() => (empty.robotIds as string[]).push('corrupt')).toThrow(TypeError)
+    expect(analyzeRobotDefinitionImpactV5(project, project.robotDefinitions[0]!)).toEqual({
+      robotIds: [], jobIds: [], mappingIds: [], frameIds: [], requiresMotionRevalidation: false, blockingCodes: [],
+    })
   })
 })

@@ -9,16 +9,31 @@ export interface RobotDefinitionImpactV5 {
   readonly blockingCodes: readonly string[]
 }
 
-const EMPTY_IMPACT: RobotDefinitionImpactV5 = {
-  robotIds: [], jobIds: [], mappingIds: [], frameIds: [], requiresMotionRevalidation: false, blockingCodes: [],
-}
-
 function sorted(values: ReadonlySet<string>): readonly string[] {
   return [...values].sort()
 }
 
+function freezeReport(report: RobotDefinitionImpactV5): RobotDefinitionImpactV5 {
+  return Object.freeze({
+    robotIds: Object.freeze([...report.robotIds]),
+    jobIds: Object.freeze([...report.jobIds]),
+    mappingIds: Object.freeze([...report.mappingIds]),
+    frameIds: Object.freeze([...report.frameIds]),
+    requiresMotionRevalidation: report.requiresMotionRevalidation,
+    blockingCodes: Object.freeze([...report.blockingCodes]),
+  })
+}
+
+const EMPTY_IMPACT: RobotDefinitionImpactV5 = freezeReport({
+  robotIds: [], jobIds: [], mappingIds: [], frameIds: [], requiresMotionRevalidation: false, blockingCodes: [],
+})
+
 function byId<T extends { readonly id: string }>(values: readonly T[]): ReadonlyMap<string, T> {
   return new Map(values.map((value) => [value.id, value]))
+}
+
+function exactIds(ids: readonly string[], expected: ReadonlyMap<string, unknown>): boolean {
+  return ids.length === expected.size && ids.every((id) => expected.has(id))
 }
 
 function equal(value: unknown, other: unknown): boolean {
@@ -39,16 +54,16 @@ function equal(value: unknown, other: unknown): boolean {
 }
 
 function jointMotionChanged(
-  current: RobotDefinitionV5['joints'][number],
+  current: RobotDefinitionV5['joints'][number] | undefined,
   candidate: RobotDefinitionV5['joints'][number] | undefined,
 ): boolean {
-  return candidate === undefined || !equal(
+  return current === undefined || candidate === undefined || !equal(
     {
       type: current.type, parentLinkId: current.parentLinkId, childLinkId: current.childLinkId,
       origin: current.origin, axis: current.axis, min: current.min, max: current.max, home: current.home,
       zeroOffset: current.zeroOffset, direction: current.direction, maximumVelocity: current.maximumVelocity,
     },
-    candidate === undefined ? undefined : {
+    {
       type: candidate.type, parentLinkId: candidate.parentLinkId, childLinkId: candidate.childLinkId,
       origin: candidate.origin, axis: candidate.axis, min: candidate.min, max: candidate.max, home: candidate.home,
       zeroOffset: candidate.zeroOffset, direction: candidate.direction, maximumVelocity: candidate.maximumVelocity,
@@ -57,50 +72,70 @@ function jointMotionChanged(
 }
 
 function frameMotionChanged(
-  current: RobotDefinitionV5['frames'][number],
+  current: RobotDefinitionV5['frames'][number] | undefined,
   candidate: RobotDefinitionV5['frames'][number] | undefined,
 ): boolean {
-  return candidate === undefined || !equal(
+  return current === undefined || candidate === undefined || !equal(
     { parentFrameId: current.parentFrameId, localPose: current.localPose, role: current.role },
-    candidate === undefined ? undefined : { parentFrameId: candidate.parentFrameId, localPose: candidate.localPose, role: candidate.role },
+    { parentFrameId: candidate.parentFrameId, localPose: candidate.localPose, role: candidate.role },
   )
 }
 
 function descendantsOfLinks(
-  definition: RobotDefinitionV5,
+  currentDefinition: RobotDefinitionV5,
+  candidateDefinition: RobotDefinitionV5,
   changedJointIds: ReadonlySet<string>,
   changedLinkIds: ReadonlySet<string>,
 ): ReadonlySet<string> {
-  const childrenByParent = new Map<string, string>()
+  const currentJoints = byId(currentDefinition.joints)
+  const candidateJoints = byId(candidateDefinition.joints)
+  const childrenByParent = new Map<string, Set<string>>()
   const links = new Set<string>(changedLinkIds)
-  for (const joint of definition.joints) {
-    childrenByParent.set(joint.parentLinkId, joint.childLinkId)
-    if (changedJointIds.has(joint.id)) links.add(joint.childLinkId)
+  for (const joint of [...currentDefinition.joints, ...candidateDefinition.joints]) {
+    const children = childrenByParent.get(joint.parentLinkId) ?? new Set<string>()
+    children.add(joint.childLinkId)
+    childrenByParent.set(joint.parentLinkId, children)
+  }
+  for (const jointId of changedJointIds) {
+    const current = currentJoints.get(jointId)
+    const candidate = candidateJoints.get(jointId)
+    if (current !== undefined) links.add(current.childLinkId)
+    if (candidate !== undefined) links.add(candidate.childLinkId)
   }
   const pending = [...links]
   while (pending.length > 0) {
-    const child = childrenByParent.get(pending.pop()!)
-    if (child !== undefined && !links.has(child)) {
-      links.add(child)
-      pending.push(child)
+    for (const child of childrenByParent.get(pending.pop()!) ?? []) {
+      if (!links.has(child)) {
+        links.add(child)
+        pending.push(child)
+      }
     }
   }
   return links
 }
 
 function affectedFrames(
-  definition: RobotDefinitionV5,
-  candidateFrames: ReadonlyMap<string, RobotDefinitionV5['frames'][number]>,
+  currentDefinition: RobotDefinitionV5,
+  candidateDefinition: RobotDefinitionV5,
   changedLinks: ReadonlySet<string>,
 ): ReadonlySet<string> {
+  const currentFrames = byId(currentDefinition.frames)
+  const candidateFrames = byId(candidateDefinition.frames)
+  const allFrameIds = new Set([...currentFrames.keys(), ...candidateFrames.keys()])
   const affected = new Set<string>()
-  for (const frame of definition.frames) {
-    if (frameMotionChanged(frame, candidateFrames.get(frame.id)) || (frame.parentFrameId !== null && changedLinks.has(frame.parentFrameId))) affected.add(frame.id)
+  for (const frameId of allFrameIds) {
+    const current = currentFrames.get(frameId)
+    const candidate = candidateFrames.get(frameId)
+    if (
+      frameMotionChanged(current, candidate)
+      || (current?.parentFrameId !== null && current?.parentFrameId !== undefined && changedLinks.has(current.parentFrameId))
+      || (candidate?.parentFrameId !== null && candidate?.parentFrameId !== undefined && changedLinks.has(candidate.parentFrameId))
+    ) affected.add(frameId)
   }
   let changed = true
   while (changed) {
     changed = false
-    for (const frame of definition.frames) {
+    for (const frame of [...currentDefinition.frames, ...candidateDefinition.frames]) {
       if (frame.parentFrameId !== null && affected.has(frame.parentFrameId) && !affected.has(frame.id)) {
         affected.add(frame.id)
         changed = true
@@ -130,17 +165,18 @@ export function analyzeRobotDefinitionImpactV5(
   const candidateJoints = byId(candidateDefinition.joints)
   const candidateLinks = byId(candidateDefinition.links)
   const candidateFrames = byId(candidateDefinition.frames)
-  const changedJointIds = new Set(currentDefinition.joints
-    .filter((joint) => jointMotionChanged(joint, candidateJoints.get(joint.id)))
-    .map((joint) => joint.id))
-  const changedLinkIds = new Set(currentDefinition.links
-    .filter((link) => {
-      const candidate = candidateLinks.get(link.id)
-      return candidate === undefined || !equal(link.geometryOccurrences, candidate.geometryOccurrences)
-    })
-    .map((link) => link.id))
-  const changedLinks = descendantsOfLinks(currentDefinition, changedJointIds, changedLinkIds)
-  const frameIds = affectedFrames(currentDefinition, candidateFrames, changedLinks)
+  const currentJoints = byId(currentDefinition.joints)
+  const currentLinks = byId(currentDefinition.links)
+  const changedJointIds = new Set([...currentJoints.keys(), ...candidateJoints.keys()]
+    .filter((jointId) => jointMotionChanged(currentJoints.get(jointId), candidateJoints.get(jointId))))
+  const changedLinkIds = new Set([...currentLinks.keys(), ...candidateLinks.keys()]
+    .filter((linkId) => {
+      const current = currentLinks.get(linkId)
+      const candidate = candidateLinks.get(linkId)
+      return current === undefined || candidate === undefined || !equal(current.geometryOccurrences, candidate.geometryOccurrences)
+    }))
+  const changedLinks = descendantsOfLinks(currentDefinition, candidateDefinition, changedJointIds, changedLinkIds)
+  const frameIds = affectedFrames(currentDefinition, candidateDefinition, changedLinks)
   const removedJointIds = new Set(currentDefinition.joints
     .filter((joint) => !candidateJoints.has(joint.id))
     .map((joint) => joint.id))
@@ -155,22 +191,24 @@ export function analyzeRobotDefinitionImpactV5(
 
   for (const robot of project.robots) {
     if (!robotIds.has(robot.id)) continue
-    if (Object.keys(robot.initialJointValues).some((jointId) => removedJointIds.has(jointId))) jointConflict = true
+    if (!exactIds(Object.keys(robot.initialJointValues), candidateJoints)) jointConflict = true
+    const selectedTcp = candidateFrames.get(robot.selectedTcpFrameId)
     if (
-      removedFrameIds.has(robot.selectedToolFrameId)
-      || removedFrameIds.has(robot.selectedTcpFrameId)
-      || Object.keys(robot.frameSources).some((frameId) => removedFrameIds.has(frameId))
-      || (robot.numericStatus.overlay.frameId !== null && removedFrameIds.has(robot.numericStatus.overlay.frameId))
+      !candidateFrames.has(robot.selectedToolFrameId)
+      || selectedTcp === undefined
+      || selectedTcp.role !== 'tcp'
+      || !exactIds(Object.keys(robot.frameSources), candidateFrames)
+      || (robot.numericStatus.overlay.frameId !== null && !candidateFrames.has(robot.numericStatus.overlay.frameId))
     ) frameConflict = true
   }
 
   for (const job of project.jobs) {
     if (!robotIds.has(job.robotId)) continue
     for (const instruction of job.instructions) {
-      if (instruction.kind === 'move-joint' && Object.keys(instruction.jointValues).some((jointId) => removedJointIds.has(jointId))) {
+      if (instruction.kind === 'move-joint' && !exactIds(Object.keys(instruction.jointValues), candidateJoints)) {
         jointConflict = true
       }
-      if (instruction.kind === 'attach' && removedFrameIds.has(instruction.toolFrameId)) frameConflict = true
+      if (instruction.kind === 'attach' && !candidateFrames.has(instruction.toolFrameId)) frameConflict = true
     }
   }
 
@@ -194,12 +232,12 @@ export function analyzeRobotDefinitionImpactV5(
   if (frameConflict) blockingCodes.add('FRAME_DEPENDENCY_CONFLICT')
   const requiresMotionRevalidation = changedJointIds.size > 0 || changedLinkIds.size > 0 || frameIds.size > 0
 
-  return {
+  return freezeReport({
     robotIds: sorted(robotIds),
     jobIds: sorted(jobIds),
     mappingIds: sorted(mappingIds),
     frameIds: sorted(frameIds),
     requiresMotionRevalidation,
     blockingCodes: sorted(blockingCodes),
-  }
+  })
 }
