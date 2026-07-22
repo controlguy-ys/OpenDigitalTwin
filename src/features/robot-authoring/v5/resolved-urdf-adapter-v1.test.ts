@@ -26,6 +26,16 @@ describe('resolved URDF adapter V1', () => {
   })
 
   it.each([
+    ['lower', '-1.5707963267948966'],
+    ['upper', '1.5707963267948966'],
+    ['velocity', '3.141592653589793'],
+  ])('rejects empty and whitespace-only %s limit lexemes', (attribute, value) => {
+    const xml = readRobotAuthoringFixtureTextV1('fixed-tool.urdf')
+    expect(() => parseResolvedUrdfV1(xml.replace(`${attribute}="${value}"`, `${attribute}=""`), makeResolvedUrdfAssetBindingsV1())).toThrow(/URDF_UNSUPPORTED/)
+    expect(() => parseResolvedUrdfV1(xml.replace(`${attribute}="${value}"`, `${attribute}="   "`), makeResolvedUrdfAssetBindingsV1())).toThrow(/URDF_UNSUPPORTED/)
+  })
+
+  it.each([
     ['origin', '<origin xyz="0 0 0.12" rpy="0 0 0"/>', '<origin xyz="0 0 0.12" rpy="0 0 0"><xacro/></origin>'],
     ['parent', '<parent link="LINK00"/>', '<parent link="LINK00"><plugin/></parent>'],
     ['child', '<child link="LINK01"/>', '<child link="LINK01"><plugin/></child>'],

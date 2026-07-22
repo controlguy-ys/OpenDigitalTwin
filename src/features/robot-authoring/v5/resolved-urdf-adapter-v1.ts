@@ -40,9 +40,19 @@ function namedAttribute(element: Element, name: string, path: string): string {
 }
 
 function numbers(value: string, count: number, path: string): number[] {
-  const values = value.trim().split(/\s+/u).map(Number)
+  const trimmed = value.trim()
+  if (trimmed.length === 0) invalid('URDF_UNSUPPORTED', path, 'Numeric attributes cannot be empty or whitespace-only.')
+  const values = trimmed.split(/\s+/u).map(Number)
   if (values.length !== count || values.some((item) => !Number.isFinite(item))) invalid('URDF_UNSUPPORTED', path, `Expected ${count} finite numeric components.`)
   return values
+}
+
+function numericAttribute(element: Element, name: string, path: string): number {
+  const raw = element.getAttribute(name)
+  if (raw === null || raw.trim().length === 0) invalid('URDF_UNSUPPORTED', path, `Required numeric attribute ${name} is missing, empty, or whitespace-only.`)
+  const value = Number(raw)
+  if (!Number.isFinite(value)) invalid('URDF_UNSUPPORTED', path, `Required numeric attribute ${name} must be finite.`)
+  return value
 }
 
 function optionalPose(element: Element | undefined, path: string): RigidTransformV5 {
@@ -111,10 +121,9 @@ function parseJoint(element: Element, linkNames: ReadonlySet<string>): RobotMech
   const limit = sole(grouped, 'limit', `$.joint.${id}.limit`)!
   attributes(limit, ['lower', 'upper', 'velocity', 'effort'], `$.joint.${id}.limit`)
   closedLeaf(limit, `$.joint.${id}.limit`)
-  const lowerText = limit.getAttribute('lower'); const upperText = limit.getAttribute('upper'); const velocityText = limit.getAttribute('velocity')
-  if (lowerText === null || upperText === null || velocityText === null) invalid('URDF_UNSUPPORTED', `$.joint.${id}.limit`, 'Movable Joints require lower, upper, and velocity attributes.')
-  const lower = Number(lowerText); const upper = Number(upperText); const velocity = Number(velocityText)
-  if (![lower, upper, velocity].every(Number.isFinite)) invalid('URDF_UNSUPPORTED', `$.joint.${id}.limit`, 'Movable Joints require finite lower, upper, and velocity limits.')
+  const lower = numericAttribute(limit, 'lower', `$.joint.${id}.limit.lower`)
+  const upper = numericAttribute(limit, 'upper', `$.joint.${id}.limit.upper`)
+  const velocity = numericAttribute(limit, 'velocity', `$.joint.${id}.limit.velocity`)
   const radiansToDegrees = jointType === 'revolute' ? 180 / Math.PI : 1
   return { id, type: jointType, parentLinkId, childLinkId, origin, axis, min: lower * radiansToDegrees, max: upper * radiansToDegrees, home: 0, zeroOffset: 0, direction: 1, maximumVelocity: velocity * radiansToDegrees }
 }
