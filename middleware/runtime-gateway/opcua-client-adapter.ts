@@ -128,9 +128,17 @@ interface EndpointRuntimeV1 extends EndpointRuntimeDiagnosticsV1 {
   subscription: ClientSubscription | null
   groups: ClientMonitoredItemGroup[]
   readonly residualCleanup: Set<NativeCleanupHandlesV1>
+  readonly retiredClients: WeakSet<OPCUAClient>
+  readonly retiredSessions: WeakSet<ClientSession>
+  readonly retiredSubscriptions: WeakSet<ClientSubscription>
+  readonly retiredGroups: WeakSet<ClientMonitoredItemGroup>
   cleanupTail: Promise<void>
+  cleanupActive: Promise<void> | null
+  cleanupDirty: boolean
   cleanupPendingCount: number
   cleanupFailed: boolean
+  cleanupFailureEpoch: number
+  cleanupFailureReason: unknown
   assembler: OpcUaClientSnapshotAssemblerV1 | null
   reconnectTimer: NodeJS.Timeout | null
   recovery: Promise<void> | null
@@ -451,7 +459,7 @@ export function createOpcUaClientSnapshotAssemblerV1(
   })
 }
 
-async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
+async function closeRuntimePass(runtime: EndpointRuntimeV1): Promise<void> {
   if (runtime.reconnectTimer !== null) {
     clearTimeout(runtime.reconnectTimer)
     runtime.reconnectTimer = null
@@ -466,21 +474,25 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
   const owners = currentOwners()
   const failures: Array<Readonly<{ error: unknown; pending: () => boolean }>> = []
   const removeGroup = (group: ClientMonitoredItemGroup): void => {
+    runtime.retiredGroups.add(group)
     for (const owner of currentOwners()) {
       owner.groups = owner.groups.filter((candidate) => candidate !== group)
     }
   }
   const removeSubscription = (subscription: ClientSubscription): void => {
+    runtime.retiredSubscriptions.add(subscription)
     for (const owner of currentOwners()) {
       if (owner.subscription === subscription) owner.subscription = null
     }
   }
   const removeSession = (session: ClientSession): void => {
+    runtime.retiredSessions.add(session)
     for (const owner of currentOwners()) {
       if (owner.session === session) owner.session = null
     }
   }
   const removeClient = (client: OPCUAClient): void => {
+    runtime.retiredClients.add(client)
     for (const owner of currentOwners()) {
       if (owner.client === client) owner.client = null
     }
@@ -561,22 +573,73 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
   if (unresolved !== undefined) throw unresolved.error
 }
 
+async function drainRuntimeCleanup(runtime: EndpointRuntimeV1): Promise<void> {
+  do {
+    runtime.cleanupDirty = false
+    await closeRuntimePass(runtime)
+  } while (runtime.cleanupDirty && hasNativeHandles(runtime))
+}
+
 function enqueueRuntimeCleanup(runtime: EndpointRuntimeV1): Promise<void> {
+  const requestedFailureEpoch = runtime.cleanupFailureEpoch
   runtime.cleanupPendingCount += 1
-  const requested = runtime.cleanupTail.then(() => closeRuntime(runtime))
+  let requested!: Promise<void>
+  requested = runtime.cleanupTail.then(async () => {
+    try {
+      if (runtime.cleanupFailureEpoch !== requestedFailureEpoch) {
+        throw runtime.cleanupFailureReason ?? new Error('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
+      }
+      runtime.cleanupActive = requested
+      try {
+        await drainRuntimeCleanup(runtime)
+        if (!hasNativeHandles(runtime)) {
+          runtime.cleanupFailed = false
+          runtime.cleanupFailureReason = null
+        }
+      } catch (error) {
+        runtime.cleanupFailed = true
+        runtime.cleanupFailureEpoch += 1
+        runtime.cleanupFailureReason = error
+        runtime.lastError = diagnosticError(error, runtime.lastGatewayTimestampMs)
+        throw error
+      } finally {
+        if (runtime.cleanupActive === requested) runtime.cleanupActive = null
+      }
+    } finally {
+      runtime.cleanupPendingCount -= 1
+    }
+  })
   runtime.cleanupTail = requested.then(() => undefined, () => undefined)
-  void requested.then(
-    () => {
-      runtime.cleanupPendingCount -= 1
-      if (!hasNativeHandles(runtime)) runtime.cleanupFailed = false
-    },
-    (error: unknown) => {
-      runtime.cleanupPendingCount -= 1
-      runtime.cleanupFailed = true
-      runtime.lastError = diagnosticError(error, runtime.lastGatewayTimestampMs)
-    },
-  )
   return requested
+}
+
+function registerResidualCleanup(
+  runtime: EndpointRuntimeV1,
+  handles: NativeCleanupHandlesV1,
+): Promise<void> | null {
+  const residual: NativeCleanupHandlesV1 = {
+    client: handles.client !== null && !runtime.retiredClients.has(handles.client)
+      ? handles.client
+      : null,
+    session: handles.session !== null && !runtime.retiredSessions.has(handles.session)
+      ? handles.session
+      : null,
+    subscription: handles.subscription !== null
+      && !runtime.retiredSubscriptions.has(handles.subscription)
+      ? handles.subscription
+      : null,
+    groups: handles.groups.filter((group) => !runtime.retiredGroups.has(group)),
+  }
+  if (
+    residual.client === null
+    && residual.session === null
+    && residual.subscription === null
+    && residual.groups.length === 0
+  ) return null
+  runtime.residualCleanup.add(residual)
+  if (runtime.cleanupActive === null) return null
+  runtime.cleanupDirty = true
+  return runtime.cleanupActive
 }
 
 async function closeDetachedConnection(
@@ -586,13 +649,17 @@ async function closeDetachedConnection(
   subscription: ClientSubscription | null,
   groups: readonly ClientMonitoredItemGroup[],
 ): Promise<void> {
-  const residual: NativeCleanupHandlesV1 = {
+  const activeCleanup = registerResidualCleanup(runtime, {
     client,
     session,
     subscription,
     groups: [...groups],
+  })
+  if (activeCleanup !== null) {
+    await activeCleanup
+    return
   }
-  runtime.residualCleanup.add(residual)
+  if (!hasNativeHandles(runtime)) return
   if (runtime.stopped) return
   await enqueueRuntimeCleanup(runtime)
 }
@@ -647,9 +714,17 @@ export function createOpcUaClientAdapterV1(
       subscription: null,
       groups: [],
       residualCleanup: new Set(),
+      retiredClients: new WeakSet(),
+      retiredSessions: new WeakSet(),
+      retiredSubscriptions: new WeakSet(),
+      retiredGroups: new WeakSet(),
       cleanupTail: Promise.resolve(),
+      cleanupActive: null,
+      cleanupDirty: false,
       cleanupPendingCount: 0,
       cleanupFailed: false,
+      cleanupFailureEpoch: 0,
+      cleanupFailureReason: null,
       assembler: null,
       reconnectTimer: null,
       recovery: null,
@@ -1133,14 +1208,14 @@ export function createOpcUaClientAdapterV1(
             TimestampsToReturn.Both,
           )
           if (!active()) {
-            runtime.residualCleanup.add({
+            const activeCleanup = registerResidualCleanup(runtime, {
               client: null,
               session: null,
               subscription: null,
               groups: [group],
             })
             lateGroupCleanupOwned = true
-            await enqueueRuntimeCleanup(runtime)
+            await (activeCleanup ?? enqueueRuntimeCleanup(runtime))
             return
           }
           groups.push(group)
@@ -1210,6 +1285,7 @@ export function createOpcUaClientAdapterV1(
   }
 
   async function stopEndpointRuntime(runtime: EndpointRuntimeV1): Promise<void> {
+    const cleanupFailureEpochAtStart = runtime.cleanupFailureEpoch
     const wasLive = runtime.connected
     runtime.stopped = true
     runtime.generation += 1
@@ -1225,7 +1301,15 @@ export function createOpcUaClientAdapterV1(
     clearEarlyRoots(runtime)
     runtime.reconnectAttempt = 0
     runtime.nextRetryAtMs = null
-    await Promise.allSettled([runtime.recovery, runtime.connectTask])
+    const pendingResults = await Promise.allSettled([runtime.recovery, runtime.connectTask])
+    if (runtime.cleanupFailureEpoch !== cleanupFailureEpochAtStart) {
+      const rejected = pendingResults.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      throw rejected?.reason
+        ?? runtime.cleanupFailureReason
+        ?? new Error('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
+    }
     await enqueueRuntimeCleanup(runtime)
   }
 

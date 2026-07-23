@@ -1367,6 +1367,123 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     expect(adapter.status()[0]?.phase).toBe('disabled')
   })
 
+  it('does not automatically retry a late group already visible to the recovery drain', async () => {
+    const project = cloneWorkcellProjectV5(readProject())
+    ;(project.opcUa.endpoints[0] as unknown as { reconnectDelayMs: number }).reconnectDelayMs = 60_000
+    const connection = fakeConnection()
+    const lateGroup = Object.assign(new EventEmitter(), {
+      terminate: vi.fn()
+        .mockRejectedValueOnce(new Error('same-turn late group terminate failed'))
+        .mockResolvedValueOnce(undefined),
+    })
+    let resolveMonitorItems!: (group: typeof lateGroup) => void
+    const subscription = Object.assign(new EventEmitter(), {
+      monitorItems: vi.fn(() => new Promise<typeof lateGroup>((resolve) => {
+        resolveMonitorItems = resolve
+      })),
+      terminate: vi.fn(async () => undefined),
+    })
+    connection.session.createSubscription2 = vi.fn(async () => subscription)
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => subscription.monitorItems.mock.calls.length === 1)
+
+    resolveMonitorItems(lateGroup)
+    connection.client.emit('connection_lost')
+    await eventually(() => adapter.status()[0]?.phase !== 'connecting')
+    await Promise.resolve()
+
+    expect(lateGroup.terminate).toHaveBeenCalledOnce()
+    expect(adapter.status()[0]).toMatchObject({
+      phase: 'faulted',
+      lastError: {
+        code: 'same-turn late group terminate failed',
+        message: 'same-turn late group terminate failed',
+      },
+    })
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+    expect(lateGroup.terminate).toHaveBeenCalledTimes(2)
+    expect(adapter.status()[0]?.phase).toBe('disabled')
+  })
+
+  it('rejects a stop whose awaited connect task creates a new cleanup failure epoch', async () => {
+    const connection = fakeConnection()
+    const lateGroup = Object.assign(new EventEmitter(), {
+      terminate: vi.fn()
+        .mockRejectedValueOnce(new Error('stop-epoch late group terminate failed'))
+        .mockResolvedValueOnce(undefined),
+    })
+    let resolveMonitorItems!: (group: typeof lateGroup) => void
+    const subscription = Object.assign(new EventEmitter(), {
+      monitorItems: vi.fn(() => new Promise<typeof lateGroup>((resolve) => {
+        resolveMonitorItems = resolve
+      })),
+      terminate: vi.fn(async () => undefined),
+    })
+    connection.session.createSubscription2 = vi.fn(async () => subscription)
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => subscription.monitorItems.mock.calls.length === 1)
+
+    const firstStop = adapter.stop()
+    await eventually(() => adapter.status()[0]?.phase === 'faulted')
+    resolveMonitorItems(lateGroup)
+
+    await expect(firstStop).rejects.toThrow('stop-epoch late group terminate failed')
+    expect(lateGroup.terminate).toHaveBeenCalledOnce()
+    expect(adapter.status()[0]?.phase).toBe('faulted')
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+    expect(lateGroup.terminate).toHaveBeenCalledTimes(2)
+    expect(adapter.status()[0]?.phase).toBe('disabled')
+  })
+
+  it('does not re-own cleaned parent handles when a pending monitorItems request rejects late', async () => {
+    const connection = fakeConnection()
+    let rejectMonitorItems!: (error: Error) => void
+    const subscription = Object.assign(new EventEmitter(), {
+      monitorItems: vi.fn(() => new Promise<never>((_resolve, reject) => {
+        rejectMonitorItems = reject
+      })),
+      terminate: vi.fn(async () => undefined),
+    })
+    connection.session.createSubscription2 = vi.fn(async () => subscription)
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => subscription.monitorItems.mock.calls.length === 1)
+
+    connection.client.emit('connection_lost')
+    await eventually(() => vi.mocked(connection.client.disconnect).mock.calls.length === 1)
+    expect(subscription.terminate).toHaveBeenCalledOnce()
+    expect(connection.session.close).toHaveBeenCalledOnce()
+    rejectMonitorItems(new Error('late monitorItems rejected'))
+    await eventually(() => adapter.status()[0]?.phase !== 'connecting')
+
+    expect(subscription.terminate).toHaveBeenCalledOnce()
+    expect(connection.session.close).toHaveBeenCalledOnce()
+    expect(connection.client.disconnect).toHaveBeenCalledOnce()
+    await adapter.stop()
+  })
+
   it('retains a Session created after the stop fence when its first close fails', async () => {
     const connection = fakeConnection()
     const order: string[] = []
