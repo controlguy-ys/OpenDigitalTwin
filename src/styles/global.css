@@ -2692,3 +2692,69 @@ button {
 .studio-header-v4[data-layout-mode='compact'] .studio-header-status-v4 > span,
 .studio-header-v4[data-layout-mode='narrow'] .studio-header-status-v4 > span { max-width: 96px; }
 .studio-header-v4[data-layout-mode='narrow'] .studio-header-status-v4 { display: none; }
+
+.opcua-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 48%);
+}
+
+.opcua-settings-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(860px, 100%);
+  max-height: min(820px, calc(100dvh - 32px));
+  overflow: hidden;
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 44px rgb(0 0 0 / 32%);
+}
+
+.opcua-settings-header,
+.opcua-settings-footer,
+.opcua-settings-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.opcua-settings-header { padding: 14px 16px; border-bottom: 1px solid var(--color-border); }
+.opcua-settings-header h2 { margin: 0; font-size: 18px; }
+.opcua-settings-header p { margin: 0; color: var(--color-muted); font-size: 12px; }
+.opcua-settings-dialog form { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; }
+.opcua-settings-body { display: grid; gap: 18px; min-height: 0; padding: 16px; overflow: auto; }
+.opcua-settings-body section { display: grid; gap: 10px; }
+.opcua-settings-body h3 { margin: 0; font-size: 14px; }
+.opcua-settings-body label { display: grid; gap: 4px; color: var(--color-muted); font-size: 12px; }
+.opcua-settings-body input,
+.opcua-settings-body select { min-width: 0; min-height: 30px; padding: 4px 7px; color: var(--color-text); font: inherit; background: var(--color-canvas); border: 1px solid var(--color-border); border-radius: var(--radius); }
+.opcua-settings-body p { margin: 0; font-size: 12px; line-height: 1.45; }
+.opcua-settings-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.opcua-settings-summary div { min-width: 0; }
+.opcua-settings-summary dt { color: var(--color-muted); font-size: 11px; }
+.opcua-settings-summary dd { margin: 2px 0 0; overflow-wrap: anywhere; font-size: 12px; }
+.opcua-settings-actions { justify-content: flex-start; flex-wrap: wrap; }
+.opcua-settings-actions button,
+.opcua-settings-body button,
+.opcua-settings-footer button { min-height: 30px; padding: 4px 9px; color: var(--color-text); font: inherit; font-size: 12px; cursor: pointer; background: var(--color-canvas); border: 1px solid var(--color-border); border-radius: var(--radius); }
+.opcua-settings-body button:disabled,
+.opcua-settings-footer button:disabled { cursor: default; opacity: 0.5; }
+.opcua-loopback-warning { display: grid; gap: 7px; padding: 10px; background: color-mix(in srgb, var(--color-panel) 75%, #9c6b00 25%); border-left: 3px solid #c78a00; }
+.opcua-bridge-route { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); }
+.opcua-settings-footer { padding: 12px 16px; border-top: 1px solid var(--color-border); }
+.opcua-settings-footer button:last-child { color: var(--color-canvas); background: var(--color-accent); border-color: var(--color-accent); }
+
+@media (max-width: 620px) {
+  .opcua-settings-overlay { padding: 8px; }
+  .opcua-settings-dialog { max-height: calc(100dvh - 16px); }
+  .opcua-settings-summary,
+  .opcua-bridge-route { grid-template-columns: 1fr; }
+  .opcua-settings-header { align-items: flex-start; flex-direction: column; }
+}
