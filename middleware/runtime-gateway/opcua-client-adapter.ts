@@ -573,7 +573,15 @@ async function closeRuntimePass(runtime: EndpointRuntimeV1): Promise<void> {
   if (unresolved !== undefined) throw unresolved.error
 }
 
-function enqueueRuntimeCleanup(runtime: EndpointRuntimeV1): Promise<void> {
+function enqueueRuntimeCleanup(
+  runtime: EndpointRuntimeV1,
+  allowExistingFailureRetry = false,
+): Promise<void> {
+  if (runtime.cleanupFailed && !allowExistingFailureRetry) {
+    return Promise.reject(
+      runtime.cleanupFailureReason ?? new Error('OPC_UA_ENDPOINT_CLEANUP_REQUIRED'),
+    )
+  }
   const requestedFailureEpoch = runtime.cleanupFailureEpoch
   runtime.cleanupPendingCount += 1
   let requested!: Promise<void>
@@ -1306,7 +1314,7 @@ export function createOpcUaClientAdapterV1(
         ?? runtime.cleanupFailureReason
         ?? new Error('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
     }
-    await enqueueRuntimeCleanup(runtime)
+    await enqueueRuntimeCleanup(runtime, true)
   }
 
   return Object.freeze({

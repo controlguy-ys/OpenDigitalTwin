@@ -1455,6 +1455,52 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     expect(adapter.status()[0]?.phase).toBe('disabled')
   })
 
+  it('does not let a late group automatically retry an earlier recovery cleanup failure', async () => {
+    const connection = fakeConnection()
+    const lateGroup = Object.assign(new EventEmitter(), {
+      terminate: vi.fn(async () => undefined),
+    })
+    let resolveMonitorItems!: (group: typeof lateGroup) => void
+    const subscription = Object.assign(new EventEmitter(), {
+      monitorItems: vi.fn(() => new Promise<typeof lateGroup>((resolve) => {
+        resolveMonitorItems = resolve
+      })),
+      terminate: vi.fn()
+        .mockRejectedValueOnce(new Error('recovery Subscription terminate failed'))
+        .mockResolvedValueOnce(undefined),
+    })
+    connection.session.createSubscription2 = vi.fn(async () => subscription)
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => subscription.monitorItems.mock.calls.length === 1)
+
+    connection.client.emit('connection_lost')
+    await eventually(() => subscription.terminate.mock.calls.length === 1)
+    resolveMonitorItems(lateGroup)
+    await eventually(() => adapter.status()[0]?.phase !== 'connecting')
+
+    expect(subscription.terminate).toHaveBeenCalledOnce()
+    expect(lateGroup.terminate).not.toHaveBeenCalled()
+    expect(adapter.status()[0]).toMatchObject({
+      phase: 'faulted',
+      lastError: {
+        code: 'recovery Subscription terminate failed',
+        message: 'recovery Subscription terminate failed',
+      },
+    })
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+    expect(subscription.terminate).toHaveBeenCalledTimes(2)
+    expect(lateGroup.terminate).toHaveBeenCalledOnce()
+    expect(adapter.status()[0]?.phase).toBe('disabled')
+  })
+
   it('rejects a stop whose awaited connect task creates a new cleanup failure epoch', async () => {
     const connection = fakeConnection()
     const lateGroup = Object.assign(new EventEmitter(), {
