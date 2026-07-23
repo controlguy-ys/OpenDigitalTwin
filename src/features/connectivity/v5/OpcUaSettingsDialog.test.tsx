@@ -15,6 +15,7 @@ import type { ConnectivityPresentationStateV1 } from './connectivity-presentatio
 import {
   createOpcUaSettingsControllerV1,
   type OpcUaSettingsActivationServiceV1,
+  type OpcUaSettingsControllerV1,
 } from './opcua-settings-activation.js'
 import { validateOpcUaSettingsDraftV1 } from './opcua-settings-draft.js'
 import { OpcUaSettingsDialog, type OpcUaSettingsDialogPropsV1 } from './OpcUaSettingsDialog.js'
@@ -92,6 +93,7 @@ function service(active: WorkcellProjectV5, options: { readonly pending?: Promis
 function Harness({
   active = project(),
   activation = service(active),
+  controller,
   presentationState = presentation(),
   connectionTest = { testEndpoint: vi.fn(async () => ({ phase: 'connected' as const, namespaceUris: ['urn:test'], elapsedMs: 4, error: null })) },
   onOpenBindingOverview = vi.fn(),
@@ -99,13 +101,14 @@ function Harness({
 }: {
   readonly active?: WorkcellProjectV5
   readonly activation?: OpcUaSettingsActivationServiceV1
+  readonly controller?: OpcUaSettingsControllerV1
   readonly presentationState?: ConnectivityPresentationStateV1
   readonly connectionTest?: OpcUaConnectionTestPortV1
   readonly onOpenBindingOverview?: () => void
   readonly onOpenDockerRunGuide?: () => void
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const controllerRef = useRef(createOpcUaSettingsControllerV1(activation))
+  const controllerRef = useRef(controller ?? createOpcUaSettingsControllerV1(activation))
   const props: OpcUaSettingsDialogPropsV1 = {
     activeProject: active, controller: controllerRef.current, connectionTest,
     onOpenBindingOverview, onOpenDockerRunGuide, presentation: presentationState, triggerRef,
@@ -360,7 +363,7 @@ describe('OpcUaSettingsDialog', () => {
     expect(trigger).toHaveFocus()
   })
 
-  it('dynamically traps both Tab directions among enabled controls while Apply is busy', async () => {
+  it('recovers browser-lost focus after Apply disables its button and traps Tab while busy', async () => {
     const user = userEvent.setup()
     const active = project()
     const pending = deferred<PublishedProjectV5>()
@@ -368,21 +371,43 @@ describe('OpcUaSettingsDialog', () => {
     await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
     const dialog = screen.getByRole('dialog')
     const apply = screen.getByRole('button', { name: 'Apply & Activate' })
-    await user.click(apply)
-    expect(apply).toBeDisabled()
-    expect(apply).toHaveFocus()
-    const focusable = tabbables(dialog)
-    const first = focusable[0]!
-    const last = focusable.at(-1)!
-    expect(focusable).not.toContain(apply)
+    const setAttribute = Element.prototype.setAttribute
+    let simulatedBrowserFocusLoss = false
+    document.body.tabIndex = -1
+    Object.defineProperty(Element.prototype, 'setAttribute', {
+      configurable: true,
+      value(this: Element, name: string, value: string) {
+        setAttribute.call(this, name, value)
+        if (name === 'disabled' && document.activeElement === this) {
+          simulatedBrowserFocusLoss = true
+          document.body.focus()
+        }
+      },
+    })
+    try {
+      await user.click(apply)
+      expect(simulatedBrowserFocusLoss).toBe(true)
+      expect(apply).toBeDisabled()
+      const focusable = tabbables(dialog)
+      const first = focusable[0]!
+      const last = focusable.at(-1)!
+      expect(focusable).not.toContain(apply)
+      expect(document.body).not.toHaveFocus()
+      expect(first).toHaveFocus()
 
-    fireEvent.keyDown(dialog, { key: 'Tab' })
-    expect(first).toHaveFocus()
-    first.focus()
-    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
-    expect(last).toHaveFocus()
-    fireEvent.keyDown(dialog, { key: 'Tab' })
-    expect(first).toHaveFocus()
+      last.focus()
+      await user.tab()
+      expect(first).toHaveFocus()
+      await user.tab({ shift: true })
+      expect(last).toHaveFocus()
+    } finally {
+      Object.defineProperty(Element.prototype, 'setAttribute', {
+        configurable: true,
+        value: setAttribute,
+        writable: true,
+      })
+      document.body.removeAttribute('tabindex')
+    }
 
     pending.resolve(published(active))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -418,20 +443,72 @@ describe('OpcUaSettingsDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('coalesces rapid Apply events into one activation service call', async () => {
+  it('ignores composing Escape without consuming it or closing the dialog', async () => {
+    const user = userEvent.setup()
+    const propagated = vi.fn()
+    document.addEventListener('keydown', propagated)
+    try {
+      render(<Harness />)
+      await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+      const composingEscape = new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'Escape',
+      })
+      Object.defineProperty(composingEscape, 'isComposing', { value: true })
+
+      act(() => screen.getByRole('dialog').dispatchEvent(composingEscape))
+
+      expect(composingEscape.defaultPrevented).toBe(false)
+      expect(propagated).toHaveBeenCalledOnce()
+      expect(screen.getByRole('dialog')).toBeVisible()
+    } finally {
+      document.removeEventListener('keydown', propagated)
+    }
+  })
+
+  it('coalesces rapid Apply events before crossing the controller boundary', async () => {
     const active = project()
     const pending = deferred<PublishedProjectV5>()
     const activation = service(active, { pending: pending.promise })
-    render(<Harness active={active} activation={activation} />)
+    const baseController = createOpcUaSettingsControllerV1(activation)
+    const applyAndActivate = vi.fn(() => baseController.applyAndActivate())
+    const controller: OpcUaSettingsControllerV1 = { ...baseController, applyAndActivate }
+    render(<Harness active={active} controller={controller} />)
     await userEvent.setup().click(screen.getByRole('button', { name: 'OPC UA Settings' }))
     const apply = screen.getByRole('button', { name: 'Apply & Activate' })
     act(() => {
       fireEvent.click(apply)
       fireEvent.click(apply)
     })
+    expect(applyAndActivate).toHaveBeenCalledOnce()
     expect(activation.apply).toHaveBeenCalledOnce()
     pending.resolve(published(active))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('releases the dialog-local Apply guard after rejection so a later retry can succeed', async () => {
+    const user = userEvent.setup()
+    const active = project()
+    const activation: OpcUaSettingsActivationServiceV1 = {
+      validate: (draft) => validateOpcUaSettingsDraftV1(draft, active),
+      apply: vi.fn()
+        .mockRejectedValueOnce(new Error('Gateway activation rejected'))
+        .mockResolvedValueOnce(published(active)),
+    }
+    const baseController = createOpcUaSettingsControllerV1(activation)
+    const applyAndActivate = vi.fn(() => baseController.applyAndActivate())
+    const controller: OpcUaSettingsControllerV1 = { ...baseController, applyAndActivate }
+    render(<Harness active={active} controller={controller} />)
+    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+
+    await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Gateway activation rejected')
+    await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(applyAndActivate).toHaveBeenCalledTimes(2)
+    expect(activation.apply).toHaveBeenCalledTimes(2)
   })
 
   it('retains all Draft inputs and presents one alert when asynchronous Apply rejects', async () => {

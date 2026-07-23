@@ -138,6 +138,7 @@ export function OpcUaSettingsDialog({
   const dialogRef = useRef<HTMLDivElement>(null)
   const roleRef = useRef<HTMLSelectElement>(null)
   const wasOpenRef = useRef(false)
+  const applyInFlightRef = useRef<Promise<unknown> | true | null>(null)
   const testAbortRef = useRef<AbortController | null>(null)
   const testGenerationRef = useRef(0)
   const [selectedEndpointId, setSelectedEndpointId] = useState<string | null>(null)
@@ -156,6 +157,7 @@ export function OpcUaSettingsDialog({
   }, [])
 
   useEffect(() => {
+    applyInFlightRef.current = null
     if (state.open) {
       wasOpenRef.current = true
       invalidateDiagnostic()
@@ -173,6 +175,7 @@ export function OpcUaSettingsDialog({
   }, [invalidateDiagnostic, state.open, triggerRef])
 
   useEffect(() => () => {
+    applyInFlightRef.current = null
     testGenerationRef.current += 1
     testAbortRef.current?.abort()
     testAbortRef.current = null
@@ -183,6 +186,16 @@ export function OpcUaSettingsDialog({
     if (selectedEndpointId !== null && draft.endpoints.some((endpoint) => endpoint.endpointId === selectedEndpointId)) return
     setSelectedEndpointId(draft.endpoints[0]?.endpointId ?? null)
   }, [draft, selectedEndpointId])
+
+  useLayoutEffect(() => {
+    if (!state.open || !busy) return
+    const root = dialogRef.current
+    if (root === null) return
+    const elements = tabbableElements(root)
+    const active = document.activeElement
+    if (active instanceof HTMLElement && root.contains(active) && elements.includes(active)) return
+    ;(elements[0] ?? root).focus()
+  }, [busy, state.open])
 
   useLayoutEffect(() => {
     const issue = state.phase === 'failed' ? state.issues[0] : undefined
@@ -229,15 +242,27 @@ export function OpcUaSettingsDialog({
   }
   const close = (): void => {
     if (busy) return
+    applyInFlightRef.current = null
     invalidateDiagnostic()
     setInteractionIssue(null)
     controller.cancel()
   }
   const apply = (): void => {
-    if (busy) return
+    if (busy || applyInFlightRef.current !== null) return
+    applyInFlightRef.current = true
     invalidateDiagnostic()
     setInteractionIssue(null)
-    void controller.applyAndActivate().catch(() => undefined)
+    try {
+      const operation = controller.applyAndActivate()
+      applyInFlightRef.current = operation
+      void operation
+        .catch(() => undefined)
+        .finally(() => {
+          if (applyInFlightRef.current === operation) applyInFlightRef.current = null
+        })
+    } catch {
+      if (applyInFlightRef.current === true) applyInFlightRef.current = null
+    }
   }
   const onTestConnection = (): void => {
     if (selectedEndpoint === null || disabled || testing) return
@@ -261,6 +286,7 @@ export function OpcUaSettingsDialog({
   }
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
+      if (event.nativeEvent.isComposing) return
       event.preventDefault()
       event.stopPropagation()
       if (!busy) close()
@@ -294,6 +320,7 @@ export function OpcUaSettingsDialog({
       }}
       ref={dialogRef}
       role="dialog"
+      tabIndex={-1}
     >
       <section className="opcua-settings-dialog">
         <header className="opcua-settings-header">
