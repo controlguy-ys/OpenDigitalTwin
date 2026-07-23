@@ -75,10 +75,14 @@ export async function testOpcUaConnectionV1(
   let namespaces: readonly string[] | null = null
   let phase: 'connect' | 'session' | 'read' = 'connect'
   const withinDeadline = async <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, deadline])
+  let connectOperation: Promise<void> | null = null
+  let createSessionOperation: Promise<OpcUaConnectionTestSessionV1> | null = null
   try {
-    await withinDeadline(client.connect(endpoint.endpointUrl))
+    connectOperation = client.connect(endpoint.endpointUrl)
+    await withinDeadline(connectOperation)
     phase = 'session'
-    session = await withinDeadline(client.createSession())
+    createSessionOperation = client.createSession()
+    session = await withinDeadline(createSessionOperation)
     phase = 'read'
     namespaces = await withinDeadline(session.readNamespaceArray())
     const validated = validNamespaces(namespaces)
@@ -97,11 +101,21 @@ export async function testOpcUaConnectionV1(
       const deadline = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { cleanupTimedOut = true; reject(new Error('OPC UA diagnostic cleanup timed out.')) }, budgetMs) })
       try { await Promise.race([Promise.resolve().then(operation), deadline]) } finally { if (timer !== null) clearTimeout(timer) }
     }
-    let cleanupFailed = false
-    try { await withinCleanupBudget(() => session?.close(), sessionCloseTimeoutMs) } catch { cleanupFailed = true }
-    // Session teardown owns the Client lifetime: disconnect is attempted only
-    // after close settles or the independent cleanup budget expires.
-    try { await withinCleanupBudget(() => client.disconnect(), disconnectTimeoutMs) } catch { cleanupFailed = true }
+    const cleanup = async (targetSession: OpcUaConnectionTestSessionV1 | null): Promise<boolean> => {
+      let failed = false
+      try { await withinCleanupBudget(() => targetSession?.close(), sessionCloseTimeoutMs) } catch { failed = true }
+      // Session teardown owns the Client lifetime: disconnect is attempted only
+      // after close settles or the independent cleanup budget expires.
+      try { await withinCleanupBudget(() => client.disconnect(), disconnectTimeoutMs) } catch { failed = true }
+      return failed
+    }
+    const cleanupFailed = await cleanup(session)
+    if (timedOut) {
+      // Timed-out node-opcua work can still produce resources. Observe both
+      // promises and apply the same bounded, ordered cleanup to late results.
+      void connectOperation?.then(() => cleanup(null), () => undefined).catch(() => undefined)
+      void createSessionOperation?.then((lateSession) => cleanup(lateSession), () => undefined).catch(() => undefined)
+    }
     if (cleanupFailed) failure = { code: 'OPC_UA_CONNECTION_CLEANUP_FAILED', message: cleanupTimedOut ? 'OPC UA diagnostic cleanup timed out.' : 'OPC UA diagnostic cleanup failed.' }
   }
   if (failure === null && namespaces !== null) {
