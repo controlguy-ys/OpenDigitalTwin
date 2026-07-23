@@ -35,3 +35,25 @@
 ## Remaining caveat
 
 The deactivation local cleanup tail is authoritative and covered by the existing stop/recovery tests, but not every individual local cleanup primitive is independently injectable. A fresh SOL Ultra review remains required before accepting A3R.
+
+## A3R2 repair progress
+
+- `97ac147 fix(v5): preserve gateway authority during empty hydration` requires
+  canonical inactive Gateway authority before empty-pointer hydration mutates
+  Browser runtime state.
+- `ea536b6 fix(v5): retain recovery authority and fence mutations` retains the
+  exact prior authority after failed replacement recovery and fences HTTP and
+  WebSocket mutation while recovery is required.
+- `0ddfb5b fix(v5): bound ordered temporary opc ua cleanup` gives temporary
+  diagnostics a separate cleanup budget and preserves Session-close before
+  Client-disconnect ordering.
+- `15d3041 fix(v5): retain exact rollback recovery authority` recognizes an
+  exact recovery-required DELETE candidate instead of classifying it as another
+  authority.
+
+Focused evidence: publication 38 tests, Gateway entrypoint 84 tests,
+temporary-diagnostic 7 tests, and V5 connectivity client 36 tests passed for
+the respective commits. Endpoint-session-generation proof and the unified
+error-envelope byte contract still require implementation and a fresh SOL Ultra
+review. The V4 App publisher cutover remains the explicit separate integration
+blocker.
