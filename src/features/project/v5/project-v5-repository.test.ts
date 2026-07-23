@@ -41,12 +41,19 @@ function createRepository(database: ProjectDatabaseV5, now = () => NOW): Project
   return createProjectRepositoryV5({ database, now })
 }
 
+async function prepareRevision(
+  repository: ProjectRepositoryV5,
+  candidate: WorkcellProjectV5,
+): Promise<PreparedProjectRevisionV5> {
+  return repository.prepareRevision(candidate, await configRevisionForProjectV5(candidate))
+}
+
 async function publishStable(
   repository: ProjectRepositoryV5,
   candidate: WorkcellProjectV5,
   token: string,
 ): Promise<void> {
-  const prepared = await repository.prepareRevision(candidate)
+  const prepared = await prepareRevision(repository, candidate)
   await repository.commitPreparedRevision((await repository.readPointer())?.revisionId ?? null, prepared, token)
   await repository.finalizePublication(token)
 }
@@ -67,12 +74,25 @@ afterEach(async () => {
 })
 
 describe('ProjectRepositoryV5 preparation authority', () => {
+  it('persists the coordinator-supplied lowercase config revision without recomputing it during preparation', async () => {
+    const database = new ProjectDatabaseV5(uniqueDatabaseName())
+    openDatabases.push(database)
+    const repository = createRepository(database)
+    const candidate = project('revision-supplied')
+    const coordinatorHash = 'f'.repeat(64)
+
+    const prepared = await repository.prepareRevision(candidate, coordinatorHash)
+
+    expect(prepared.configRevision).toBe(coordinatorHash)
+    expect(prepared.project).toEqual(candidate)
+  })
+
   it('round-trips only canonical V5 content', async () => {
     const database = new ProjectDatabaseV5(uniqueDatabaseName())
     openDatabases.push(database)
     const repository = createRepository(database)
     const candidate = project('revision-a')
-    const prepared = await repository.prepareRevision(candidate)
+    const prepared = await prepareRevision(repository, candidate)
     await repository.commitPreparedRevision(null, prepared, 'commit-v5-a')
     await repository.finalizePublication('commit-v5-a')
     await expect(repository.readActive()).resolves.toEqual(candidate)
@@ -83,7 +103,7 @@ describe('ProjectRepositoryV5 preparation authority', () => {
     openDatabases.push(database)
     const repository = createRepository(database)
     const other = createRepository(database)
-    const prepared = await repository.prepareRevision(project('revision-a'))
+    const prepared = await prepareRevision(repository, project('revision-a'))
     const forged = { ...prepared } as PreparedProjectRevisionV5
 
     expect(repository.materializePreparedProject(prepared)).toEqual(project('revision-a'))
@@ -98,7 +118,7 @@ describe('ProjectRepositoryV5 preparation authority', () => {
     openDatabases.push(database)
     const repository = createRepository(database)
     const other = createRepository(database)
-    const prepared = await repository.prepareRevision(project('revision-a'))
+    const prepared = await prepareRevision(repository, project('revision-a'))
     const forged = { ...prepared } as PreparedProjectRevisionV5
 
     await expectRepositoryError(
@@ -120,7 +140,7 @@ describe('ProjectRepositoryV5 preparation authority', () => {
     openDatabases.push(database)
     const repository = createRepository(database)
     const candidate = project('revision-a')
-    const prepared = await repository.prepareRevision(candidate)
+    const prepared = await prepareRevision(repository, candidate)
 
     expect(await Promise.all([
       database.projectRevisions.count(), database.projectPointers.count(), database.projectCommitTokens.count(),
@@ -141,7 +161,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     openDatabases.push(database)
     const repository = createRepository(database)
     const candidate = project('revision-a')
-    const prepared = await repository.prepareRevision(candidate)
+    const prepared = await prepareRevision(repository, candidate)
     await repository.commitPreparedRevision(null, prepared, 'token-a')
 
     await expect(repository.readPointer()).resolves.toEqual({
@@ -163,7 +183,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
       const database = new ProjectDatabaseV5(uniqueDatabaseName())
       openDatabases.push(database)
       const repository = createRepository(database)
-      const prepared = await repository.prepareRevision(project(`revision-${database.name}`))
+      const prepared = await prepareRevision(repository, project(`revision-${database.name}`))
       await expect(run(repository, prepared)).rejects.toBeInstanceOf(Error)
       expect(() => repository.materializePreparedProject(prepared)).toThrow('PROJECT_PREPARED_REVISION_CONSUMED')
     }
@@ -173,7 +193,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     const database = new ProjectDatabaseV5(uniqueDatabaseName())
     openDatabases.push(database)
     const repository = createRepository(database)
-    const prepared = await repository.prepareRevision(project('revision-a'))
+    const prepared = await prepareRevision(repository, project('revision-a'))
     const pointerRead = deferred<void>()
     const release = deferred<void>()
     const originalGet = database.projectPointers.get.bind(database.projectPointers)
@@ -204,16 +224,16 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     openDatabases.push(database)
     const repository = createRepository(database)
     await publishStable(repository, project('revision-a'), 'token-a')
-    const inProgress = await repository.prepareRevision(project('revision-b'))
+    const inProgress = await prepareRevision(repository, project('revision-b'))
     await repository.commitPreparedRevision('revision-a', inProgress, 'token-b')
-    const blocked = await repository.prepareRevision(project('revision-c'))
+    const blocked = await prepareRevision(repository, project('revision-c'))
     await expectRepositoryError(repository.commitPreparedRevision('revision-b', blocked, 'token-c'), 'PROJECT_PUBLICATION_IN_PROGRESS')
     expect(() => repository.materializePreparedProject(blocked)).toThrow('PROJECT_PREPARED_REVISION_CONSUMED')
     await repository.compensatePublication('token-b')
-    const reused = await repository.prepareRevision(project('revision-b'))
+    const reused = await prepareRevision(repository, project('revision-b'))
     await expectRepositoryError(repository.commitPreparedRevision('revision-a', reused, 'token-b'), 'PROJECT_COMMIT_TOKEN_REUSED')
     expect(() => repository.materializePreparedProject(reused)).toThrow('PROJECT_PREPARED_REVISION_CONSUMED')
-    const collision = await repository.prepareRevision(project('revision-a', 'conflicting'))
+    const collision = await prepareRevision(repository, project('revision-a', 'conflicting'))
     await expectRepositoryError(repository.commitPreparedRevision('revision-a', collision, 'token-c'), 'PROJECT_REVISION_ID_COLLISION')
     expect(() => repository.materializePreparedProject(collision)).toThrow('PROJECT_PREPARED_REVISION_CONSUMED')
   })
@@ -224,7 +244,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     const repository = createRepository(database)
     await publishStable(repository, project('revision-a', 'original'), 'token-a')
     const original = await database.projectRevisions.get('revision-a')
-    const prepared = await repository.prepareRevision(project('revision-a', 'conflict'))
+    const prepared = await prepareRevision(repository, project('revision-a', 'conflict'))
     await expectRepositoryError(repository.commitPreparedRevision('revision-a', prepared, 'token-b'), 'PROJECT_REVISION_ID_COLLISION')
     expect(await database.projectRevisions.get('revision-a')).toEqual(original)
     await expect(database.projectCommitTokens.toArray()).resolves.toHaveLength(1)
@@ -238,7 +258,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     await publishStable(repository, candidate, 'token-a')
     const row = (await database.projectRevisions.get('revision-a'))!
     await database.projectRevisions.put({ ...row, canonicalJson: JSON.stringify(candidate) })
-    const prepared = await repository.prepareRevision(candidate)
+    const prepared = await prepareRevision(repository, candidate)
     await expectRepositoryError(repository.commitPreparedRevision('revision-a', prepared, 'token-b'), 'PROJECT_REVISION_CORRUPT')
     await expect(database.projectCommitTokens.count()).resolves.toBe(1)
   })
@@ -252,7 +272,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     const database = new ProjectDatabaseV5(uniqueDatabaseName())
     openDatabases.push(database)
     const repository = createRepository(database)
-    const prepared = await repository.prepareRevision(project('revision-a'))
+    const prepared = await prepareRevision(repository, project('revision-a'))
     await expectRepositoryError(repository.commitPreparedRevision(null, prepared, token), code)
     await expect(Promise.all([
       database.projectRevisions.count(), database.projectPointers.count(), database.projectCommitTokens.count(),
@@ -265,8 +285,8 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     openDatabases.push(database, secondDatabase)
     const first = createRepository(database)
     const second = createRepository(secondDatabase)
-    const a = await first.prepareRevision(project('revision-a'))
-    const b = await second.prepareRevision(project('revision-b'))
+    const a = await prepareRevision(first, project('revision-a'))
+    const b = await prepareRevision(second, project('revision-b'))
     const results = await Promise.allSettled([
       first.commitPreparedRevision(null, a, 'racing-token'),
       second.commitPreparedRevision(null, b, 'racing-token'),
@@ -288,7 +308,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     const reopenedDatabase = new ProjectDatabaseV5(database.name)
     openDatabases.push(reopenedDatabase)
     const reopened = createRepository(reopenedDatabase)
-    const replay = await reopened.prepareRevision(project('revision-replay'))
+    const replay = await prepareRevision(reopened, project('revision-replay'))
     await expectRepositoryError(
       reopened.commitPreparedRevision(winner, replay, 'racing-token'),
       'PROJECT_COMMIT_TOKEN_REUSED',
@@ -300,7 +320,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     openDatabases.push(database)
     const repository = createRepository(database)
     await publishStable(repository, project('revision-a'), 'token-a')
-    const prepared = await repository.prepareRevision(project('revision-b'))
+    const prepared = await prepareRevision(repository, project('revision-b'))
     await repository.commitPreparedRevision('revision-a', prepared, 'token-b')
     database.close()
     const reopenedDatabase = new ProjectDatabaseV5(database.name)
@@ -320,7 +340,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     const database = new ProjectDatabaseV5(uniqueDatabaseName())
     openDatabases.push(database)
     const repository = createRepository(database)
-    const prepared = await repository.prepareRevision(project('revision-a'))
+    const prepared = await prepareRevision(repository, project('revision-a'))
     await repository.commitPreparedRevision(null, prepared, 'token-a')
     await repository.compensatePublication('token-a')
     await expect(repository.readPointer()).resolves.toBeNull()
@@ -330,7 +350,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     const reopenedDatabase = new ProjectDatabaseV5(database.name)
     openDatabases.push(reopenedDatabase)
     const reopened = createRepository(reopenedDatabase)
-    const replay = await reopened.prepareRevision(project('revision-a'))
+    const replay = await prepareRevision(reopened, project('revision-a'))
     await expectRepositoryError(
       reopened.commitPreparedRevision(null, replay, 'token-a'),
       'PROJECT_COMMIT_TOKEN_REUSED',
@@ -342,13 +362,13 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     openDatabases.push(database)
     const repository = createRepository(database)
     await publishStable(repository, project('revision-a'), 'token-a')
-    const prepared = await repository.prepareRevision(project('revision-b'))
+    const prepared = await prepareRevision(repository, project('revision-b'))
     await repository.commitPreparedRevision('revision-a', prepared, 'token-b')
     await repository.compensatePublication('token-b')
     const reopenedDatabase = new ProjectDatabaseV5(database.name)
     openDatabases.push(reopenedDatabase)
     const reopened = createRepository(reopenedDatabase)
-    const replay = await reopened.prepareRevision(project('revision-b'))
+    const replay = await prepareRevision(reopened, project('revision-b'))
     await expectRepositoryError(reopened.commitPreparedRevision('revision-a', replay, 'token-b'), 'PROJECT_COMMIT_TOKEN_REUSED')
     await expect(reopenedDatabase.projectCommitTokens.count()).resolves.toBe(2)
   })
@@ -358,7 +378,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     openDatabases.push(database)
     const repository = createRepository(database)
     await publishStable(repository, project('revision-a'), 'token-a')
-    const prepared = await repository.prepareRevision(project('revision-b'))
+    const prepared = await prepareRevision(repository, project('revision-b'))
     await repository.commitPreparedRevision('revision-a', prepared, 'token-b')
     await expectRepositoryError(repository.compensatePublication('token-other'), 'PROJECT_PUBLICATION_TOKEN_MISMATCH')
     await repository.compensatePublication('token-b')
@@ -373,7 +393,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     const database = new ProjectDatabaseV5(uniqueDatabaseName())
     openDatabases.push(database)
     const repository = createRepository(database)
-    const prepared = await repository.prepareRevision(project('revision-a'))
+    const prepared = await prepareRevision(repository, project('revision-a'))
     const originalPut = database.projectPointers.put.bind(database.projectPointers)
     database.projectPointers.put = (async (pointer) => {
       if (pointer.state === 'publishing') throw new Error('pointer write failed')
@@ -432,7 +452,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
     })
     await repository.garbageCollect()
     await expect(database.projectRevisions.toCollection().primaryKeys()).resolves.toEqual(['revision-a'])
-    const b = await repository.prepareRevision(project('revision-b'))
+    const b = await prepareRevision(repository, project('revision-b'))
     await repository.commitPreparedRevision('revision-a', b, 'token-b')
     await repository.garbageCollect()
     expect((await database.projectRevisions.toCollection().primaryKeys()).sort()).toEqual(['revision-a', 'revision-b'])
@@ -463,7 +483,7 @@ describe('ProjectRepositoryV5 commit, recovery, and integrity', () => {
       configRevision: await configRevisionForProjectV5(orphan), createdAt: NOW,
       canonicalJson: canonicalProjectV5Json(orphan),
     })
-    const prepared = await second.prepareRevision(project('revision-b'))
+    const prepared = await prepareRevision(second, project('revision-b'))
     const pointerRead = deferred<void>()
     const release = deferred<void>()
     const originalGet = database.projectPointers.get.bind(database.projectPointers)

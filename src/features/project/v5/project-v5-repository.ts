@@ -26,7 +26,7 @@ export interface ProjectRevisionRecordV5 {
 }
 
 export interface ProjectRepositoryV5 {
-  prepareRevision(candidate: WorkcellProjectV5): Promise<PreparedProjectRevisionV5>
+  prepareRevision(candidate: WorkcellProjectV5, configRevision: string): Promise<PreparedProjectRevisionV5>
   materializePreparedProject(prepared: PreparedProjectRevisionV5): WorkcellProjectV5
   discardPreparedRevision(prepared: PreparedProjectRevisionV5): void
   commitPreparedRevision(expectedRevisionId: string | null, prepared: PreparedProjectRevisionV5, commitToken: string): Promise<void>
@@ -211,10 +211,9 @@ export function createProjectRepositoryV5(options: ProjectRepositoryV5Options): 
   }
 
   const repository: ProjectRepositoryV5 = {
-    async prepareRevision(candidate) {
+    async prepareRevision(candidate, configRevision) {
       const project = validateWorkcellProjectV5(candidate)
       const canonicalJson = canonicalProjectV5Json(project)
-      const configRevision = await configRevisionForProjectV5(project)
       if (!CONFIG_REVISION_PATTERN.test(configRevision)) {
         return failRepository('PROJECT_CONFIG_REVISION_MISMATCH', 'Project V5 config revision must be lowercase SHA-256 hex.')
       }

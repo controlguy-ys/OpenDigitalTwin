@@ -360,6 +360,15 @@ describe('BrowserProjectRuntimeV5', () => {
       published.runtimeGraph.jobs.getState().projectRevisionId,
       published.runtimeGraph.attachments.getState().projectRevisionId,
     ]).toEqual(Array(6).fill('revision-2'))
+    expect([
+      published.runtimeGraph.robots.getState().configRevision,
+      published.runtimeGraph.robotFrames.configRevision,
+      published.runtimeGraph.objects.configRevision,
+      published.runtimeGraph.signals.getState().configRevision,
+      published.runtimeGraph.jobs.getState().configRevision,
+      published.runtimeGraph.attachments.getState().configRevision,
+      published.runtimeGraph.streamTarget.configRevision,
+    ]).toEqual(Array(7).fill(CONFIG_B))
   })
 
   it('keeps the published graph live throughout every detached apply checkpoint', async () => {
