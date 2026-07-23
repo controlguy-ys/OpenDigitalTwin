@@ -1140,6 +1140,79 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     expect(adapter.status()[0]).toMatchObject({ phase: 'disabled', reconnectAttempt: 0, nextRetryAtMs: null })
   })
 
+  it.each(['monitored-group', 'subscription', 'session', 'client'] as const)('retains and retries a failed %s cleanup handle before reporting disabled', async (resource) => {
+    const connection = fakeConnection()
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => connection.groups.length === 1)
+    const groupTerminate = (connection.groups[0] as unknown as { terminate: typeof connection.session.close }).terminate
+    const subscriptionTerminate = (connection.subscriptions[0] as unknown as { terminate: typeof connection.session.close }).terminate
+    const cleanup = resource === 'monitored-group'
+      ? groupTerminate
+      : resource === 'subscription'
+        ? subscriptionTerminate
+        : resource === 'session'
+          ? connection.session.close
+          : connection.client.disconnect
+    cleanup.mockRejectedValueOnce(new Error(`${resource} cleanup failed`))
+
+    await expect(adapter.stop()).rejects.toThrow(`${resource} cleanup failed`)
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(adapter.status()[0]).toMatchObject({
+      phase: 'faulted',
+      sessionActive: resource === 'session',
+      subscriptionActive: resource === 'subscription',
+    })
+    await expect(adapter.reconnectEndpoint!('plc')).rejects.toThrow('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+    expect(cleanup).toHaveBeenCalledTimes(2)
+    expect(groupTerminate).toHaveBeenCalledTimes(resource === 'monitored-group' ? 2 : 1)
+    expect(subscriptionTerminate).toHaveBeenCalledTimes(resource === 'subscription' ? 2 : 1)
+    expect(connection.session.close).toHaveBeenCalledTimes(resource === 'session' ? 2 : 1)
+    expect(connection.client.disconnect).toHaveBeenCalledTimes(resource === 'client' ? 2 : 1)
+    expect(adapter.status()[0]).toMatchObject({
+      phase: 'disabled',
+      sessionActive: false,
+      subscriptionActive: false,
+    })
+  })
+
+  it('retains a Session created after the stop fence when its first close fails', async () => {
+    const connection = fakeConnection()
+    let resolveSession!: (session: typeof connection.session) => void
+    connection.client.createSession = vi.fn(() => new Promise((resolve) => {
+      resolveSession = resolve
+    }))
+    connection.session.close.mockRejectedValueOnce(new Error('late Session close failed'))
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => vi.mocked(connection.client.createSession).mock.calls.length === 1)
+
+    const stopping = adapter.stop()
+    resolveSession(connection.session)
+
+    await expect(stopping).rejects.toThrow('late Session close failed')
+    expect(connection.session.close).toHaveBeenCalledOnce()
+    expect(adapter.status()[0]?.phase).toBe('faulted')
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+    expect(connection.session.close).toHaveBeenCalledTimes(2)
+    expect(adapter.status()[0]?.phase).toBe('disabled')
+  })
+
   it('disconnects and reconnects one Endpoint without changing its saved mapping count', async () => {
     const first = fakeConnection()
     const second = fakeConnection()

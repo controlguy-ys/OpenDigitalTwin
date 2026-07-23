@@ -112,6 +112,13 @@ interface EarlyRootSnapshotV1 {
   readonly encodedBytes: number
 }
 
+interface NativeCleanupHandlesV1 {
+  client: OPCUAClient | null
+  session: ClientSession | null
+  subscription: ClientSubscription | null
+  groups: ClientMonitoredItemGroup[]
+}
+
 interface EndpointRuntimeV1 extends EndpointRuntimeDiagnosticsV1 {
   readonly endpoint: OpcUaEndpointV5
   readonly readPlan: CompiledOpcUaClientEndpointReadPlanV1 | null
@@ -120,6 +127,7 @@ interface EndpointRuntimeV1 extends EndpointRuntimeDiagnosticsV1 {
   session: ClientSession | null
   subscription: ClientSubscription | null
   groups: ClientMonitoredItemGroup[]
+  readonly residualCleanup: Set<NativeCleanupHandlesV1>
   assembler: OpcUaClientSnapshotAssemblerV1 | null
   reconnectTimer: NodeJS.Timeout | null
   recovery: Promise<void> | null
@@ -296,8 +304,18 @@ function isClientMode(project: WorkcellProjectV5): boolean {
   return project.opcUa.mode === 'client' || project.opcUa.mode === 'bridge'
 }
 
+function hasNativeCleanupPending(runtime: EndpointRuntimeV1): boolean {
+  return runtime.client !== null
+    || runtime.session !== null
+    || runtime.subscription !== null
+    || runtime.groups.length > 0
+    || runtime.residualCleanup.size > 0
+}
+
 function endpointPhase(runtime: EndpointRuntimeV1): RuntimeGatewayOpcUaClientEndpointPhaseV1 {
-  if (runtime.stopped) return 'disabled'
+  if (runtime.stopped) {
+    return hasNativeCleanupPending(runtime) ? 'faulted' : 'disabled'
+  }
   if (runtime.connected) return 'connected'
   if (runtime.connecting) return 'connecting'
   if (runtime.recovery !== null || runtime.reconnectTimer !== null) return 'reconnecting'
@@ -423,8 +441,50 @@ export function createOpcUaClientSnapshotAssemblerV1(
   })
 }
 
-async function terminateGroups(groups: readonly ClientMonitoredItemGroup[]): Promise<void> {
-  await Promise.all(groups.map(async (group) => group.terminate().catch(() => undefined)))
+async function cleanupNativeHandles(handles: NativeCleanupHandlesV1): Promise<void> {
+  let firstFailure: unknown
+  let hasFailure = false
+  const retainFailure = (error: unknown): void => {
+    if (hasFailure) return
+    hasFailure = true
+    firstFailure = error
+  }
+  for (const group of [...handles.groups]) {
+    try {
+      await group.terminate()
+      handles.groups = handles.groups.filter((candidate) => candidate !== group)
+    } catch (error) {
+      retainFailure(error)
+    }
+  }
+  const subscription = handles.subscription
+  if (subscription !== null) {
+    try {
+      await subscription.terminate()
+      if (handles.subscription === subscription) handles.subscription = null
+    } catch (error) {
+      retainFailure(error)
+    }
+  }
+  const session = handles.session
+  if (session !== null) {
+    try {
+      await session.close()
+      if (handles.session === session) handles.session = null
+    } catch (error) {
+      retainFailure(error)
+    }
+  }
+  const client = handles.client
+  if (client !== null) {
+    try {
+      await client.disconnect()
+      if (handles.client === client) handles.client = null
+    } catch (error) {
+      retainFailure(error)
+    }
+  }
+  if (hasFailure) throw firstFailure
 }
 
 async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
@@ -432,36 +492,60 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
     clearTimeout(runtime.reconnectTimer)
     runtime.reconnectTimer = null
   }
-  const groups = runtime.groups
-  const subscription = runtime.subscription
-  const session = runtime.session
-  const client = runtime.client
-  runtime.groups = []
-  runtime.subscription = null
-  runtime.session = null
-  runtime.client = null
   runtime.assembler?.reset()
   runtime.earlyRoots.clear()
   runtime.earlyEncodedBytes = 0
   runtime.nextEarlyArrivalOrdinal = 1
   runtime.drainingEarlyRoots = false
   runtime.connected = false
-  await terminateGroups(groups)
-  if (subscription !== null) await subscription.terminate().catch(() => undefined)
-  if (session !== null) await session.close().catch(() => undefined)
-  if (client !== null) await client.disconnect().catch(() => undefined)
+  let firstFailure: unknown
+  let hasFailure = false
+  const cleanup = async (handles: NativeCleanupHandlesV1): Promise<void> => {
+    try {
+      await cleanupNativeHandles(handles)
+    } catch (error) {
+      if (!hasFailure) {
+        hasFailure = true
+        firstFailure = error
+      }
+    }
+  }
+  await cleanup(runtime)
+  for (const residual of runtime.residualCleanup) {
+    await cleanup(residual)
+    if (
+      residual.client === null
+      && residual.session === null
+      && residual.subscription === null
+      && residual.groups.length === 0
+    ) runtime.residualCleanup.delete(residual)
+  }
+  if (hasFailure) throw firstFailure
 }
 
 async function closeDetachedConnection(
+  runtime: EndpointRuntimeV1,
   client: OPCUAClient,
   session: ClientSession | null,
   subscription: ClientSubscription | null,
   groups: readonly ClientMonitoredItemGroup[],
 ): Promise<void> {
-  await terminateGroups(groups)
-  if (subscription !== null) await subscription.terminate().catch(() => undefined)
-  if (session !== null) await session.close().catch(() => undefined)
-  await client.disconnect().catch(() => undefined)
+  const residual: NativeCleanupHandlesV1 = {
+    client: runtime.client === client ? null : client,
+    session: runtime.session === session ? null : session,
+    subscription: runtime.subscription === subscription ? null : subscription,
+    groups: groups.filter((group) => !runtime.groups.includes(group)),
+  }
+  if (
+    residual.client === null
+    && residual.session === null
+    && residual.subscription === null
+    && residual.groups.length === 0
+  ) return
+  runtime.residualCleanup.add(residual)
+  if (runtime.stopped) return
+  await cleanupNativeHandles(residual)
+  runtime.residualCleanup.delete(residual)
 }
 
 export function createOpcUaClientAdapterV1(
@@ -513,6 +597,7 @@ export function createOpcUaClientAdapterV1(
       session: null,
       subscription: null,
       groups: [],
+      residualCleanup: new Set(),
       assembler: null,
       reconnectTimer: null,
       recovery: null,
@@ -797,6 +882,7 @@ export function createOpcUaClientAdapterV1(
       || runtime.recovery !== null
       || runtime.connecting
       || runtime.connected
+      || hasNativeCleanupPending(runtime)
     ) return
     try {
       runtime.nextRetryAtMs = nextGatewayTimestamp(runtime) + runtime.endpoint.reconnectDelayMs
@@ -821,9 +907,15 @@ export function createOpcUaClientAdapterV1(
     ) return
     const task = connect(runtime)
     runtime.connectTask = task
-    void task.finally(() => {
-      if (runtime.connectTask === task) runtime.connectTask = null
-    })
+    void task.then(
+      () => {
+        if (runtime.connectTask === task) runtime.connectTask = null
+      },
+      (error: unknown) => {
+        if (runtime.connectTask === task) runtime.connectTask = null
+        runtime.lastError = diagnosticError(error, runtime.lastGatewayTimestampMs)
+      },
+    )
   }
 
   function recover(runtime: EndpointRuntimeV1, error: unknown): void {
@@ -1015,7 +1107,7 @@ export function createOpcUaClientAdapterV1(
     } finally {
       runtime.connecting = false
       if (!active()) {
-        await closeDetachedConnection(candidate, session, subscription, groups)
+        await closeDetachedConnection(runtime, candidate, session, subscription, groups)
       }
       if (
         !runtime.stopped
@@ -1064,13 +1156,8 @@ export function createOpcUaClientAdapterV1(
     clearEarlyRoots(runtime)
     runtime.reconnectAttempt = 0
     runtime.nextRetryAtMs = null
-    try {
-      await closeRuntime(runtime)
-      await runtime.recovery
-      await runtime.connectTask
-    } finally {
-      await closeRuntime(runtime)
-    }
+    await Promise.allSettled([runtime.recovery, runtime.connectTask])
+    await closeRuntime(runtime)
   }
 
   return Object.freeze({
@@ -1088,6 +1175,9 @@ export function createOpcUaClientAdapterV1(
       const runtime = requireRuntime(endpointId)
       if (runtime.mappingCount === 0) {
         throw new Error('OPC_UA_ENDPOINT_NOT_ACTIVE')
+      }
+      if (hasNativeCleanupPending(runtime)) {
+        throw new Error('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
       }
       runtime.stopped = false
       startConnect(runtime)
