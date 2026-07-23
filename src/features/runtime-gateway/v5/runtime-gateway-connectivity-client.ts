@@ -106,7 +106,7 @@ function exactError(value: unknown): { readonly code: string; readonly message: 
     const envelope = validateRuntimeGatewayErrorEnvelopeV1(value)
     const details: Record<string, string | null> = {}
     for (const key of ['recoveredProjectId', 'recoveredRevisionId', 'recoveryError'] as const) {
-      if (key in envelope) details[key] = envelope[key]
+      if (key in envelope) details[key] = envelope[key] ?? null
     }
     return { code: envelope.code, message: envelope.message, details: Object.keys(details).length === 0 ? null : Object.freeze(details) }
   } catch {
