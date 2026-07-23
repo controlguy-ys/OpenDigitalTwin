@@ -23,6 +23,7 @@ import {
   type OpcUaServerAdapterV1,
 } from './opcua-server-adapter.js'
 import * as serverAdapterModule from './opcua-server-adapter.js'
+import { OPENWEB_MODEL_NAMESPACE_URI_V1 } from './opcua-openweb-model.js'
 
 const CRB_ROBOT_ID = 'robot-1'
 const OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 =
@@ -34,6 +35,30 @@ function sampleProject(mode: 'off' | 'server' | 'bridge'): WorkcellProjectV5 {
   ;(source as unknown as { projectId: string }).projectId = `project-opcua-${mode}`
   ;(source as unknown as { revisionId: string }).revisionId = `revision-opcua-${mode}`
   ;(source.opcUa as unknown as { mode: WorkcellProjectV5['opcUa']['mode'] }).mode = mode
+  return validateWorkcellProjectV5(source)
+}
+
+function sampleOpenWebProject(): WorkcellProjectV5 {
+  const source = cloneWorkcellProjectV5(sampleProject('server'))
+  ;(source.spatialEntities as unknown as WorkcellProjectV5['spatialEntities'][number][]).push({
+    id: 'box',
+    name: 'Box',
+    geometry: { kind: 'box', dimensionsM: [0.1, 0.1, 0.1], color: '#808080' },
+    parentFrameId: 'mcp',
+    localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+    visible: true,
+    groupId: null,
+    removable: true,
+    transformOwner: 'simulation',
+    numericStatus: {
+      value: 0,
+      sourceOwnership: 'simulation',
+      overlay: { visible: false, frameId: null },
+    },
+    graspable: false,
+    graspFrames: [],
+    movingFrames: [],
+  })
   return validateWorkcellProjectV5(source)
 }
 
@@ -121,6 +146,9 @@ describe('OPC UA server adapter V1', () => {
       namespaceUri: OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1,
       namespaceIndex: null,
       nodeIds: {},
+      productNamespaceUri: OPENWEB_MODEL_NAMESPACE_URI_V1,
+      productNamespaceIndex: null,
+      productRootNodeId: null,
     })
     await expect(adapter.publishRobotJointState(CRB_ROBOT_ID, { J1: 5 }))
       .rejects.toThrow('OPC_UA_SERVER_MODE_OFF')
@@ -216,6 +244,67 @@ describe('OPC UA server adapter V1', () => {
     await adapter.stop()
     await adapter.stop()
     expect(adapter.status().started).toBe(false)
+  }, 30_000)
+
+  it('creates the OpenWebDigitalTwin product model and publishes its Actual snapshot beside Robotics telemetry', async () => {
+    const project = sampleOpenWebProject()
+    const adapter = createOpcUaServerAdapterV1(project, {
+      host: '127.0.0.1',
+      advertisedHost: '127.0.0.1',
+      advertisedPort: 0,
+      port: 0,
+      pkiRootDir: TEST_PKI_ROOT,
+    })
+    adapters.push(adapter)
+    await adapter.start()
+
+    const status = adapter.status()
+    expect(status.productNamespaceUri).toBe(OPENWEB_MODEL_NAMESPACE_URI_V1)
+    expect(status.productNamespaceIndex).toBeGreaterThan(1)
+    expect(status.productRootNodeId).toMatch(/^ns=\d+;s=OpenWebDigitalTwin\/Projects\/project-opcua-server$/u)
+
+    await adapter.publishActualSnapshot({
+      projectId: project.projectId,
+      revisionId: project.revisionId,
+      configRevision: project.revisionId,
+      robots: { [CRB_ROBOT_ID]: { J1: 21.5 } },
+      sceneObjects: {
+        box: {
+          pose: { positionM: [0.4, 0.5, 0.6], quaternion: [0, 0, 0, 1] },
+          status: 3,
+          color: '#123456',
+          quality: 'GOOD',
+          sourceTimestampMs: 1_000,
+          publishedTimestampMs: 1_050,
+        },
+      },
+      logicalSignals: {
+        PartPresent: {
+          value: true,
+          quality: 'GOOD',
+          statusCode: 'Good',
+          sourceTimestampMs: 1_000,
+          publishedTimestampMs: 1_050,
+        },
+      },
+      jobs: { 'job-1': { state: 'running', stepIndex: 2, failureCode: null } },
+      attachments: { box: { state: 'attached', parentFrameId: 'robot-1:Tool' } },
+    })
+
+    const { client, session } = await openAnonymousSession(status.endpointUrl!)
+    try {
+      const objectX = `ns=${status.namespaceIndex};s=OpenWebDigitalTwin/Projects/${project.projectId}/Actual/SceneObjects/box/Pose/X`
+      const robotJ1 = status.nodeIds[CRB_ROBOT_ID]!.J1!
+      const values = await session.read([
+        { nodeId: objectX, attributeId: AttributeIds.Value },
+        { nodeId: robotJ1, attributeId: AttributeIds.Value },
+      ])
+      expect(values.map(({ statusCode }) => statusCode.isGood())).toEqual([true, true])
+      expect(values.map(({ value }) => value.value)).toEqual([0.4, 21.5])
+    } finally {
+      await session.close()
+      await client.disconnect()
+    }
   }, 30_000)
 
   it('rejects unknown Robot and joint identities before changing any value', async () => {
