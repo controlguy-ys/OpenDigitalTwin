@@ -3,29 +3,29 @@ import { createLocalHelpControllerV4, type LocalHelpTopicV4 } from './local-help
 
 describe('createLocalHelpControllerV4', () => {
   it('uses only copied declared topics and publishes immutable state exactly once per change', () => {
-    const declared: LocalHelpTopicV4[] = ['controls', 'stepImport', 'opcUaMapping', 'about']
+    const declared: LocalHelpTopicV4[] = ['controls', 'stepImport', 'opcUaSettings', 'connectionMonitor', 'opcUaBinding', 'dockerRunGuide', 'about']
     const controller = createLocalHelpControllerV4({ availableTopics: declared })
     declared.length = 0
     const listener = vi.fn()
     controller.subscribe(listener)
-    for (const topic of ['controls', 'stepImport', 'opcUaMapping', 'about'] as const) {
+    for (const topic of ['controls', 'stepImport', 'opcUaSettings', 'connectionMonitor', 'opcUaBinding', 'dockerRunGuide', 'about'] as const) {
       expect(controller.hasTopic(topic)).toBe(true)
       controller.open(topic)
       expect(Object.isFrozen(controller.getState())).toBe(true)
     }
     controller.open('about')
-    expect(listener).toHaveBeenCalledTimes(4)
+    expect(listener).toHaveBeenCalledTimes(7)
     controller.close()
     controller.close()
-    expect(listener).toHaveBeenCalledTimes(5)
+    expect(listener).toHaveBeenCalledTimes(8)
   })
 
   it('rejects omitted topics without publishing and handles unsubscribe/disposal', () => {
     const controller = createLocalHelpControllerV4({ availableTopics: ['controls'] })
     const listener = vi.fn()
     const unsubscribe = controller.subscribe(listener)
-    expect(controller.hasTopic('opcUaMapping')).toBe(false)
-    expect(() => controller.open('opcUaMapping')).toThrow('Local Help topic is unavailable: opcUaMapping')
+    expect(controller.hasTopic('opcUaBinding')).toBe(false)
+    expect(() => controller.open('opcUaBinding')).toThrow('Local Help topic is unavailable: opcUaBinding')
     expect(listener).not.toHaveBeenCalled()
     unsubscribe()
     controller.open('controls')

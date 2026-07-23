@@ -36,6 +36,10 @@ PLC. Docker Project Endpoints must use `opc.tcp://host.docker.internal:4840`.
 
 ## Start
 
+The application exposes the same block as a copy-only surface at
+**Connectivity > Docker Run Guide**. It never starts, stops, or restarts Docker;
+the operator reviews and runs the copied commands.
+
 ```powershell
 $env:ROBOTSIM_OPCUA_PORT = '4841'
 $env:ROBOTSIM_OPCUA_ADVERTISE_HOST = '127.0.0.1'
@@ -71,13 +75,14 @@ UA endpoint discovery also works when the published port is changed.
 Changing listener or advertised endpoint environment values requires a container
 restart.
 
-## Select an OPC UA mode
+## Select an OPC UA role
 
 1. Load the intended Project, or choose **Project → Samples → Dual-Robot Technical Demo**.
-2. Change the Project's **OPC UA** selector from **Off** to **Server** to expose
-   Robot Actual values, **Client** to subscribe to external Object bindings, or
-   **Bridge** to do both.
-3. Wait for **Gateway ready**. For Server/Bridge, inspect the reported endpoint.
+2. Open **Connectivity > OPC UA Settings**. Select **Server** to expose Robot
+   Actual values, **Client** to subscribe to external mappings, or **Bridge** to
+   do both, then Apply. There are no direct role radio commands in the menu.
+3. Open **Connectivity > Connection Monitor** and wait for Project readiness.
+   For Server/Bridge, inspect the reported listener and advertised endpoint.
 4. In Server/Bridge mode, connect an external OPC UA Client to
    `opc.tcp://<docker-host>:${ROBOTSIM_OPCUA_PORT:-4841}`.
 
@@ -121,6 +126,11 @@ docker compose ps
 
 The Browser remains a local Simulation runtime when the Gateway is unavailable;
 its Gateway indicator reports the integration error separately.
+
+Connection success does not prove every mapped value is usable. Inspect each
+Endpoint's quality, last notification, last good value, and stale state in
+**Connection Monitor**. A connected transport can still report a bad value or
+an unreadable node.
 
 ## Direct Gateway check
 

@@ -14,7 +14,10 @@ interface ReturnFocusTargetV4 {
 const HELP_CONTENT_V4: Readonly<Record<LocalHelpTopicV4, { readonly title: string; readonly body: string }>> = Object.freeze({
   controls: Object.freeze({ title: 'Keyboard and Mouse Controls', body: 'Use the camera controls to orbit, pan, and focus the 3D workspace.' }),
   stepImport: Object.freeze({ title: 'STEP Import Guide', body: 'Import STEP assets within the configured Robot and Object limits, then review geometry and placement.' }),
-  opcUaMapping: Object.freeze({ title: 'OPC UA Mapping Guide', body: 'Map supported Robot Joint and Object XYZRPY values through the configured OPC UA workflow.' }),
+  opcUaSettings: Object.freeze({ title: 'OPC UA Settings', body: 'Configure shared Client Endpoints and choose Off, Client, Server, or Bridge only inside Settings. Endpoint URLs, reconnect policy, and deployment-owned listener values have one authority.' }),
+  connectionMonitor: Object.freeze({ title: 'Connection Monitor', body: 'Inspect Gateway, Project, Server, and Client Endpoint state. Header polling uses 10 seconds; the open monitor uses 2 seconds. Quality and stale state remain separate from transport connectivity.' }),
+  opcUaBinding: Object.freeze({ title: 'OPC UA Binding', body: 'Bind Object moving frames, Object status, Robot Joints, Robot frames, and Robot status through stable Namespace URI addresses. Taking Manual ownership explicitly removes conflicting read mappings.' }),
+  dockerRunGuide: Object.freeze({ title: 'Docker Run Guide', body: 'Copy the reviewed PowerShell commands, then run them yourself. Native PLC port 4840, Docker host.docker.internal:4840, and Gateway Server port 4841 are independent; environment changes require a container restart.' }),
   about: Object.freeze({ title: 'About', body: 'RobotSim is a lightweight Web Digital Twin for Project V4 workcells.' }),
 })
 

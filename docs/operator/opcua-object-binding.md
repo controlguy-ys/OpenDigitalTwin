@@ -18,25 +18,34 @@ OPC UA `Double` nodes:
 
 An optional `Double` Status node supplies the Object's numeric status overlay.
 Status ownership is separate from transform ownership: binding no Status node
-leaves Status manual, and **Take Manual Control** returns only the transform to
-manual ownership while retaining a configured OPC UA Status binding.
+leaves Status manual, and confirmed **Take Manual Ownership** removes conflicting
+read mappings in the selected ownership scope.
 
-## Configure an Object
+## Configure an Endpoint and Binding
 
-1. Right-click a Box, Cylinder, or imported STEP Object in the Scene tree or
-   viewport and choose **Open Binding**. The Inspector opens and expands the
-   existing **OPC UA Pose Binding** editor for that exact Object.
-2. Provide the external endpoint URL and a
-   whole-number publishing interval of at least 50 ms.
-3. Select `m` or `mm` for X/Y/Z. `m` is passed through; `mm` is multiplied by
-   `0.001` before the project stores metres. Roll, Pitch, and Yaw are degrees.
-4. Enter all six Node IDs, and optionally a Status Node ID, then choose **Bind
-   OPC UA Pose**.
+1. Open **Connectivity > OPC UA Settings**. Add or edit the shared Client
+   Endpoint once, including its URL, publishing interval, reconnect policy, and
+   enabled state. Choose Client or Bridge in this dialog; menu clicks do not
+   change runtime role.
+2. Open **Connectivity > Connection Monitor** and confirm the intended Endpoint
+   has an active Session and Subscription. The compact header polls every 10
+   seconds; an open monitor polls every 2 seconds.
+3. Right-click a Box, Cylinder, or imported STEP Object and choose **Open
+   Binding**, or open **Connectivity > Binding Overview** and select its moving
+   frame or numeric Status target.
+4. Select the shared Endpoint and enter a stable Node Address as Namespace URI,
+   Identifier type, and Identifier. A pasted `ns=N;...` address is accepted only
+   while a matching Browse Session is active and is immediately resolved to the
+   current Namespace URI.
+5. For Object Pose, map six source leaf paths to the fixed Project destinations
+   X, Y, Z, Roll, Pitch, and Yaw. Project position is metres and orientation is
+   degrees. Save applies the Mapping and source ownership in one Project
+   mutation.
 
-The Project switches from Off to Client when needed; if it was Server, it
-switches to Bridge so Robot Actual Server values remain available. The Gateway
-connects outward to the supplied endpoint. It does not expose those Object nodes
-from its own Server namespace.
+The same editor supports Object Status, Robot Joints, Robot frames, and Robot
+Status. Removing a Mapping does not silently claim Manual ownership. Use the
+separate, confirmed **Take Manual Ownership** action when manual control is
+intended; it removes conflicting read mappings and changes ownership atomically.
 
 ## Run the bundled ObjectPos demo Server
 
@@ -53,18 +62,20 @@ npm run runtime:gateway
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-In the application, choose **Project > Samples > Dual-Robot Technical Demo**
-and then **Connectivity > Create 20 Box ObjectPos bindings**. The demo Server
-uses `opc.tcp://127.0.0.1:4840`, namespace index `5`, XYZ in millimetres, and RPY
-in degrees. It is an anonymous Security Policy None endpoint for local testing,
-not a production security configuration.
+In the application, configure `opc.tcp://127.0.0.1:4840` as a shared Endpoint
+in **OPC UA Settings**, then create Object moving-frame mappings from **Binding
+Overview**. The demo Server's Namespace URI is
+`http://br-automation.com/OpcUa/PLC/PV/`; its current namespace index is not a
+persisted contract. XYZ is millimetres at the source and RPY is degrees. It is
+an anonymous Security Policy None endpoint for local testing, not a production
+security configuration.
 
 ## Ownership and runtime behavior
 
 While the Object transform is OPC UA-owned, the Inspector's manual XYZ/RPY
 fields and the viewport move gizmo are disabled. The displayed transform is the
-latest runtime pose. Choose **Take Manual Control** deliberately to remove the
-transform binding and restore manual fields/gizmo placement.
+latest runtime pose. Choose **Take Manual Ownership** deliberately to remove
+conflicting read mappings and restore manual fields/gizmo placement.
 
 The six pose leaves form one coherent mapping. The Client converts RPY to the
 project quaternion and the browser samples the retained poses with deterministic
@@ -90,8 +101,8 @@ does not take Status ownership.
 - The browser connects to the Gateway over same-origin `/runtime/`, including
   the `/runtime/ws` WebSocket. In Docker, Nginx proxies that WebSocket upgrade.
 - Docker must be able to route from `runtime-gateway` to the external OPC UA
-  Server. The published `4840` port is needed only for Server/Bridge inbound
-  Robot Actual clients, not for Client-only outbound connections.
+  Server at host port `4840`. The separately published Gateway Server port
+  `4841` is used only for Server/Bridge inbound Robot Actual clients.
 
 This feature never writes OPC UA values, calls OPC UA methods, starts motion,
 transfers to a PLC, or provides a safety function. Authentication,

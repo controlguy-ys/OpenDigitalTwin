@@ -1,7 +1,10 @@
 export type LocalHelpTopicV4 =
   | 'controls'
   | 'stepImport'
-  | 'opcUaMapping'
+  | 'opcUaSettings'
+  | 'connectionMonitor'
+  | 'opcUaBinding'
+  | 'dockerRunGuide'
   | 'about'
 
 export interface LocalHelpStateV4 {

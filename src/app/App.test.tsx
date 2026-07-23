@@ -593,7 +593,7 @@ describe('App Project V4 production composition', () => {
     expect(addSpy).toHaveBeenCalled(); expect(removeSpy).toHaveBeenCalled()
   })
 
-  it('routes Project and connectivity commands through only the injected App resource ports', async () => {
+  it('routes Project commands, exposes local Connectivity Help, and keeps V5 surfaces disabled before cutover', async () => {
     const resources = resourcesForTest()
     render(<App gatewayPublisher={null} resources={resources} />)
     const runtime = observed.commandBindings.at(-1)!.runtime
@@ -603,12 +603,18 @@ describe('App Project V4 production composition', () => {
     await expect(runtime.invoke('project.export')).resolves.toBe('completed')
     await expect(runtime.invoke('project.sample.dual')).resolves.toBe('completed')
     await expect(runtime.invoke('project.sample.handover')).resolves.toBe('completed')
-    await expect(runtime.invoke('connectivity.mode.server')).resolves.toBe('completed')
+    await expect(runtime.invoke('connectivity.settings.open')).resolves.toBe('ignored')
+    await expect(runtime.invoke('connectivity.monitor.open')).resolves.toBe('ignored')
+    await expect(runtime.invoke('connectivity.bindings.open')).resolves.toBe('ignored')
+    await expect(runtime.invoke('connectivity.docker.open')).resolves.toBe('ignored')
+    for (const id of ['help.opcUaSettings', 'help.connectionMonitor', 'help.opcUaBinding', 'help.dockerRunGuide']) {
+      await expect(runtime.invoke(id)).resolves.toBe('completed')
+    }
     expect(resources.projectStore.getState().newProject).toHaveBeenCalledOnce()
     expect(resources.projectStore.getState().saveActiveProject).toHaveBeenCalledOnce()
     expect(resources.projectFiles.pickProject).toHaveBeenCalledOnce()
     expect(resources.projectFiles.downloadProject).toHaveBeenCalledWith(expect.any(Blob), 'Untitled Workcell.json')
-    expect(vi.mocked(resources.mutations.replaceFromActive)).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(resources.mutations.replaceFromActive)).toHaveBeenCalledTimes(2)
     const handoverMutation = vi.mocked(resources.mutations.replaceFromActive)
       .mock.calls.find(([request]) => request.description === 'Load NED2 direct Handover demo')?.[0]
     expect(handoverMutation).toBeDefined()

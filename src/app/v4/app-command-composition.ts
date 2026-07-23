@@ -62,6 +62,10 @@ export interface AppCommandActionPortsV4 {
     openTimeline(): void
     openCollision(selection: SceneSelectionTargetV4 | null): void
     openGatewayDetails(): void
+    openOpcUaSettings?: () => void
+    openConnectionMonitor?: () => void
+    openBindingOverview?: () => void
+    openDockerRunGuide?: () => void
   }
 }
 
@@ -117,7 +121,7 @@ export const APP_COMMAND_PLACEMENTS_BY_SECTION_V4: PlacementMapV4 = Object.freez
     ['job.start', null, null], ['job.cancel', null, null], ['view.timeline.open', null, null], ['collision.validate', null, null], ['view.collision.open', null, null], ['simulation.fault.gripConfirmTimeout', 'simulation.faults', 'Fault Injection'],
   ]),
   connectivity: placements([
-    ['connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'], ['connectivity.bindObjectPosBoxes', null, null], ['connectivity.robotBinding.disconnect', null, null], ['connectivity.robotBinding.reconnect', null, null], ['connectivity.details.open', null, null],
+    ['connectivity.settings.open', null, null], ['connectivity.monitor.open', null, null], ['connectivity.bindings.open', null, null], ['connectivity.docker.open', null, null],
   ]),
   view: placements([
     ['view.sidebar', 'view.panels', 'Panels'], ['view.inspector', 'view.panels', 'Panels'], ['view.bottom', 'view.panels', 'Panels'], ['view.ribbon', 'view.panels', 'Panels'], ['view.layout.reset', 'view.panels', 'Panels'],
@@ -127,7 +131,7 @@ export const APP_COMMAND_PLACEMENTS_BY_SECTION_V4: PlacementMapV4 = Object.freez
     ['view.orientation.isometric', 'view.standard-views', 'Standard Views'], ['view.orientation.top', 'view.standard-views', 'Standard Views'], ['view.orientation.front', 'view.standard-views', 'Standard Views'], ['view.orientation.right', 'view.standard-views', 'Standard Views'], ['view.orientation.back', 'view.standard-views', 'Standard Views'], ['view.orientation.left', 'view.standard-views', 'Standard Views'], ['view.orientation.bottom', 'view.standard-views', 'Standard Views'],
   ]),
   help: placements([
-    ['help.controls', null, null], ['help.stepImport', null, null], ['help.opcUaMapping', null, null], ['help.about', null, null],
+    ['help.controls', null, null], ['help.stepImport', null, null], ['help.opcUaSettings', null, null], ['help.connectionMonitor', null, null], ['help.opcUaBinding', null, null], ['help.dockerRunGuide', null, null], ['help.about', null, null],
   ]),
 })
 
@@ -163,23 +167,6 @@ function activeJob(context: AppCommandCompositionContextV4): WorkcellProjectV4['
 
 function activeRobotReason(context: AppCommandCompositionContextV4): string | undefined {
   return activeRobot(context) === null ? 'No active Robot.' : undefined
-}
-
-function activeRobotBindingEndpointId(context: AppCommandCompositionContextV4): string | null {
-  const robot = activeRobot(context)
-  if (robot === null || !robot.jointSource.startsWith('opcua:')) return null
-  const endpointId = robot.jointSource.slice('opcua:'.length)
-  return endpointId.length === 0 ? null : endpointId
-}
-
-function robotBindingControlReason(context: AppCommandCompositionContextV4): string | undefined {
-  if (context.project.opcUa.mode !== 'client' && context.project.opcUa.mode !== 'bridge') {
-    return 'Robot Binding control requires OPC UA Client Mode.'
-  }
-  if (activeRobotBindingEndpointId(context) === null) {
-    return activeRobotReason(context) ?? 'The active Robot has no saved OPC UA Binding.'
-  }
-  return undefined
 }
 
 function activeJobReason(context: AppCommandCompositionContextV4): string | undefined {
@@ -422,61 +409,21 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
         )
       },
     }),
-    command('connectivity.mode.off', 'Off', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'off' }, execute: () => context.actions.connectivity.setMode('off') }),
-    command('connectivity.mode.client', 'OPC UA Client', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'client' }, execute: () => context.actions.connectivity.setMode('client') }),
-    command('connectivity.mode.server', 'OPC UA Server', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'server' }, execute: () => context.actions.connectivity.setMode('server') }),
-    command('connectivity.mode.bridge', 'OPC UA Bridge', 'connectivity', { kind: 'radio', visible: true, enabled: true, groupId: 'connectivity.runtime-mode', get checked() { return context.project.opcUa.mode === 'bridge' }, execute: () => context.actions.connectivity.setMode('bridge') }),
-    command('connectivity.bindObjectPosBoxes', 'Create 20 Box ObjectPos bindings', 'connectivity', {
-      kind: 'action', visible: true,
-      get enabled() { return projectReason(context, true) === undefined },
-      get disabledReason() { return projectReason(context, true) },
-      execute: () => context.actions.connectivity.bindBrObjectPosBoxes(),
-    }),
-    command('connectivity.robotBinding.disconnect', 'Disconnect Robot Binding', 'connectivity', {
-      kind: 'action', visible: true,
-      get enabled() {
-        return robotBindingControlReason(context) === undefined
-          && context.actions.connectivity.disconnectRobotBinding !== undefined
+    ...([
+      ['connectivity.settings.open', 'OPC UA Settings…', context.actions.presentation.openOpcUaSettings],
+      ['connectivity.monitor.open', 'Connection Monitor…', context.actions.presentation.openConnectionMonitor],
+      ['connectivity.bindings.open', 'Binding Overview…', context.actions.presentation.openBindingOverview],
+      ['connectivity.docker.open', 'Docker Run Guide…', context.actions.presentation.openDockerRunGuide],
+    ] as const).map(([id, label, open]) => command(id, label, 'connectivity', {
+      kind: 'action',
+      visible: true,
+      enabled: open !== undefined,
+      disabledReason: open === undefined ? 'Project V5 browser cutover pending' : undefined,
+      execute() {
+        if (open === undefined) throw new Error('Project V5 browser cutover pending')
+        open()
       },
-      get disabledReason() {
-        return robotBindingControlReason(context)
-          ?? (context.actions.connectivity.disconnectRobotBinding === undefined
-            ? 'Runtime Gateway endpoint control is unavailable.'
-            : undefined)
-      },
-      async execute() {
-        const robot = activeRobot(context)
-        const endpointId = activeRobotBindingEndpointId(context)
-        const disconnect = context.actions.connectivity.disconnectRobotBinding
-        if (robot === null || endpointId === null || disconnect === undefined) {
-          throw new Error(robotBindingControlReason(context) ?? 'Runtime Gateway endpoint control is unavailable.')
-        }
-        await disconnect(robot.id)
-      },
-    }),
-    command('connectivity.robotBinding.reconnect', 'Reconnect Robot Binding', 'connectivity', {
-      kind: 'action', visible: true,
-      get enabled() {
-        return robotBindingControlReason(context) === undefined
-          && context.actions.connectivity.reconnectRobotBinding !== undefined
-      },
-      get disabledReason() {
-        return robotBindingControlReason(context)
-          ?? (context.actions.connectivity.reconnectRobotBinding === undefined
-            ? 'Runtime Gateway endpoint control is unavailable.'
-            : undefined)
-      },
-      async execute() {
-        const robot = activeRobot(context)
-        const endpointId = activeRobotBindingEndpointId(context)
-        const reconnect = context.actions.connectivity.reconnectRobotBinding
-        if (robot === null || endpointId === null || reconnect === undefined) {
-          throw new Error(robotBindingControlReason(context) ?? 'Runtime Gateway endpoint control is unavailable.')
-        }
-        await reconnect(robot.id)
-      },
-    }),
-    command('connectivity.details.open', 'Gateway Details', 'connectivity', { kind: 'action', visible: true, enabled: true, execute: () => context.actions.presentation.openGatewayDetails() }),
+    })),
   ]
 
   const dock = (id: string, label: string, name: 'sidebar' | 'inspector' | 'bottom'): void => {
@@ -526,7 +473,13 @@ export function composeAppCommandsV4(context: AppCommandCompositionContextV4): A
   for (const [view, label] of views) commands.push(command(`view.orientation.${view}`, label, 'view', { kind: 'action', visible: true, enabled: true, execute: () => context.camera.setStandardView(view) }))
 
   const helpTopics: readonly (readonly [LocalHelpTopicV4, string, string])[] = [
-    ['controls', 'help.controls', 'Keyboard and Mouse Controls'], ['stepImport', 'help.stepImport', 'STEP Import Guide'], ['opcUaMapping', 'help.opcUaMapping', 'OPC UA Mapping Guide'], ['about', 'help.about', 'About'],
+    ['controls', 'help.controls', 'Keyboard and Mouse Controls'],
+    ['stepImport', 'help.stepImport', 'STEP Import Guide'],
+    ['opcUaSettings', 'help.opcUaSettings', 'OPC UA Settings'],
+    ['connectionMonitor', 'help.connectionMonitor', 'Connection Monitor'],
+    ['opcUaBinding', 'help.opcUaBinding', 'OPC UA Binding'],
+    ['dockerRunGuide', 'help.dockerRunGuide', 'Docker Run Guide'],
+    ['about', 'help.about', 'About'],
   ]
   for (const [topic, id, label] of helpTopics) if (context.help.hasTopic(topic)) {
     commands.push(command(id, label, 'help', { kind: 'action', visible: true, enabled: true, execute: () => context.help.open(topic) }))

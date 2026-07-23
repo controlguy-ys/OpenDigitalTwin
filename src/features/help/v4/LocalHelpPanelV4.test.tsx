@@ -31,9 +31,15 @@ function HelpMenuHarnessV4({ controller, compact = false }: { readonly controlle
 
 describe('LocalHelpPanelV4', () => {
   it('renders each declared local topic and restores focus to its invoking Help item after close', async () => {
-    const controller = createLocalHelpControllerV4({ availableTopics: ['controls', 'stepImport', 'opcUaMapping', 'about'] })
+    const controller = createLocalHelpControllerV4({ availableTopics: ['controls', 'stepImport', 'opcUaSettings', 'connectionMonitor', 'opcUaBinding', 'dockerRunGuide', 'about'] })
     const topics = [
-      ['controls', 'Keyboard and Mouse Controls'], ['stepImport', 'STEP Import Guide'], ['opcUaMapping', 'OPC UA Mapping Guide'], ['about', 'About'],
+      ['controls', 'Keyboard and Mouse Controls'],
+      ['stepImport', 'STEP Import Guide'],
+      ['opcUaSettings', 'OPC UA Settings'],
+      ['connectionMonitor', 'Connection Monitor'],
+      ['opcUaBinding', 'OPC UA Binding'],
+      ['dockerRunGuide', 'Docker Run Guide'],
+      ['about', 'About'],
     ] as const
     render(<>{topics.map(([topic, title]) => <button key={topic} onClick={(event) => { event.currentTarget.focus(); controller.open(topic) }}>{title}</button>)}<LocalHelpPanelV4 controller={controller} /></>)
     for (const [topic, title] of topics) {
@@ -148,7 +154,7 @@ describe('LocalHelpPanelV4', () => {
     priorFocus.remove()
   })
 
-  it('does not manufacture an unavailable OPC UA Mapping panel and unsubscribes cleanly through StrictMode', () => {
+  it('does not manufacture an unavailable OPC UA Binding panel and unsubscribes cleanly through StrictMode', () => {
     const controller = createLocalHelpControllerV4({ availableTopics: ['controls', 'stepImport', 'about'] })
     const subscribe = vi.fn((listener: () => void) => controller.subscribe(listener))
     const facade: LocalHelpControllerV4 = {
@@ -160,9 +166,9 @@ describe('LocalHelpPanelV4', () => {
       dispose: controller.dispose,
     }
     const view = render(<StrictMode><LocalHelpPanelV4 controller={facade} /></StrictMode>)
-    expect(() => controller.open('opcUaMapping')).toThrow('Local Help topic is unavailable')
-    expect(screen.queryByRole('dialog', { name: 'OPC UA Mapping Guide' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'OPC UA Mapping Guide' })).toBeNull()
+    expect(() => controller.open('opcUaBinding')).toThrow('Local Help topic is unavailable')
+    expect(screen.queryByRole('dialog', { name: 'OPC UA Binding' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'OPC UA Binding' })).toBeNull()
     expect(subscribe).toHaveBeenCalled()
     view.unmount()
     controller.open('about')

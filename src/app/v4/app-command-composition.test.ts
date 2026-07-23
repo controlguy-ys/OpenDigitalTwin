@@ -12,11 +12,6 @@ import {
   HACKATHON_HANDOVER_IDS_V4,
   createHackathonHandoverSampleV4,
 } from '../../features/project/v4/hackathon-handover-sample-v4.js'
-import {
-  createDualRobotSampleV4,
-  DUAL_ROBOT_SAMPLE_IDS_V4,
-} from '../../features/project/v4/dual-robot-sample-v4.js'
-import { bindBrRobotJointsV4, BR_ROBOT_OPCUA_ENDPOINT_ID_V4 } from '../../features/project/v4/robot-joint-opcua-binding-v4.js'
 import type { AppCommandCompositionContextV4 } from './app-command-composition.js'
 import {
   APP_COMMAND_PLACEMENTS_BY_SECTION_V4,
@@ -71,11 +66,23 @@ function context(project = projectWithJob()): AppCommandCompositionContextV4 {
     collision: { getState: vi.fn(() => ({ projectRevisionId: project.revisionId, pending: false, canValidate: true, error: null, result: null })), subscribe: vi.fn(() => () => undefined), replaceInput: vi.fn(), validate: vi.fn(async () => undefined), dispose: vi.fn() },
     camera: { home: vi.fn(), fitAll: vi.fn(), canFocusSelection: vi.fn(() => true), focusSelection: vi.fn(), setStandardView: vi.fn() },
     prompt: { requestText: vi.fn(async () => 'Job') },
-    help: { getState: vi.fn(() => ({ openTopic: null })), subscribe: vi.fn(() => () => undefined), hasTopic: vi.fn((topic: string) => topic !== 'opcUaMapping'), open: vi.fn(), close: vi.fn(), dispose: vi.fn() },
+    help: { getState: vi.fn(() => ({ openTopic: null })), subscribe: vi.fn(() => () => undefined), hasTopic: vi.fn(() => true), open: vi.fn(), close: vi.fn(), dispose: vi.fn() },
     actions: {
       project: { newProject: vi.fn(), saveProject: vi.fn(async () => undefined), importProject: vi.fn(async () => 'cancelled' as const), exportProject: vi.fn(async () => undefined), loadDualRobotSample: vi.fn(), loadHackathonHandoverSample: vi.fn() },
       connectivity: { setMode: vi.fn(async () => undefined), bindBrObjectPosBoxes: vi.fn(async () => undefined) },
-      presentation: { canOpenRobotImport: vi.fn(() => true), openRobotImport: vi.fn(), openRobotBase: vi.fn(), openInspector: vi.fn(), openTimeline: vi.fn(), openCollision: vi.fn(), openGatewayDetails: vi.fn() },
+      presentation: {
+        canOpenRobotImport: vi.fn(() => true),
+        openRobotImport: vi.fn(),
+        openRobotBase: vi.fn(),
+        openInspector: vi.fn(),
+        openTimeline: vi.fn(),
+        openCollision: vi.fn(),
+        openGatewayDetails: vi.fn(),
+        openOpcUaSettings: vi.fn(),
+        openConnectionMonitor: vi.fn(),
+        openBindingOverview: vi.fn(),
+        openDockerRunGuide: vi.fn(),
+      },
     },
   }
 }
@@ -90,7 +97,7 @@ describe('composeAppCommandsV4', () => {
       model: ['model.importRobotStep', 'model.add.box', 'model.add.cylinder', 'model.add.group', 'scene.group.move', 'scene.group.remove', 'robot.base.edit', 'robot.mount.edit'].map(root),
       job: ['job.new', 'job.pose.save', 'job.start', 'job.cancel', 'job.reset', 'job.rename', 'job.duplicate', 'job.delete', 'view.timeline.open'].map(root),
       simulation: [root('job.start'), root('job.cancel'), root('view.timeline.open'), root('collision.validate'), root('view.collision.open'), submenu('simulation.fault.gripConfirmTimeout', 'simulation.faults', 'Fault Injection')],
-      connectivity: [submenu('connectivity.mode.off', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.client', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.server', 'connectivity.runtime-mode', 'Runtime Mode'), submenu('connectivity.mode.bridge', 'connectivity.runtime-mode', 'Runtime Mode'), root('connectivity.bindObjectPosBoxes'), root('connectivity.robotBinding.disconnect'), root('connectivity.robotBinding.reconnect'), root('connectivity.details.open')],
+      connectivity: ['connectivity.settings.open', 'connectivity.monitor.open', 'connectivity.bindings.open', 'connectivity.docker.open'].map(root),
       view: [
         ...['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset'].map((id) => submenu(id, 'view.panels', 'Panels')),
         ...['view.theme.system', 'view.theme.light', 'view.theme.dark'].map((id) => submenu(id, 'view.theme', 'Theme')),
@@ -98,7 +105,7 @@ describe('composeAppCommandsV4', () => {
         ...['view.home', 'view.fitAll', 'view.focusSelection'].map((id) => submenu(id, 'view.camera', 'Camera')),
         ...['view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom'].map((id) => submenu(id, 'view.standard-views', 'Standard Views')),
       ],
-      help: ['help.controls', 'help.stepImport', 'help.opcUaMapping', 'help.about'].map(root),
+      help: ['help.controls', 'help.stepImport', 'help.opcUaSettings', 'help.connectionMonitor', 'help.opcUaBinding', 'help.dockerRunGuide', 'help.about'].map(root),
     })
     expect(() => (APP_COMMAND_PLACEMENTS_BY_SECTION_V4.project as unknown as object[]).push({})).toThrow()
     expect(() => (APP_CONTEXT_COMMAND_IDS_V4.robot as unknown as string[]).push('bad')).toThrow()
@@ -136,7 +143,7 @@ describe('composeAppCommandsV4', () => {
       ...APP_QUICK_ACTION_IDS_V4,
       ...Object.values(APP_CONTEXT_COMMAND_IDS_V4).flatMap((ids) => ids),
     ]
-    const uniqueIds = [...new Set(allReferencedIds.filter((id) => id !== 'help.opcUaMapping'))]
+    const uniqueIds = [...new Set(allReferencedIds)]
     const resolved = uniqueIds.map((id) => [id, registry.get(id)] as const)
     expect(resolved.every(([, entry]) => entry !== null)).toBe(true)
     expect(new Set(resolved.map(([, entry]) => entry)).size).toBe(uniqueIds.length)
@@ -144,7 +151,7 @@ describe('composeAppCommandsV4', () => {
       if (entry!.visible) expect(registry.list(entry!.section).find((candidate) => candidate.id === id)).toBe(entry)
     }
     expect(registry.get('job.pause')).toBeNull()
-    expect(registry.get('help.opcUaMapping')).toBeNull()
+    expect(registry.get('help.unknown')).toBeNull()
   })
 
   it('uses live active Robot and Job identities without selection fallback', async () => {
@@ -158,31 +165,25 @@ describe('composeAppCommandsV4', () => {
     expect(composed.jobOperator.cancel).toHaveBeenCalledWith('robot-1')
   })
 
-  it('controls the saved active Robot Binding without mutating its Project source', async () => {
-    const source = createDualRobotSampleV4({
-      projectId: 'project-binding-command',
-      revisionId: 'revision-binding-command',
-      nowIso: '2026-07-22T00:00:00.000Z',
-    })
-    const project = bindBrRobotJointsV4(source, DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId)
-    const composed = context(project)
-    const disconnect = vi.fn(async () => undefined)
-    const reconnect = vi.fn(async () => undefined)
-    Object.assign(composed.actions.connectivity, {
-      disconnectRobotBinding: disconnect,
-      reconnectRobotBinding: reconnect,
-    })
+  it('exposes only the four Connectivity surfaces and keeps old immediate actions absent', async () => {
+    const composed = context()
     const registry = composeAppCommandsV4(composed)
-
-    expect(registry.get('connectivity.robotBinding.disconnect')).toMatchObject({ enabled: true })
-    expect(registry.get('connectivity.robotBinding.reconnect')).toMatchObject({ enabled: true })
-    await registry.get('connectivity.robotBinding.disconnect')!.execute()
-    await registry.get('connectivity.robotBinding.reconnect')!.execute()
-
-    expect(disconnect).toHaveBeenCalledWith(DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId)
-    expect(reconnect).toHaveBeenCalledWith(DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId)
-    expect(project.robots[0]!.jointSource).toBe(`opcua:${BR_ROBOT_OPCUA_ENDPOINT_ID_V4}`)
-    expect(project.opcUa.mappings).toHaveLength(6)
+    const ids = registry.list('connectivity').map(({ id }) => id)
+    expect(ids).toEqual([
+      'connectivity.settings.open',
+      'connectivity.monitor.open',
+      'connectivity.bindings.open',
+      'connectivity.docker.open',
+    ])
+    for (const id of ids) await registry.get(id)!.execute()
+    expect(composed.actions.presentation.openOpcUaSettings).toHaveBeenCalledOnce()
+    expect(composed.actions.presentation.openConnectionMonitor).toHaveBeenCalledOnce()
+    expect(composed.actions.presentation.openBindingOverview).toHaveBeenCalledOnce()
+    expect(composed.actions.presentation.openDockerRunGuide).toHaveBeenCalledOnce()
+    expect(composed.actions.connectivity.setMode).not.toHaveBeenCalled()
+    expect(composed.actions.connectivity.bindBrObjectPosBoxes).not.toHaveBeenCalled()
+    expect(registry.get('connectivity.mode.client')).toBeNull()
+    expect(registry.get('connectivity.details.open')).toBeNull()
   })
 
   it('uses exact live gripper, Job authoring, and missing-or-foreign Job gates', async () => {
@@ -333,12 +334,10 @@ describe('composeAppCommandsV4', () => {
     const registry = composeAppCommandsV4(composed)
     await expect(registry.get('project.import')!.execute()).resolves.toBe('cancelled')
     await registry.get('view.layer.grid')!.execute()
-    await registry.get('connectivity.mode.server')!.execute()
-    await registry.get('connectivity.bindObjectPosBoxes')!.execute()
+    await registry.get('connectivity.settings.open')!.execute()
     expect(composed.actions.project.importProject).toHaveBeenCalledTimes(1)
     expect(composed.viewportPreferences.getState().layers.grid).toBe(false)
-    expect(composed.actions.connectivity.setMode).toHaveBeenCalledWith('server')
-    expect(composed.actions.connectivity.bindBrObjectPosBoxes).toHaveBeenCalledOnce()
+    expect(composed.actions.presentation.openOpcUaSettings).toHaveBeenCalledOnce()
   })
 
   it('routes every Project action once, leaves projectFiles untouched, and preserves action rejection', async () => {
@@ -423,8 +422,8 @@ describe('composeAppCommandsV4', () => {
     expect(composed.camera.setStandardView).toHaveBeenCalledWith('top')
     expect(composed.collision.validate).toHaveBeenCalledTimes(1)
     expect(composed.help.open).toHaveBeenCalledWith('controls')
-    expect(registry.get('connectivity.mode.client')).toMatchObject({ label: 'OPC UA Client' })
-    expect(registry.get('connectivity.mode.bridge')).toMatchObject({ label: 'OPC UA Bridge' })
+    expect(registry.get('connectivity.settings.open')).toMatchObject({ label: 'OPC UA Settings…' })
+    expect(registry.get('connectivity.bindings.open')).toMatchObject({ label: 'Binding Overview…' })
     expect(registry.get('model.importRobotStep')).toMatchObject({
       label: 'Import Robot STEP',
       enabled: true,
@@ -451,7 +450,7 @@ describe('composeAppCommandsV4', () => {
   it('routes all remaining shell, view, connectivity, presentation, and available Help actions exactly once', async () => {
     const composed = context()
     const registry = composeAppCommandsV4(composed)
-    for (const id of ['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset', 'view.theme.system', 'view.theme.light', 'view.theme.dark', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp', 'view.home', 'view.fitAll', 'view.focusSelection', 'view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom', 'view.timeline.open', 'connectivity.mode.off', 'connectivity.mode.client', 'connectivity.mode.server', 'connectivity.mode.bridge', 'connectivity.details.open', 'help.controls', 'help.stepImport', 'help.about'] as const) {
+    for (const id of ['view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layout.reset', 'view.theme.system', 'view.theme.light', 'view.theme.dark', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp', 'view.home', 'view.fitAll', 'view.focusSelection', 'view.orientation.isometric', 'view.orientation.top', 'view.orientation.front', 'view.orientation.right', 'view.orientation.back', 'view.orientation.left', 'view.orientation.bottom', 'view.timeline.open', 'connectivity.settings.open', 'connectivity.monitor.open', 'connectivity.bindings.open', 'connectivity.docker.open', 'help.controls', 'help.stepImport', 'help.about'] as const) {
       await registry.get(id)!.execute()
     }
     composed.interaction.getState().select({ kind: 'scene-frame', frameId: 'mcp' })
@@ -464,11 +463,11 @@ describe('composeAppCommandsV4', () => {
     expect(composed.camera.setStandardView).toHaveBeenCalledTimes(7)
     expect(composed.actions.presentation.openTimeline).toHaveBeenCalledTimes(1)
     expect(composed.actions.presentation.openCollision).toHaveBeenCalledWith({ kind: 'scene-frame', frameId: 'mcp' })
-    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(1, 'off')
-    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(2, 'client')
-    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(3, 'server')
-    expect(composed.actions.connectivity.setMode).toHaveBeenNthCalledWith(4, 'bridge')
-    expect(composed.actions.presentation.openGatewayDetails).toHaveBeenCalledTimes(1)
+    expect(composed.actions.connectivity.setMode).not.toHaveBeenCalled()
+    expect(composed.actions.presentation.openOpcUaSettings).toHaveBeenCalledTimes(1)
+    expect(composed.actions.presentation.openConnectionMonitor).toHaveBeenCalledTimes(1)
+    expect(composed.actions.presentation.openBindingOverview).toHaveBeenCalledTimes(1)
+    expect(composed.actions.presentation.openDockerRunGuide).toHaveBeenCalledTimes(1)
     expect(composed.help.open).toHaveBeenCalledWith('controls')
     expect(composed.help.open).toHaveBeenCalledWith('stepImport')
     expect(composed.help.open).toHaveBeenCalledWith('about')
@@ -497,7 +496,7 @@ describe('composeAppCommandsV4', () => {
     expect(registry.get('scene.visibility.toggle')).toMatchObject({ section: 'home', kind: 'toggle' })
     expect(registry.get('scene.delete')).toMatchObject({ section: 'home', destructive: true })
     expect(registry.get('job.delete')).toMatchObject({ section: 'job', destructive: true })
-    expect(registry.get('connectivity.mode.off')).toMatchObject({ kind: 'radio', groupId: 'connectivity.runtime-mode', checked: true })
+    expect(registry.get('connectivity.settings.open')).toMatchObject({ kind: 'action', enabled: true })
     expect(registry.get('view.theme.system')).toMatchObject({ kind: 'radio', groupId: 'view.theme' })
     expect(registry.get('view.focusSelection')).toMatchObject({ enabled: false, disabledReason: 'Select a focusable Scene item.', shortcut: 'F' })
     await expect(registry.get('collision.validate')!.execute()).rejects.toBe(rejected)
@@ -511,7 +510,7 @@ describe('composeAppCommandsV4', () => {
       'scene.visibility.toggle', 'view.sidebar', 'view.inspector', 'view.bottom', 'view.ribbon', 'view.layer.grid', 'view.layer.world', 'view.layer.mcp', 'view.layer.base', 'view.layer.tcp',
     ])
     expect(all.filter(({ kind }) => kind === 'radio').map(({ id, groupId }) => [id, groupId])).toEqual([
-      ['connectivity.mode.off', 'connectivity.runtime-mode'], ['connectivity.mode.client', 'connectivity.runtime-mode'], ['connectivity.mode.server', 'connectivity.runtime-mode'], ['connectivity.mode.bridge', 'connectivity.runtime-mode'], ['view.theme.system', 'view.theme'], ['view.theme.light', 'view.theme'], ['view.theme.dark', 'view.theme'],
+      ['view.theme.system', 'view.theme'], ['view.theme.light', 'view.theme'], ['view.theme.dark', 'view.theme'],
     ])
     expect(all.filter(({ destructive }) => destructive === true).map(({ id }) => id)).toEqual(['scene.delete', 'job.delete'])
     expect(all.filter(({ shortcut }) => shortcut !== undefined).map(({ id, shortcut }) => [id, shortcut])).toEqual([
@@ -521,7 +520,7 @@ describe('composeAppCommandsV4', () => {
       ['project.new', 'New Project'], ['project.save', 'Save Project'], ['project.import', 'Import Project'], ['project.export', 'Export Project'], ['project.sample.dual', 'Dual-Robot Technical Demo'], ['project.sample.handover', 'NED2 Direct Handover Demo'],
     ])
     expect(all.filter(({ section }) => section === 'connectivity').map(({ id, label }) => [id, label])).toEqual([
-      ['connectivity.mode.off', 'Off'], ['connectivity.mode.client', 'OPC UA Client'], ['connectivity.mode.server', 'OPC UA Server'], ['connectivity.mode.bridge', 'OPC UA Bridge'], ['connectivity.bindObjectPosBoxes', 'Create 20 Box ObjectPos bindings'], ['connectivity.robotBinding.disconnect', 'Disconnect Robot Binding'], ['connectivity.robotBinding.reconnect', 'Reconnect Robot Binding'], ['connectivity.details.open', 'Gateway Details'],
+      ['connectivity.settings.open', 'OPC UA Settings…'], ['connectivity.monitor.open', 'Connection Monitor…'], ['connectivity.bindings.open', 'Binding Overview…'], ['connectivity.docker.open', 'Docker Run Guide…'],
     ])
   })
 
@@ -569,11 +568,10 @@ describe('composeAppCommandsV4', () => {
       { id: 'collision.validate', label: 'Validate Geometry Collision', section: 'simulation' },
       { id: 'view.collision.open', label: 'Open Collision Findings', section: 'simulation' },
       { id: 'simulation.fault.gripConfirmTimeout', label: 'Grip Confirm Timeout', section: 'simulation' },
-      { id: 'connectivity.mode.off', label: 'Off', section: 'connectivity' },
-      { id: 'connectivity.mode.client', label: 'OPC UA Client', section: 'connectivity' },
-      { id: 'connectivity.mode.server', label: 'OPC UA Server', section: 'connectivity' },
-      { id: 'connectivity.mode.bridge', label: 'OPC UA Bridge', section: 'connectivity' },
-      { id: 'connectivity.details.open', label: 'Gateway Details', section: 'connectivity' },
+      { id: 'connectivity.settings.open', label: 'OPC UA Settings…', section: 'connectivity' },
+      { id: 'connectivity.monitor.open', label: 'Connection Monitor…', section: 'connectivity' },
+      { id: 'connectivity.bindings.open', label: 'Binding Overview…', section: 'connectivity' },
+      { id: 'connectivity.docker.open', label: 'Docker Run Guide…', section: 'connectivity' },
       { id: 'view.sidebar', label: 'Scene and Job Sidebar', section: 'view' },
       { id: 'view.inspector', label: 'Inspector', section: 'view' },
       { id: 'view.bottom', label: 'Bottom Workspace', section: 'view' },
@@ -599,6 +597,10 @@ describe('composeAppCommandsV4', () => {
       { id: 'view.orientation.bottom', label: 'Bottom', section: 'view' },
       { id: 'help.controls', label: 'Keyboard and Mouse Controls', section: 'help' },
       { id: 'help.stepImport', label: 'STEP Import Guide', section: 'help' },
+      { id: 'help.opcUaSettings', label: 'OPC UA Settings', section: 'help' },
+      { id: 'help.connectionMonitor', label: 'Connection Monitor', section: 'help' },
+      { id: 'help.opcUaBinding', label: 'OPC UA Binding', section: 'help' },
+      { id: 'help.dockerRunGuide', label: 'Docker Run Guide', section: 'help' },
       { id: 'help.about', label: 'About', section: 'help' },
     ] as const
     expect(expected.map(({ id }) => registry.get(id)).every((command) => command !== null)).toBe(true)
@@ -630,24 +632,39 @@ describe('composeAppCommandsV4', () => {
     }
   })
 
-  it('keeps an existing registry on its snapshot until a replacement context is composed', () => {
+  it('disables optional V5 surfaces until their callbacks are supplied by the browser cutover', () => {
     const original = context()
-    const firstRegistry = composeAppCommandsV4(original)
-    const replacementProject = { ...original.project, opcUa: { ...original.project.opcUa, mode: 'server' as const } }
-    const replacement = { ...original, project: replacementProject, projectState: { ...original.projectState, activeProject: replacementProject } }
-    const replacementRegistry = composeAppCommandsV4(replacement)
-    expect(firstRegistry.get('connectivity.mode.server')).toMatchObject({ checked: false })
-    expect(replacementRegistry.get('connectivity.mode.server')).toMatchObject({ checked: true })
+    const {
+      openOpcUaSettings: _openOpcUaSettings,
+      openConnectionMonitor: _openConnectionMonitor,
+      openBindingOverview: _openBindingOverview,
+      openDockerRunGuide: _openDockerRunGuide,
+      ...presentation
+    } = original.actions.presentation
+    const registry = composeAppCommandsV4({
+      ...original,
+      actions: { ...original.actions, presentation },
+    })
+    for (const id of ['connectivity.settings.open', 'connectivity.monitor.open', 'connectivity.bindings.open', 'connectivity.docker.open']) {
+      expect(registry.get(id)).toMatchObject({
+        enabled: false,
+        disabledReason: 'Project V5 browser cutover pending',
+      })
+      expect(() => registry.get(id)!.execute()).toThrow('Project V5 browser cutover pending')
+    }
   })
 
   it('registers and executes the optional OPC UA Help topic when it is available', async () => {
     const initial = context()
     const help = { ...initial.help, hasTopic: vi.fn(() => true) }
     const registry = composeAppCommandsV4({ ...initial, help })
-    for (const id of ['help.controls', 'help.stepImport', 'help.opcUaMapping', 'help.about'] as const) await registry.get(id)!.execute()
+    for (const id of ['help.controls', 'help.stepImport', 'help.opcUaSettings', 'help.connectionMonitor', 'help.opcUaBinding', 'help.dockerRunGuide', 'help.about'] as const) await registry.get(id)!.execute()
     expect(help.open).toHaveBeenCalledWith('controls')
     expect(help.open).toHaveBeenCalledWith('stepImport')
-    expect(help.open).toHaveBeenCalledWith('opcUaMapping')
+    expect(help.open).toHaveBeenCalledWith('opcUaSettings')
+    expect(help.open).toHaveBeenCalledWith('connectionMonitor')
+    expect(help.open).toHaveBeenCalledWith('opcUaBinding')
+    expect(help.open).toHaveBeenCalledWith('dockerRunGuide')
     expect(help.open).toHaveBeenCalledWith('about')
     for (const id of ['job.pause', 'job.resume', 'robot.geometry.open', 'robot.kinematics.open', 'robot.rapid.open', 'scene.opcUaMapping.open', 'coordinate.frames.open'] as const) expect(registry.get(id)).toBeNull()
   })

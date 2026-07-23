@@ -2841,6 +2841,21 @@ button {
 .binding-overview-table button,
 .binding-target-list button { min-height: 30px; padding: 4px 9px; color: var(--color-text); font: inherit; cursor: pointer; background: var(--color-canvas); border: 1px solid var(--color-border); border-radius: var(--radius); }
 .binding-target-list { display: grid; gap: 6px; }
+.docker-run-guide-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(820px, 100%);
+}
+.docker-run-guide-dialog pre {
+  max-width: 100%;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: var(--color-text);
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+.docker-run-guide-dialog code { font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; }
 
 @media (max-width: 620px) {
   .opcua-settings-overlay { padding: 8px; }

@@ -401,7 +401,15 @@ export function App({
       },
     })
     const help = createLocalHelpControllerV4({
-      availableTopics: ['controls', 'stepImport', 'about'],
+      availableTopics: [
+        'controls',
+        'stepImport',
+        'opcUaSettings',
+        'connectionMonitor',
+        'opcUaBinding',
+        'dockerRunGuide',
+        'about',
+      ],
     })
     const runtime = createAppCommandRuntimeV4(createAppCommandRegistryV4([]))
     const bindings = createAppCommandBindingsV4(runtime)

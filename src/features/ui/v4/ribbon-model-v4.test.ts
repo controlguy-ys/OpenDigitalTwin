@@ -74,7 +74,7 @@ describe('ribbon-model-v4', () => {
     const ids = [
       'project.save', 'project.new', 'project.import', 'view.focusSelection', 'robot.home', 'scene.visibility.toggle',
       'model.add.box', 'model.add.cylinder', 'model.add.group', 'job.new', 'job.pose.save', 'job.start', 'job.cancel',
-      'collision.validate', 'connectivity.mode.server', 'connectivity.details.open', 'view.home', 'view.fitAll',
+      'collision.validate', 'connectivity.settings.open', 'connectivity.monitor.open', 'view.home', 'view.fitAll',
       'help.controls', 'help.stepImport', 'help.about',
     ]
     const registry = createAppCommandRegistryV4(ids.map((id) => command(id)))

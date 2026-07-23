@@ -64,6 +64,11 @@ All final architecture decisions, validation, and repository integration were re
   `Bridge`. Client reads configured external OPC UA nodes; Bridge combines that
   client with the read-only Server namespace. Server remains limited to each
   Robot Joint's read-only OPC UA `Double` Actual value.
+- The Connectivity workflow is split into four explicit surfaces: **OPC UA
+  Settings** owns Endpoints and runtime role, **Connection Monitor** reports
+  quality and stale state, **Binding Overview** maps Object/Robot targets by
+  stable Namespace URI, and **Docker Run Guide** provides copy-only operator
+  commands. The menu no longer changes runtime role directly.
 - The standard Docker topology starts both the Nginx web service and the Runtime
   Gateway. Nginx serves the SPA and proxies same-origin `/runtime/` requests;
   the Gateway owns HTTP activation/state endpoints and optional OPC UA port
@@ -115,7 +120,8 @@ so Docker Compose is the supported full browser-plus-Gateway topology.
    to the Home value `0`.
 4. Select **Logical Linear Slide** and run **Linear Slide Traverse** to verify
    that each Robot keeps independent Joint values and Job state.
-5. Change **OPC UA** from **Off** to **Server** to activate the Gateway namespace.
+5. Open **Connectivity > OPC UA Settings**, choose **Server**, and Apply to
+   activate the Gateway namespace. Verify it in **Connection Monitor**.
 6. Read the Joint Actual nodes with an external OPC UA Client. Node IDs are
    deterministic:
 
@@ -156,9 +162,9 @@ Then:
 
 1. Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
 2. Choose **Project > Samples > Dual-Robot Technical Demo**.
-3. Choose **Connectivity > Create 20 Box ObjectPos bindings**. This creates the
-   20 Boxes, switches the Project to OPC UA Client mode, and publishes its
-   binding configuration to the Gateway.
+3. Open **Connectivity > OPC UA Settings**, add
+   `opc.tcp://127.0.0.1:4840`, choose **Client**, and Apply. Then use
+   **Binding Overview** to map Object moving frames to the demo Namespace URI.
 4. Confirm the Gateway status becomes connected and the Boxes move around the
    track. Select a Box to verify that its transform owner is OPC UA.
 
