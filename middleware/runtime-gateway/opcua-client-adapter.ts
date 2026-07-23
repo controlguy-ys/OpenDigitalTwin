@@ -441,64 +441,6 @@ export function createOpcUaClientSnapshotAssemblerV1(
   })
 }
 
-async function cleanupNativeHandles(handles: NativeCleanupHandlesV1): Promise<void> {
-  let firstFailure: unknown
-  let hasFailure = false
-  const retainFailure = (error: unknown): void => {
-    if (hasFailure) return
-    hasFailure = true
-    firstFailure = error
-  }
-  let firstGroupFailure: unknown
-  let hasGroupFailure = false
-  for (const group of handles.groups) {
-    try {
-      await group.terminate()
-      handles.groups = handles.groups.filter((candidate) => candidate !== group)
-    } catch (error) {
-      if (!hasGroupFailure) {
-        hasGroupFailure = true
-        firstGroupFailure = error
-      }
-    }
-  }
-  const subscription = handles.subscription
-  if (subscription !== null) {
-    try {
-      await subscription.terminate()
-      if (handles.subscription === subscription) handles.subscription = null
-      // Native Subscription termination retires every child monitored item.
-      // It is authoritative proof even when an earlier group-level terminate
-      // could not run because node-opcua had already retired the Subscription.
-      handles.groups = []
-    } catch (error) {
-      if (hasGroupFailure) retainFailure(firstGroupFailure)
-      retainFailure(error)
-    }
-  } else if (hasGroupFailure) {
-    retainFailure(firstGroupFailure)
-  }
-  const session = handles.session
-  if (session !== null) {
-    try {
-      await session.close()
-      if (handles.session === session) handles.session = null
-    } catch (error) {
-      retainFailure(error)
-    }
-  }
-  const client = handles.client
-  if (client !== null) {
-    try {
-      await client.disconnect()
-      if (handles.client === client) handles.client = null
-    } catch (error) {
-      retainFailure(error)
-    }
-  }
-  if (hasFailure) throw firstFailure
-}
-
 async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
   if (runtime.reconnectTimer !== null) {
     clearTimeout(runtime.reconnectTimer)
@@ -510,21 +452,93 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
   runtime.nextEarlyArrivalOrdinal = 1
   runtime.drainingEarlyRoots = false
   runtime.connected = false
-  let firstFailure: unknown
-  let hasFailure = false
-  const cleanup = async (handles: NativeCleanupHandlesV1): Promise<void> => {
-    try {
-      await cleanupNativeHandles(handles)
-    } catch (error) {
-      if (!hasFailure) {
-        hasFailure = true
-        firstFailure = error
-      }
+  const owners: NativeCleanupHandlesV1[] = [runtime, ...runtime.residualCleanup]
+  const failures: Array<Readonly<{ error: unknown; pending: () => boolean }>> = []
+  const removeGroup = (group: ClientMonitoredItemGroup): void => {
+    for (const owner of owners) {
+      owner.groups = owner.groups.filter((candidate) => candidate !== group)
     }
   }
-  await cleanup(runtime)
+  const removeSubscription = (subscription: ClientSubscription): void => {
+    for (const owner of owners) {
+      if (owner.subscription === subscription) owner.subscription = null
+    }
+  }
+  const removeSession = (session: ClientSession): void => {
+    for (const owner of owners) {
+      if (owner.session === session) owner.session = null
+    }
+  }
+  const removeClient = (client: OPCUAClient): void => {
+    for (const owner of owners) {
+      if (owner.client === client) owner.client = null
+    }
+  }
+
+  const groups = new Set(owners.flatMap((owner) => owner.groups))
+  for (const group of groups) {
+    try {
+      await group.terminate()
+      removeGroup(group)
+    } catch (error) {
+      failures.push({
+        error,
+        pending: () => owners.some((owner) => owner.groups.includes(group)),
+      })
+    }
+  }
+
+  const subscriptions = new Set(owners.flatMap((owner) => (
+    owner.subscription === null ? [] : [owner.subscription]
+  )))
+  for (const subscription of subscriptions) {
+    const childGroups = new Set(owners.flatMap((owner) => (
+      owner.subscription === subscription ? owner.groups : []
+    )))
+    try {
+      await subscription.terminate()
+      removeSubscription(subscription)
+      // A proven native Subscription termination retires every child item.
+      for (const group of childGroups) removeGroup(group)
+    } catch (error) {
+      failures.push({
+        error,
+        pending: () => owners.some((owner) => owner.subscription === subscription),
+      })
+    }
+  }
+
+  const sessions = new Set(owners.flatMap((owner) => (
+    owner.session === null ? [] : [owner.session]
+  )))
+  for (const session of sessions) {
+    try {
+      await session.close()
+      removeSession(session)
+    } catch (error) {
+      failures.push({
+        error,
+        pending: () => owners.some((owner) => owner.session === session),
+      })
+    }
+  }
+
+  const clients = new Set(owners.flatMap((owner) => (
+    owner.client === null ? [] : [owner.client]
+  )))
+  for (const client of clients) {
+    try {
+      await client.disconnect()
+      removeClient(client)
+    } catch (error) {
+      failures.push({
+        error,
+        pending: () => owners.some((owner) => owner.client === client),
+      })
+    }
+  }
+
   for (const residual of runtime.residualCleanup) {
-    await cleanup(residual)
     if (
       residual.client === null
       && residual.session === null
@@ -532,7 +546,8 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
       && residual.groups.length === 0
     ) runtime.residualCleanup.delete(residual)
   }
-  if (hasFailure) throw firstFailure
+  const unresolved = failures.find(({ pending }) => pending())
+  if (unresolved !== undefined) throw unresolved.error
 }
 
 async function closeDetachedConnection(
@@ -543,21 +558,14 @@ async function closeDetachedConnection(
   groups: readonly ClientMonitoredItemGroup[],
 ): Promise<void> {
   const residual: NativeCleanupHandlesV1 = {
-    client: runtime.client === client ? null : client,
-    session: runtime.session === session ? null : session,
-    subscription: runtime.subscription === subscription ? null : subscription,
-    groups: groups.filter((group) => !runtime.groups.includes(group)),
+    client,
+    session,
+    subscription,
+    groups: [...groups],
   }
-  if (
-    residual.client === null
-    && residual.session === null
-    && residual.subscription === null
-    && residual.groups.length === 0
-  ) return
   runtime.residualCleanup.add(residual)
   if (runtime.stopped) return
-  await cleanupNativeHandles(residual)
-  runtime.residualCleanup.delete(residual)
+  await closeRuntime(runtime)
 }
 
 export function createOpcUaClientAdapterV1(
@@ -1175,6 +1183,11 @@ export function createOpcUaClientAdapterV1(
   return Object.freeze({
     start: () => enqueue(async () => {
       for (const runtime of runtimes.values()) {
+        if (runtime.stopped && hasNativeCleanupPending(runtime)) {
+          throw new Error('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
+        }
+      }
+      for (const runtime of runtimes.values()) {
         if (runtime.mappingCount === 0) continue
         runtime.stopped = false
         startConnect(runtime)
@@ -1195,7 +1208,13 @@ export function createOpcUaClientAdapterV1(
       startConnect(runtime)
     }),
     stop: () => enqueue(async () => {
-      await Promise.all([...runtimes.values()].map((runtime) => stopEndpointRuntime(runtime)))
+      const results = await Promise.allSettled(
+        [...runtimes.values()].map((runtime) => stopEndpointRuntime(runtime)),
+      )
+      const rejected = results.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      if (rejected !== undefined) throw rejected.reason
     }),
     status: () => Object.freeze([...runtimes.values()].map((runtime) => Object.freeze({
       endpointId: runtime.endpoint.endpointId,

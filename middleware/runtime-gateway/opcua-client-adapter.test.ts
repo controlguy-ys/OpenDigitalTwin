@@ -74,6 +74,33 @@ function readProject(direction: 'read' | 'readWrite' = 'read'): WorkcellProjectV
   return validateWorkcellProjectV5(project)
 }
 
+function twoEndpointReadProject(): WorkcellProjectV5 {
+  const project = cloneWorkcellProjectV5(readProject())
+  const endpoint = project.opcUa.endpoints[0]!
+  const signal = project.logicalSignals[0]!
+  const mapping = project.opcUa.mappings[0]!
+  ;(project.opcUa.endpoints as unknown as WorkcellProjectV5['opcUa']['endpoints'][number][]).push({
+    ...endpoint,
+    endpointId: 'plc-b',
+    endpointUrl: 'opc.tcp://127.0.0.1:4841',
+  })
+  ;(project.logicalSignals as unknown as WorkcellProjectV5['logicalSignals'][number][]).push({
+    ...signal,
+    id: 'part-present-b',
+    name: 'Part Present B',
+  })
+  ;(project.opcUa.mappings as unknown as WorkcellProjectV5['opcUa']['mappings'][number][]).push({
+    ...mapping,
+    id: 'map-part-present-b',
+    endpointId: 'plc-b',
+    leaves: mapping.leaves.map((leaf) => ({
+      ...leaf,
+      projectTarget: { type: 'logical-signal', signalId: 'part-present-b' },
+    })),
+  })
+  return validateWorkcellProjectV5(project)
+}
+
 function writeOnlyProject(): WorkcellProjectV5 {
   const project = cloneWorkcellProjectV5(readProject())
   ;(project.logicalSignals[0] as unknown as { direction: 'output' }).direction = 'output'
@@ -1189,13 +1216,44 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     })
   })
 
+  it('rejects global start before creating a Client when native cleanup is pending', async () => {
+    const first = fakeConnection()
+    const second = fakeConnection()
+    const connections = [first, second]
+    const createClient = vi.fn(() => connections.shift()!.client as never)
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient,
+    })
+    await adapter.start()
+    await eventually(() => first.groups.length === 1)
+    first.session.close.mockRejectedValueOnce(new Error('Session close failed'))
+    await expect(adapter.stop()).rejects.toThrow('Session close failed')
+
+    await expect(adapter.start()).rejects.toThrow('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
+    expect(createClient).toHaveBeenCalledOnce()
+    expect(adapter.status()[0]?.phase).toBe('faulted')
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+  })
+
   it('retains a Session created after the stop fence when its first close fails', async () => {
     const connection = fakeConnection()
+    const order: string[] = []
     let resolveSession!: (session: typeof connection.session) => void
     connection.client.createSession = vi.fn(() => new Promise<typeof connection.session>((resolve) => {
       resolveSession = resolve
     }))
-    connection.session.close.mockRejectedValueOnce(new Error('late Session close failed'))
+    connection.session.close
+      .mockImplementationOnce(async () => {
+        order.push('session-close')
+        throw new Error('late Session close failed')
+      })
+      .mockImplementationOnce(async () => { order.push('session-close-retry') })
+    connection.client.disconnect = vi.fn(async () => { order.push('client-disconnect') })
     const adapter = createOpcUaClientAdapterV1(readProject(), {
       gatewayId: 'gateway-local',
       originId: 'gateway-local:client',
@@ -1211,11 +1269,110 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
 
     await expect(stopping).rejects.toThrow('late Session close failed')
     expect(connection.session.close).toHaveBeenCalledOnce()
+    expect(order).toEqual(['session-close', 'client-disconnect'])
     expect(adapter.status()[0]?.phase).toBe('faulted')
 
     await expect(adapter.stop()).resolves.toBeUndefined()
     expect(connection.session.close).toHaveBeenCalledTimes(2)
+    expect(order).toEqual(['session-close', 'client-disconnect', 'session-close-retry'])
     expect(adapter.status()[0]?.phase).toBe('disabled')
+  })
+
+  it('terminates a late Subscription before its runtime-owned Session and Client', async () => {
+    const connection = fakeConnection()
+    const order: string[] = []
+    const lateSubscription = Object.assign(new EventEmitter(), {
+      terminate: vi.fn()
+        .mockImplementationOnce(async () => {
+          order.push('subscription-terminate')
+          throw new Error('late Subscription terminate failed')
+        })
+        .mockImplementationOnce(async () => { order.push('subscription-terminate-retry') }),
+      monitorItems: vi.fn(),
+    })
+    let resolveSubscription!: (subscription: typeof lateSubscription) => void
+    connection.session.createSubscription2 = vi.fn(
+      () => new Promise<typeof lateSubscription>((resolve) => { resolveSubscription = resolve }),
+    )
+    connection.session.close = vi.fn(async () => { order.push('session-close') })
+    connection.client.disconnect = vi.fn(async () => { order.push('client-disconnect') })
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => connection.session.createSubscription2.mock.calls.length === 1)
+
+    const stopping = adapter.stop()
+    resolveSubscription(lateSubscription)
+
+    await expect(stopping).rejects.toThrow('late Subscription terminate failed')
+    expect(order).toEqual(['subscription-terminate', 'session-close', 'client-disconnect'])
+    expect(adapter.status()[0]?.phase).toBe('faulted')
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+    expect(order).toEqual([
+      'subscription-terminate',
+      'session-close',
+      'client-disconnect',
+      'subscription-terminate-retry',
+    ])
+    expect(adapter.status()[0]?.phase).toBe('disabled')
+  })
+
+  it('settles every Endpoint cleanup before releasing stop for an immediate retry', async () => {
+    const first = fakeConnection()
+    const second = fakeConnection()
+    first.session.close.mockRejectedValueOnce(new Error('first Endpoint close failed'))
+    let resolveSecondDisconnect!: () => void
+    second.client.disconnect = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveSecondDisconnect = resolve
+      }))
+      .mockResolvedValue(undefined)
+    const adapter = createOpcUaClientAdapterV1(twoEndpointReadProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: (endpoint) => (
+        endpoint.endpointId === 'plc' ? first.client : second.client
+      ) as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status().every(({ phase }) => phase === 'connected'))
+
+    const firstStop = adapter.stop()
+    let firstOutcome: 'pending' | 'resolved' | 'rejected' = 'pending'
+    void firstStop.then(
+      () => { firstOutcome = 'resolved' },
+      () => { firstOutcome = 'rejected' },
+    )
+    let retry: Promise<void> | null = null
+    try {
+      await eventually(() => (
+        first.session.close.mock.calls.length === 1
+        && vi.mocked(second.client.disconnect).mock.calls.length === 1
+      ))
+      await Promise.resolve()
+      expect(firstOutcome).toBe('pending')
+
+      retry = adapter.stop()
+      await Promise.resolve()
+      expect(second.client.disconnect).toHaveBeenCalledOnce()
+
+      resolveSecondDisconnect()
+      await expect(firstStop).rejects.toThrow('first Endpoint close failed')
+      await expect(retry).resolves.toBeUndefined()
+      expect(first.session.close).toHaveBeenCalledTimes(2)
+      expect(second.client.disconnect).toHaveBeenCalledOnce()
+    } finally {
+      resolveSecondDisconnect?.()
+      await Promise.allSettled([firstStop, ...(retry === null ? [] : [retry])])
+    }
   })
 
   it('disconnects and reconnects one Endpoint without changing its saved mapping count', async () => {
