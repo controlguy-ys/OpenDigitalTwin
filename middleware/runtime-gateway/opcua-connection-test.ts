@@ -77,11 +77,15 @@ export async function testOpcUaConnectionV1(
   const withinDeadline = async <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, deadline])
   let connectOperation: Promise<void> | null = null
   let createSessionOperation: Promise<OpcUaConnectionTestSessionV1> | null = null
+  let connectSettled = false
+  let createSessionSettled = false
   try {
     connectOperation = client.connect(endpoint.endpointUrl)
+    void connectOperation.then(() => { connectSettled = true }, () => { connectSettled = true })
     await withinDeadline(connectOperation)
     phase = 'session'
     createSessionOperation = client.createSession()
+    void createSessionOperation.then(() => { createSessionSettled = true }, () => { createSessionSettled = true })
     session = await withinDeadline(createSessionOperation)
     phase = 'read'
     namespaces = await withinDeadline(session.readNamespaceArray())
@@ -113,8 +117,8 @@ export async function testOpcUaConnectionV1(
     if (timedOut) {
       // Timed-out node-opcua work can still produce resources. Observe both
       // promises and apply the same bounded, ordered cleanup to late results.
-      void connectOperation?.then(() => cleanup(null), () => undefined).catch(() => undefined)
-      void createSessionOperation?.then((lateSession) => cleanup(lateSession), () => undefined).catch(() => undefined)
+      if (!connectSettled) void connectOperation?.then(() => cleanup(null), () => undefined).catch(() => undefined)
+      if (!createSessionSettled) void createSessionOperation?.then((lateSession) => cleanup(lateSession), () => undefined).catch(() => undefined)
     }
     if (cleanupFailed) failure = { code: 'OPC_UA_CONNECTION_CLEANUP_FAILED', message: cleanupTimedOut ? 'OPC UA diagnostic cleanup timed out.' : 'OPC UA diagnostic cleanup failed.' }
   }

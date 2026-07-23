@@ -68,4 +68,35 @@ describe('testOpcUaConnectionV1', () => {
     await expect(testOpcUaConnectionV1(endpoint, { createClient: () => ({ connect: async () => undefined, createSession: async () => ({ close: () => { throw new Error('close') }, readNamespaceArray: async () => ['urn:a'] }), disconnect }) })).resolves.toMatchObject({ code: 'OPC_UA_CONNECTION_CLEANUP_FAILED' })
     expect(disconnect).toHaveBeenCalledOnce()
   })
+
+  it('owns namespace-read timeout cleanup exactly once', async () => {
+    vi.useFakeTimers()
+    const close = vi.fn(async () => undefined); const disconnect = vi.fn(async () => undefined)
+    const pending = testOpcUaConnectionV1(endpoint, { timeoutMs: 10, createClient: () => ({
+      connect: async () => undefined,
+      createSession: async () => ({ close, readNamespaceArray: () => new Promise<readonly string[]>(() => undefined) }),
+      disconnect,
+    }) })
+    await vi.advanceTimersByTimeAsync(10)
+    await expect(pending).resolves.toMatchObject({ outcome: 'failed', code: 'OPC_UA_CONNECTION_TIMEOUT' })
+    await vi.runAllTimersAsync()
+    expect(close).toHaveBeenCalledOnce(); expect(disconnect).toHaveBeenCalledOnce()
+    vi.useRealTimers()
+  })
+
+  it('cleans a Client that connects after the operation timeout', async () => {
+    vi.useFakeTimers(); let resolveConnect!: () => void; const disconnect = vi.fn(async () => undefined)
+    const pending = testOpcUaConnectionV1(endpoint, { timeoutMs: 10, createClient: () => ({ connect: () => new Promise<void>((resolve) => { resolveConnect = resolve }), createSession: vi.fn(), disconnect }) })
+    await vi.advanceTimersByTimeAsync(10); await pending; expect(disconnect).toHaveBeenCalledOnce()
+    resolveConnect(); await vi.runAllTimersAsync(); expect(disconnect).toHaveBeenCalledTimes(2); vi.useRealTimers()
+  })
+
+  it('closes a Session that arrives after timeout before disconnecting again', async () => {
+    vi.useFakeTimers(); let resolveSession!: (session: { close: () => Promise<void>; readNamespaceArray: () => Promise<readonly string[]> }) => void
+    const order: string[] = []; const close = vi.fn(async () => { order.push('close') }); const disconnect = vi.fn(async () => { order.push('disconnect') })
+    const pending = testOpcUaConnectionV1(endpoint, { timeoutMs: 10, createClient: () => ({ connect: async () => undefined, createSession: () => new Promise((resolve) => { resolveSession = resolve }), disconnect }) })
+    await vi.advanceTimersByTimeAsync(10); await pending; order.length = 0
+    resolveSession({ close, readNamespaceArray: async () => ['urn:a'] }); await vi.runAllTimersAsync()
+    expect(order).toEqual(['close', 'disconnect']); vi.useRealTimers()
+  })
 })
