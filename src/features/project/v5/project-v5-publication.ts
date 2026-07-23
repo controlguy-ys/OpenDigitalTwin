@@ -230,6 +230,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   let tail = Promise.resolve()
   const cleanupTasks: PendingCleanupTaskV5[] = []
   let cleanupDrainPromise: Promise<void> | null = null
+  let cleanupRetryPromise: Promise<void> | null = null
   const listeners = new Set<() => void>()
 
   const enqueue = <Result>(operation: () => Promise<Result>): Promise<Result> => {
@@ -311,9 +312,11 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     cleanupTasks.push(task)
   }
 
-  const kickCleanupDrain = (): void => {
-    if (cleanupDrainPromise !== null || cleanupTasks.length === 0) return
-    cleanupDrainPromise = (async () => {
+  const kickCleanupDrain = (): Promise<void> => {
+    if (cleanupDrainPromise !== null) return cleanupDrainPromise
+    if (cleanupTasks.length === 0) return Promise.resolve()
+    let drain!: Promise<void>
+    drain = (async () => {
       while (cleanupTasks.length > 0) {
         const task = cleanupTasks[0]!
         task.attemptCount += 1
@@ -327,7 +330,25 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           return
         }
       }
-    })().finally(() => { cleanupDrainPromise = null })
+    })().finally(() => {
+      if (cleanupDrainPromise === drain) cleanupDrainPromise = null
+    })
+    cleanupDrainPromise = drain
+    return drain
+  }
+
+  const retryCleanup = (): Promise<void> => {
+    if (cleanupRetryPromise !== null) return cleanupRetryPromise
+    let retry!: Promise<void>
+    retry = (async () => {
+      const activeDrain = cleanupDrainPromise
+      if (activeDrain !== null) await activeDrain
+      if (cleanupTasks.length > 0) await kickCleanupDrain()
+    })().finally(() => {
+      if (cleanupRetryPromise === retry) cleanupRetryPromise = null
+    })
+    cleanupRetryPromise = retry
+    return retry
   }
 
   const loadDurablePublication = async (revisionId: string): Promise<PublishedProjectV5> => {
@@ -521,7 +542,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           retainCleanupTask('gateway-previous', previous.revisionId, () => gateway.cleanupPrevious(previous))
         }
         retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())
-        kickCleanupDrain()
+        void kickCleanupDrain()
         return publicPublished(next.project, next.revisionId, next.configRevision)
       })
     },
@@ -548,7 +569,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           }
           notifyPublished()
           retainCleanupTask('runtime-transition-finalize', 'empty', () => deactivation!.finalize())
-          kickCleanupDrain()
+          void kickCleanupDrain()
           return null
         }
 
@@ -594,7 +615,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
             notifyPublished()
             retainCleanupTask('runtime-transition-finalize', prior.revisionId, () => activation.runtimeTransition.finalize())
             retainCleanupTask('repository-garbage-collection', prior.revisionId, () => repository.garbageCollect())
-            kickCleanupDrain()
+            void kickCleanupDrain()
             return publicPublished(prior.project, prior.revisionId, prior.configRevision)
           } catch (compensationError) {
             enterRecovery([originalError, compensationError])
@@ -649,7 +670,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           retainCleanupTask('gateway-previous', previous.revisionId, () => gateway.cleanupPrevious(previous!))
         }
         retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())
-        kickCleanupDrain()
+        void kickCleanupDrain()
         return publicPublished(next.project, next.revisionId, next.configRevision)
       })
     },
@@ -679,8 +700,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     },
 
     retryCleanup() {
-      kickCleanupDrain()
-      return Promise.resolve()
+      return retryCleanup()
     },
   }
   return Object.freeze(coordinator)

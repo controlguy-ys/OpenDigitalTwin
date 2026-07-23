@@ -156,10 +156,11 @@ interface BundleInstallTokenV5 {
 }
 
 interface BundlePublisherV5 extends BrowserRuntimeBundleCellV5 {
+  readGeneration(): number
   prepareInstall(
     next: BrowserRuntimeBundleStateV5 | null,
     expectedBaseBundle: BrowserRuntimeBundleStateV5 | null,
-    expectedEpoch: number,
+    expectedGeneration: number,
   ): BundleInstallTokenV5
 }
 
@@ -195,7 +196,7 @@ interface CandidateRecordV5 {
   readonly project: WorkcellProjectV5
   readonly configRevision: string
   readonly baseBundle: BrowserRuntimeBundleStateV5 | null
-  readonly baseEpoch: number
+  readonly baseGeneration: number
   readonly owned: OwnedBrowserRuntimeGraphV5
   readonly controller: AbortController
   state: CandidateStateV5
@@ -905,7 +906,8 @@ export function createBrowserProjectRuntimeV5(
       const candidateProject = validateWorkcellProjectV5(projectCandidate)
       const candidateConfig = requireConfigRevision(candidateConfigRevision)
       const baseBundle = bundle.readActiveState()
-      if (baseBundle?.runtimeEpoch === Number.MAX_SAFE_INTEGER) throw new TypeError('RUNTIME_EPOCH_EXHAUSTED')
+      const baseGeneration = bundle.readGeneration()
+      if (baseGeneration >= Number.MAX_SAFE_INTEGER - 1) throw new TypeError('RUNTIME_EPOCH_EXHAUSTED')
       const owned = createOwnedGraph(candidateProject, candidateConfig, options, onDiagnostic)
       const handle = Object.freeze({
         projectRevisionId: candidateProject.revisionId,
@@ -913,7 +915,7 @@ export function createBrowserProjectRuntimeV5(
       })
       const record: CandidateRecordV5 = {
         handle, project: candidateProject, configRevision: candidateConfig,
-        baseBundle, baseEpoch: baseBundle?.runtimeEpoch ?? 0, owned,
+        baseBundle, baseGeneration, owned,
         controller: new AbortController(), state: 'prepared', applyPromise: null, rollbackPromise: null,
         commitPromise: null,
       }
@@ -950,7 +952,7 @@ export function createBrowserProjectRuntimeV5(
         const initialBundle = bundle.readActiveState()
         if (
           initialBundle !== record.baseBundle
-          || (initialBundle === null ? record.baseEpoch !== 0 : initialBundle.runtimeEpoch !== record.baseEpoch)
+          || bundle.readGeneration() !== record.baseGeneration
         ) {
           consumeAndDispose(record)
           throw failure('BROWSER_RUNTIME_CANDIDATE_STALE')
@@ -973,19 +975,19 @@ export function createBrowserProjectRuntimeV5(
             const currentBundle = bundle.readActiveState()
             if (
               currentBundle !== record.baseBundle
-              || (currentBundle === null ? record.baseEpoch !== 0 : currentBundle.runtimeEpoch !== record.baseEpoch)
+              || bundle.readGeneration() !== record.baseGeneration
             ) {
               throw failure('BROWSER_RUNTIME_CANDIDATE_STALE')
             }
             const next: BrowserRuntimeBundleStateV5 = Object.freeze({
-              runtimeEpoch: record.baseEpoch + 1,
+              runtimeEpoch: record.baseGeneration + 1,
               project: record.project,
               projectRevisionId: record.project.revisionId,
               configRevision: record.configRevision,
               gatewayId,
               runtimeGraph: record.owned.graph,
             })
-            const install = bundle.prepareInstall(next, currentBundle, record.baseEpoch)
+            const install = bundle.prepareInstall(next, currentBundle, record.baseGeneration)
             const transition: CommittedTransitionRecordV5 = {
               candidate: record,
               install,
@@ -1071,7 +1073,7 @@ export function createBrowserProjectRuntimeV5(
         if (ownerState !== 'active' || activeOwnedGraph !== previousOwned || bundle.readActiveState() !== currentBundle) {
           throw failure('BROWSER_RUNTIME_TRANSITION_STALE')
         }
-        const install = bundle.prepareInstall(null, currentBundle, currentBundle.runtimeEpoch)
+        const install = bundle.prepareInstall(null, currentBundle, bundle.readGeneration())
         const transition: DeactivationTransitionRecordV5 = {
           install, previousOwned, state: 'committed', rollbackPromise: null, finalizePromise: null,
         }

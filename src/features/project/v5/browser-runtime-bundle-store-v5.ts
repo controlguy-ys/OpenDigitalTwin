@@ -55,10 +55,11 @@ interface BrowserRuntimeBundleInstallTokenV5 {
 }
 
 interface BrowserRuntimeBundlePublisherCellV5 extends BrowserRuntimeBundleCellV5 {
+  readGeneration(): number
   prepareInstall(
     next: BrowserRuntimeBundleStateV5 | null,
     expectedBaseBundle: BrowserRuntimeBundleStateV5 | null,
-    expectedEpoch: number,
+    expectedGeneration: number,
   ): BrowserRuntimeBundleInstallTokenV5
 }
 
@@ -69,7 +70,7 @@ interface InstallOwnerV5 {
 interface InstallRecordV5 {
   readonly owner: InstallOwnerV5
   readonly base: BrowserRuntimeBundleStateV5 | null
-  readonly expectedEpoch: number
+  readonly expectedGeneration: number
   readonly next: BrowserRuntimeBundleStateV5 | null
   readonly listeners: readonly BundleListenerV5[]
   phase: InstallPhaseV5
@@ -593,12 +594,14 @@ export function createBrowserRuntimeBundleCellV5(
   const owner: InstallOwnerV5 = Object.freeze({ ownerId: Symbol('browser-runtime-bundle-cell-v5') })
   const listeners = new Set<BundleListenerV5>()
   let state = initial === null ? null : canonicalBundleState(initial)
+  let generation = state?.runtimeEpoch ?? 0
 
   const getState = (): BrowserRuntimeBundleStateV5 => {
     if (state === null) fail('RUNTIME_BUNDLE_EMPTY', 'Browser runtime has no active Bundle.')
     return state
   }
   const readActiveState = (): BrowserRuntimeBundleStateV5 | null => state
+  const readGeneration = (): number => generation
   const subscribe = (listener: BundleListenerV5): (() => void) => {
     if (typeof listener !== 'function') throw new TypeError('Bundle listener must be a function.')
     listeners.add(listener)
@@ -608,26 +611,26 @@ export function createBrowserRuntimeBundleCellV5(
   const prepareInstall = (
     nextInput: BrowserRuntimeBundleStateV5 | null,
     expectedBaseBundle: BrowserRuntimeBundleStateV5 | null,
-    expectedEpochInput: number,
+    expectedGenerationInput: number,
   ): BrowserRuntimeBundleInstallTokenV5 => {
     const base = state
     if (expectedBaseBundle !== base) {
       fail('RUNTIME_BASE_BUNDLE_STALE', 'Expected Bundle is not the exact active Bundle object.')
     }
-    if (!Number.isSafeInteger(expectedEpochInput) || expectedEpochInput < 0) {
-      fail('RUNTIME_BASE_EPOCH_INVALID', 'Expected Runtime Epoch must be a nonnegative safe integer.')
+    if (!Number.isSafeInteger(expectedGenerationInput) || expectedGenerationInput < 0) {
+      fail('RUNTIME_BASE_EPOCH_INVALID', 'Expected Runtime generation must be a nonnegative safe integer.')
     }
-    const expectedEpoch = expectedEpochInput
-    if ((base === null && expectedEpoch !== 0) || (base !== null && base.runtimeEpoch !== expectedEpoch)) {
-      fail('RUNTIME_BASE_EPOCH_STALE', 'Expected Runtime Epoch is not active.')
+    const expectedGeneration = expectedGenerationInput
+    if (generation !== expectedGeneration) {
+      fail('RUNTIME_BASE_EPOCH_STALE', 'Expected Runtime generation is not active.')
     }
-    if (nextInput !== null && expectedEpoch === Number.MAX_SAFE_INTEGER) {
-      fail('RUNTIME_EPOCH_EXHAUSTED', 'Runtime Epoch cannot be incremented safely.')
+    if (expectedGeneration >= Number.MAX_SAFE_INTEGER - 1) {
+      fail('RUNTIME_EPOCH_EXHAUSTED', 'Runtime generation cannot reserve install and rollback increments safely.')
     }
-    const next = nextInput === null ? null : canonicalBundleState(nextInput, expectedEpoch + 1)
+    const next = nextInput === null ? null : canonicalBundleState(nextInput, expectedGeneration + 1)
     if (
       state !== base
-      || (state === null ? expectedEpoch !== 0 : state.runtimeEpoch !== expectedEpoch)
+      || generation !== expectedGeneration
     ) {
       fail('RUNTIME_BASE_BUNDLE_STALE', 'Active Bundle changed while preparing the install token.')
     }
@@ -645,13 +648,14 @@ export function createBrowserRuntimeBundleCellV5(
         }
         if (
           state !== record.base
-          || (state === null ? record.expectedEpoch !== 0 : state.runtimeEpoch !== record.expectedEpoch)
+          || generation !== record.expectedGeneration
         ) {
           record.phase = 'rejected'
           fail('INSTALL_TOKEN_STALE', 'Install token base Bundle is no longer active.')
         }
         record.phase = 'installed'
         state = record.next
+        generation = record.expectedGeneration + 1
       },
       flushIsolatedNotifications(this: BrowserRuntimeBundleInstallTokenV5): void {
         const record = installRecords.get(this)
@@ -675,13 +679,14 @@ export function createBrowserRuntimeBundleCellV5(
         }
         if (
           state !== record.next
-          || (state !== null && state.runtimeEpoch !== record.expectedEpoch + 1)
+          || generation !== record.expectedGeneration + 1
         ) {
           record.phase = 'rejected'
           fail('INSTALL_TOKEN_STALE', 'Install token candidate Bundle is no longer active.')
         }
         record.phase = 'restored'
         state = record.base
+        generation = record.expectedGeneration + 2
       },
       flushRollbackNotifications(this: BrowserRuntimeBundleInstallTokenV5): void {
         const record = installRecords.get(this)
@@ -698,7 +703,7 @@ export function createBrowserRuntimeBundleCellV5(
     installRecords.set(token, {
       owner,
       base,
-      expectedEpoch,
+      expectedGeneration,
       next,
       listeners: listenerSnapshot,
       phase: 'prepared',
@@ -706,5 +711,5 @@ export function createBrowserRuntimeBundleCellV5(
     return token
   }
 
-  return Object.freeze({ getState, readActiveState, subscribe, prepareInstall })
+  return Object.freeze({ getState, readActiveState, readGeneration, subscribe, prepareInstall })
 }

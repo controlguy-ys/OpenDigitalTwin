@@ -74,4 +74,32 @@ describe('Project V5 browser file command port', () => {
     expect(url.revokeObjectURL).toHaveBeenCalledWith('blob:test')
     createElement.mockRestore()
   })
+
+  it('settles cancel exactly once even when every cleanup operation throws', async () => {
+    const input = document.createElement('input')
+    const createElement = vi.spyOn(document, 'createElement').mockReturnValue(input)
+    vi.spyOn(input, 'removeEventListener').mockImplementation(() => { throw new Error('listener cleanup blocked') })
+    vi.spyOn(input, 'remove').mockImplementation(() => { throw new Error('element cleanup blocked') })
+    const port = createBrowserProjectFileCommandPortV5({ document })
+    input.click = () => {
+      input.dispatchEvent(new Event('cancel'))
+      input.dispatchEvent(new Event('change'))
+    }
+
+    await expect(port.pickProject()).resolves.toBeNull()
+    createElement.mockRestore()
+  })
+
+  it('rejects change access failures even when cleanup independently throws', async () => {
+    const input = document.createElement('input')
+    const createElement = vi.spyOn(document, 'createElement').mockReturnValue(input)
+    Object.defineProperty(input, 'files', { configurable: true, get: () => { throw new Error('files blocked') } })
+    vi.spyOn(input, 'removeEventListener').mockImplementation(() => { throw new Error('listener cleanup blocked') })
+    vi.spyOn(input, 'remove').mockImplementation(() => { throw new Error('element cleanup blocked') })
+    const port = createBrowserProjectFileCommandPortV5({ document })
+    input.click = () => input.dispatchEvent(new Event('change'))
+
+    await expect(port.pickProject()).rejects.toThrow('files blocked')
+    createElement.mockRestore()
+  })
 })

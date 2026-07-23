@@ -496,6 +496,27 @@ describe('BrowserProjectRuntimeV5', () => {
     await runtime.dispose()
   })
 
+  it('keeps the restored bundle identity but invalidates candidates prepared before a commit rollback', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options())
+    const base = runtime.readActiveBundle()!
+    const staleProject = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(staleProject as { revisionId: string }).revisionId = 'revision-before-rollback'
+    const stale = await runtime.prepare(staleProject, CONFIG_B)
+    await runtime.apply(stale)
+
+    const transitionProject = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(transitionProject as { revisionId: string }).revisionId = 'revision-rolled-back'
+    const transitionCandidate = await runtime.prepare(transitionProject, CONFIG_B)
+    await runtime.apply(transitionCandidate)
+    const transition = await runtime.commit(transitionCandidate)
+    await transition.rollback()
+
+    expect(runtime.readActiveBundle()).toBe(base)
+    expect(runtime.readActiveBundle()!.runtimeGraph).toBe(base.runtimeGraph)
+    await expect(runtime.commit(stale)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_STALE')
+    await runtime.dispose()
+  })
+
   it('returns a first committed candidate to a truly empty Browser runtime', async () => {
     const runtime = createBrowserProjectRuntimeV5(options({
       initialProject: undefined,
@@ -517,6 +538,37 @@ describe('BrowserProjectRuntimeV5', () => {
 
     expect(runtime.readActiveBundle()).toBeNull()
     expect(() => runtime.bundle.getState()).toThrow('RUNTIME_BUNDLE_EMPTY')
+    await runtime.dispose()
+  })
+
+  it('rejects an empty-state ABA candidate after publish and deactivate while a fresh candidate succeeds', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: undefined,
+      initialConfigRevision: undefined,
+    }))
+    const staleProject = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(staleProject as { revisionId: string }).revisionId = 'revision-stale-empty'
+    const stale = await runtime.prepare(staleProject, CONFIG_B)
+    await runtime.apply(stale)
+
+    const winnerProject = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(winnerProject as { revisionId: string }).revisionId = 'revision-winner-empty'
+    const winner = await runtime.prepare(winnerProject, CONFIG_A)
+    await runtime.apply(winner)
+    await (await runtime.commit(winner)).finalize()
+    await (await runtime.deactivate()).finalize()
+
+    await expect(runtime.commit(stale)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_STALE')
+
+    const freshProject = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(freshProject as { revisionId: string }).revisionId = 'revision-fresh-empty'
+    const fresh = await runtime.prepare(freshProject, CONFIG_B)
+    await runtime.apply(fresh)
+    await (await runtime.commit(fresh)).finalize()
+    expect(runtime.readActiveBundle()).toMatchObject({
+      projectRevisionId: 'revision-fresh-empty',
+      runtimeEpoch: 3,
+    })
     await runtime.dispose()
   })
 

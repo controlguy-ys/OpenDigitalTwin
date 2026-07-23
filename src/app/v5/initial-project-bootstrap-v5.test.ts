@@ -34,6 +34,7 @@ describe('initial Project V5 bootstrap', () => {
 
     const first = bootstrap.run(() => false)
     const second = bootstrap.run(() => true)
+    await vi.waitFor(() => expect(hydrate).toHaveBeenCalledOnce())
     releaseHydrate()
     await Promise.all([first, second])
 
@@ -54,6 +55,68 @@ describe('initial Project V5 bootstrap', () => {
     await late
 
     expect(hydrate).toHaveBeenCalledOnce()
+    expect(newProject).toHaveBeenCalledOnce()
+  })
+
+  it('publishes the shared hydration handle before hydrate can synchronously reenter', async () => {
+    let reentrant: Promise<void> | null = null
+    let bootstrap!: ReturnType<typeof createInitialProjectBootstrapV5>
+    const newProject = vi.fn(async () => undefined)
+    const hydrate = vi.fn(async () => {
+      reentrant = bootstrap.run(() => true)
+    })
+    bootstrap = createInitialProjectBootstrapV5({
+      getState: () => ({ activeProject: null, status: 'idle' as const, hydrate, newProject }),
+    })
+
+    await bootstrap.run(() => true)
+    await reentrant
+
+    expect(hydrate).toHaveBeenCalledOnce()
+    expect(newProject).toHaveBeenCalledOnce()
+  })
+
+  it('lets a late joiner await the exact in-flight New Project result while the store is saving', async () => {
+    let releaseNew!: () => void
+    const state = { activeProject: null, status: 'idle' as 'idle' | 'saving' | 'ready' }
+    const hydrate = vi.fn(async () => undefined)
+    const newProject = vi.fn(() => {
+      state.status = 'saving'
+      return new Promise<void>((resolve) => {
+        releaseNew = () => { state.status = 'ready'; resolve() }
+      })
+    })
+    const bootstrap = createInitialProjectBootstrapV5({ getState: () => ({ ...state, hydrate, newProject }) })
+
+    const first = bootstrap.run(() => true)
+    await vi.waitFor(() => expect(newProject).toHaveBeenCalledOnce())
+    const late = bootstrap.run(() => true)
+    expect(newProject).toHaveBeenCalledOnce()
+    let lateSettled = false
+    void late.then(() => { lateSettled = true })
+    await Promise.resolve()
+    expect(lateSettled).toBe(false)
+
+    releaseNew()
+    await expect(Promise.all([first, late])).resolves.toEqual([undefined, undefined])
+  })
+
+  it('shares hydration failure with joiners and permits a later retry', async () => {
+    const hydrate = vi.fn()
+      .mockRejectedValueOnce(new Error('hydrate failed'))
+      .mockResolvedValueOnce(undefined)
+    const newProject = vi.fn(async () => undefined)
+    const bootstrap = createInitialProjectBootstrapV5({
+      getState: () => ({ activeProject: null, status: 'idle' as const, hydrate, newProject }),
+    })
+
+    const first = bootstrap.run(() => true)
+    const second = bootstrap.run(() => true)
+    await expect(Promise.all([first, second])).rejects.toThrow('hydrate failed')
+    expect(hydrate).toHaveBeenCalledOnce()
+
+    await expect(bootstrap.run(() => true)).resolves.toBeUndefined()
+    expect(hydrate).toHaveBeenCalledTimes(2)
     expect(newProject).toHaveBeenCalledOnce()
   })
 })

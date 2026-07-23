@@ -21,16 +21,37 @@ export function createInitialProjectBootstrapV5(store: InitialProjectStoreV5): I
     async run(isActive) {
       let run = activeRun
       if (run === null) {
-        run = { hydration: store.getState().hydrate(), participants: 0, newProject: null }
+        let resolveHydration!: () => void
+        let rejectHydration!: (reason: unknown) => void
+        const hydration = new Promise<void>((resolve, reject) => {
+          resolveHydration = resolve
+          rejectHydration = reject
+        })
+        run = { hydration, participants: 0, newProject: null }
         activeRun = run
+        void Promise.resolve()
+          .then(() => store.getState().hydrate())
+          .then(resolveHydration, rejectHydration)
       }
       run.participants += 1
       try {
         await run.hydration
         if (!isActive()) return
+        if (run.newProject !== null) {
+          await run.newProject
+          return
+        }
         const state = store.getState()
         if (state.activeProject !== null || (state.status !== 'idle' && state.status !== 'ready')) return
-        run.newProject ??= state.newProject()
+        let resolveNewProject!: () => void
+        let rejectNewProject!: (reason: unknown) => void
+        run.newProject = new Promise<void>((resolve, reject) => {
+          resolveNewProject = resolve
+          rejectNewProject = reject
+        })
+        void Promise.resolve()
+          .then(() => state.newProject())
+          .then(resolveNewProject, rejectNewProject)
         await run.newProject
       } finally {
         run.participants -= 1

@@ -40,9 +40,13 @@ export function createBrowserProjectFileCommandPortV5(
       let changeAttached = false
       let cancelAttached = false
       const cleanup = () => {
-        if (changeAttached) input.removeEventListener('change', onChange)
-        if (cancelAttached) input.removeEventListener('cancel', onCancel)
-        input.remove()
+        if (changeAttached) {
+          try { input.removeEventListener('change', onChange) } catch { /* Best-effort cleanup. */ }
+        }
+        if (cancelAttached) {
+          try { input.removeEventListener('cancel', onCancel) } catch { /* Best-effort cleanup. */ }
+        }
+        try { input.remove() } catch { /* Best-effort cleanup. */ }
       }
       const settle = (value: File | null) => {
         if (settled) return
@@ -56,7 +60,13 @@ export function createBrowserProjectFileCommandPortV5(
         cleanup()
         reject(error)
       }
-      const onChange = () => settle(input.files?.item(0) ?? null)
+      const onChange = () => {
+        try {
+          settle(input.files?.item(0) ?? null)
+        } catch (error) {
+          fail(error)
+        }
+      }
       const onCancel = () => settle(null)
       try {
         document.body.append(input)

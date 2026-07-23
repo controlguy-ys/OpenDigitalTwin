@@ -117,7 +117,10 @@ function failure(point: FailurePoint | null, target: FailurePoint): void {
   if (point === target) throw new Error(`TEST_${target.toUpperCase().replaceAll('-', '_')}`)
 }
 
-function publicationHarness(failurePoint: FailurePoint | null = null) {
+function publicationHarness(
+  failurePoint: FailurePoint | null = null,
+  onCleanupIssue?: (retry: () => Promise<void>) => void,
+) {
   const previousProject = project('revision-a', 'Previous')
   const nextProject = project('revision-b', 'Next')
   const previous = published(previousProject, HASH_A)
@@ -233,14 +236,18 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
     return HASH_B
   })
   const cleanupDiagnostics = vi.fn()
-  const publication = createProjectPublicationCoordinatorV5({
+  let publication!: ReturnType<typeof createProjectPublicationCoordinatorV5<RuntimeCandidate, GatewayCandidate>>
+  publication = createProjectPublicationCoordinatorV5({
     repository,
     runtime: runtimePort,
     gateway,
     initialPublished: previous,
     configRevisionForProjectV5,
     createCommitToken: () => 'commit-b',
-    onCleanupIssue: cleanupDiagnostics,
+    onCleanupIssue: (issue) => {
+      cleanupDiagnostics(issue)
+      onCleanupIssue?.(() => publication.retryCleanup())
+    },
   })
   return {
     previous,
@@ -513,6 +520,44 @@ describe('Project V5 publication coordinator', () => {
       kind: 'repository-garbage-collection', revisionId: 'revision-b', attemptCount: 1,
     }))
     expect(harness.publication.readCleanupStatus()).toEqual({ pending: [] })
+  })
+
+  it('shares one retry generation that waits for the exact in-flight drain before retrying a failed head', async () => {
+    const harness = publicationHarness()
+    let rejectFirst!: (error: Error) => void
+    harness.runtimeTransition.finalize.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject
+    }))
+
+    await harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })
+    const firstRetry = harness.publication.retryCleanup()
+    const secondRetry = harness.publication.retryCleanup()
+    expect(secondRetry).toBe(firstRetry)
+    rejectFirst(new Error('first finalize failed'))
+
+    await expect(firstRetry).resolves.toBeUndefined()
+    expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(2)
+    expect(harness.publication.readCleanupStatus().pending).toEqual([])
+  })
+
+  it('does not lose a synchronous retry requested from the cleanup issue observer', async () => {
+    let retryFromIssue: Promise<void> | null = null
+    const harness = publicationHarness(null, (retry) => {
+      retryFromIssue = retry()
+    })
+    harness.runtimeTransition.finalize.mockRejectedValueOnce(new Error('transient finalize failure'))
+
+    await harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })
+    await retryFromIssue
+
+    expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(2)
+    expect(harness.publication.readCleanupStatus().pending).toEqual([])
   })
 
   it('marks recovery when a first-publication Gateway rollback readback is not canonical', async () => {
@@ -889,8 +934,11 @@ describe('Project V5 publication coordinator', () => {
     expect(subject.publication.readCleanupStatus().pending[0]).toMatchObject({ kind: 'runtime-transition-finalize' })
     await expect(subject.publication.replace({ candidate: subject.nextProject, expectedRevisionId: subject.nextProject.revisionId }))
       .rejects.toMatchObject({ code: 'PROJECT_CLEANUP_REQUIRED' })
-    await expect(subject.publication.retryCleanup()).resolves.toBeUndefined()
+    const retry = subject.publication.retryCleanup()
+    expect(subject.publication.retryCleanup()).toBe(retry)
     expect(subject.runtimeTransition.finalize).toHaveBeenCalledOnce()
     release()
+    await expect(retry).resolves.toBeUndefined()
+    expect(subject.runtimeTransition.finalize).toHaveBeenCalledOnce()
   })
 })

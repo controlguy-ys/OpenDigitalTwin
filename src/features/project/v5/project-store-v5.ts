@@ -65,9 +65,11 @@ export function createProjectStoreV5(dependencies: ProjectStoreDependenciesV5): 
 
   const finishReady = (): void => {
     const recovery = dependencies.mutations.readRecoveryError()
+    const recoveryRequired = dependencies.mutations.isRecoveryRequired()
+    const authoritative = publishedProject()
     store.setState({
-      activeProject: publishedProject(),
-      status: dependencies.mutations.isRecoveryRequired() ? 'recovery-required' : 'ready',
+      activeProject: recoveryRequired ? authoritative ?? store.getState().activeProject : authoritative,
+      status: recoveryRequired ? 'recovery-required' : 'ready',
       error: recovery === null ? null : errorMessage(recovery),
     })
   }
