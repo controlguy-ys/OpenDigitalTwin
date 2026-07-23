@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { OPCUAServer, standardUnits } from 'node-opcua'
+import { NodeClass, OPCUAServer, standardUnits, type BaseNode, type UAObject, type UAVariable } from 'node-opcua'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -17,24 +17,10 @@ import {
 } from './opcua-robotics-model.js'
 import { projectRoboticsSystemV1 } from './opcua-robotics-projection.js'
 
-const IDENTITY_POSE = Object.freeze({ positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] })
-
-type UaNode = {
-  readonly nodeId: { readonly namespace: number }
-  readonly browseName: { readonly name: string }
-  readonly typeDefinitionObj: { readonly browseName: { readonly name: string } } | null
-  readonly description: { readonly text: string | null } | null
-  readonly accessLevel: number
-  readonly userAccessLevel: number
-  getComponentByName(name: string, namespaceIndex?: number): unknown
-  getPropertyByName(name: string, namespaceIndex?: number): {
-    readValue(): { value: { value: unknown } }
-  } | null
-  getAggregates(): readonly unknown[]
-  getComponents(): readonly unknown[]
-  findReferences(referenceType: unknown, isForward?: boolean): readonly { readonly nodeId: unknown }[]
-  readValue(): { value: { value: unknown } }
-}
+const IDENTITY_POSE = Object.freeze({
+  positionM: [0, 0, 0] as const,
+  quaternion: [0, 0, 0, 1] as const,
+})
 
 function projectWithJointCount(jointCount: number): WorkcellProjectV5 {
   const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
@@ -76,16 +62,34 @@ function projectWithJointCount(jointCount: number): WorkcellProjectV5 {
   })
 }
 
-function component(parent: UaNode, name: string, namespaceIndex: number): UaNode {
-  const child = parent.getComponentByName(name, namespaceIndex)
-  if (child === null) throw new Error(`Missing component ${name}`)
-  return child as UaNode
+function requireObject(node: BaseNode | null, path: string): UAObject {
+  if (node === null || node.nodeClass !== NodeClass.Object) {
+    throw new Error(`Expected OPC UA Object at ${path}`)
+  }
+  return node as UAObject
 }
 
-function descendants(node: UaNode): readonly UaNode[] {
+function requireVariable(node: BaseNode | null, path: string): UAVariable {
+  if (node === null || node.nodeClass !== NodeClass.Variable) {
+    throw new Error(`Expected OPC UA Variable at ${path}`)
+  }
+  return node as UAVariable
+}
+
+function component(parent: UAObject, name: string, namespaceIndex: number): UAObject {
+  const child = parent.getComponentByName(name, namespaceIndex)
+  return requireObject(child, `${parent.browseName.name}/${name}`)
+}
+
+function variable(parent: UAObject, name: string, namespaceIndex: number): UAVariable {
+  const child = parent.getComponentByName(name, namespaceIndex)
+  return requireVariable(child, `${parent.browseName.name}/${name}`)
+}
+
+function descendants(node: BaseNode): readonly BaseNode[] {
   const result = [node]
   for (const child of node.getAggregates()) {
-    result.push(...descendants(child as UaNode))
+    result.push(...descendants(child))
   }
   return result
 }
@@ -100,7 +104,7 @@ describe('OPC UA Robotics model V1', () => {
   async function startModel(project: WorkcellProjectV5) {
     const server = new OPCUAServer({
       port: 0,
-      nodeset_filename: ROBOTICS_NODESET_FILES_V1,
+      nodeset_filename: [...ROBOTICS_NODESET_FILES_V1],
     })
     servers.push(server)
     await server.initialize()
@@ -124,7 +128,7 @@ describe('OPC UA Robotics model V1', () => {
   it.each([2, 7, 16])('uses standard types and exactly %i configured Axes with product-owned instance NodeIds', async (jointCount) => {
     const { addressSpace, instancesNamespace, model } = await startModel(projectWithJointCount(jointCount))
     const roboticsNamespaceIndex = addressSpace.getNamespaceIndex('http://opcfoundation.org/UA/Robotics/')
-    const system = addressSpace.findNode(model.motionSystemNodeId) as UaNode
+    const system = requireObject(addressSpace.findNode(model.motionSystemNodeId), 'MotionDeviceSystem')
 
     expect(system.typeDefinitionObj?.browseName.name).toBe('MotionDeviceSystemType')
     expect(descendants(system).every(({ nodeId }) => nodeId.namespace === instancesNamespace.index)).toBe(true)
@@ -158,8 +162,8 @@ describe('OPC UA Robotics model V1', () => {
 
   it('publishes engineering units and EURanges through standard read-only ActualPosition variables', async () => {
     const { addressSpace, instancesNamespace, model } = await startModel(projectWithJointCount(2))
-    const firstActual = addressSpace.findNode(model.axisActualNodeIds['robot-1']!.J1!) as UaNode
-    const secondActual = addressSpace.findNode(model.axisActualNodeIds['robot-1']!.J2!) as UaNode
+    const firstActual = requireVariable(addressSpace.findNode(model.axisActualNodeIds['robot-1']!.J1!), 'J1 ActualPosition')
+    const secondActual = requireVariable(addressSpace.findNode(model.axisActualNodeIds['robot-1']!.J2!), 'J2 ActualPosition')
 
     expect(firstActual.nodeId.namespace).toBe(instancesNamespace.index)
     expect(firstActual.readValue().value.value).toBe(12.5)
@@ -194,21 +198,21 @@ describe('OPC UA Robotics model V1', () => {
     const { addressSpace, instancesNamespace, model } = await startModel(projectWithJointCount(2))
     const roboticsNamespaceIndex = addressSpace.getNamespaceIndex('http://opcfoundation.org/UA/Robotics/')
     const diNamespaceIndex = addressSpace.getNamespaceIndex('http://opcfoundation.org/UA/DI/')
-    const system = addressSpace.findNode(model.motionSystemNodeId) as UaNode
+    const system = requireObject(addressSpace.findNode(model.motionSystemNodeId), 'MotionDeviceSystem')
     const safetyStates = component(system, 'SafetyStates', roboticsNamespaceIndex)
     const safetyState = component(safetyStates, 'SimulationSafetyState', instancesNamespace.index)
     const parameterSet = component(safetyState, 'ParameterSet', diNamespaceIndex)
     const safetyVariables = ['EmergencyStop', 'OperationalMode', 'ProtectiveStop']
-      .map((browseName) => component(parameterSet, browseName, roboticsNamespaceIndex))
+      .map((browseName) => variable(parameterSet, browseName, roboticsNamespaceIndex))
 
     expect(safetyState.typeDefinitionObj?.browseName.name).toBe('SafetyStateType')
     expect(safetyState.description?.text).toContain('Informational simulation data only')
-    expect(safetyState.getComponents().map(({ browseName }) => browseName.name))
+    expect(safetyState.getComponents().map((node) => node.browseName.name))
       .toEqual(['ParameterSet'])
     expect(safetyVariables.every(({ accessLevel, userAccessLevel }) => (
       accessLevel === 1 && userAccessLevel === 1
     ))).toBe(true)
-    expect(safetyState.getComponents().map(({ browseName }) => browseName.name))
+    expect(safetyState.getComponents().map((node) => node.browseName.name))
       .not.toEqual(expect.arrayContaining(['Command', 'Result', 'Status']))
   }, 30_000)
 })

@@ -17,13 +17,13 @@ import {
 const CONFIG_REVISION = 'a'.repeat(64)
 
 const POSE_A: RigidTransformV5 = Object.freeze({
-  positionM: [0.1, 0.2, 0.3],
-  quaternion: [0, 0, 0, 1],
+  positionM: [0.1, 0.2, 0.3] as const,
+  quaternion: [0, 0, 0, 1] as const,
 })
 
 const POSE_B: RigidTransformV5 = Object.freeze({
-  positionM: [0.4, 0.5, 0.6],
-  quaternion: [0.1, 0.2, 0.3, 0.9],
+  positionM: [0.4, 0.5, 0.6] as const,
+  quaternion: [0.1, 0.2, 0.3, 0.9] as const,
 })
 
 function project(): WorkcellProjectV5 {
@@ -185,18 +185,18 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
     })).toBe(true)
   })
 
-  it('rejects namespace zero as a supplied product model namespace', async () => {
+  it('rejects a non-product namespace as a supplied product model namespace', async () => {
     const server = new OPCUAServer({ port: 0 })
     servers.push(server)
     await server.initialize()
     const addressSpace = server.engine.addressSpace
     if (addressSpace === null) throw new Error('OPC_UA_ADDRESS_SPACE_UNAVAILABLE')
     const instancesNamespace = addressSpace.registerNamespace(OPENWEB_INSTANCES_NAMESPACE_URI_V1)
-    const namespaceZero = addressSpace.getNamespaceArray()[0]!
+    const nonProductNamespace = addressSpace.registerNamespace('urn:open-web-digital-twin:not-product')
 
     expect(() => instantiateOpcUaOpenWebModelV1({
       addressSpace,
-      modelNamespace: namespaceZero,
+      modelNamespace: nonProductNamespace,
       instancesNamespace,
       project: project(),
       configRevision: CONFIG_REVISION,

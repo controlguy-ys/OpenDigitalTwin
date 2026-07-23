@@ -280,6 +280,7 @@ describe('OPC UA server adapter V1', () => {
     const namespaceIndex = status.namespaceIndex
     expect(namespaceIndex).not.toBeNull()
     const crbNodeId = status.nodeIds[CRB_ROBOT_ID]?.J1
+    if (crbNodeId === undefined) throw new Error('CRB J1 ActualPosition is missing')
     expect(crbNodeId).toMatch(new RegExp(`^ns=${namespaceIndex};s=Robotics/`, 'u'))
     expect(status.nodeIds).toEqual({
       [CRB_ROBOT_ID]: expect.objectContaining({ J1: crbNodeId }),
@@ -302,10 +303,10 @@ describe('OPC UA server adapter V1', () => {
           && tokens[0]?.tokenType === UserTokenType.Anonymous
       })).toBe(true)
 
-      const initialValues = await session.read([{ nodeId: crbNodeId, attributeId: AttributeIds.Value }])
-      expect(initialValues.map(({ statusCode }) => statusCode.isGood())).toEqual([true])
-      expect(initialValues.map(({ value }) => value.dataType)).toEqual([DataType.Double])
-      expect(initialValues.map(({ value }) => value.value)).toEqual([0])
+      const initialValue = await session.read({ nodeId: crbNodeId, attributeId: AttributeIds.Value })
+      expect(initialValue.statusCode.isGood()).toBe(true)
+      expect(initialValue.value.dataType).toBe(DataType.Double)
+      expect(initialValue.value.value).toBe(0)
       const writeStatus = await session.write({
         nodeId: crbNodeId,
         attributeId: AttributeIds.Value,
@@ -315,8 +316,8 @@ describe('OPC UA server adapter V1', () => {
 
       await adapter.publishRobotJointState(CRB_ROBOT_ID, { J1: 12.5 })
 
-      const publishedValues = await session.read([{ nodeId: crbNodeId, attributeId: AttributeIds.Value }])
-      expect(publishedValues.map(({ value }) => value.value)).toEqual([12.5])
+      const publishedValue = await session.read({ nodeId: crbNodeId, attributeId: AttributeIds.Value })
+      expect(publishedValue.value.value).toBe(12.5)
     } finally {
       await session.close()
       await client.disconnect()

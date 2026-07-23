@@ -58,6 +58,19 @@ adapters. The Client does not write, call methods, or control a Robot. Anonymous
 access with `SecurityPolicy.None` is deliberate for the current no-security
 prototype and must not be treated as a production security profile.
 
+## Robotics server model boundary
+
+The optional Server uses a **Robotics-compatible mapping** of Project V5 Robots
+and independent linear devices to the official Standard, DI, IA, and Robotics
+NodeSets. It publishes degree-valued revolute Actuals and millimetre-valued
+prismatic Actuals with read-only standard Actual Position variables; product
+Actual, Command, Result, and Diagnostics remain under the OpenWebDigitalTwin
+product namespaces.
+
+This mapping is not an OPC UA Robotics conformance claim. It makes no
+conformance, security, safety, or manufacturer-code claim, and it is not a
+substitute for a safety-rated controller or a vendor's robot implementation.
+
 For generic Object bindings, the Client assembles six `Double` values into a
 coherent pose, converts XYZ from the configured `m` or `mm` unit to project
 metres, and converts Roll/Pitch/Yaw degrees to the project quaternion. It keeps

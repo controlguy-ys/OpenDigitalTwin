@@ -15,7 +15,18 @@ import {
   projectRoboticsSystemV1,
 } from './opcua-robotics-projection.js'
 
-const IDENTITY_POSE = Object.freeze({ positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] })
+const IDENTITY_POSE = Object.freeze({
+  positionM: [0, 0, 0] as const,
+  quaternion: [0, 0, 0, 1] as const,
+})
+
+type MutableRobotInstanceV5 = {
+  -readonly [Key in keyof RobotInstanceV5]: RobotInstanceV5[Key]
+}
+
+type MutableWorkcellProjectV5 = Omit<WorkcellProjectV5, 'robots'> & {
+  robots: MutableRobotInstanceV5[]
+}
 
 function projectWithJointCount(jointCount: number): WorkcellProjectV5 {
   const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
@@ -206,16 +217,26 @@ describe('OPC UA Robotics projection V1', () => {
   })
 
   it('rejects a finite V5 prismatic joint state that overflows during OPC UA projection', () => {
-    const project = cloneWorkcellProjectV5(projectWithJointCount(2))
-    const definition = project.robotDefinitions[0]!
+    const source = cloneWorkcellProjectV5(projectWithJointCount(2))
+    const definition = {
+      ...source.robotDefinitions[0]!,
+      joints: [...source.robotDefinitions[0]!.joints],
+    }
     const prismatic = definition.joints[1]!
-    ;(definition.joints as unknown as RobotDefinitionV5['joints'][number][])[1] = {
+    definition.joints[1] = {
       ...prismatic,
       min: -1e308,
       max: 1e308,
     }
-    ;(project.robots[0]!.initialJointValues as unknown as Record<string, number>).J2 = 1e308
-    const validFiniteProject = validateWorkcellProjectV5(project)
+    const robot = {
+      ...source.robots[0]!,
+      initialJointValues: { ...source.robots[0]!.initialJointValues, J2: 1e308 },
+    }
+    const validFiniteProject = validateWorkcellProjectV5({
+      ...source,
+      robotDefinitions: [definition],
+      robots: [robot],
+    })
 
     expect(() => projectRoboticsSystemV1(validFiniteProject)).toThrow('OPC_UA_ROBOTICS_PROJECTION_VALUE_INVALID')
   })
@@ -226,7 +247,11 @@ describe('OPC UA Robotics projection V1', () => {
   })
 
   it('returns an immutable projection without retaining mutable caller records', () => {
-    const source = cloneWorkcellProjectV5(projectWithJointCount(2))
+    const original = cloneWorkcellProjectV5(projectWithJointCount(2))
+    const source: MutableWorkcellProjectV5 = {
+      ...original,
+      robots: original.robots.map((robot) => ({ ...robot })),
+    }
     const projection = projectRoboticsSystemV1(source)
 
     expect(Object.isFrozen(projection)).toBe(true)
@@ -247,11 +272,15 @@ describe('OPC UA Robotics projection V1', () => {
   })
 
   it.each([
-    ['controller', 'ROBOT_CONTROLLER_NOT_FOUND', (project: WorkcellProjectV5) => { project.robots[0]!.controllerId = 'missing-controller' }],
-    ['definition', 'ROBOT_DEFINITION_NOT_FOUND', (project: WorkcellProjectV5) => { project.robots[0]!.definitionId = 'missing-definition' }],
-    ['joint state', 'ROBOT_JOINT_SET_MISMATCH', (project: WorkcellProjectV5) => { project.robots[0]!.initialJointValues = {} }],
+    ['controller', 'ROBOT_CONTROLLER_NOT_FOUND', (project: MutableWorkcellProjectV5) => { project.robots[0]!.controllerId = 'missing-controller' }],
+    ['definition', 'ROBOT_DEFINITION_NOT_FOUND', (project: MutableWorkcellProjectV5) => { project.robots[0]!.definitionId = 'missing-definition' }],
+    ['joint state', 'ROBOT_JOINT_SET_MISMATCH', (project: MutableWorkcellProjectV5) => { project.robots[0]!.initialJointValues = {} }],
   ])('rejects a missing %s before creating a projection', (_name, expectedCode, corrupt) => {
-    const invalid = cloneWorkcellProjectV5(projectWithJointCount(2))
+    const original = cloneWorkcellProjectV5(projectWithJointCount(2))
+    const invalid: MutableWorkcellProjectV5 = {
+      ...original,
+      robots: original.robots.map((robot) => ({ ...robot })),
+    }
     corrupt(invalid)
 
     expect(() => projectRoboticsSystemV1(invalid)).toThrow(expectedCode)
