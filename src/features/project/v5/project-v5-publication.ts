@@ -88,6 +88,7 @@ export interface ProjectV5PublicationCoordinatorOptions<PreparedRuntime = unknow
   readonly initialPublished?: PublishedProjectV5 | null
   readonly configRevisionForProjectV5?: (project: WorkcellProjectV5) => Promise<string>
   readonly createCommitToken?: () => string
+  readonly cleanupTimeoutMs?: number
   readonly onRecoveryRequired?: (error: unknown) => void
   readonly onCleanupIssue?: (issue: ProjectV5CleanupIssue) => void
 }
@@ -257,6 +258,10 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   const runtime = options.runtime
   const gateway = options.gateway
   const createCommitToken = options.createCommitToken ?? defaultCommitToken
+  const cleanupTimeoutMs = options.cleanupTimeoutMs ?? 10_000
+  if (!Number.isFinite(cleanupTimeoutMs) || cleanupTimeoutMs <= 0) {
+    throw new TypeError('PROJECT_CLEANUP_TIMEOUT_INVALID')
+  }
   const calculateConfigRevision = options.configRevisionForProjectV5 ?? calculateConfigRevisionForProjectV5
   let published = validateInitialPublished(options.initialPublished)
   let recoveryRequired = false
@@ -274,9 +279,19 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     return pending
   }
 
-  const requireEditable = (): void => {
+  const requireEditable = async (): Promise<void> => {
     if (recoveryRequired) {
       failPublication('PROJECT_RECOVERY_REQUIRED', 'Reload recovery is required before another Project V5 publication.')
+    }
+    if (cleanupTasks.length > 0) {
+      const activeDrain = cleanupDrainPromise
+      if (activeDrain !== null) await activeDrain
+    }
+    if (cleanupTasks.length > 0) {
+      const failedCleanup = cleanupTasks[0]?.lastError !== null
+      if (failedCleanup && cleanupDrainPromise === null) {
+        await retryCleanup()
+      }
     }
     if (cleanupTasks.length > 0) {
       failPublication('PROJECT_CLEANUP_REQUIRED', 'Resolve retained Project V5 cleanup tasks before another publication.')
@@ -340,7 +355,22 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     const task: PendingCleanupTaskV5 = {
       kind,
       revisionId,
-      operation,
+      operation: async () => {
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+        try {
+          await Promise.race([
+            operation(),
+            new Promise<never>((_resolve, reject) => {
+              timeoutHandle = setTimeout(() => reject(new ProjectPublicationV5Error(
+                'PROJECT_CLEANUP_TIMEOUT',
+                `Project V5 cleanup ${kind} exceeded ${cleanupTimeoutMs} ms.`,
+              )), cleanupTimeoutMs)
+            }),
+          ])
+        } finally {
+          if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
+        }
+      },
       attemptCount: 0,
       lastError: null,
       failureOwner: undefined,
@@ -550,7 +580,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   const coordinator: ProjectPublicationCoordinatorV5 = {
     replace(request) {
       return enqueue(async () => {
-        requireEditable()
+        await requireEditable()
         const previous = published
         if (request.expectedRevisionId !== (previous?.revisionId ?? null)) {
           return failPublication(
@@ -601,8 +631,16 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           await repository.commitPreparedRevision(request.expectedRevisionId, preparedRevision, commitToken)
           repositoryCommitted = true
           runtimeTransition = await runtime.commit(preparedRuntime)
-          await repository.finalizePublication(commitToken)
           assertGatewayStatus(await gateway.readStatus(), next)
+          try {
+            await repository.finalizePublication(commitToken)
+          } catch (finalizeError) {
+            const pointer = await repository.readPointer()
+            const finalizedDespiteRejection = pointer?.state === 'stable'
+              && pointer.revisionId === next.revisionId
+              && pointer.commitToken === commitToken
+            if (!finalizedDespiteRejection) throw finalizeError
+          }
           published = next
         } catch (error) {
           const compensationErrors: unknown[] = []
@@ -687,7 +725,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     hydrate() {
       return enqueue(async () => {
         if (published !== null) return publicPublished(published.project, published.revisionId, published.configRevision)
-        requireEditable()
+        await requireEditable()
         const pointer = await readHydrationPointer()
         if (pointer === null) {
           let deactivation: ProjectV5RuntimeCommitTransitionV5 | undefined
@@ -791,19 +829,31 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           return rollbackActivation(activation, error)
         }
 
+        try {
+          assertGatewayStatus(await gateway.readStatus(), next)
+        } catch (error) {
+          return rollbackActivation(activation, error)
+        }
+
         if (pointer.state === 'publishing') {
           try {
             await repository.finalizePublication(pointer.commitToken)
-            const stableTarget: StoredProjectPointerV5 = {
-              key: 'active', state: 'stable', revisionId: pointer.revisionId, commitToken: pointer.commitToken,
+          } catch (finalizeError) {
+            let observed: StoredProjectPointerV5 | null
+            try {
+              observed = await readHydrationPointer()
+            } catch (reconciliationError) {
+              enterRecovery([finalizeError, reconciliationError])
+              throw finalizeError
             }
-            await requireExactPointer(stableTarget)
-          } catch (error) {
-            await rollbackActivation(activation, error, true)
+            const finalizedDespiteRejection = observed?.state === 'stable'
+              && observed.revisionId === pointer.revisionId
+              && observed.commitToken === pointer.commitToken
+            if (!finalizedDespiteRejection) {
+              await rollbackActivation(activation, finalizeError, true)
+            }
           }
         }
-
-        assertGatewayStatus(await gateway.readStatus(), next)
 
         published = next
         notifyPublished()

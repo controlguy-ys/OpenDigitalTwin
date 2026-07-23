@@ -214,6 +214,12 @@ function graph(
     signalWrites,
     jobExecutor,
     playback,
+    world: {
+      readRobotFrameWorldPose: () => null,
+      readRobotLinkWorldPose: () => null,
+      readSceneFrameWorldPose: () => null,
+      readObjectWorldPose: () => null,
+    },
     streamTarget: {
       projectId: currentProject.projectId,
       configRevision,
@@ -582,6 +588,7 @@ describe('BrowserRuntimeBundleCellV5 split-phase publication', () => {
       signalWrites: sourceGraph.signalWrites,
       jobExecutor: sourceGraph.jobExecutor,
       playback: sourceGraph.playback,
+      world: sourceGraph.world,
     }
     Object.defineProperties(accessorGraph, {
       robots: {

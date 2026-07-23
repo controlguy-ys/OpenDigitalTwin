@@ -44,13 +44,20 @@ function robotDefinitionV5(
       serialNumberTemplate: null,
       motionDeviceCategory: 'ARTICULATED_ROBOT',
     },
+    mechanics: {
+      schemaVersion: 1,
+      status: 'estimated',
+      sourceKind: 'manual',
+      sourceName: 'inactive-v4-gateway-adapter',
+      calibrationRevision: `v4-${definition.id}`,
+    },
     assetReferenceIds: definition.assetReferenceIds,
     sourceConventions: definition.sourceConventions,
     links: definition.links,
     joints: definition.joints,
     frames: definition.frames,
     excludedGeometryOccurrenceKeys: definition.excludedGeometryOccurrenceKeys,
-  } as RobotDefinitionV5
+  }
 }
 
 function robotControllerV5(

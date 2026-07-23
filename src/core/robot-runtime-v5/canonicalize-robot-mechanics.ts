@@ -259,12 +259,12 @@ function collapseFixedOnlySegments(graph: DraftGraph): CollapsedMechanics {
     invalid('ROBOT_JOINT_LIMIT_EXCEEDED', '$.draft.joints', `At most ${MAX_ROBOT_JOINTS_V5} movable Joints are supported.`)
   }
   const frames = [...graph.framesById.values()].map((frame) => {
-    const location = locations.get(frame.parentFrameId ?? '')
-    if (location === undefined) return { ...frame, localPose: finitePose(frame.localPose, `$.draft.frames.${frame.id}.localPose`) }
+    const retainedLocation = locations.get(frame.parentFrameId ?? '')
+    if (retainedLocation === undefined) return { ...frame, localPose: finitePose(frame.localPose, `$.draft.frames.${frame.id}.localPose`) }
     return {
       ...frame,
-      parentFrameId: location.retainedLinkId,
-      localPose: composeRigidTransformV5(location.retainedFromLink, finitePose(frame.localPose, `$.draft.frames.${frame.id}.localPose`)),
+      parentFrameId: retainedLocation.retainedLinkId,
+      localPose: composeRigidTransformV5(retainedLocation.retainedFromLink, finitePose(frame.localPose, `$.draft.frames.${frame.id}.localPose`)),
     }
   })
   const links = retainedLinkOrder.map((linkId) => ({

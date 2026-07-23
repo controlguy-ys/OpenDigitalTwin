@@ -399,8 +399,8 @@ describe('Project V5 publication coordinator', () => {
       'gateway.activate:revision-b',
       'repository.commit:revision-b',
       'runtime.commit:revision-b',
-      'repository.finalize',
       'gateway.read-status:revision-b',
+      'repository.finalize',
       'runtime.transition.finalize',
       'gateway.cleanup:revision-a',
       'repository.gc',
@@ -453,6 +453,28 @@ describe('Project V5 publication coordinator', () => {
     })).rejects.toThrow('TEST_COMMIT_RESPONSE_LOST')
     expect(harness.repository.compensatePublication).toHaveBeenCalledWith('commit-b')
     expect(harness.repository.discardPreparedRevision).not.toHaveBeenCalled()
+  })
+
+  it('keeps the exact stable publication when finalization succeeds before its response is lost', async () => {
+    const harness = publicationHarness()
+    harness.repository.finalizePublication.mockRejectedValueOnce(new Error('TEST_FINALIZE_RESPONSE_LOST'))
+    harness.repository.readPointer = async (): Promise<StoredProjectPointerV5 | null> => ({
+      key: 'active',
+      state: 'stable',
+      revisionId: harness.nextProject.revisionId,
+      commitToken: 'commit-b',
+    })
+
+    await expect(harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })).resolves.toEqual(published(harness.nextProject, HASH_B))
+
+    expect(harness.publication.readPublished()).toEqual(published(harness.nextProject, HASH_B))
+    expect(harness.repository.compensatePublication).not.toHaveBeenCalled()
+    expect(harness.runtimeTransition.rollback).not.toHaveBeenCalled()
+    expect(harness.gateway.rollback).not.toHaveBeenCalled()
+    expect(harness.publication.isRecoveryRequired()).toBe(false)
   })
 
   it.each([
@@ -540,7 +562,7 @@ describe('Project V5 publication coordinator', () => {
     expect(runtimeRollback).toBeGreaterThan(gatewayRollback)
     expect(repositoryRollback).toBeGreaterThan(runtimeRollback)
     expect(gatewayReactivate).toBeGreaterThan(repositoryRollback)
-    expect(harness.gateway.readStatus).toHaveBeenCalledOnce()
+    expect(harness.gateway.readStatus).toHaveBeenCalledTimes(2)
     expect(harness.events.indexOf('gateway.read-status:revision-a')).toBeGreaterThan(gatewayReactivate)
     expect(harness.durable()).toEqual(harness.previous)
     expect(harness.runtimeActive()).toEqual(harness.previous)
@@ -582,6 +604,29 @@ describe('Project V5 publication coordinator', () => {
     expect(harness.publication.readCleanupStatus()).toEqual({ pending: [] })
   })
 
+  it('retries one failed cleanup automatically before the next publication', async () => {
+    const harness = publicationHarness()
+    harness.gateway.cleanupPrevious.mockRejectedValueOnce(new Error('transient gateway cleanup failure'))
+
+    await harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })
+    await vi.waitFor(() => expect(harness.publication.readCleanupStatus().pending[0]).toMatchObject({
+      kind: 'gateway-previous',
+      attemptCount: 1,
+    }))
+
+    const afterCleanup = project('revision-c', 'After transient cleanup')
+    await expect(harness.publication.replace({
+      candidate: afterCleanup,
+      expectedRevisionId: harness.nextProject.revisionId,
+    })).resolves.toMatchObject({ revisionId: afterCleanup.revisionId })
+
+    expect(harness.gateway.cleanupPrevious).toHaveBeenCalledTimes(3)
+    expect(harness.publication.isRecoveryRequired()).toBe(false)
+  })
+
   it('shares one retry generation that waits for the exact in-flight drain before retrying a failed head', async () => {
     const harness = publicationHarness()
     let rejectFirst!: (error: Error) => void
@@ -614,7 +659,8 @@ describe('Project V5 publication coordinator', () => {
       candidate: harness.nextProject,
       expectedRevisionId: harness.previous.revisionId,
     })
-    await retryFromIssue
+    await vi.waitFor(() => expect(retryFromIssue).not.toBeNull())
+    await retryFromIssue!
 
     expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(2)
     expect(harness.publication.readCleanupStatus().pending).toEqual([])
@@ -785,7 +831,7 @@ describe('Project V5 publication coordinator', () => {
     expect(transition.rollback).toHaveBeenCalledOnce()
     expect(runtime.rollback).not.toHaveBeenCalled()
     expect(gateway.reactivate).not.toHaveBeenCalled()
-    expect(gateway.readStatus).toHaveBeenCalledOnce()
+    expect(gateway.readStatus).toHaveBeenCalledTimes(2)
     expect(durable).toBeNull()
     expect(runtimeActive).toBeNull()
     expect(gatewayActive).toBeNull()
@@ -837,7 +883,9 @@ describe('Project V5 publication coordinator', () => {
         return gatewayStatus(nextProject, HASH_B)
       }),
       reactivate: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
-      readStatus: vi.fn(async () => inactiveGatewayStatus()),
+      readStatus: vi.fn(async () => gatewayActive === null
+        ? inactiveGatewayStatus()
+        : gatewayStatus(gatewayActive.project, gatewayActive.configRevision)),
       rollback: vi.fn(async () => { gatewayActive = null; return 'candidate-deactivated' as const }),
       deactivate: vi.fn(async () => inactiveGatewayStatus()),
       cleanupPrevious: vi.fn(async () => undefined),
@@ -856,11 +904,13 @@ describe('Project V5 publication coordinator', () => {
       expect(runtime.readActiveBundle()).toBeNull()
       expect(durable).toBeNull()
       expect(gatewayActive).toBeNull()
-      expect(gateway.readStatus).toHaveBeenCalledOnce()
+      expect(gateway.readStatus).toHaveBeenCalledTimes(2)
       expect(publication.readPublished()).toBeNull()
       expect(publication.isRecoveryRequired()).toBe(false)
 
-      gateway.readStatus.mockRejectedValueOnce(new Error('Gateway rollback readback failed.'))
+      gateway.readStatus
+        .mockResolvedValueOnce(gatewayStatus(nextProject, HASH_B))
+        .mockRejectedValueOnce(new Error('Gateway rollback readback failed.'))
       await expect(publication.replace({ candidate: nextProject, expectedRevisionId: null })).rejects.toThrow('TEST_REAL_RUNTIME_FINALIZE')
       expect(runtime.readActiveBundle()).toBeNull()
       expect(durable).toBeNull()
@@ -919,6 +969,43 @@ describe('Project V5 publication coordinator', () => {
 
     expect(subject.repository.finalizePublication).toHaveBeenCalledWith('publishing-target')
     expect(subject.pointer()).toEqual({ key: 'active', state: 'stable', revisionId: 'hydration-target', commitToken: 'publishing-target' })
+  })
+
+  it('accepts an interrupted hydration finalization whose durable response is lost', async () => {
+    const subject = hydrationHarness({
+      key: 'active', state: 'publishing', revisionId: 'hydration-target',
+      previousRevisionId: 'hydration-previous', previousCommitToken: 'stable-previous', commitToken: 'publishing-target',
+    })
+    subject.repository.finalizePublication.mockImplementationOnce(async () => {
+      subject.setPointer({
+        key: 'active',
+        state: 'stable',
+        revisionId: 'hydration-target',
+        commitToken: 'publishing-target',
+      })
+      throw new Error('TEST_HYDRATION_FINALIZE_RESPONSE_LOST')
+    })
+
+    await expect(subject.publication.hydrate()).resolves.toEqual(subject.target)
+
+    expect(subject.publication.readPublished()).toEqual(subject.target)
+    expect(subject.runtimeActive()).toEqual(subject.target)
+    expect(subject.gatewayActive()).toEqual(subject.target)
+    expect(subject.publication.isRecoveryRequired()).toBe(false)
+  })
+
+  it('rolls back stable hydration when Gateway readback fails before publication', async () => {
+    const subject = hydrationHarness({
+      key: 'active', state: 'stable', revisionId: 'hydration-target', commitToken: 'stable-target',
+    })
+    subject.gateway.readStatus.mockRejectedValueOnce(new Error('TEST_HYDRATION_GATEWAY_READBACK'))
+
+    await expect(subject.publication.hydrate()).rejects.toThrow('TEST_HYDRATION_GATEWAY_READBACK')
+
+    expect(subject.publication.readPublished()).toBeNull()
+    expect(subject.runtimeActive()).toBeNull()
+    expect(subject.gatewayActive()).toBeNull()
+    expect(subject.publication.isRecoveryRequired()).toBe(false)
   })
 
   it('compensates an interrupted publishing pointer to the previous durable project when target restoration fails', async () => {
@@ -1096,7 +1183,7 @@ describe('Project V5 publication coordinator', () => {
     ])
   })
 
-  it('publishes and notifies before a never-settling cleanup, then rejects overlap fast', async () => {
+  it('publishes first, then coalesces the next publication behind an active cleanup drain', async () => {
     const subject = publicationHarness()
     let release!: () => void
     subject.runtimeTransition.finalize.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve }))
@@ -1107,13 +1194,20 @@ describe('Project V5 publication coordinator', () => {
     await expect(replacing).resolves.toEqual(published(subject.nextProject, HASH_B))
     expect(observed).toHaveBeenCalledOnce()
     expect(subject.publication.readCleanupStatus().pending[0]).toMatchObject({ kind: 'runtime-transition-finalize' })
-    await expect(subject.publication.replace({ candidate: subject.nextProject, expectedRevisionId: subject.nextProject.revisionId }))
-      .rejects.toMatchObject({ code: 'PROJECT_CLEANUP_REQUIRED' })
-    const retry = subject.publication.retryCleanup()
-    expect(subject.publication.retryCleanup()).toBe(retry)
+    let overlappingSettled = false
+    const overlapping = subject.publication.replace({
+      candidate: subject.nextProject,
+      expectedRevisionId: subject.nextProject.revisionId,
+    }).then((result) => {
+      overlappingSettled = true
+      return result
+    })
+    await Promise.resolve()
+    expect(overlappingSettled).toBe(false)
     expect(subject.runtimeTransition.finalize).toHaveBeenCalledOnce()
     release()
-    await expect(retry).resolves.toBeUndefined()
-    expect(subject.runtimeTransition.finalize).toHaveBeenCalledOnce()
+    await expect(overlapping).resolves.toEqual(published(subject.nextProject, HASH_B))
+    await vi.waitFor(() => expect(subject.publication.readCleanupStatus().pending).toEqual([]))
+    expect(subject.runtimeTransition.finalize).toHaveBeenCalledTimes(2)
   })
 })

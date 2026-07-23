@@ -5,10 +5,10 @@
 OpenDigitalTwin is a lightweight, browser-first Robot workcell simulator for
 small manufacturers and engineering teams that need accessible kinematic and
 OPC UA integration checks without adopting a full Unity, Unreal, or industrial
-physics toolchain. The current release uses one deterministic Project V4 model
-for multiple independent Robot Instances, scene objects, Robot-owned Simulation
-Jobs, geometric collision checks, and an optional Runtime Gateway with read-only
-OPC UA Server and Client/Bridge subscriptions.
+physics toolchain. The current release uses one deterministic Project V5 model
+for variable-joint Robot Instances, scene objects, Robot-owned Simulation Jobs,
+geometric visualization, and an atomic Runtime Gateway connection with OPC UA
+Server, Client, or Bridge operation.
 
 It is an engineering visualization tool, not a Robot controller, physics engine,
 or safety-rated system.
@@ -19,7 +19,7 @@ This project was developed with Codex powered by GPT-5.6 as an engineering copil
 
 Codex/GPT-5.6 was used to:
 
-- design and iterate the Project V4 multi-robot data model and runtime contracts;
+- design and iterate the Project V5 multi-robot data model and runtime contracts;
 - implement and review the browser simulator, per-robot jobs, collision checks, and OPC UA Runtime Gateway;
 - generate and refine validation, unit, middleware, and end-to-end test coverage;
 - troubleshoot Docker, same-origin runtime routing, and OPC UA integration behavior;
@@ -29,37 +29,31 @@ All final architecture decisions, validation, and repository integration were re
 
 ## Current short-term scope
 
-- Project V4 is the only active browser Project format. New, Save, Export,
-  Import, reload, and runtime publication use validated canonical JSON.
+- Project V5 is the only active browser Project format. New, Save, Export,
+  Import, reload, Settings, Bindings, Scene changes, and Jobs share one
+  validated atomic publication authority. V4 files are rejected before the
+  active Project changes.
 - A Project can describe up to 16 Robot Instances. Each reusable Robot
   Definition has one through sixteen named revolute or prismatic Joints; runtime
   state, selection, Jobs, rendering, and collision identity are keyed by Robot
   ID rather than a global active Robot.
 - Robot STEP source count and Joint count are independent. A Definition may
-  reference one through seven Robot STEP sources, including one assembly source,
-  and **Model → Import Robot STEP** maps them to `LINK00` through `LINK06`.
-  A single assembly STEP is split deterministically from seven primary assembly
-  nodes when possible. Imported Robots use an estimated six-axis mechanical
-  template; STEP alone does not provide authoritative Joint axes, pivots, limits,
-  or zero calibration. There is no per-source 25 MiB or per-Link
-  150,000-triangle cap; the aggregate Definition budgets remain
-  100 MiB and 600,000 triangles. A Project supports up to 16 Robot instances
-  and 16 Robot definitions while retaining the global 512 MiB referenced STEP
-  and 3,000,000 visible-triangle budgets.
-- The default Project renders the bundled Niryo NED2 Geometry as one Robot with
-  `J1` through `J6`. ABB CRB15000 remains available in the Dual-Robot Technical
-  Demo sample. The V4 Scene
-  also supports primitive Boxes/Cylinders, Groups, visibility, transforms, and
-  geometry-proxy collision inspection. Boxes, Cylinders, and imported STEP
-  objects have manual XYZ/RPY placement when their transform is manually owned.
-- Simulation Jobs belong to one Robot and contain ordered Joint Poses with a
-  speed percentage to the next Pose. Different Robots keep independent state and
-  execution sessions. Robot STEP import creates and selects an empty Robot-owned
-  Job. **Save Current Pose** also creates that Job on demand for older Projects
-  whose imported Robot has no Job.
+  reference one through seven Robot STEP assets independently of its Joint
+  count. STEP alone does not provide authoritative Joint axes, pivots, limits,
+  or zero calibration. Definition budgets are 100 MiB and 600,000 triangles;
+  the Project budgets are 512 MiB of referenced STEP and 3,000,000 visible
+  triangles.
+- The active V5 Scene supports primitive Boxes/Cylinders, visibility, manual
+  XYZ/RPY placement, variable-joint Robot controls, mapped Robot Frames, and
+  runtime Object/Robot status. Current V5 rendering uses deterministic geometry
+  proxies; loading the referenced STEP mesh into the active V5 renderer remains
+  follow-up work.
+- Simulation Jobs belong to one Robot and support Joint Pose, SetDO, WaitDI,
+  Delay, Attach, and Detach instructions. Different Robots keep independent
+  state and execution sessions.
 - The browser publishes only a fully matched Project revision and matching
-  multi-Robot state to the Runtime Gateway. A missing Gateway does not disable
-  local Simulation.
+  runtime graph to the Runtime Gateway. The active V5 application intentionally
+  requires the Gateway for atomic browser/Gateway authority.
 - Runtime Gateway mode is selected per Project: `Off`, `Server`, `Client`, or
   `Bridge`. Client reads configured external OPC UA nodes; Bridge combines that
   client with the read-only Server namespace. Server remains limited to each
@@ -74,68 +68,48 @@ All final architecture decisions, validation, and repository integration were re
   the Gateway owns HTTP activation/state endpoints and optional OPC UA port
   `4841`.
 
-Project V4 is a clean break. There is no Legacy Adoption or automatic Project
+Project V5 is a clean break. There is no Legacy Adoption or automatic Project
 migration.
 
 ## Quick start
 
 Requirements: Node.js `>=22.15.1 <23` and npm `>=11.4.2 <12`.
 
-Browser-only local Simulation:
+Run the Runtime Gateway and browser in two PowerShell terminals:
 
 ```powershell
 npm install
+
+# Terminal 1
+npm run build:gateway
+npm run runtime:gateway
+
+# Terminal 2
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/). The application remains
-usable when `/runtime` is unavailable; Gateway status is reported separately.
-
-To add custom Robot Geometry, open **Model → Import Robot STEP**, select one to
-seven `.step`/`.stp` sources, confirm the LINK mapping, and choose the source
-X/Y/Z-Up convention. Files named with `LINK00` through `LINK06` map explicitly;
-other filenames fill the first free Link. Raw sources are retained in the local
-browser asset database so the imported Geometry can be restored after reload.
-See [Working Demo known limitations](docs/operator/working-demo-known-limitations.md)
-before using an inferred Robot definition for TCP or mechanical-dimension work.
-
-Build and run the Runtime Gateway directly for HTTP/OPC UA integration tests:
-
-```powershell
-npm run build:gateway
-npm run runtime:gateway
-```
+Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/). The header reports
+Gateway and OPC UA state separately. If the Gateway is unavailable, Project V5
+activation is blocked instead of leaving browser and middleware revisions out
+of sync.
 
 The direct Gateway defaults are HTTP `http://127.0.0.1:8081` and OPC UA
 `opc.tcp://127.0.0.1:4841`. The browser expects a same-origin `/runtime` route,
 so Docker Compose is the supported full browser-plus-Gateway topology.
 
-## Two-Robot Technical Demo flow
+## Project V5 technical demo flow
 
-1. Open **Project → Samples → Dual-Robot Technical Demo**.
-2. Select **ABB CRB15000**, then select **CRB 12-Pose Technical Demo** in Robot
-   Jobs. The Timeline contains 12 Joint Poses with per-transition speeds.
-3. Press **Start Job**. The approximately 5.2-second sequence moves J1 through
-   +60° and -60°, follows all 12 Poses, reaches **SUCCEEDED**, and returns J1-J6
-   to the Home value `0`.
-4. Select **Logical Linear Slide** and run **Linear Slide Traverse** to verify
-   that each Robot keeps independent Joint values and Job state.
-5. Open **Connectivity > OPC UA Settings**, choose **Server**, and Apply to
-   activate the Gateway namespace. Verify it in **Connection Monitor**.
-6. Read the Joint Actual nodes with an external OPC UA Client. Node IDs are
-   deterministic:
-
-   ```text
-   ns=2;s=RobotSim/Robots/<robotId>/Joints/<jointId>/Actual
-   ```
-
-The second sample Robot is deliberately a source-only, one-axis prismatic
-`RobotDefinition`. It has logical Links, one `SLIDE_X` Joint, Jobs, and OPC UA
-state, but no Geometry occurrences and no imported STEP mesh. It proves
-multi-Robot identity and data flow; it does **not** prove MRb05 assembly
-extraction, mechanical correctness, or a second rendered industrial Robot.
-The full Pose table, acceptance checks, and remaining scope checklist are in the
-[12-Pose Technical Demo guide](docs/operator/technical-demo-12-pose.md).
+1. Select **Load Demo** to publish the Logical I/O sample.
+2. Select the sample Robot and adjust its Joint values to verify
+   definition-driven kinematics.
+3. Select the Part Object, choose **Open Binding…**, and map its status or pose
+   through a stable Namespace URI and identifier.
+4. Open **OPC UA Settings…**, add the external Endpoint, and choose
+   **Apply & Activate**.
+5. Use the modeless **Connection Monitor…** to inspect Gateway, Server, Client
+   Session/Subscription, quality, retry, and command state.
+6. Start the selected Robot Job and observe its instruction progress and final
+   result.
 
 ## OPC UA Client ObjectPos demo
 
@@ -199,19 +173,20 @@ The browser and Gateway exchange exact Project/Revision-qualified JSON:
 - `GET /healthz` - process liveness.
 - `GET /readyz` - `503` before a Project revision is active, then `200`.
 - `GET /runtime/status` - active Project, revision, mode, and OPC UA endpoint.
-- `PUT /runtime/project` - validate and atomically activate one Project V4.
+- `PUT /runtime/project` - validate and atomically activate one Project V5.
 - `POST /runtime/state` - publish one validated multi-Robot Joint batch for the
   exact active revision; Server or Bridge mode only.
 - `/runtime/ws` - stream revision-fenced OPC UA Client/Bridge state batches to
   the browser over a same-origin WebSocket.
 
-Project bodies are bounded to 1 MiB. Runtime state uses the Project V4 runtime
+Project bodies are bounded to 1 MiB. Runtime state uses the Project V5 runtime
 batch budget. Unknown Robots/Joints, duplicate Robots, non-finite values, and
 stale revisions are rejected before publication.
 
-The OPC UA namespace URI is `urn:web-digital-twin:robot-sim:v4`. Actual Joint
-variables are read-only and the Server namespace is derived from Robot
-Definitions.
+OPC UA Client bindings persist stable Namespace URIs rather than Session-local
+namespace indexes. The Gateway resolves the current index for each connected
+Session. Server nodes are derived from the active Project V5 Robot, Object,
+Signal, and Job model.
 
 ## Docker deployment
 
@@ -269,26 +244,30 @@ npm run lint
 npm run test:run
 npm run cad:validate
 npm run build:gateway
+node dist-gateway/middleware/runtime-gateway/main.js --check-config
 npm run build
-npm run test:e2e:v4
+npm run test:connectivity-ui
+npm run test:job-io
+npm run test:e2e:v5
 npm run deploy:validate
 docker compose config --quiet
 ```
 
-`tests/project-v4-multi-robot.spec.ts` is the browser acceptance path for
-loading the two-Robot Project, rendering all 12 CRB Poses, observing positive
-and negative intermediate motion, returning Home, preserving the second Robot,
-and running its slide Job. Middleware tests start a real `node-opcua` Client and
-verify read-only values for both Robots.
+`tests/project-v5-browser-cutover.spec.ts` and
+`tests/opcua-settings-monitor.spec.ts` are the active browser acceptance paths.
+They verify V5-only boot/import, the eight-Endpoint limit, canonical
+export/import/reload, Object and Robot bindings, Job start, Settings, Monitor,
+Binding, and Docker surfaces.
 
 ## Architecture
 
 ```text
 Browser SPA
-  Project V4 authoring/persistence
+  Project V5 authoring/persistence
+  atomic publication and recovery
   Multi-Robot simulation and Jobs
-  Scene/render/collision projection
-  Runtime Gateway publisher
+  Scene/runtime projection
+  Gateway state stream and commands
           |
           | same-origin /runtime JSON, exact revision
           v
@@ -305,13 +284,13 @@ External OPC UA Server / Client connections
 Key code areas:
 
 ```text
-src/core/project-v4             closed Project contracts and validation
-src/core/robot-runtime          variable-Joint frames and serial kinematics
-src/features/project/v4         V4 persistence, mutation, and publication
-src/features/robot/v4           definition-driven Robot rendering
-src/features/jobs/v4            per-Robot Job authoring and execution
-src/features/collision/v4       Robot-qualified geometric collision
-src/features/runtime-gateway/v4 browser HTTP publisher
+src/core/project-v5             closed Project contracts and validation
+src/core/robot-runtime-v5       variable-Joint frames and serial kinematics
+src/features/project/v5         V5 persistence, mutation, and publication
+src/features/scene/v5           V5 workcell/runtime projection
+src/features/jobs/v5            per-Robot Job execution
+src/features/connectivity/v5    Settings, Monitor, Binding, and Docker surfaces
+src/features/runtime-gateway/v5 browser Gateway clients and state stream
 middleware/runtime-gateway      HTTP activation and OPC UA Server/Client adapters
 ```
 
@@ -329,17 +308,19 @@ middleware/runtime-gateway      HTTP activation and OPC UA Server/Client adapter
   It maps each whole source to one Link and applies the built-in six-axis
   mechanical template. Arbitrary mechanical axes, origins, and limits still
   require a later deterministic authoring workflow and human confirmation.
-- No generic Attach/Detach pick-place runtime. The Hackathon Handover sample
-  owns one bounded transient attachment and ownership flow.
+- The active V5 Scene renders deterministic proxy geometry. Referenced STEP mesh
+  restoration/import and full Robot geometry authoring are not yet exposed by
+  the V5 shell.
 - The NED2 Direct Handover Hackathon sample is sample-specific choreography,
   not a generic scheduler or planner. It uses fixed Joint keyframes, no physics
   or IK, a local simulated Grip Confirm, and no safety-rated validation.
 - No Legacy Project adoption. Unsupported Projects are rejected without
-  mutating the active V4 revision.
+  mutating the active V5 revision.
 
 ## Documentation
 
-- [Project V4 multi-Robot and Runtime Gateway design](docs/superpowers/specs/2026-07-16-project-v4-multi-robot-runtime-gateway-design.md)
+- [Project V5 and OPC UA implementation plan](docs/superpowers/plans/2026-07-19-opcua-settings-connection-monitor.md)
+- [Historical Project V4 multi-Robot design](docs/superpowers/specs/2026-07-16-project-v4-multi-robot-runtime-gateway-design.md)
 - [Runtime Gateway middleware notes](middleware/README.md)
 - [Docker operator guide](docs/operator/docker-deployment.md)
 - [Object OPC UA live binding](docs/operator/opcua-object-binding.md)

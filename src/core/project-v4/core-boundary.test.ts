@@ -387,8 +387,8 @@ describe('Project V4 shared Core browser boundary', () => {
 
   it('keeps the Gateway-emitted production Core graph relative and platform-independent', () => {
     expect(scanProductionCoreGraph()).toEqual({
-      productionFileCount: 32,
-      moduleSpecifierCount: 80,
+      productionFileCount: 42,
+      moduleSpecifierCount: 112,
       externalSpecifiers: [],
       unresolvedSpecifiers: [],
       forbiddenPlatformIdentifiers: [],

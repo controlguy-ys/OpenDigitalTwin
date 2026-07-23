@@ -1,5 +1,6 @@
 import {
   validateWorkcellProjectV5,
+  type RigidTransformV5,
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
 import type { StoreApi } from 'zustand/vanilla'
@@ -14,6 +15,13 @@ import type { RuntimeGatewayStreamTargetV5 } from '../../runtime-gateway/v5/runt
 import type { ObjectRuntimeStateV5 } from '../../scene/v5/object-runtime-state.js'
 import type { LogicalSignalRuntimeStoreV1 } from '../../signals/v5/logical-signal-runtime-store.js'
 
+export interface WorldResolverV5 {
+  readonly readRobotFrameWorldPose: (robotId: string, frameId: string) => RigidTransformV5 | null
+  readonly readRobotLinkWorldPose: (robotId: string, linkId: string) => RigidTransformV5 | null
+  readonly readSceneFrameWorldPose: (frameId: string) => RigidTransformV5 | null
+  readonly readObjectWorldPose: (objectId: string) => RigidTransformV5 | null
+}
+
 export interface PublishedBrowserRuntimeGraphV5 {
   readonly robots: StoreApi<RobotJointRuntimeStoreV5>
   readonly robotFrames: RobotFrameStatusRuntimeStoreV5
@@ -25,6 +33,7 @@ export interface PublishedBrowserRuntimeGraphV5 {
   readonly jobExecutor: RobotJobExecutorV5
   readonly playback: RobotJobPlaybackControllerV5
   readonly streamTarget: RuntimeGatewayStreamTargetV5
+  readonly world: WorldResolverV5
 }
 
 export interface BrowserRuntimeBundleStateV5 {
@@ -107,6 +116,12 @@ const ATTACHMENT_RUNTIME_METHODS = [
   'reset',
   'commitAttach',
   'commitDetach',
+] as const
+const WORLD_RESOLVER_METHODS = [
+  'readRobotFrameWorldPose',
+  'readRobotLinkWorldPose',
+  'readSceneFrameWorldPose',
+  'readObjectWorldPose',
 ] as const
 const FRAME_RUNTIME_METHODS = [
   'replaceProject',
@@ -456,6 +471,7 @@ function canonicalRuntimeGraph(
     jobExecutor: readField(input, 'jobExecutor', 'RUNTIME_GRAPH_INVALID'),
     playback: readField(input, 'playback', 'RUNTIME_GRAPH_INVALID'),
     streamTarget: readField(input, 'streamTarget', 'RUNTIME_GRAPH_INVALID'),
+    world: readField(input, 'world', 'RUNTIME_GRAPH_INVALID'),
   }
   const robots = canonicalRuntimeStore<RobotJointRuntimeStoreV5>(
     'RUNTIME_GRAPH_ROBOTS_INVALID',
@@ -525,6 +541,11 @@ function canonicalRuntimeGraph(
     PLAYBACK_METHODS,
   )
   const streamTarget = canonicalStreamTarget(snapshot.streamTarget, project, configRevision, gatewayId)
+  const world = canonicalMethodService<WorldResolverV5>(
+    'RUNTIME_GRAPH_WORLD_INVALID',
+    snapshot.world,
+    WORLD_RESOLVER_METHODS,
+  )
   return Object.freeze({
     robots,
     robotFrames,
@@ -536,6 +557,7 @@ function canonicalRuntimeGraph(
     jobExecutor,
     playback,
     streamTarget,
+    world,
   })
 }
 

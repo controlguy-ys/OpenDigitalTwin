@@ -143,8 +143,9 @@ describe('ConnectionMonitorPanel', () => {
     externalOpener.textContent = 'Header monitor'
     document.body.append(externalOpener)
     const focus = vi.spyOn(externalOpener, 'focus')
-    render(<ConnectionMonitorPanel controlRef={controlRef} store={presentationStore} />)
+    render(<ConnectionMonitorPanel controlRef={controlRef} showTrigger={false} store={presentationStore} />)
 
+    expect(screen.queryByRole('button', { name: 'Connection Monitor' })).not.toBeInTheDocument()
     act(() => controlRef.current?.open(externalOpener))
     expect(presentationStore.poller().status().demand).toBe('monitor')
     expect(screen.getByRole('complementary', { name: 'Connection Monitor' })).toBeVisible()

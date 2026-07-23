@@ -920,12 +920,39 @@ describe('BrowserProjectRuntimeV5', () => {
         worldPose: { positionM: [1, 0, 0] },
         quality: 'GOOD',
       })
+      expect(graph.world.readRobotFrameWorldPose('robot-1', 'Base')).toMatchObject({
+        positionM: [1, 0, 0],
+      })
+      expect(graph.world.readRobotLinkWorldPose('robot-1', 'L0')).toMatchObject({
+        positionM: [1, 0, 0],
+      })
 
       graph.jobExecutor.startJob('job-1', 0)
       await graph.jobExecutor.advanceAll(0)
 
       expect(graph.jobs.getState().byRobotId['robot-1']).toMatchObject({ state: 'SUCCEEDED', stepIndex: 1 })
       expect(graph.attachments.getState().attachmentsByObjectId.part).toMatchObject({ toolFrameId: 'TCP' })
+      expect(graph.world.readObjectWorldPose('part')).toMatchObject({ positionM: [1, 0, 0] })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it('publishes a GOOD mapped non-Base Robot frame through the world resolver', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: attachmentProject({ mappedRobotFrameId: 'TCP' }),
+      stream: {
+        url: 'ws://runtime.test/runtime/ws',
+        createWebSocket: () => { throw new Error('Socket was not expected in this test.') },
+        nowMs: () => 200,
+      },
+    }))
+    try {
+      const graph = runtime.bundle.getState().runtimeGraph
+      expect(graph.robotFrames.ingest(robotFrameBatch('map-robot-tcp', [2, 3, 4]), 100)).toBe(true)
+      expect(graph.world.readRobotFrameWorldPose('robot-1', 'TCP')).toMatchObject({
+        positionM: [2, 3, 4],
+      })
     } finally {
       await runtime.dispose()
     }

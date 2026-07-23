@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { builtinModules } from 'node:module'
 import * as ts from 'typescript'
 import { afterEach, describe, expect, it, vi } from 'vitest'

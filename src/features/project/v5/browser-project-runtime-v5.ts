@@ -76,6 +76,7 @@ import {
   type BrowserRuntimeBundleCellV5,
   type BrowserRuntimeBundleStateV5,
   type PublishedBrowserRuntimeGraphV5,
+  type WorldResolverV5,
 } from './browser-runtime-bundle-store-v5.js'
 
 export type BrowserRuntimeDetachedApplyStepV5 =
@@ -224,12 +225,6 @@ interface DeactivationTransitionRecordV5 {
   finalizePromise: Promise<void> | null
 }
 
-interface WorldResolverV5 {
-  readonly readRobotFrameWorldPose: (robotId: string, frameId: string) => RigidTransformV5 | null
-  readonly readSceneFrameWorldPose: (frameId: string) => RigidTransformV5 | null
-  readonly readObjectWorldPose: (objectId: string) => RigidTransformV5 | null
-}
-
 const CONFIG_REVISION_PATTERN = /^[0-9a-f]{64}$/u
 const APPLY_STEPS: readonly BrowserRuntimeDetachedApplyStepV5[] = Object.freeze([
   'robots', 'frames', 'objects', 'signals', 'jobs', 'attachments',
@@ -316,7 +311,11 @@ function createWorldResolver(
     for (const frame of entity.graspFrames) graspById.set(frame.frameId, { entityId: entity.id, frame })
   }
 
-  const resolve = (kind: 'scene' | 'robot' | 'object', id: string, frameId?: string): RigidTransformV5 | null => {
+  const resolve = (
+    kind: 'scene' | 'robot-frame' | 'robot-link' | 'object',
+    id: string,
+    childId?: string,
+  ): RigidTransformV5 | null => {
     const renderTimestampMs = renderClock()
     const visiting = new Set<string>()
     const memo = new Map<string, RigidTransformV5 | null>()
@@ -378,13 +377,9 @@ function createWorldResolver(
       const root = resolveObject(entityId)
       return root === null ? null : composeRigidTransformV5(root, entry.frame.localPose)
     })
-    const resolveRobot = (robotId: string, robotFrameId: string): RigidTransformV5 | null => within(`robot:${robotId}:${robotFrameId}`, () => {
+    const resolveRobotBase = (robotId: string): RigidTransformV5 | null => within(`robot-base:${robotId}`, () => {
       const robot = robotById.get(robotId)
       if (robot === undefined) return null
-      const ownership = robot.frameSources[robotFrameId]
-      if (typeof ownership === 'string' && ownership.startsWith('opcua:')) {
-        return robotFrames.sampleFrame(robotId, robotFrameId, renderTimestampMs)?.worldPose ?? null
-      }
       const definition = definitionById.get(robot.definitionId)
       if (definition === undefined) return null
       const baseParent = resolveFrame(robot.baseParentFrameId)
@@ -395,14 +390,31 @@ function createWorldResolver(
         const mappedBase = robotFrames.sampleFrame(robotId, baseFrame.id, renderTimestampMs)?.worldPose
         if (mappedBase !== null && mappedBase !== undefined) base = mappedBase
       }
+      return base
+    })
+    const resolveRobot = (robotId: string, robotFrameId: string): RigidTransformV5 | null => within(`robot:${robotId}:${robotFrameId}`, () => {
+      const robot = robotById.get(robotId)
+      if (robot === undefined) return null
+      const ownership = robot.frameSources[robotFrameId]
+      if (typeof ownership === 'string' && ownership.startsWith('opcua:')) {
+        return robotFrames.sampleFrame(robotId, robotFrameId, renderTimestampMs)?.worldPose ?? null
+      }
+      const base = resolveRobotBase(robotId)
+      if (base === null) return null
       return robots.getState().readRobotPose(robotId, base).frameWorldPoses[robotFrameId] ?? null
+    })
+    const resolveRobotLink = (robotId: string, linkId: string): RigidTransformV5 | null => within(`robot-link:${robotId}:${linkId}`, () => {
+      const base = resolveRobotBase(robotId)
+      if (base === null) return null
+      return robots.getState().readRobotPose(robotId, base).linkWorldPoses[linkId] ?? null
     })
 
     let resolved: RigidTransformV5 | null
     try {
       if (kind === 'scene') resolved = resolveFrame(id)
       else if (kind === 'object') resolved = resolveObject(id)
-      else resolved = resolveRobot(id, frameId ?? '')
+      else if (kind === 'robot-link') resolved = resolveRobotLink(id, childId ?? '')
+      else resolved = resolveRobot(id, childId ?? '')
     } catch {
       return null
     }
@@ -410,7 +422,8 @@ function createWorldResolver(
   }
 
   return Object.freeze({
-    readRobotFrameWorldPose: (robotId: string, frameId: string) => resolve('robot', robotId, frameId),
+    readRobotFrameWorldPose: (robotId: string, frameId: string) => resolve('robot-frame', robotId, frameId),
+    readRobotLinkWorldPose: (robotId: string, linkId: string) => resolve('robot-link', robotId, linkId),
     readSceneFrameWorldPose: (frameId: string) => resolve('scene', frameId),
     readObjectWorldPose: (objectId: string) => resolve('object', objectId),
   })
@@ -679,6 +692,7 @@ function createOwnedGraph(
   const graph: PublishedBrowserRuntimeGraphV5 = Object.freeze({
     robots, robotFrames, signals, objects, jobs, attachments,
     signalWrites: publishedSignalWrites, jobExecutor: publishedJobExecutor, playback: publishedPlayback, streamTarget,
+    world: resolver,
   })
   return {
     project, configRevision, robots, robotFrames, objects, simulationObjectPoses, signals, jobs, attachments,
