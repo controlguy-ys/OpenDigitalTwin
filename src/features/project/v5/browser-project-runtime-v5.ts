@@ -508,6 +508,7 @@ function createOwnedGraph(
   let ownerActive = true
   let graphDisposed = false
   let browserLease: RuntimePublisherLeaseV1 | null = null
+  const directAdvanceSettlements = new Set<Promise<void>>()
   const commandOwner = createRuntimeGatewayCommandOwnerV5({
     project,
     configRevision,
@@ -581,6 +582,21 @@ function createOwnedGraph(
   const requirePublishedGraphActive = (): void => {
     if (!ownerActive && !graphDisposed) throw failure('BROWSER_RUNTIME_GRAPH_INACTIVE')
   }
+  const trackDirectAdvance = (advance: () => Promise<void>): Promise<void> => {
+    let caller: Promise<void>
+    try { caller = advance() } catch (error) { return Promise.reject(error) }
+    const settled = caller.then(() => undefined, () => undefined)
+    directAdvanceSettlements.add(settled)
+    void settled.then(() => { directAdvanceSettlements.delete(settled) })
+    return caller
+  }
+  const publishedSignalWrites: GatewaySignalWritePortV1 = Object.freeze({
+    writeBoolean: (signalId: string, value: boolean, signal?: AbortSignal) => {
+      if (graphDisposed) return Promise.reject(failure('BROWSER_RUNTIME_GRAPH_DISPOSED'))
+      if (!ownerActive) return Promise.reject(failure('BROWSER_RUNTIME_GRAPH_INACTIVE'))
+      return signalWrites.writeBoolean(signalId, value, signal)
+    },
+  })
   const publishedJobExecutor: RobotJobExecutorV5 = Object.freeze({
     startJob: (jobId: string, simulationMs: number) => {
       requirePublishedGraphActive()
@@ -588,11 +604,11 @@ function createOwnedGraph(
     },
     advanceRobot: (robotId: string, simulationMs: number) => {
       if (!ownerActive && !graphDisposed) return Promise.reject(failure('BROWSER_RUNTIME_GRAPH_INACTIVE'))
-      return jobExecutor.advanceRobot(robotId, simulationMs)
+      return trackDirectAdvance(() => jobExecutor.advanceRobot(robotId, simulationMs))
     },
     advanceAll: (simulationMs: number) => {
       if (!ownerActive && !graphDisposed) return Promise.reject(failure('BROWSER_RUNTIME_GRAPH_INACTIVE'))
-      return jobExecutor.advanceAll(simulationMs)
+      return trackDirectAdvance(() => jobExecutor.advanceAll(simulationMs))
     },
     cancelRobotJob: (robotId: string, reason: string) => {
       requirePublishedGraphActive()
@@ -641,16 +657,17 @@ function createOwnedGraph(
   })
   const graph: PublishedBrowserRuntimeGraphV5 = Object.freeze({
     robots, robotFrames, signals, objects, jobs, attachments,
-    signalWrites, jobExecutor: publishedJobExecutor, playback: publishedPlayback, streamTarget,
+    signalWrites: publishedSignalWrites, jobExecutor: publishedJobExecutor, playback: publishedPlayback, streamTarget,
   })
   return {
     project, configRevision, robots, robotFrames, objects, simulationObjectPoses, signals, jobs, attachments,
     commandClient, signalWrites, jobExecutor, playback, endpointRouter, commandOwner,
     suspendForTransition: () => {
       ownerActive = false
+      const directAdvances = [...directAdvanceSettlements]
       browserLease = null
       commandClient.clearLease()
-      return playback.quiesce()
+      return Promise.allSettled([playback.quiesce(), ...directAdvances]).then(() => undefined)
     },
     resumeAfterTransition: () => {
       if (ownerActive) return

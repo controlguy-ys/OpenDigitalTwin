@@ -230,6 +230,42 @@ function longRunningJobProject(): WorkcellProjectV5 {
   return project
 }
 
+function writableSetDoProject(): WorkcellProjectV5 {
+  const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+  ;(project.logicalSignals[0] as { direction: 'output' }).direction = 'output'
+  ;(project.opcUa.mappings[0] as { direction: 'write' }).direction = 'write'
+  ;(project.jobs[0] as { instructions: WorkcellProjectV5['jobs'][number]['instructions'] }).instructions = [
+    { id: 'set-part-present', kind: 'set-do', signalId: 'PartPresent', value: true },
+  ]
+  return project
+}
+
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined
+  let reject: (reason?: unknown) => void = () => undefined
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
+}
+
+function commandLeaseResponse(): Response {
+  return new Response(JSON.stringify({
+    projectId: 'project-v5', configRevision: CONFIG_A,
+    publisherId: 'gateway-1:client-write', generation: 1, expiresAt: 6_000,
+  }), { headers: { 'Content-Type': 'application/json' } })
+}
+
+function successfulCommandResponse(targetId = 'mapping-1'): Response {
+  return new Response(JSON.stringify({
+    type: 'command-result-v1', protocolVersion: 1,
+    projectId: 'project-v5', configRevision: CONFIG_A, leaseGeneration: 1,
+    targetId, commandId: 'command-1', acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED',
+    failureCode: null, message: 'done', attachedObjectId: null, completedAt: 101,
+  }), { headers: { 'Content-Type': 'application/json' } })
+}
+
 function browserRobotCommand(configRevision: string, commandId: string, leaseGeneration = 1) {
   return {
     type: 'command-batch-v1' as const,
@@ -566,6 +602,85 @@ describe('BrowserProjectRuntimeV5', () => {
     await (await runtime.commit(finalPrepared)).finalize()
     expect(() => oldGraph.playback.startJob('job-1')).toThrow('disposed')
     unsubscribeOldRobot()
+    await runtime.dispose()
+  })
+
+  it('drains a direct deferred executor advance before installing a candidate', async () => {
+    const commandResponse = deferred<Response>()
+    const fetch = vi.fn((url: string): Promise<Response> => (
+      url.endsWith('/command-lease') ? Promise.resolve(commandLeaseResponse()) : commandResponse.promise
+    ))
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: writableSetDoProject(),
+      command: { fetch, nowMs: () => 100 },
+    }))
+    const oldGraph = runtime.bundle.getState().runtimeGraph
+    let oldJobNotifications = 0
+    const unsubscribe = oldGraph.jobs.subscribe(() => { oldJobNotifications += 1 })
+    oldGraph.jobExecutor.startJob('job-1', 0)
+    const directAdvance = oldGraph.jobExecutor.advanceRobot('robot-1', 0)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    const candidate = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(candidate as { revisionId: string }).revisionId = 'revision-direct-advance-drain'
+    const prepared = await runtime.prepare(candidate, CONFIG_B)
+    await runtime.apply(prepared)
+    const committing = runtime.commit(prepared)
+    let commitSettled = false
+    void committing.then(() => { commitSettled = true })
+    for (let index = 0; index < 10; index += 1) await Promise.resolve()
+    expect(commitSettled).toBe(false)
+    expect(runtime.bundle.getState().runtimeGraph).toBe(oldGraph)
+
+    commandResponse.resolve(successfulCommandResponse())
+    await directAdvance
+    const notificationsBeforeInstall = oldJobNotifications
+    const transition = await committing
+    expect(runtime.bundle.getState().runtimeGraph).not.toBe(oldGraph)
+    expect(oldJobNotifications).toBe(notificationsBeforeInstall)
+
+    await transition.rollback()
+    expect(runtime.bundle.getState().runtimeGraph).toBe(oldGraph)
+    expect(oldGraph.jobs.getState().byRobotId['robot-1']).toMatchObject({ state: 'SUCCEEDED' })
+    unsubscribe()
+    await runtime.dispose()
+  })
+
+  it('fences published signal writes before lease fetches and re-enables them only after rollback', async () => {
+    const fetch = vi.fn(async (url: string): Promise<Response> => (
+      url.endsWith('/command-lease') ? commandLeaseResponse() : successfulCommandResponse()
+    ))
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: writableSetDoProject(),
+      command: { fetch, nowMs: () => 100 },
+    }))
+    const oldGraph = runtime.bundle.getState().runtimeGraph
+    await expect(oldGraph.signalWrites.writeBoolean('PartPresent', true)).resolves.toMatchObject({ executionState: 'SUCCEEDED' })
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/runtime/command-lease', '/runtime/command'])
+    const candidate = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(candidate as { revisionId: string }).revisionId = 'revision-signal-write-fence'
+    const prepared = await runtime.prepare(candidate, CONFIG_B)
+    await runtime.apply(prepared)
+    const transition = await runtime.commit(prepared)
+
+    await expect(oldGraph.signalWrites.writeBoolean('PartPresent', true)).rejects.toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    await transition.rollback()
+    await expect(oldGraph.signalWrites.writeBoolean('PartPresent', true)).resolves.toMatchObject({ executionState: 'SUCCEEDED' })
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      '/runtime/command-lease', '/runtime/command', '/runtime/command-lease', '/runtime/command',
+    ])
+
+    const finalCandidate = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(finalCandidate as { revisionId: string }).revisionId = 'revision-signal-write-finalized'
+    const finalPrepared = await runtime.prepare(finalCandidate, 'c'.repeat(64))
+    await runtime.apply(finalPrepared)
+    await (await runtime.commit(finalPrepared)).finalize()
+
+    await expect(oldGraph.signalWrites.writeBoolean('PartPresent', true)).rejects.toThrow('BROWSER_RUNTIME_GRAPH_DISPOSED')
+    expect(fetch).toHaveBeenCalledTimes(4)
     await runtime.dispose()
   })
 
