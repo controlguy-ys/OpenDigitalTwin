@@ -1281,7 +1281,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
       publish: () => undefined, createClient: () => connection.client as never,
     })
     await adapter.start()
-    await eventually(() => connection.client.disconnect.mock.calls.length === 1)
+    await eventually(() => vi.mocked(connection.client.disconnect).mock.calls.length === 1)
     await Promise.resolve()
 
     expect(connection.client.disconnect).toHaveBeenCalledOnce()
