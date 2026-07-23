@@ -86,6 +86,19 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     await expect(client.activate(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_UNAVAILABLE' })
     await expect(client.rollback(prepared)).rejects.toMatchObject({ code: 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED' })
   })
+  it('reconciles a retry conflict to inactive before consuming the rollback candidate', async () => {
+    const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64); let call = 0
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => {
+      call += 1
+      if (call === 1) throw new Error('lost activation response')
+      if (call === 2 || call === 4) return new Response(JSON.stringify({ code: 'PROJECT_DEACTIVATION_CONFLICT', message: 'conflict' }), { status: 409 })
+      if (call === 3) return new Response(JSON.stringify(status(project.projectId, project.revisionId, hash)))
+      return new Response(JSON.stringify(status(null, null, null)))
+    } })
+    const prepared = await client.prepare(project, hash, undefined as never)
+    await expect(client.activate(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_UNAVAILABLE' })
+    await expect(client.rollback(prepared)).resolves.toBe('candidate-deactivated')
+  })
   it('accepts a versioned connection diagnostic result', async () => {
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response(JSON.stringify({ type: 'opcua-test-connection-result-v1', protocolVersion: 1, outcome: 'succeeded', namespaces: ['urn:controller'] })) })
     await expect(client.testConnection({ endpointId: 'x', name: 'x', endpointUrl: 'opc.tcp://localhost:4840', enabled: true, publishingIntervalMs: 50, reconnectDelayMs: 0 })).resolves.toMatchObject({ outcome: 'succeeded' })
