@@ -1037,9 +1037,13 @@ export function createRuntimeGatewayEntrypointService(
       if (active === null) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_MISMATCH', 'Endpoint is not configured by the active Project.')
       const configured = active.project.opcUa.endpoints.some(({ endpointId }) => endpointId === query.endpointId)
       if (!configured) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_MISMATCH', 'Endpoint is not configured by the active Project.')
-      const resolveNamespaceIndex = active.clientAdapter?.resolveNamespaceIndex
+      const clientAdapter = active.clientAdapter
+      const resolveNamespaceIndex = clientAdapter?.resolveNamespaceIndex
       if (resolveNamespaceIndex === undefined) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED', 'Endpoint has no live OPC UA Client Session.')
-      return Object.freeze({ runtimeToken: active.runtimeToken, generation: active.generation, adapter: active.clientAdapter, resolveNamespaceIndex })
+      if (clientAdapter === null) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED', 'Endpoint has no live OPC UA Client Session.')
+      const sessionProof = clientAdapter.readNamespaceSessionProof?.(query.endpointId) ?? null
+      if (clientAdapter.readNamespaceSessionProof !== undefined && sessionProof === null) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED', 'Endpoint has no live OPC UA Client Session.')
+      return Object.freeze({ runtimeToken: active.runtimeToken, generation: active.generation, adapter: clientAdapter, resolveNamespaceIndex, sessionProof })
     })
     try {
       // NamespaceArray is network I/O. The transition queue protects the
@@ -1062,6 +1066,10 @@ export function createRuntimeGatewayEntrypointService(
       return await enqueueRuntimeTransition(async () => {
         const active = activeRuntime
         if (active === null || active.runtimeToken !== captured.runtimeToken || active.generation !== captured.generation || active.clientAdapter !== captured.adapter) {
+          throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_SESSION_STALE', 'Namespace URI could not be resolved from the live OPC UA Session.')
+        }
+        const currentProof = captured.adapter.readNamespaceSessionProof?.(query.endpointId) ?? null
+        if (captured.sessionProof !== null && (currentProof === null || currentProof.endpointId !== captured.sessionProof.endpointId || currentProof.generation !== captured.sessionProof.generation || currentProof.session !== captured.sessionProof.session)) {
           throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_SESSION_STALE', 'Namespace URI could not be resolved from the live OPC UA Session.')
         }
         if (!Number.isSafeInteger(namespaceIndex) || namespaceIndex < 0) throw new Error('OPC_UA_NAMESPACE_INDEX_INVALID')

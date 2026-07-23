@@ -2838,6 +2838,19 @@ describe('runtime Gateway entrypoint', () => {
     } finally { await service.stop() }
   })
 
+  it('rejects namespace resolution when the exact Endpoint Session proof changes during the read', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
+    const client = connectedClientAdapter(); const first = {}; const replacement = {}; let proof: object = first
+    ;(client.adapter as unknown as { resolveNamespaceIndex: () => Promise<number>; readNamespaceSessionProof: () => { endpointId: string; generation: number; session: object } }).resolveNamespaceIndex = async () => { proof = replacement; return 2 }
+    ;(client.adapter as unknown as { readNamespaceSessionProof: () => { endpointId: string; generation: number; session: object } }).readNamespaceSessionProof = () => ({ endpointId: 'endpoint-main', generation: proof === first ? 1 : 2, session: proof })
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter }); await service.start()
+    try {
+      const project = sampleProject('client'); await requestJson(port, 'PUT', '/runtime/project', project)
+      const response = await requestJson(port, 'POST', '/runtime/opcua/namespace-index', { type: 'opcua-namespace-index-request-v1', protocolVersion: 1, endpointId: project.opcUa.endpoints[0]!.endpointId, namespaceUri: 'urn:controller' })
+      expect(response.status).toBe(409); expect(await response.json()).toMatchObject({ code: 'OPC_UA_NAMESPACE_SESSION_STALE' })
+    } finally { await service.stop() }
+  })
+
   it('bounds a namespace read outside the transition queue and returns a stable timeout', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
     const client = connectedClientAdapter()

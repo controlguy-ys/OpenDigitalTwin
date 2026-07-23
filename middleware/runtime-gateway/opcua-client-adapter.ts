@@ -93,6 +93,7 @@ export interface OpcUaClientAdapterV1 {
   status(): readonly RuntimeGatewayOpcUaClientEndpointStatusV1[]
   write(request: OpcUaClientWriteRequestV1): Promise<OpcUaClientWriteResultV1>
   resolveNamespaceIndex?: (endpointId: string, namespaceUri: string) => Promise<number>
+  readNamespaceSessionProof?: (endpointId: string) => Readonly<{ readonly endpointId: string; readonly generation: number; readonly session: object }> | null
 }
 
 interface EndpointRuntimeDiagnosticsV1 {
@@ -1110,6 +1111,7 @@ export function createOpcUaClientAdapterV1(
       lastError: runtime.lastError,
     }))),
     write: (request: OpcUaClientWriteRequestV1) => writeService.write(request),
+    readNamespaceSessionProof: (endpointId: string) => currentSession(endpointId),
     async resolveNamespaceIndex(endpointId: string, namespaceUri: string): Promise<number> {
       const first = currentSession(endpointId)
       if (first === null) throw new Error('OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED')
