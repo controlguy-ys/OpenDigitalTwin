@@ -1,5 +1,8 @@
 # M5 Foundation A3 report
 
+> Superseded by the A3R repair report: `v5-cutover-m5-foundation-a3r-report.md`.
+> The repair commits are `390ced4`, `b240dc3`, `301ce6d`, and `f676168`.
+
 ## Delivered
 
 - Added the V5-only connectivity client implementing the approved A2 publication port with opaque prepared candidates, exact config-revision validation, fenced rollback, canonical empty deactivation, bounded same-origin requests, and the two narrow diagnostic calls.
@@ -19,3 +22,7 @@
 ## Known gate issue
 
 `npm run test:gateway` ran 427 tests; 423 passed and 4 failed in untouched V4 adapter/publisher tests. Each failure is caused by the pre-existing V4-to-V5 fixture omitting now-required `robotDefinitions[0].mechanics`, not by the A3 files. The same command at baseline `618fe4f` ran 390 tests; 386 passed and the same four V4 tests failed with the same `PROJECT_VALUE_INVALID` error.
+
+## A3R verification update
+
+After A3R, `npm run test:job-io` passed 49 files / 815 tests, both builds and lint passed, and `npm run test:gateway` passed 426 / 430 tests. The unchanged four failures remain the documented V4 mechanics-fixture baseline; see the A3R report for the repair scope and remaining SOL review caveat.
