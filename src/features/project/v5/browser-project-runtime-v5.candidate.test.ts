@@ -68,7 +68,7 @@ describe('BrowserProjectRuntimeV5 candidate lifecycle', () => {
     const runtime = createBrowserProjectRuntimeV5(options())
     const prepared = await runtime.prepare(project('revision-not-applied'), CONFIG_B)
 
-    expect(() => runtime.commit(prepared)).toThrow('BROWSER_RUNTIME_CANDIDATE_NOT_APPLIED')
+    await expect(runtime.commit(prepared)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_NOT_APPLIED')
 
     await runtime.rollback(prepared)
     await runtime.dispose()
@@ -86,7 +86,7 @@ describe('BrowserProjectRuntimeV5 candidate lifecycle', () => {
     await Promise.resolve()
 
     await expect(runtime.apply(prepared)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_BUSY')
-    expect(() => runtime.commit(prepared)).toThrow('BROWSER_RUNTIME_CANDIDATE_BUSY')
+    await expect(runtime.commit(prepared)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_BUSY')
 
     const rollback = runtime.rollback(prepared)
     releaseGate!()
@@ -103,7 +103,7 @@ describe('BrowserProjectRuntimeV5 candidate lifecycle', () => {
 
     await expect(runtime.apply(prepared)).rejects.toThrow('TEST_APPLY_FAILURE')
     await expect(runtime.apply(prepared)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_APPLY_FAILED')
-    expect(() => runtime.commit(prepared)).toThrow('BROWSER_RUNTIME_CANDIDATE_APPLY_FAILED')
+    await expect(runtime.commit(prepared)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_APPLY_FAILED')
 
     await runtime.rollback(prepared)
     await expect(runtime.apply(prepared)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
@@ -117,12 +117,12 @@ describe('BrowserProjectRuntimeV5 candidate lifecycle', () => {
     const newer = await runtime.prepare(project('revision-newer'), 'c'.repeat(64))
 
     await Promise.all([runtime.apply(older), runtime.apply(newer)])
-    await runtime.commit(newer).finalize()
+    await (await runtime.commit(newer)).finalize()
 
-    expect(() => runtime.commit(older)).toThrow('BROWSER_RUNTIME_CANDIDATE_STALE')
+    await expect(runtime.commit(older)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_STALE')
     await expect(runtime.apply(older)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
     await expect(runtime.rollback(older)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
-    expect(() => runtime.commit(older)).toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
+    await expect(runtime.commit(older)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
     await runtime.dispose()
   })
 
@@ -173,7 +173,7 @@ describe('BrowserProjectRuntimeV5 candidate lifecycle', () => {
     await expect(runtime.prepare(project('revision-after-dispose'), CONFIG_A)).rejects.toThrow('BROWSER_RUNTIME_DISPOSED')
     await expect(runtime.apply(preparedCandidate)).rejects.toThrow('BROWSER_RUNTIME_DISPOSED')
     await expect(runtime.rollback(preparedCandidate)).rejects.toThrow('BROWSER_RUNTIME_DISPOSED')
-    expect(() => runtime.commit(preparedCandidate)).toThrow('BROWSER_RUNTIME_DISPOSED')
+    await expect(runtime.commit(preparedCandidate)).rejects.toThrow('BROWSER_RUNTIME_DISPOSED')
     expect(() => runtime.startGatewayStream()).toThrow('BROWSER_RUNTIME_DISPOSED')
     expect(() => runtime.stopGatewayStream()).not.toThrow()
   })

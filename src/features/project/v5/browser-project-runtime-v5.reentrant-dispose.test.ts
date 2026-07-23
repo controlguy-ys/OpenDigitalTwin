@@ -46,7 +46,7 @@ describe('BrowserProjectRuntimeV5 reentrant graph disposal', () => {
     const unsubscribe = oldGraph.jobs.subscribe((state) => {
       if (committed || state.byRobotId['robot-1']?.state !== 'RUNNING') return
       committed = true
-      finalization = runtime.commit(prepared).finalize()
+      finalization = runtime.commit(prepared).then((transition) => transition.finalize())
     })
 
     try {
@@ -80,7 +80,7 @@ describe('BrowserProjectRuntimeV5 reentrant graph disposal', () => {
     const unsubscribeCommit = oldGraph.jobs.subscribe((state) => {
       if (committed || state.byRobotId['robot-1']?.state !== 'RUNNING') return
       committed = true
-      finalization = runtime.commit(prepared).finalize()
+      finalization = runtime.commit(prepared).then((transition) => transition.finalize())
     })
     const unsubscribeHostile = oldGraph.jobs.subscribe((state) => {
       if (state.byRobotId['robot-1']?.state === 'IDLE') throw new Error('idle-hostile')

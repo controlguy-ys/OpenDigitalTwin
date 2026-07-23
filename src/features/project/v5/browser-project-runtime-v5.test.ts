@@ -194,6 +194,58 @@ function scheduler() {
   }
 }
 
+function controlledScheduler() {
+  let now = 0
+  let next = 0
+  let requests = 0
+  const callbacks = new Map<number, (simulationMs: number) => void>()
+  return {
+    scheduler: {
+      now: () => now,
+      request: (callback: (simulationMs: number) => void) => {
+        const handle = ++next
+        requests += 1
+        callbacks.set(handle, callback)
+        return handle
+      },
+      cancel: (handle: number) => { callbacks.delete(handle) },
+    },
+    advance: (simulationMs: number) => {
+      now = simulationMs
+      const scheduled = Array.from(callbacks.values())
+      callbacks.clear()
+      for (const callback of scheduled) callback(simulationMs)
+    },
+    pending: () => callbacks.size,
+    requests: () => requests,
+  }
+}
+
+function longRunningJobProject(): WorkcellProjectV5 {
+  const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+  ;(project.jobs[0] as { instructions: WorkcellProjectV5['jobs'][number]['instructions'] }).instructions = [
+    { id: 'home', kind: 'move-joint', jointValues: { J1: 0 }, speedPercentToNext: 100 },
+    { id: 'move', kind: 'move-joint', jointValues: { J1: 100 }, speedPercentToNext: 100 },
+  ]
+  return project
+}
+
+function browserRobotCommand(configRevision: string, commandId: string) {
+  return {
+    type: 'command-batch-v1' as const,
+    protocolVersion: 1 as const,
+    projectId: 'project-v5',
+    configRevision,
+    leaseGeneration: 1,
+    commands: [{
+      commandId,
+      expiresAt: 10_000,
+      targetId: 'robot-1',
+      value: { kind: 'robot-joint-target' as const, robotId: 'robot-1', jointValues: { J1: 12 } },
+    }],
+  }
+}
+
 class FakeSocket implements BrowserWebSocketV5 {
   readyState = 0
   private readonly listeners = new Map<string, Set<(event: unknown) => void>>()
@@ -337,12 +389,12 @@ describe('BrowserProjectRuntimeV5', () => {
     const prepared = await runtime.prepare(next, CONFIG_B)
     expect(Object.keys(prepared).sort()).toEqual(['configRevision', 'projectRevisionId'])
     expect(Object.keys(runtime).sort()).toEqual([
-      'apply', 'bundle', 'commit', 'dispose', 'prepare', 'rollback',
+      'apply', 'bundle', 'commit', 'dispose', 'prepare', 'readActiveBundle', 'rollback',
       'startGatewayStream', 'stopGatewayStream',
     ])
 
     await runtime.apply(prepared)
-    await runtime.commit(prepared).finalize()
+    await (await runtime.commit(prepared)).finalize()
 
     const published = runtime.bundle.getState()
     expect(published).toMatchObject({
@@ -382,7 +434,7 @@ describe('BrowserProjectRuntimeV5', () => {
 
     const prepared = await runtime.prepare(candidate, CONFIG_B)
     await runtime.apply(prepared)
-    const transition = runtime.commit(prepared)
+    const transition = await runtime.commit(prepared)
 
     expect(runtime.bundle.getState()).not.toBe(base)
     expect(runtime.bundle.getState().runtimeGraph).not.toBe(base.runtimeGraph)
@@ -396,6 +448,121 @@ describe('BrowserProjectRuntimeV5', () => {
     base.runtimeGraph.robots.getState().writeJointValues('robot-1', { J1: 25 }, 'simulation')
     expect(baseRobotNotifications).toBe(2)
     unsubscribeBaseRobot()
+    await runtime.dispose()
+  })
+
+  it('returns a first committed candidate to a truly empty Browser runtime', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: undefined,
+      initialConfigRevision: undefined,
+    }))
+    expect(runtime.readActiveBundle()).toBeNull()
+    expect(() => runtime.bundle.getState()).toThrow('RUNTIME_BUNDLE_EMPTY')
+
+    const candidate = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(candidate as { revisionId: string }).revisionId = 'revision-first-transition'
+    const prepared = await runtime.prepare(candidate, CONFIG_B)
+    await runtime.apply(prepared)
+    const transition = await runtime.commit(prepared)
+
+    expect(runtime.readActiveBundle()).toMatchObject({
+      projectRevisionId: 'revision-first-transition', configRevision: CONFIG_B,
+    })
+    await transition.rollback()
+
+    expect(runtime.readActiveBundle()).toBeNull()
+    expect(() => runtime.bundle.getState()).toThrow('RUNTIME_BUNDLE_EMPTY')
+    await runtime.dispose()
+  })
+
+  it('fences the prior graph until rollback resumes one playback and command owner, then finalization disposes it', async () => {
+    let receiptNow = 100
+    const clock = controlledScheduler()
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: longRunningJobProject(),
+      scheduler: clock.scheduler,
+      stream: {
+        url: 'ws://runtime.test/runtime/ws',
+        createWebSocket: () => { throw new Error('Socket was not expected in this test.') },
+        nowMs: () => receiptNow,
+        reconnectDelayMs: 50,
+      },
+    }))
+    const oldGraph = runtime.bundle.getState().runtimeGraph
+    oldGraph.streamTarget.onBrowserPublisherLease?.({
+      projectId: 'project-v5', configRevision: CONFIG_A,
+      publisherId: 'gateway-1:browser-simulation', generation: 1, expiresAt: 6_000,
+    })
+    oldGraph.playback.startJob('job-1')
+    clock.advance(0)
+    expect(oldGraph.jobs.getState().byRobotId['robot-1']?.state).toBe('RUNNING')
+    expect(clock.pending()).toBe(1)
+    let resumedRobotNotifications = 0
+    const unsubscribeOldRobot = oldGraph.robots.subscribe(() => { resumedRobotNotifications += 1 })
+
+    const candidate = longRunningJobProject()
+    ;(candidate as { revisionId: string }).revisionId = 'revision-fenced'
+    const prepared = await runtime.prepare(candidate, CONFIG_B)
+    await runtime.apply(prepared)
+    const transition = await runtime.commit(prepared)
+
+    await expect(oldGraph.streamTarget.onCommandBatch?.(browserRobotCommand(CONFIG_A, 'blocked'))).resolves.toMatchObject({
+      executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
+    })
+    expect(clock.pending()).toBe(0)
+    clock.advance(1_000)
+    expect(oldGraph.robots.getState().readRobot('robot-1')?.jointValues).toEqual({ J1: 0 })
+
+    const requestsBeforeRollback = clock.requests()
+    await transition.rollback()
+    expect(clock.pending()).toBe(1)
+    expect(clock.requests()).toBe(requestsBeforeRollback + 1)
+    await expect(oldGraph.streamTarget.onCommandBatch?.(browserRobotCommand(CONFIG_A, 'resumed'))).resolves.toMatchObject({
+      executionState: 'SUCCEEDED', failureCode: null,
+    })
+    expect(resumedRobotNotifications).toBe(1)
+    clock.advance(1_000)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(oldGraph.robots.getState().readRobot('robot-1')?.jointValues.J1).toBeGreaterThan(0)
+
+    const finalCandidate = longRunningJobProject()
+    ;(finalCandidate as { revisionId: string }).revisionId = 'revision-finalized'
+    const finalPrepared = await runtime.prepare(finalCandidate, 'c'.repeat(64))
+    await runtime.apply(finalPrepared)
+    await (await runtime.commit(finalPrepared)).finalize()
+    expect(() => oldGraph.playback.startJob('job-1')).toThrow('disposed')
+    unsubscribeOldRobot()
+    await runtime.dispose()
+  })
+
+  it('does not resurrect a Browser lease that expires while a transition is pending', async () => {
+    let receiptNow = 100
+    const runtime = createBrowserProjectRuntimeV5(options({
+      stream: {
+        url: 'ws://runtime.test/runtime/ws',
+        createWebSocket: () => { throw new Error('Socket was not expected in this test.') },
+        nowMs: () => receiptNow,
+        reconnectDelayMs: 50,
+      },
+    }))
+    const oldGraph = runtime.bundle.getState().runtimeGraph
+    oldGraph.streamTarget.onBrowserPublisherLease?.({
+      projectId: 'project-v5', configRevision: CONFIG_A,
+      publisherId: 'gateway-1:browser-simulation', generation: 1, expiresAt: 101,
+    })
+    const candidate = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(candidate as { revisionId: string }).revisionId = 'revision-expired-lease'
+    const prepared = await runtime.prepare(candidate, CONFIG_B)
+    await runtime.apply(prepared)
+    const transition = await runtime.commit(prepared)
+    receiptNow = 102
+
+    await transition.rollback()
+
+    await expect(oldGraph.streamTarget.onCommandBatch?.(browserRobotCommand(CONFIG_A, 'expired'))).resolves.toMatchObject({
+      executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
+    })
     await runtime.dispose()
   })
 
@@ -680,7 +847,7 @@ describe('BrowserProjectRuntimeV5', () => {
     ;(next as { revisionId: string }).revisionId = 'revision-4'
     const prepared = await runtime.prepare(next, CONFIG_B)
 
-    expect(() => runtime.commit({ projectRevisionId: 'foreign', configRevision: CONFIG_B })).toThrow(
+    await expect(runtime.commit({ projectRevisionId: 'foreign', configRevision: CONFIG_B })).rejects.toThrow(
       'BROWSER_RUNTIME_CANDIDATE_FOREIGN',
     )
     const applying = runtime.apply(prepared)
@@ -765,11 +932,10 @@ describe('BrowserProjectRuntimeV5', () => {
     const prepared = await runtime.prepare(replacement, CONFIG_B)
     await runtime.apply(prepared)
 
-    let transition: ReturnType<typeof runtime.commit> | null = null
-    expect(() => { transition = runtime.commit(prepared) }).not.toThrow()
+    const transition = await runtime.commit(prepared)
     expect(runtime.bundle.getState().projectRevisionId).toBe('revision-5')
     expect(diagnostics.some((error) => error instanceof Error && error.message === 'subscriber failure')).toBe(true)
-    await transition!.finalize()
+    await transition.finalize()
     expect(() => oldGraph.playback.startJob('job-1')).toThrow('disposed')
     const nestedCandidate = await nested!
     await runtime.rollback(nestedCandidate)

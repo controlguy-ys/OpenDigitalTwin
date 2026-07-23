@@ -5,6 +5,7 @@ import {
   type RuntimeGatewayStatusV1,
 } from '../../../core/runtime-protocol/gateway-status-v1.js'
 import type { WorkcellProjectV5 } from '../../../core/project-v5/index.js'
+import { createBrowserProjectRuntimeV5 } from './browser-project-runtime-v5.js'
 import {
   cloneWorkcellProjectV5,
   makeMinimalWorkcellProjectV5,
@@ -73,6 +74,31 @@ function gatewayStatus(projectValue: WorkcellProjectV5, configRevision: string):
     project: {
       phase: 'ready', projectId: projectValue.projectId, revisionId: projectValue.revisionId,
       configRevision, readinessCode: 'READY',
+    },
+    opcUa: {
+      mode: 'off',
+      server: { phase: 'disabled', endpointUrl: null, lastError: null },
+      clientEndpoints: [],
+    },
+  })
+}
+
+function inactiveGatewayStatus(): RuntimeGatewayStatusV1 {
+  return validateRuntimeGatewayStatusV1({
+    type: 'runtime-gateway-status-v1',
+    protocolVersion: 1,
+    observedAtMs: 1,
+    gateway: { gatewayId: 'gateway-1', phase: 'online', runtimeKind: 'native' },
+    deployment: {
+      http: { bindHost: '127.0.0.1', port: 8081 },
+      opcUaServer: {
+        bindHost: '127.0.0.1', port: 4841,
+        advertisedHost: '127.0.0.1', advertisedPort: 4841,
+      },
+    },
+    project: {
+      phase: 'not-applied', projectId: null, revisionId: null,
+      configRevision: null, readinessCode: 'NO_ACTIVE_REVISION',
     },
     opcUa: {
       mode: 'off',
@@ -152,7 +178,7 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
       events.push(`runtime.apply:${candidate.revisionId}`)
       failure(failurePoint, 'runtime-apply')
     }),
-    commit: vi.fn((candidate: RuntimeCandidate) => {
+    commit: vi.fn(async (candidate: RuntimeCandidate) => {
       events.push(`runtime.commit:${candidate.revisionId}`)
       failure(failurePoint, 'runtime-commit')
       runtimeActive = published(candidate.project, candidate.configRevision)
@@ -381,7 +407,7 @@ describe('Project V5 publication coordinator', () => {
     expect(harness.publication.readCleanupStatus()).toEqual({ pending: [] })
   })
 
-  it('returns a first publication to no active runtime through the committed transition', async () => {
+  it('marks recovery when a first-publication Gateway rollback readback is not canonical', async () => {
     const nextProject = project('revision-first', 'First')
     let runtimeActive: PublishedProjectV5 | null = null
     let gatewayActive: PublishedProjectV5 | null = null
@@ -413,7 +439,7 @@ describe('Project V5 publication coordinator', () => {
     const runtime = {
       prepare: vi.fn(async () => Object.freeze({ revisionId: nextProject.revisionId })),
       apply: vi.fn(async () => undefined),
-      commit: vi.fn(() => {
+      commit: vi.fn(async () => {
         runtimeActive = published(nextProject, HASH_B)
         return transition
       }),
@@ -426,7 +452,7 @@ describe('Project V5 publication coordinator', () => {
         return gatewayStatus(nextProject, HASH_B)
       }),
       reactivate: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
-      readStatus: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
+      readStatus: vi.fn(async () => gatewayStatus(nextProject, HASH_B)),
       rollback: vi.fn(async () => { gatewayActive = null }),
       cleanupPrevious: vi.fn(async () => undefined),
     } satisfies ProjectV5GatewayPublicationPort<{ readonly revisionId: string }>
@@ -443,10 +469,88 @@ describe('Project V5 publication coordinator', () => {
     expect(transition.rollback).toHaveBeenCalledOnce()
     expect(runtime.rollback).not.toHaveBeenCalled()
     expect(gateway.reactivate).not.toHaveBeenCalled()
+    expect(gateway.readStatus).toHaveBeenCalledOnce()
     expect(durable).toBeNull()
     expect(runtimeActive).toBeNull()
     expect(gatewayActive).toBeNull()
     expect(publication.readPublished()).toBeNull()
-    expect(publication.isRecoveryRequired()).toBe(false)
+    expect(publication.isRecoveryRequired()).toBe(true)
+  })
+
+  it('restores real Browser runtime, repository, and Gateway to no publication after first finalization failure', async () => {
+    const nextProject = project('revision-first-real-runtime', 'First real runtime')
+    const runtime = createBrowserProjectRuntimeV5({
+      gatewayId: 'gateway-1',
+      scheduler: { now: () => 0, request: () => 1, cancel: () => undefined },
+      createRunId: () => 'run-1',
+      createCommandId: () => 'command-1',
+      stream: {
+        url: 'ws://runtime.test/runtime/ws',
+        createWebSocket: () => { throw new Error('Socket was not expected in this test.') },
+        nowMs: () => 100,
+      },
+      command: { fetch: async () => new Response(), nowMs: () => 100 },
+      onDiagnostic: () => undefined,
+    })
+    let durable: PublishedProjectV5 | null = null
+    let gatewayActive: PublishedProjectV5 | null = null
+    const preparedRevision: PreparedProjectRevisionV5 = Object.freeze({
+      revisionId: nextProject.revisionId,
+      configRevision: HASH_B,
+      project: nextProject,
+    })
+    const repository = {
+      prepareRevision: vi.fn(async () => preparedRevision),
+      materializePreparedProject: () => nextProject,
+      discardPreparedRevision: vi.fn(async () => undefined),
+      commitPreparedRevision: vi.fn(async (expectedRevisionId: string | null) => {
+        expect(expectedRevisionId).toBeNull()
+        durable = published(nextProject, HASH_B)
+      }),
+      finalizePublication: vi.fn(async () => { throw new Error('TEST_REAL_RUNTIME_FINALIZE') }),
+      compensatePublication: vi.fn(async () => { durable = null }),
+      readRevision: async () => null,
+      readActive: async () => durable?.project ?? null,
+      readPointer: async () => null,
+      garbageCollect: vi.fn(async () => undefined),
+    } satisfies ProjectRepositoryV5
+    const gateway = {
+      prepare: vi.fn(async () => Object.freeze({ revisionId: nextProject.revisionId })),
+      activate: vi.fn(async () => {
+        gatewayActive = published(nextProject, HASH_B)
+        return gatewayStatus(nextProject, HASH_B)
+      }),
+      reactivate: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
+      readStatus: vi.fn(async () => inactiveGatewayStatus()),
+      rollback: vi.fn(async () => { gatewayActive = null }),
+      cleanupPrevious: vi.fn(async () => undefined),
+    } satisfies ProjectV5GatewayPublicationPort<{ readonly revisionId: string }>
+    const publication = createProjectPublicationCoordinatorV5({
+      repository,
+      runtime,
+      gateway,
+      initialPublished: null,
+      configRevisionForProjectV5: async () => HASH_B,
+      createCommitToken: () => 'commit-first-real-runtime',
+    })
+
+    try {
+      await expect(publication.replace({ candidate: nextProject, expectedRevisionId: null })).rejects.toThrow('TEST_REAL_RUNTIME_FINALIZE')
+      expect(runtime.readActiveBundle()).toBeNull()
+      expect(durable).toBeNull()
+      expect(gatewayActive).toBeNull()
+      expect(gateway.readStatus).toHaveBeenCalledOnce()
+      expect(publication.readPublished()).toBeNull()
+      expect(publication.isRecoveryRequired()).toBe(false)
+
+      gateway.readStatus.mockRejectedValueOnce(new Error('Gateway rollback readback failed.'))
+      await expect(publication.replace({ candidate: nextProject, expectedRevisionId: null })).rejects.toThrow('TEST_REAL_RUNTIME_FINALIZE')
+      expect(runtime.readActiveBundle()).toBeNull()
+      expect(durable).toBeNull()
+      expect(gatewayActive).toBeNull()
+      expect(publication.isRecoveryRequired()).toBe(true)
+    } finally {
+      await runtime.dispose()
+    }
   })
 })

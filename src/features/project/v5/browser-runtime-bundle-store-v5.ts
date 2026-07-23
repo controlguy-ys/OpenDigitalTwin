@@ -38,6 +38,7 @@ export interface BrowserRuntimeBundleStateV5 {
 
 export interface BrowserRuntimeBundleCellV5 {
   getState(): BrowserRuntimeBundleStateV5
+  readActiveState(): BrowserRuntimeBundleStateV5 | null
   subscribe(listener: () => void): () => void
 }
 
@@ -46,7 +47,7 @@ type DiagnosticListenerV5 = (error: unknown) => void
 type InstallPhaseV5 = 'prepared' | 'installed' | 'flushed' | 'restored' | 'rejected'
 
 interface BrowserRuntimeBundleInstallTokenV5 {
-  readonly previousRuntimeGraph: PublishedBrowserRuntimeGraphV5
+  readonly previousRuntimeGraph: PublishedBrowserRuntimeGraphV5 | null
   installPure(): void
   flushIsolatedNotifications(): void
   restorePure(): void
@@ -56,7 +57,7 @@ interface BrowserRuntimeBundleInstallTokenV5 {
 interface BrowserRuntimeBundlePublisherCellV5 extends BrowserRuntimeBundleCellV5 {
   prepareInstall(
     next: BrowserRuntimeBundleStateV5,
-    expectedBaseBundle: BrowserRuntimeBundleStateV5,
+    expectedBaseBundle: BrowserRuntimeBundleStateV5 | null,
     expectedEpoch: number,
   ): BrowserRuntimeBundleInstallTokenV5
 }
@@ -67,7 +68,7 @@ interface InstallOwnerV5 {
 
 interface InstallRecordV5 {
   readonly owner: InstallOwnerV5
-  readonly base: BrowserRuntimeBundleStateV5
+  readonly base: BrowserRuntimeBundleStateV5 | null
   readonly expectedEpoch: number
   readonly next: BrowserRuntimeBundleStateV5
   readonly listeners: readonly BundleListenerV5[]
@@ -583,7 +584,7 @@ function diagnosticNoThrow(onDiagnostic: DiagnosticListenerV5, error: unknown): 
 }
 
 export function createBrowserRuntimeBundleCellV5(
-  initial: BrowserRuntimeBundleStateV5,
+  initial: BrowserRuntimeBundleStateV5 | null,
   onDiagnostic: DiagnosticListenerV5,
 ): BrowserRuntimeBundlePublisherCellV5 {
   if (typeof onDiagnostic !== 'function') {
@@ -591,9 +592,13 @@ export function createBrowserRuntimeBundleCellV5(
   }
   const owner: InstallOwnerV5 = Object.freeze({ ownerId: Symbol('browser-runtime-bundle-cell-v5') })
   const listeners = new Set<BundleListenerV5>()
-  let state = canonicalBundleState(initial)
+  let state = initial === null ? null : canonicalBundleState(initial)
 
-  const getState = (): BrowserRuntimeBundleStateV5 => state
+  const getState = (): BrowserRuntimeBundleStateV5 => {
+    if (state === null) fail('RUNTIME_BUNDLE_EMPTY', 'Browser runtime has no active Bundle.')
+    return state
+  }
+  const readActiveState = (): BrowserRuntimeBundleStateV5 | null => state
   const subscribe = (listener: BundleListenerV5): (() => void) => {
     if (typeof listener !== 'function') throw new TypeError('Bundle listener must be a function.')
     listeners.add(listener)
@@ -602,28 +607,34 @@ export function createBrowserRuntimeBundleCellV5(
 
   const prepareInstall = (
     nextInput: BrowserRuntimeBundleStateV5,
-    expectedBaseBundle: BrowserRuntimeBundleStateV5,
+    expectedBaseBundle: BrowserRuntimeBundleStateV5 | null,
     expectedEpochInput: number,
   ): BrowserRuntimeBundleInstallTokenV5 => {
     const base = state
     if (expectedBaseBundle !== base) {
       fail('RUNTIME_BASE_BUNDLE_STALE', 'Expected Bundle is not the exact active Bundle object.')
     }
-    const expectedEpoch = requireEpoch(expectedEpochInput)
-    if (base.runtimeEpoch !== expectedEpoch) {
+    if (!Number.isSafeInteger(expectedEpochInput) || expectedEpochInput < 0) {
+      fail('RUNTIME_BASE_EPOCH_INVALID', 'Expected Runtime Epoch must be a nonnegative safe integer.')
+    }
+    const expectedEpoch = expectedEpochInput
+    if ((base === null && expectedEpoch !== 0) || (base !== null && base.runtimeEpoch !== expectedEpoch)) {
       fail('RUNTIME_BASE_EPOCH_STALE', 'Expected Runtime Epoch is not active.')
     }
     if (expectedEpoch === Number.MAX_SAFE_INTEGER) {
       fail('RUNTIME_EPOCH_EXHAUSTED', 'Runtime Epoch cannot be incremented safely.')
     }
     const next = canonicalBundleState(nextInput, expectedEpoch + 1)
-    if (state !== base || state.runtimeEpoch !== expectedEpoch) {
+    if (
+      state !== base
+      || (state === null ? expectedEpoch !== 0 : state.runtimeEpoch !== expectedEpoch)
+    ) {
       fail('RUNTIME_BASE_BUNDLE_STALE', 'Active Bundle changed while preparing the install token.')
     }
     const listenerSnapshot = Object.freeze(Array.from(listeners))
     let token!: BrowserRuntimeBundleInstallTokenV5
     token = Object.freeze({
-      previousRuntimeGraph: base.runtimeGraph,
+      previousRuntimeGraph: base?.runtimeGraph ?? null,
       installPure(this: BrowserRuntimeBundleInstallTokenV5): void {
         const record = installRecords.get(this)
         if (record === undefined || record.owner !== owner) {
@@ -632,7 +643,10 @@ export function createBrowserRuntimeBundleCellV5(
         if (record.phase !== 'prepared') {
           fail('INSTALL_TOKEN_REUSED', 'Install token has already been consumed.')
         }
-        if (state !== record.base || state.runtimeEpoch !== record.expectedEpoch) {
+        if (
+          state !== record.base
+          || (state === null ? record.expectedEpoch !== 0 : state.runtimeEpoch !== record.expectedEpoch)
+        ) {
           record.phase = 'rejected'
           fail('INSTALL_TOKEN_STALE', 'Install token base Bundle is no longer active.')
         }
@@ -689,5 +703,5 @@ export function createBrowserRuntimeBundleCellV5(
     return token
   }
 
-  return Object.freeze({ getState, subscribe, prepareInstall })
+  return Object.freeze({ getState, readActiveState, subscribe, prepareInstall })
 }

@@ -27,7 +27,7 @@ export interface ProjectV5RuntimeCommitTransitionV5 {
 export interface ProjectV5BrowserRuntimePublicationPort<PreparedRuntime = unknown> {
   prepare(project: WorkcellProjectV5, configRevision: string): Promise<PreparedRuntime>
   apply(prepared: PreparedRuntime): Promise<void>
-  commit(prepared: PreparedRuntime): ProjectV5RuntimeCommitTransitionV5 | Promise<ProjectV5RuntimeCommitTransitionV5>
+  commit(prepared: PreparedRuntime): Promise<ProjectV5RuntimeCommitTransitionV5>
   rollback(prepared: PreparedRuntime): Promise<void>
 }
 
@@ -169,6 +169,27 @@ function assertGatewayStatus(
     return failPublication(
       'PROJECT_GATEWAY_ACTIVATION_MISMATCH',
       'Gateway did not activate the requested Project V5 revision and config revision.',
+    )
+  }
+}
+
+function assertGatewayInactiveStatus(value: RuntimeGatewayStatusV1): void {
+  let status: RuntimeGatewayStatusV1
+  try {
+    status = validateRuntimeGatewayStatusV1(value)
+  } catch (error) {
+    return failPublication('PROJECT_GATEWAY_STATUS_INVALID', 'Gateway returned an invalid rollback status.', error)
+  }
+  if (
+    status.project.phase !== 'not-applied'
+    || status.project.projectId !== null
+    || status.project.revisionId !== null
+    || status.project.configRevision !== null
+    || status.project.readinessCode !== 'NO_ACTIVE_REVISION'
+  ) {
+    return failPublication(
+      'PROJECT_GATEWAY_ROLLBACK_MISMATCH',
+      'Gateway did not return to the canonical no-active-revision state.',
     )
   }
 }
@@ -345,6 +366,11 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
 
           if (preparedGateway !== undefined) {
             await compensate(() => gateway.rollback(preparedGateway!))
+          }
+          if (gatewayActivationAttempted && previous === null) {
+            await compensate(async () => {
+              assertGatewayInactiveStatus(await gateway.readStatus())
+            })
           }
           if (runtimeTransition !== undefined) {
             await compensate(() => runtimeTransition!.rollback())
