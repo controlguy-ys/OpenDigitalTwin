@@ -147,6 +147,15 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     const fallback = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response('{}', { status: 502 }) })
     await expect(fallback.readStatus()).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_HTTP_502', statusCode: 502 })
   })
+  it.each([
+    { code: 'lowercase', message: 'bad' },
+    { code: 'VALID_CODE', message: 'x'.repeat(513) },
+    { code: 'VALID_CODE', message: 'bad', injected: true },
+    { code: 'VALID_CODE', message: 'bad', recoveryError: 'x'.repeat(513) },
+  ])('rejects a noncanonical bounded Gateway error envelope', async (envelope) => {
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response(JSON.stringify(envelope), { status: 503 }) })
+    await expect(client.readStatus()).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_HTTP_503', statusCode: 503 })
+  })
   it('honors pre-aborted caller signal and timeout', async () => {
     const aborted = new AbortController(); aborted.abort()
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response('{}'), timeoutMs: 1 })

@@ -113,6 +113,8 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
   /** Injected only by deterministic lifecycle tests. */
   readonly clearTimeout?: (timer: RuntimeGatewayTimerV1) => void
   readonly initialCommittedCommandGeneration?: number
+  /** Bounded deadline for an out-of-queue NamespaceArray diagnostic read. */
+  readonly namespaceResolutionTimeoutMs?: number
   /** Test-only synchronous injection point immediately before the final staging health check. */
   readonly beforeCandidateTimelineSealForTest?: () => void
   readonly testOpcUaConnection?: (endpoint: import('../../src/core/project-v5/index.js').OpcUaEndpointV5) => Promise<OpcUaConnectionTestResultV1>
@@ -331,6 +333,10 @@ export function createRuntimeGatewayEntrypointService(
   function browserCommandKey(batch: CommandBatchV1): string {
     const command = batch.commands[0]!
     return JSON.stringify([batch.projectId, batch.configRevision, batch.leaseGeneration, command.commandId])
+  }
+  const namespaceResolutionTimeoutMs = dependencies.namespaceResolutionTimeoutMs ?? 5_000
+  if (!Number.isSafeInteger(namespaceResolutionTimeoutMs) || namespaceResolutionTimeoutMs < 1 || namespaceResolutionTimeoutMs > 5_000) {
+    throw new Error('NAMESPACE_RESOLUTION_TIMEOUT_INVALID')
   }
 
   function failedBrowserBatch(
@@ -1026,7 +1032,21 @@ export function createRuntimeGatewayEntrypointService(
     try {
       // NamespaceArray is network I/O. The transition queue protects the
       // authority capture and post-read fence, not this bounded read itself.
-      const namespaceIndex = await captured.resolveNamespaceIndex(query.endpointId, query.namespaceUri)
+      const namespaceOperation = captured.resolveNamespaceIndex(query.endpointId, query.namespaceUri)
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('OPC_UA_NAMESPACE_READ_TIMEOUT')), namespaceResolutionTimeoutMs)
+        if (timer !== null && typeof timer === 'object' && 'unref' in timer && typeof timer.unref === 'function') timer.unref()
+      })
+      let namespaceIndex: number
+      try {
+        namespaceIndex = await Promise.race([namespaceOperation, timeout])
+      } finally {
+        if (timer !== null) clearTimeout(timer)
+        // A browser abort cannot cancel node-opcua; observe a late rejection
+        // so a timeout does not become an unhandled rejection.
+        void namespaceOperation.catch(() => undefined)
+      }
       return await enqueueRuntimeTransition(async () => {
         const active = activeRuntime
         if (active === null || active.runtimeToken !== captured.runtimeToken || active.generation !== captured.generation || active.clientAdapter !== captured.adapter) {

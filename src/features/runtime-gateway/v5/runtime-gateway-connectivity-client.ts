@@ -104,11 +104,11 @@ function exactError(value: unknown): { readonly code: string; readonly message: 
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const allowed = new Set(['code', 'message', 'recoveredProjectId', 'recoveredRevisionId', 'recoveryError'])
-  if (typeof record.code !== 'string' || typeof record.message !== 'string' || Object.keys(record).some((key) => !allowed.has(key))) return null
+  if (typeof record.code !== 'string' || !/^[A-Z][A-Z0-9_]{0,127}$/u.test(record.code) || typeof record.message !== 'string' || new TextEncoder().encode(record.message).byteLength > 512 || Object.keys(record).some((key) => !allowed.has(key))) return null
   const details: Record<string, string | null> = {}
   for (const key of ['recoveredProjectId', 'recoveredRevisionId', 'recoveryError']) {
     if (!(key in record)) continue
-    if (record[key] !== null && typeof record[key] !== 'string') return null
+    if (record[key] !== null && (typeof record[key] !== 'string' || new TextEncoder().encode(record[key] as string).byteLength > 512)) return null
     details[key] = record[key] as string | null
   }
   return { code: record.code, message: record.message, details: Object.keys(details).length === 0 ? null : Object.freeze(details) }

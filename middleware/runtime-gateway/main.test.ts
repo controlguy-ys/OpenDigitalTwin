@@ -2829,6 +2829,21 @@ describe('runtime Gateway entrypoint', () => {
     } finally { await service.stop() }
   })
 
+  it('bounds a namespace read outside the transition queue and returns a stable timeout', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    ;(client.adapter as unknown as { resolveNamespaceIndex: () => Promise<number> }).resolveNamespaceIndex = () => new Promise<number>(() => undefined)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter, namespaceResolutionTimeoutMs: 1 })
+    await service.start()
+    try {
+      const project = sampleProject('client'); await requestJson(port, 'PUT', '/runtime/project', project)
+      const response = await requestJson(port, 'POST', '/runtime/opcua/namespace-index', { type: 'opcua-namespace-index-request-v1', protocolVersion: 1, endpointId: project.opcUa.endpoints[0]!.endpointId, namespaceUri: 'urn:controller' })
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({ code: 'OPC_UA_NAMESPACE_READ_TIMEOUT' })
+      expect(gatewayStatus(service.status()).project).toMatchObject({ phase: 'ready', revisionId: project.revisionId })
+    } finally { await service.stop() }
+  })
+
   it('maps unconfigured and disconnected namespace routes without mutating the Project', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
