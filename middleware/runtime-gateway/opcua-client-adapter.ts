@@ -449,12 +449,17 @@ async function cleanupNativeHandles(handles: NativeCleanupHandlesV1): Promise<vo
     hasFailure = true
     firstFailure = error
   }
+  let firstGroupFailure: unknown
+  let hasGroupFailure = false
   for (const group of [...handles.groups]) {
     try {
       await group.terminate()
       handles.groups = handles.groups.filter((candidate) => candidate !== group)
     } catch (error) {
-      retainFailure(error)
+      if (!hasGroupFailure) {
+        hasGroupFailure = true
+        firstGroupFailure = error
+      }
     }
   }
   const subscription = handles.subscription
@@ -462,9 +467,16 @@ async function cleanupNativeHandles(handles: NativeCleanupHandlesV1): Promise<vo
     try {
       await subscription.terminate()
       if (handles.subscription === subscription) handles.subscription = null
+      // Native Subscription termination retires every child monitored item.
+      // It is authoritative proof even when an earlier group-level terminate
+      // could not run because node-opcua had already retired the Subscription.
+      handles.groups = []
     } catch (error) {
+      if (hasGroupFailure) retainFailure(firstGroupFailure)
       retainFailure(error)
     }
+  } else if (hasGroupFailure) {
+    retainFailure(firstGroupFailure)
   }
   const session = handles.session
   if (session !== null) {

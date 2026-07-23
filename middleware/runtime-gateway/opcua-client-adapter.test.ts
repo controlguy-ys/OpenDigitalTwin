@@ -1161,20 +1161,25 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
           ? connection.session.close
           : connection.client.disconnect
     cleanup.mockRejectedValueOnce(new Error(`${resource} cleanup failed`))
+    if (resource === 'monitored-group') {
+      subscriptionTerminate.mockRejectedValueOnce(new Error('subscription cleanup proof failed'))
+    }
 
     await expect(adapter.stop()).rejects.toThrow(`${resource} cleanup failed`)
     expect(cleanup).toHaveBeenCalledOnce()
     expect(adapter.status()[0]).toMatchObject({
       phase: 'faulted',
       sessionActive: resource === 'session',
-      subscriptionActive: resource === 'subscription',
+      subscriptionActive: resource === 'monitored-group' || resource === 'subscription',
     })
     await expect(adapter.reconnectEndpoint!('plc')).rejects.toThrow('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
 
     await expect(adapter.stop()).resolves.toBeUndefined()
     expect(cleanup).toHaveBeenCalledTimes(2)
     expect(groupTerminate).toHaveBeenCalledTimes(resource === 'monitored-group' ? 2 : 1)
-    expect(subscriptionTerminate).toHaveBeenCalledTimes(resource === 'subscription' ? 2 : 1)
+    expect(subscriptionTerminate).toHaveBeenCalledTimes(
+      resource === 'monitored-group' || resource === 'subscription' ? 2 : 1,
+    )
     expect(connection.session.close).toHaveBeenCalledTimes(resource === 'session' ? 2 : 1)
     expect(connection.client.disconnect).toHaveBeenCalledTimes(resource === 'client' ? 2 : 1)
     expect(adapter.status()[0]).toMatchObject({
