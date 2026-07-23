@@ -127,6 +127,22 @@ describe('AppShellV4', () => {
     expect(renderViewport.mock.calls[0]?.[0]).toBe(shellLayoutController.getState().safeAreaInsets)
   })
 
+  it('renders an optional modeless monitor slot without changing the absent shell path', () => {
+    const { rerender } = renderShell()
+    expect(screen.queryByLabelText('Connection Monitor')).not.toBeInTheDocument()
+
+    rerender(
+      <AppShellV4
+        shellLayoutController={shellLayoutController}
+        commandBindings={layoutCommandBindings()}
+        header={<div>Header</div>}
+        monitor={<aside aria-label="Connection Monitor">Monitor</aside>}
+        renderViewport={() => <div>3D viewport</div>}
+      />,
+    )
+    expect(screen.getByLabelText('Connection Monitor')).toBeInTheDocument()
+  })
+
   it('allocates the reviewed ribbon height and restores the workspace offset when collapsed', () => {
     renderShell()
     const shell = screen.getByLabelText('3D viewport').closest('.app-shell') as HTMLElement

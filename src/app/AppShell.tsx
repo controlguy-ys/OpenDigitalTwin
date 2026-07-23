@@ -29,6 +29,7 @@ export interface AppShellPropsV4 {
   readonly jobTree?: ReactNode
   readonly inspector?: ReactNode
   readonly bottomRail?: ReactNode
+  readonly monitor?: ReactNode
   readonly viewportBusy?: boolean
 }
 
@@ -55,6 +56,7 @@ export function AppShellV4({
   jobTree,
   inspector,
   bottomRail,
+  monitor,
   viewportBusy = false,
 }: AppShellPropsV4) {
   const { snapshot, workspaceRef } = useShellLayoutObserverV4(shellLayoutController)
@@ -237,6 +239,7 @@ export function AppShellV4({
           {inspector}
         </aside>
       </div>
+      {monitor}
     </div>
   )
 }

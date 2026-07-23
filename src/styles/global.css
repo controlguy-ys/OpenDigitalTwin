@@ -2264,6 +2264,66 @@ button {
   grid-row: auto;
 }
 
+/* Modeless V5 connectivity monitor: it occupies a bounded edge panel and
+   deliberately leaves the viewport and the rest of the workspace interactive. */
+.connection-monitor-trigger {
+  position: fixed;
+  z-index: 20;
+  top: 12px;
+  right: 12px;
+}
+
+.connection-monitor-panel {
+  position: fixed;
+  z-index: 20;
+  top: calc(var(--top-bar-height) + var(--ribbon-height, 0px) + 8px);
+  right: 8px;
+  bottom: 8px;
+  width: min(680px, calc(100vw - 24px));
+  overflow: auto;
+  padding: 16px;
+  color: var(--color-text);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 12px 36px rgb(0 0 0 / 24%);
+}
+
+.connection-monitor-panel > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connection-monitor-panel h2,
+.connection-monitor-panel p { margin: 0; }
+.connection-monitor-panel header p { color: var(--color-text-muted); font-size: 0.8rem; }
+.connection-monitor-transport-error { margin-top: 12px !important; color: var(--color-danger); }
+.connection-monitor-table-wrap { overflow: auto; margin-top: 14px; }
+.connection-monitor-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.connection-monitor-table th,
+.connection-monitor-table td { padding: 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--color-border); }
+.connection-monitor-details summary { cursor: pointer; }
+.connection-monitor-details dl,
+.connection-monitor-card dl { margin: 8px 0 0; }
+.connection-monitor-details dl > div,
+.connection-monitor-card dl > div { display: grid; grid-template-columns: minmax(92px, 0.65fr) minmax(0, 1fr); gap: 8px; }
+.connection-monitor-details dt,
+.connection-monitor-card dt { color: var(--color-text-muted); }
+.connection-monitor-details dd,
+.connection-monitor-card dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.connection-monitor-cards { display: none; gap: 10px; margin-top: 14px; }
+.connection-monitor-card { padding: 12px; border: 1px solid var(--color-border); border-radius: 6px; }
+
+@media (max-width: 720px) {
+  .connection-monitor-panel:not(.is-compact) .connection-monitor-table-wrap { display: none; }
+  .connection-monitor-panel:not(.is-compact) .connection-monitor-cards { display: grid; }
+}
+
+.connection-monitor-panel.is-compact .connection-monitor-table-wrap { display: none; }
+.connection-monitor-panel.is-compact .connection-monitor-cards { display: grid; }
+
 .studio-workspace > [role='separator'] {
   z-index: 6;
   cursor: col-resize;
