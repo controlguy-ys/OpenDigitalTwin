@@ -259,18 +259,9 @@ export function createRuntimeGatewayConnectivityClientV1(
       if (record.state === 'prepared') { record.state = 'consumed'; return 'prepared-only' }
       const candidateAuthority = Object.freeze({ projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
       try {
-        try {
-          await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
-          record.state = 'consumed'
-          return 'candidate-deactivated'
-        } catch (retryError) {
-          if (!(isRuntimeGatewayConnectivityClientV1Error(retryError) && (retryError.code === 'PROJECT_DEACTIVATION_CONFLICT' || retryError.code === 'RUNTIME_GATEWAY_UNAVAILABLE' || retryError.code === 'RUNTIME_GATEWAY_TIMEOUT' || retryError.code === 'RUNTIME_GATEWAY_RESPONSE_INVALID'))) throw retryError
-          const terminal = await readStatus()
-          if (terminal.project.phase === 'not-applied') { record.state = 'consumed'; return 'candidate-deactivated' }
-          if (!sameAuthority(authorityFromStatus(terminal), candidateAuthority)) { record.state = 'consumed'; return 'other-authority' }
-          if (terminal.project.phase === 'recovery-required') throw new RuntimeGatewayConnectivityClientV1Error('PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Gateway candidate requires recovery before rollback can complete.', 503)
-          throw new RuntimeGatewayConnectivityClientV1Error('PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Gateway candidate deactivation did not reach a terminal state.', 503)
-        }
+        await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
+        record.state = 'consumed'
+        return 'candidate-deactivated'
       } catch (error) {
         if (!(isRuntimeGatewayConnectivityClientV1Error(error) && (error.code === 'PROJECT_DEACTIVATION_CONFLICT' || error.code === 'RUNTIME_GATEWAY_UNAVAILABLE' || error.code === 'RUNTIME_GATEWAY_TIMEOUT' || error.code === 'RUNTIME_GATEWAY_RESPONSE_INVALID'))) throw error
         const explicitConflict = isRuntimeGatewayConnectivityClientV1Error(error) && error.code === 'PROJECT_DEACTIVATION_CONFLICT'
