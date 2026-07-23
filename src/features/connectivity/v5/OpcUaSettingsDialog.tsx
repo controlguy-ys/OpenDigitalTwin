@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -85,6 +86,16 @@ function issueTargetPath(issue: OpcUaSettingsValidationIssueV1): string {
   return issue.path
 }
 
+function tabbableElements(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(
+    'button, input, select, textarea, [tabindex]',
+  )).filter((element) => (
+    element.tabIndex >= 0
+    && element.closest('[hidden]') === null
+    && (!('disabled' in element) || element.disabled !== true)
+  ))
+}
+
 function numberValue(value: string): number {
   return value === '' ? Number.NaN : Number(value)
 }
@@ -136,20 +147,36 @@ export function OpcUaSettingsDialog({
   const busy = state.phase === 'validating' || state.phase === 'activating'
   const draft = state.draft
 
+  const invalidateDiagnostic = useCallback((): void => {
+    testGenerationRef.current += 1
+    testAbortRef.current?.abort()
+    testAbortRef.current = null
+    setTesting(false)
+    setTestResult(null)
+  }, [])
+
   useEffect(() => {
     if (state.open) {
       wasOpenRef.current = true
+      invalidateDiagnostic()
+      setInteractionIssue(null)
       const timer = window.setTimeout(() => roleRef.current?.focus(), 0)
       return () => window.clearTimeout(timer)
     }
     if (wasOpenRef.current) {
       wasOpenRef.current = false
+      invalidateDiagnostic()
+      setInteractionIssue(null)
       triggerRef?.current?.focus()
     }
     return undefined
-  }, [state.open, triggerRef])
+  }, [invalidateDiagnostic, state.open, triggerRef])
 
-  useEffect(() => () => testAbortRef.current?.abort(), [])
+  useEffect(() => () => {
+    testGenerationRef.current += 1
+    testAbortRef.current?.abort()
+    testAbortRef.current = null
+  }, [])
 
   useEffect(() => {
     if (draft === null) return
@@ -170,8 +197,10 @@ export function OpcUaSettingsDialog({
       const root = dialogRef.current
       if (root === null) return
       const path = issueTargetPath(issue)
-      const target = Array.from(root.querySelectorAll<HTMLElement>('[data-validation-path]'))
-        .find((element) => element.dataset.validationPath === path)
+      const pathTargets = Array.from(root.querySelectorAll<HTMLElement>('[data-validation-path]'))
+        .filter((element) => element.dataset.validationPath === path)
+      const target = pathTargets.find((element) => !('disabled' in element) || element.disabled !== true)
+        ?? pathTargets[0]
         ?? (path.startsWith('$.opcUa.mappings') ? root.querySelector<HTMLElement>('[data-validation-path="$.opcUa.mappings"]') : null)
         ?? (path.startsWith('$.opcUa.bridgeRoutes') ? root.querySelector<HTMLElement>('[data-validation-path="$.opcUa.bridgeRoutes"]') : null)
         ?? root.querySelector<HTMLElement>('[data-validation-path="$"]')
@@ -194,17 +223,19 @@ export function OpcUaSettingsDialog({
 
   const update = (recipe: (current: OpcUaSettingsDraftV1) => OpcUaSettingsDraftV1): void => {
     if (disabled) return
+    invalidateDiagnostic()
     setInteractionIssue(null)
-    setTestResult(null)
     controller.update(recipe)
   }
   const close = (): void => {
     if (busy) return
-    testAbortRef.current?.abort()
+    invalidateDiagnostic()
+    setInteractionIssue(null)
     controller.cancel()
   }
   const apply = (): void => {
     if (busy) return
+    invalidateDiagnostic()
     setInteractionIssue(null)
     void controller.applyAndActivate().catch(() => undefined)
   }
@@ -230,15 +261,22 @@ export function OpcUaSettingsDialog({
   }
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
       if (!busy) close()
       return
     }
     if (event.key !== 'Tab') return
     const root = dialogRef.current
     if (root === null) return
-    const first = roleRef.current
-    const last = root.querySelector<HTMLButtonElement>('button[type="submit"]')
-    if ((!event.shiftKey && document.activeElement === last) || (event.shiftKey && document.activeElement === first)) {
+    const elements = tabbableElements(root)
+    const first = elements[0]
+    const last = elements.at(-1)
+    const activeIndex = elements.indexOf(document.activeElement as HTMLElement)
+    if (
+      (!event.shiftKey && (activeIndex < 0 || activeIndex === elements.length - 1))
+      || (event.shiftKey && activeIndex <= 0)
+    ) {
       event.preventDefault()
       ;(event.shiftKey ? last : first)?.focus()
     }
@@ -293,19 +331,28 @@ export function OpcUaSettingsDialog({
             <section aria-labelledby="opcua-client-endpoints-title">
               <h3 id="opcua-client-endpoints-title">Client Endpoints</h3>
               <div className="opcua-settings-actions">
-                <button disabled={disabled || draft.endpoints.length >= MAX_OPC_UA_ENDPOINTS_V5} onClick={() => {
-                  const endpointId = endpointIdFor(draft)
-                  update((current) => addEndpointV1(current, { endpointId, name: `Endpoint ${current.endpoints.length + 1}`, endpointUrl: 'opc.tcp://localhost:4840', enabled: true, publishingIntervalMs: 100, reconnectDelayMs: 1_000 }))
-                  setSelectedEndpointId(endpointId)
+                <button data-validation-path="$.opcUa.endpoints" disabled={disabled || draft.endpoints.length >= MAX_OPC_UA_ENDPOINTS_V5} onClick={() => {
+                  let endpointId: string | null = null
+                  update((current) => {
+                    if (current.endpoints.length >= MAX_OPC_UA_ENDPOINTS_V5) return current
+                    endpointId = endpointIdFor(current)
+                    return addEndpointV1(current, { endpointId, name: `Endpoint ${current.endpoints.length + 1}`, endpointUrl: 'opc.tcp://localhost:4840', enabled: true, publishingIntervalMs: 100, reconnectDelayMs: 1_000 })
+                  })
+                  if (endpointId !== null) setSelectedEndpointId(endpointId)
                 }} type="button">Add Endpoint</button>
-                <button disabled={disabled || selectedEndpoint === null} onClick={() => {
+                <button disabled={disabled || selectedEndpoint === null || draft.endpoints.length >= MAX_OPC_UA_ENDPOINTS_V5} onClick={() => {
                   if (selectedEndpoint === null) return
-                  const duplicateId = endpointIdFor(draft)
-                  update((current) => duplicateEndpointV1(current, selectedEndpoint.endpointId, duplicateId))
-                  setSelectedEndpointId(duplicateId)
+                  let duplicateId: string | null = null
+                  update((current) => {
+                    if (current.endpoints.length >= MAX_OPC_UA_ENDPOINTS_V5) return current
+                    duplicateId = endpointIdFor(current)
+                    return duplicateEndpointV1(current, selectedEndpoint.endpointId, duplicateId)
+                  })
+                  if (duplicateId !== null) setSelectedEndpointId(duplicateId)
                 }} type="button">Duplicate Endpoint</button>
                 <button disabled={disabled || selectedEndpoint === null} onClick={() => {
                   if (selectedEndpoint === null) return
+                  invalidateDiagnostic()
                   const result = deleteEndpointV1(draft, activeProject, selectedEndpoint.endpointId)
                   setInteractionIssue(result.issues[0] ?? null)
                   if (result.issues.length === 0) {
@@ -316,7 +363,7 @@ export function OpcUaSettingsDialog({
               </div>
               <label>
                 <span>Endpoint profile</span>
-                <select aria-label="Endpoint profile" disabled={disabled || draft.endpoints.length === 0} onChange={(event) => { setSelectedEndpointId(event.currentTarget.value); setInteractionIssue(null); setTestResult(null) }} value={selectedEndpoint?.endpointId ?? ''}>
+                <select aria-label="Endpoint profile" data-validation-path="$.opcUa.endpoints" disabled={disabled || draft.endpoints.length === 0} onChange={(event) => { invalidateDiagnostic(); setSelectedEndpointId(event.currentTarget.value); setInteractionIssue(null) }} value={selectedEndpoint?.endpointId ?? ''}>
                   {draft.endpoints.map((endpoint) => <option key={endpoint.endpointId} value={endpoint.endpointId}>{endpoint.name}</option>)}
                 </select>
               </label>
@@ -352,7 +399,7 @@ export function OpcUaSettingsDialog({
                 const route: OpcUaBridgeRouteV5 = { id: routeIdFor(current), sourceMappingId: mappingId, destinationMappingId: mappingId, direction: 'forward', scale: 1, offset: 0, unit: '' }
                 return addBridgeRouteV1(current, route)
               })} type="button">Add Bridge Route</button>
-              {draft.bridgeRoutes.map((route, index) => <div className="opcua-bridge-route" data-validation-path={`$.opcUa.bridgeRoutes[${index}]`} key={route.id}>
+              {draft.bridgeRoutes.map((route, index) => <div className="opcua-bridge-route" data-validation-path={`$.opcUa.bridgeRoutes[${index}]`} key={route.id} tabIndex={-1}>
                 <label><span>Source mapping</span><select aria-label={`Source mapping ${route.id}`} data-validation-path={`$.opcUa.bridgeRoutes[${index}].sourceMappingId`} disabled={disabled} onChange={(event) => update((current) => updateBridgeRouteV1(current, route.id, { sourceMappingId: event.currentTarget.value }))} value={route.sourceMappingId}>{activeProject.opcUa.mappings.map((mapping) => <option key={mapping.id} value={mapping.id}>{mapping.id}</option>)}</select></label>
                 <label><span>Destination mapping</span><select aria-label={`Destination mapping ${route.id}`} data-validation-path={`$.opcUa.bridgeRoutes[${index}].destinationMappingId`} disabled={disabled} onChange={(event) => update((current) => updateBridgeRouteV1(current, route.id, { destinationMappingId: event.currentTarget.value }))} value={route.destinationMappingId}>{activeProject.opcUa.mappings.map((mapping) => <option key={mapping.id} value={mapping.id}>{mapping.id}</option>)}</select></label>
                 <label><span>Scale</span><input aria-label={`Scale ${route.id}`} data-validation-path={`$.opcUa.bridgeRoutes[${index}].scale`} disabled={disabled} onChange={(event) => update((current) => updateBridgeRouteV1(current, route.id, { scale: numberValue(event.currentTarget.value) }))} type="number" value={route.scale} /></label>

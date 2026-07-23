@@ -51,4 +51,17 @@ describe('Runtime Gateway connection-test port V1', () => {
     expect(gateway.testConnection).toHaveBeenCalledWith(endpoint, signal)
     expect(endpoint.endpointUrl).toBe('opc.tcp://controller:4840')
   })
+
+  it('preserves transport rejection and AbortError identity', async () => {
+    const transport = new Error('Gateway offline')
+    const transportClient = { testConnection: vi.fn(async () => { throw transport }) }
+    const transportPort = createRuntimeGatewayConnectionTestPortV1({ gateway: transportClient })
+    await expect(transportPort.testEndpoint(endpoint)).rejects.toBe(transport)
+
+    const aborted = new Error('The operation was aborted.')
+    aborted.name = 'AbortError'
+    const abortClient = { testConnection: vi.fn(async () => { throw aborted }) }
+    const abortPort = createRuntimeGatewayConnectionTestPortV1({ gateway: abortClient })
+    await expect(abortPort.testEndpoint(endpoint, new AbortController().signal)).rejects.toBe(aborted)
+  })
 })

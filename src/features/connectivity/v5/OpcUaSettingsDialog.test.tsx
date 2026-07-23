@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
@@ -26,6 +26,26 @@ function project(): WorkcellProjectV5 {
 
 function published(value: WorkcellProjectV5): PublishedProjectV5 {
   return { project: value, revisionId: value.revisionId, configRevision: 'a'.repeat(64) }
+}
+
+function deferred<Value>() {
+  let resolve!: (value: Value) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<Value>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, reject, resolve }
+}
+
+function tabbables(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(
+    'button, input, select, textarea, [tabindex]',
+  )).filter((element) => (
+    element.tabIndex >= 0
+    && element.closest('[hidden]') === null
+    && (!('disabled' in element) || element.disabled !== true)
+  ))
 }
 
 function status(runtimeKind: 'native' | 'docker' = 'native'): RuntimeGatewayStatusV1 {
@@ -113,11 +133,15 @@ describe('OpcUaSettingsDialog', () => {
     const dialog = screen.getByRole('dialog', { name: 'OPC UA Settings' })
     const role = screen.getByLabelText('OPC UA role')
     await waitFor(() => expect(role).toHaveFocus())
-    screen.getByRole('button', { name: 'Apply & Activate' }).focus()
+    const focusable = tabbables(dialog)
+    const first = focusable[0]!
+    const last = focusable.at(-1)!
+    expect(first).toBe(role)
+    last.focus()
     fireEvent.keyDown(dialog, { key: 'Tab' })
-    expect(role).toHaveFocus()
+    expect(first).toHaveFocus()
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
-    expect(screen.getByRole('button', { name: 'Apply & Activate' })).toHaveFocus()
+    expect(last).toHaveFocus()
     fireEvent.keyDown(dialog, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(trigger).toHaveFocus()
@@ -149,6 +173,24 @@ describe('OpcUaSettingsDialog', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Cannot delete an OPC UA Endpoint while a Mapping references it.')
   })
 
+  it('guards Duplicate at eight and rejects a stale double event from creating a ninth endpoint', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    const add = screen.getByRole('button', { name: 'Add Endpoint' })
+    for (let count = 1; count < 7; count += 1) await user.click(add)
+    const duplicate = screen.getByRole('button', { name: 'Duplicate Endpoint' })
+
+    act(() => {
+      fireEvent.click(duplicate)
+      fireEvent.click(duplicate)
+    })
+
+    expect(screen.getByLabelText('Endpoint profile').querySelectorAll('option')).toHaveLength(8)
+    expect(screen.getByRole('button', { name: 'Duplicate Endpoint' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add Endpoint' })).toBeDisabled()
+  })
+
   it('duplicates endpoints, reports active mapping count, and opens the Binding Overview callback', async () => {
     const user = userEvent.setup()
     const onOpenBindingOverview = vi.fn()
@@ -177,6 +219,65 @@ describe('OpcUaSettingsDialog', () => {
     expect(screen.getByRole('button', { name: 'Apply & Activate' })).toBeEnabled()
   })
 
+  it('invalidates ignored diagnostic completions across edits, switch, delete, cancel, success, reopen, and unmount', async () => {
+    const user = userEvent.setup()
+    const calls: Array<{
+      readonly signal: AbortSignal | undefined
+      readonly operation: ReturnType<typeof deferred<Awaited<ReturnType<OpcUaConnectionTestPortV1['testEndpoint']>>>>
+    }> = []
+    const connectionTest: OpcUaConnectionTestPortV1 = {
+      testEndpoint: vi.fn((_endpoint, signal) => {
+        const operation = deferred<Awaited<ReturnType<OpcUaConnectionTestPortV1['testEndpoint']>>>()
+        calls.push({ signal, operation })
+        return operation.promise
+      }),
+    }
+    const rendered = render(<Harness connectionTest={connectionTest} />)
+    const open = async () => user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    const test = async () => user.click(screen.getByRole('button', { name: 'Test Connection' }))
+
+    await open()
+    await test()
+    await user.type(screen.getByLabelText('Endpoint name'), ' edited')
+    expect(calls[0]!.signal?.aborted).toBe(true)
+    expect(screen.getByRole('button', { name: 'Test Connection' })).toBeEnabled()
+    await act(async () => calls[0]!.operation.resolve({ phase: 'connected', namespaceUris: ['urn:late'], elapsedMs: 99, error: null }))
+    expect(screen.queryByText('Connected in 99 ms')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Add Endpoint' }))
+    await user.selectOptions(screen.getByLabelText('Endpoint profile'), 'endpoint-1')
+    await test()
+    await user.selectOptions(screen.getByLabelText('Endpoint profile'), 'endpoint-2')
+    expect(calls[1]!.signal?.aborted).toBe(true)
+    expect(screen.getByRole('button', { name: 'Test Connection' })).toBeEnabled()
+
+    await test()
+    await user.click(screen.getByRole('button', { name: 'Delete Endpoint' }))
+    expect(calls[2]!.signal?.aborted).toBe(true)
+    expect(screen.getByLabelText('Endpoint profile')).toHaveValue('endpoint-1')
+
+    await test()
+    await user.click(screen.getByRole('button', { name: 'Delete Endpoint' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Cannot delete')
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(calls[3]!.signal?.aborted).toBe(true)
+    await open()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Test Connection' })).toBeEnabled()
+
+    await test()
+    await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(calls[4]!.signal?.aborted).toBe(true)
+    await open()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+
+    await test()
+    rendered.unmount()
+    expect(calls[5]!.signal?.aborted).toBe(true)
+    await act(async () => calls[5]!.operation.resolve({ phase: 'connected', namespaceUris: ['urn:unmounted'], elapsedMs: 1, error: null }))
+  })
+
   it('surfaces immediate Bridge Route validation and focuses the first failed field without discarding edits', async () => {
     const user = userEvent.setup()
     const source = cloneWorkcellProjectV5(project())
@@ -192,12 +293,53 @@ describe('OpcUaSettingsDialog', () => {
     await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
     await user.click(screen.getByRole('button', { name: 'Add Bridge Route' }))
     expect(screen.getByText(/Bridge route cannot echo a Mapping to itself\./)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Bridge route cannot echo'))
+    const routeTarget = screen.getByLabelText('Source mapping bridge-route-1').closest<HTMLElement>('[data-validation-path="$.opcUa.bridgeRoutes[0]"]')
+    expect(routeTarget).toHaveAttribute('tabindex', '-1')
+    expect(routeTarget).toHaveFocus()
     await user.click(screen.getByRole('button', { name: 'Delete Bridge Route' }))
     await user.clear(screen.getByLabelText('Endpoint name'))
     await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('UTF-8 length'))
     expect(screen.getByLabelText('Endpoint name')).toHaveFocus()
     expect(screen.getByLabelText('Endpoint name')).toHaveValue('')
+  })
+
+  it.each([
+    { path: '$.opcUa.endpoints', target: 'endpoint-root' },
+    { path: '$.unsupported', target: 'summary' },
+  ] as const)('focuses the stable $target target for validation path $path', async ({ path, target }) => {
+    const user = userEvent.setup()
+    const active = project()
+    const activation: OpcUaSettingsActivationServiceV1 = {
+      validate: () => [{ code: 'TEST_ISSUE', path, message: `Issue at ${path}` }],
+      apply: vi.fn(async () => published(active)),
+    }
+    render(<Harness active={active} activation={activation} />)
+    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
+    const alert = await screen.findByRole('alert')
+    const expected = target === 'endpoint-root'
+      ? screen.getByRole('button', { name: 'Add Endpoint' })
+      : alert
+    await waitFor(() => expect(expected).toHaveFocus())
+  })
+
+  it('focuses the Endpoint profile for an endpoint-root issue when Add is disabled at eight', async () => {
+    const user = userEvent.setup()
+    const active = project()
+    const activation: OpcUaSettingsActivationServiceV1 = {
+      validate: () => [{ code: 'TEST_ENDPOINT_ROOT', path: '$.opcUa.endpoints', message: 'Endpoint list issue' }],
+      apply: vi.fn(async () => published(active)),
+    }
+    render(<Harness active={active} activation={activation} />)
+    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    const add = screen.getByRole('button', { name: 'Add Endpoint' })
+    for (let count = 1; count < 8; count += 1) await user.click(add)
+    expect(add).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
+    await waitFor(() => expect(screen.getByLabelText('Endpoint profile')).toHaveFocus())
   })
 
   it('disables changes while Apply is busy, retains an async failure, and restores focus after success', async () => {
@@ -216,6 +358,80 @@ describe('OpcUaSettingsDialog', () => {
     resolve(published(active))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(trigger).toHaveFocus()
+  })
+
+  it('dynamically traps both Tab directions among enabled controls while Apply is busy', async () => {
+    const user = userEvent.setup()
+    const active = project()
+    const pending = deferred<PublishedProjectV5>()
+    render(<Harness active={active} activation={service(active, { pending: pending.promise })} />)
+    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    const dialog = screen.getByRole('dialog')
+    const apply = screen.getByRole('button', { name: 'Apply & Activate' })
+    await user.click(apply)
+    expect(apply).toBeDisabled()
+    expect(apply).toHaveFocus()
+    const focusable = tabbables(dialog)
+    const first = focusable[0]!
+    const last = focusable.at(-1)!
+    expect(focusable).not.toContain(apply)
+
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(first).toHaveFocus()
+    first.focus()
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(last).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(first).toHaveFocus()
+
+    pending.resolve(published(active))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('contains Escape and closes only while idle', async () => {
+    const user = userEvent.setup()
+    const propagated = vi.fn()
+    document.addEventListener('keydown', propagated)
+    render(<Harness />)
+    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    const idleEscape = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })
+    act(() => screen.getByRole('dialog').dispatchEvent(idleEscape))
+    expect(idleEscape.defaultPrevented).toBe(true)
+    expect(propagated).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    document.removeEventListener('keydown', propagated)
+
+    const pending = deferred<PublishedProjectV5>()
+    const active = project()
+    const busyPropagated = vi.fn()
+    document.addEventListener('keydown', busyPropagated)
+    render(<Harness active={active} activation={service(active, { pending: pending.promise })} />)
+    await user.click(screen.getAllByRole('button', { name: 'OPC UA Settings' }).at(-1)!)
+    await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
+    const busyEscape = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })
+    act(() => screen.getByRole('dialog').dispatchEvent(busyEscape))
+    expect(busyEscape.defaultPrevented).toBe(true)
+    expect(busyPropagated).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeVisible()
+    document.removeEventListener('keydown', busyPropagated)
+    pending.resolve(published(active))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('coalesces rapid Apply events into one activation service call', async () => {
+    const active = project()
+    const pending = deferred<PublishedProjectV5>()
+    const activation = service(active, { pending: pending.promise })
+    render(<Harness active={active} activation={activation} />)
+    await userEvent.setup().click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    const apply = screen.getByRole('button', { name: 'Apply & Activate' })
+    act(() => {
+      fireEvent.click(apply)
+      fireEvent.click(apply)
+    })
+    expect(activation.apply).toHaveBeenCalledOnce()
+    pending.resolve(published(active))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
   it('retains all Draft inputs and presents one alert when asynchronous Apply rejects', async () => {
