@@ -400,6 +400,7 @@ describe('Project V5 publication coordinator', () => {
       'repository.commit:revision-b',
       'runtime.commit:revision-b',
       'repository.finalize',
+      'gateway.read-status:revision-b',
       'runtime.transition.finalize',
       'gateway.cleanup:revision-a',
       'repository.gc',

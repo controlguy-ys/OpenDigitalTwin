@@ -602,6 +602,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           repositoryCommitted = true
           runtimeTransition = await runtime.commit(preparedRuntime)
           await repository.finalizePublication(commitToken)
+          assertGatewayStatus(await gateway.readStatus(), next)
           published = next
         } catch (error) {
           const compensationErrors: unknown[] = []
@@ -801,6 +802,8 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
             await rollbackActivation(activation, error, true)
           }
         }
+
+        assertGatewayStatus(await gateway.readStatus(), next)
 
         published = next
         notifyPublished()
