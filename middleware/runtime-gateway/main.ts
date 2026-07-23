@@ -1616,7 +1616,7 @@ export function createRuntimeGatewayEntrypointService(
           return rejected === undefined
         }
         const activeClean = await stopPair(active?.clientAdapter ?? null, active?.serverAdapter ?? null)
-        for (const residual of [...residualRuntimeCleanup]) {
+        for (const residual of residualRuntimeCleanup) {
           if (residual.clientAdapter === active?.clientAdapter && residual.serverAdapter === active?.serverAdapter) {
             if (activeClean) residualRuntimeCleanup.delete(residual)
             continue
