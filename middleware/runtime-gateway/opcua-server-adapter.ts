@@ -294,6 +294,7 @@ export function createOpcUaServerAdapterV1(
   async function stopTransition(): Promise<void> {
     const activeServer = server
     if (activeServer === null) return
+    await activeServer.shutdown(0)
     server = null
     if (sessionEventServer === activeServer) {
       activeServer.off('session_activated', onSessionActivated)
@@ -301,12 +302,9 @@ export function createOpcUaServerAdapterV1(
       sessionEventServer = null
     }
     activeSessionIds.clear()
-    openWebModel?.dispose()
     openWebModel = null
-    roboticsModel?.dispose()
     roboticsModel = null
     currentStatus = createStatus(mode, false, null, null, {}, null, null, 0)
-    await activeServer.shutdown(0)
   }
 
   function start(): Promise<void> {

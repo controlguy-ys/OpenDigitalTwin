@@ -6,6 +6,7 @@ import {
   MessageSecurityMode,
   OPCUAClient,
   OPCUACertificateManager,
+  OPCUAServer,
   SecurityPolicy,
   StatusCodes,
   UserTokenType,
@@ -14,7 +15,7 @@ import {
 } from 'node-opcua'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { validateWorkcellProjectV5, type WorkcellProjectV5 } from '../../src/core/project-v5/index.js'
 import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
@@ -220,6 +221,35 @@ describe('OPC UA server adapter V1', () => {
       .rejects.toThrow('OPC_UA_SERVER_MODE_OFF')
     await adapter.stop()
     await adapter.stop()
+  })
+
+  it('retains the exact native Server and retries shutdown after a stop failure', async () => {
+    const adapter = createOpcUaServerAdapterV1(sampleProject('server'), {
+      host: '127.0.0.1',
+      advertisedHost: '127.0.0.1',
+      advertisedPort: 0,
+      port: 0,
+      pkiRootDir: TEST_PKI_ROOT,
+      configRevision: CONFIG_REVISION,
+    })
+    adapters.push(adapter)
+    await adapter.start()
+    const activeStatus = adapter.status()
+    const shutdown = vi.spyOn(OPCUAServer.prototype, 'shutdown')
+      .mockRejectedValueOnce(new Error('native shutdown failed'))
+
+    await expect(adapter.stop()).rejects.toThrow('native shutdown failed')
+    expect(shutdown).toHaveBeenCalledTimes(1)
+    expect(adapter.status()).toEqual(activeStatus)
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+    expect(shutdown).toHaveBeenCalledTimes(2)
+    expect(adapter.status()).toMatchObject({
+      mode: 'server',
+      started: false,
+      endpointUrl: null,
+      activeSessionCount: 0,
+    })
   })
 
   it('rejects a Project revision used as noncanonical configRevision at construction', () => {
