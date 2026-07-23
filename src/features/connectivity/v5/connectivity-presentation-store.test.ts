@@ -51,6 +51,36 @@ describe('Connectivity presentation store V1', () => {
     expect(state.opcUa.label).toBe(expectedLabel)
   })
 
+  it.each([
+    { name: 'Server disabled', mode: 'server', serverPhase: 'disabled', endpoints: [], expected: { state: 'error', label: 'Unavailable' } },
+    { name: 'Server listening', mode: 'server', serverPhase: 'listening', endpoints: [], expected: { state: 'server-listening', label: 'Listening' } },
+    { name: 'Server faulted without an error payload', mode: 'server', serverPhase: 'faulted', endpoints: [], expected: { state: 'error', label: 'Error' } },
+    { name: 'Client with connected required Endpoint and unused reconnecting Endpoint', mode: 'client', serverPhase: 'disabled', endpoints: [{ mappingCount: 1, phase: 'connected', sessionActive: true, subscriptionActive: true }, { mappingCount: 0, phase: 'reconnecting', sessionActive: false, subscriptionActive: false }], expected: { state: 'client-connected', label: 'Connected' } },
+    { name: 'Client with degraded required Endpoint', mode: 'client', serverPhase: 'disabled', endpoints: [{ mappingCount: 1, phase: 'reconnecting', sessionActive: false, subscriptionActive: false }], expected: { state: 'client-degraded', label: 'Degraded' } },
+    { name: 'Client with faulted required Endpoint without an error payload', mode: 'client', serverPhase: 'disabled', endpoints: [{ mappingCount: 1, phase: 'faulted', sessionActive: false, subscriptionActive: false }], expected: { state: 'error', label: 'Error' } },
+    { name: 'Bridge listener down with connected required Endpoint', mode: 'bridge', serverPhase: 'disabled', endpoints: [{ mappingCount: 1, phase: 'connected', sessionActive: true, subscriptionActive: true }], expected: { state: 'bridge-degraded', label: 'Degraded' } },
+    { name: 'Bridge with partially connected required Endpoints', mode: 'bridge', serverPhase: 'listening', endpoints: [{ mappingCount: 1, phase: 'connected', sessionActive: true, subscriptionActive: true }, { mappingCount: 1, phase: 'reconnecting', sessionActive: false, subscriptionActive: false }], expected: { state: 'bridge-degraded', label: 'Degraded' } },
+    { name: 'Bridge with faulted required Endpoint', mode: 'bridge', serverPhase: 'listening', endpoints: [{ mappingCount: 1, phase: 'faulted', sessionActive: false, subscriptionActive: false }], expected: { state: 'error', label: 'Error' } },
+  ] as const)('derives $name from required Endpoint health', ({ mode, serverPhase, endpoints, expected }) => {
+    const base = snapshot()
+    const clientEndpoints = endpoints.map((endpoint, index) => ({
+      ...base.status.opcUa.clientEndpoints[0]!,
+      endpointId: `endpoint-${index + 1}`,
+      ...endpoint,
+    }))
+    const server = {
+      ...base.status.opcUa.server,
+      phase: serverPhase,
+      endpointUrl: serverPhase === 'listening' ? base.status.opcUa.server.endpointUrl : null,
+      lastError: null,
+    }
+    const state = deriveConnectivityPresentationV1({
+      status: { ...base.status, opcUa: { ...base.status.opcUa, mode, server, clientEndpoints } },
+      integrationDiagnostics: base.integrationDiagnostics,
+    })
+    expect(state.opcUa).toMatchObject(expected)
+  })
+
   it('retains decoded details but marks Gateway Offline on a transport failure and rejects a cross-revision pair', async () => {
     vi.useFakeTimers()
     try {
@@ -60,7 +90,7 @@ describe('Connectivity presentation store V1', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(store.getState().gateway.label).toBe('Online')
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(store.getState()).toMatchObject({ gateway: { label: 'Offline' }, transportError: 'offline', status: { project: { configRevision: revision } } })
+      expect(store.getState()).toMatchObject({ gateway: { label: 'Offline' }, opcUa: { state: 'error', label: 'Unavailable' }, transportError: 'offline', status: { project: { configRevision: revision } } })
       await vi.advanceTimersByTimeAsync(10_000)
       expect(store.getState()).toMatchObject({ gateway: { label: 'Offline' }, transportError: expect.stringContaining('configRevision') })
       store.dispose()

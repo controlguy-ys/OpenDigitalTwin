@@ -49,11 +49,17 @@ function connected(endpoint: RuntimeGatewayStatusV1['opcUa']['clientEndpoints'][
   return endpoint.phase === 'connected' && endpoint.sessionActive && endpoint.subscriptionActive
 }
 
+function requiredEndpoints(status: RuntimeGatewayStatusV1): readonly RuntimeGatewayStatusV1['opcUa']['clientEndpoints'][number][] {
+  return status.opcUa.clientEndpoints.filter((endpoint) => endpoint.mappingCount > 0)
+}
+
 function endpointError(status: RuntimeGatewayStatusV1): string | null {
   const serverError = status.opcUa.server.lastError
   if (status.opcUa.server.phase === 'faulted') return serverError?.message ?? 'OPC UA Server faulted.'
-  const clientError = status.opcUa.clientEndpoints.find((endpoint) => endpoint.phase === 'faulted')?.lastError
-  return clientError?.message ?? null
+  const faultedEndpoint = requiredEndpoints(status).find((endpoint) => endpoint.phase === 'faulted')
+  return faultedEndpoint === undefined
+    ? null
+    : faultedEndpoint.lastError?.message ?? `OPC UA Client endpoint ${faultedEndpoint.endpointId} faulted.`
 }
 
 function opcUaPresentation(status: RuntimeGatewayStatusV1 | null): ConnectivityPresentationStateV1['opcUa'] {
@@ -61,7 +67,7 @@ function opcUaPresentation(status: RuntimeGatewayStatusV1 | null): ConnectivityP
   if (status.opcUa.mode === 'off') return Object.freeze({ state: 'off', label: 'Off', detail: projectDetail(status) })
   const fault = endpointError(status)
   if (fault !== null) return Object.freeze({ state: 'error', label: 'Error', detail: fault })
-  const endpoints = status.opcUa.clientEndpoints
+  const endpoints = requiredEndpoints(status)
   const allConnected = endpoints.length > 0 && endpoints.every(connected)
   if (status.opcUa.mode === 'server') {
     return status.opcUa.server.phase === 'listening'
@@ -96,7 +102,9 @@ export function deriveConnectivityPresentationV1(
           : Object.freeze({ state: 'online' as const, label: 'Online', detail: 'Runtime Gateway responded.' })
   return Object.freeze({
     gateway,
-    opcUa: opcUaPresentation(status),
+    opcUa: transportError === null
+      ? opcUaPresentation(status)
+      : Object.freeze({ state: 'error' as const, label: 'Unavailable', detail: 'Runtime Gateway transport is unavailable.' }),
     status,
     integrationDiagnostics,
     transportError,
