@@ -124,10 +124,36 @@ export function createRuntimeConnectivitySnapshotReaderV1(
     }
   }
   return async (signal?: AbortSignal): Promise<RuntimeConnectivitySnapshotV1> => {
-    const [status, integrationDiagnostics] = await Promise.all([
-      readStatus(signal),
-      diagnostics.readIntegrationDiagnostics(signal),
-    ])
-    return validateRuntimeConnectivitySnapshotV1({ status, integrationDiagnostics })
+    if (signal?.aborted) throw abortError()
+    const controller = new AbortController()
+    const abortFromCaller = (): void => controller.abort()
+    signal?.addEventListener('abort', abortFromCaller, { once: true })
+    let firstFailure: unknown = undefined
+    let failed = false
+    const settle = async <T>(operation: Promise<T>): Promise<{ readonly value: T | null }> => {
+      try {
+        return Object.freeze({ value: await operation })
+      } catch (error) {
+        if (!failed) {
+          failed = true
+          firstFailure = error
+          controller.abort()
+        }
+        return Object.freeze({ value: null })
+      }
+    }
+    try {
+      const [statusResult, diagnosticsResult] = await Promise.all([
+        settle(readStatus(controller.signal)),
+        settle(diagnostics.readIntegrationDiagnostics(controller.signal)),
+      ])
+      if (failed) throw firstFailure
+      return validateRuntimeConnectivitySnapshotV1({
+        status: statusResult.value,
+        integrationDiagnostics: diagnosticsResult.value,
+      })
+    } finally {
+      signal?.removeEventListener('abort', abortFromCaller)
+    }
   }
 }
