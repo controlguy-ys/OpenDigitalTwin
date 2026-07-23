@@ -22,6 +22,8 @@ export interface OpcUaConnectionTestOptionsV1 {
   readonly createClient?: () => OpcUaConnectionTestClientV1
   readonly timeoutMs?: number
   readonly cleanupTimeoutMs?: number
+  readonly sessionCloseTimeoutMs?: number
+  readonly disconnectTimeoutMs?: number
 }
 
 export type OpcUaConnectionTestResultV1 = OpcUaTestConnectionResultV1
@@ -60,6 +62,8 @@ export async function testOpcUaConnectionV1(
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5_000) throw new TypeError('timeoutMs must be a positive integer no greater than five seconds.')
   const cleanupTimeoutMs = options.cleanupTimeoutMs ?? timeoutMs
   if (!Number.isSafeInteger(cleanupTimeoutMs) || cleanupTimeoutMs < 1 || cleanupTimeoutMs > 5_000) throw new TypeError('cleanupTimeoutMs must be a positive integer no greater than five seconds.')
+  const sessionCloseTimeoutMs = options.sessionCloseTimeoutMs ?? cleanupTimeoutMs
+  const disconnectTimeoutMs = options.disconnectTimeoutMs ?? cleanupTimeoutMs
   const client = (options.createClient ?? defaultClient)()
   let session: OpcUaConnectionTestSessionV1 | null = null
   let failure: { readonly code: string; readonly message: string } | null = null
@@ -88,19 +92,16 @@ export async function testOpcUaConnectionV1(
   } finally {
     if (timeout !== null) clearTimeout(timeout)
     let cleanupTimedOut = false
-    let cleanupTimer: ReturnType<typeof setTimeout> | null = null
-    const cleanupDeadline = new Promise<never>((_resolve, reject) => {
-      cleanupTimer = setTimeout(() => { cleanupTimedOut = true; reject(new Error('OPC UA diagnostic cleanup timed out.')) }, cleanupTimeoutMs)
-    })
-    const withinCleanupBudget = async (operation: () => Promise<void> | void): Promise<void> => {
-      await Promise.race([Promise.resolve().then(operation), cleanupDeadline])
+    const withinCleanupBudget = async (operation: () => Promise<void> | void, budgetMs: number): Promise<void> => {
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const deadline = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { cleanupTimedOut = true; reject(new Error('OPC UA diagnostic cleanup timed out.')) }, budgetMs) })
+      try { await Promise.race([Promise.resolve().then(operation), deadline]) } finally { if (timer !== null) clearTimeout(timer) }
     }
     let cleanupFailed = false
-    try { await withinCleanupBudget(() => session?.close()) } catch { cleanupFailed = true }
+    try { await withinCleanupBudget(() => session?.close(), sessionCloseTimeoutMs) } catch { cleanupFailed = true }
     // Session teardown owns the Client lifetime: disconnect is attempted only
     // after close settles or the independent cleanup budget expires.
-    try { await withinCleanupBudget(() => client.disconnect()) } catch { cleanupFailed = true }
-    if (cleanupTimer !== null) clearTimeout(cleanupTimer)
+    try { await withinCleanupBudget(() => client.disconnect(), disconnectTimeoutMs) } catch { cleanupFailed = true }
     if (cleanupFailed) failure = { code: 'OPC_UA_CONNECTION_CLEANUP_FAILED', message: cleanupTimedOut ? 'OPC UA diagnostic cleanup timed out.' : 'OPC UA diagnostic cleanup failed.' }
   }
   if (failure === null && namespaces !== null) {
