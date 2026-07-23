@@ -115,7 +115,7 @@ function exactError(value: unknown): { readonly code: string; readonly message: 
 }
 
 function authorityFromStatus(status: RuntimeGatewayStatusV1): RuntimeProjectAuthorityV1 | null {
-  return status.project.phase === 'ready' ? Object.freeze({
+  return status.project.authorityPhase !== 'inactive' ? Object.freeze({
     projectId: status.project.projectId!, revisionId: status.project.revisionId!,
     configRevision: status.project.configRevision!, activationAttemptId: status.project.activationAttemptId!,
   }) : null
@@ -266,7 +266,11 @@ export function createRuntimeGatewayConnectivityClientV1(
         const explicitConflict = isRuntimeGatewayConnectivityClientV1Error(error) && error.code === 'PROJECT_DEACTIVATION_CONFLICT'
         const current = await readStatus()
         if (current.project.phase === 'not-applied') { record.state = 'consumed'; return explicitConflict ? 'candidate-absent' : 'candidate-deactivated' }
-        if (!sameAuthority(authorityFromStatus(current), Object.freeze({ projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId }))) { record.state = 'consumed'; return 'other-authority' }
+        const candidateAuthority = Object.freeze({ projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
+        if (!sameAuthority(authorityFromStatus(current), candidateAuthority)) { record.state = 'consumed'; return 'other-authority' }
+        if (current.project.phase === 'recovery-required') {
+          throw new RuntimeGatewayConnectivityClientV1Error('PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Gateway candidate requires recovery before rollback can complete.', 503)
+        }
         await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
         record.state = 'consumed'
         return 'candidate-deactivated'
