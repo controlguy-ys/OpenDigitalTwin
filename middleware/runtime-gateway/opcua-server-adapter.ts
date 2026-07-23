@@ -36,6 +36,7 @@ export interface OpcUaServerAdapterOptionsV1 {
   readonly port: number
   readonly pkiRootDir: string
   readonly configRevision: string
+  readonly openWebModelFactory?: (options: Parameters<typeof instantiateOpcUaOpenWebModelV1>[0]) => OpcUaOpenWebModelV1
   readonly onProductCommandWrite?: (write: Readonly<{ sessionId: string; target: ProductCommandTargetV1; field: string; value: unknown }>) => void
   readonly onSessionOpen?: (sessionId: string) => void
   readonly onSessionClose?: (sessionId: string) => void
@@ -254,7 +255,7 @@ export function createOpcUaServerAdapterV1(
         projection: projectRoboticsSystemV1(project),
         instancesNamespace: namespace,
       })
-      const nextOpenWebModel = instantiateOpcUaOpenWebModelV1({
+      const nextOpenWebModel = (options.openWebModelFactory ?? instantiateOpcUaOpenWebModelV1)({
         addressSpace,
         modelNamespace: productNamespace,
         instancesNamespace: namespace,

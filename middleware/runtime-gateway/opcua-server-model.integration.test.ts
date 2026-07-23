@@ -16,7 +16,7 @@ import {
   type StatusCode,
 } from 'node-opcua'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { getMaxListeners, setMaxListeners } from 'node:events'
+import { EventEmitter } from 'node:events'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -44,6 +44,8 @@ import { createOpcUaServerAdapterV1 } from './opcua-server-adapter.js'
 import {
   OPENWEB_INSTANCES_NAMESPACE_URI_V1,
   OPENWEB_MODEL_NAMESPACE_URI_V1,
+  instantiateOpcUaOpenWebModelV1,
+  type OpcUaOpenWebModelV1,
 } from './opcua-openweb-model.js'
 import { OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 } from './opcua-robotics-model.js'
 
@@ -60,6 +62,10 @@ const ROBOTICS_TYPE_NODE_IDS = Object.freeze({
   Controls: 4002,
   Moves: 18178,
 })
+const COMMAND_BATCH_DELIVERY_TIMEOUT_MS = 10_000
+const COMMAND_BATCH_QUIESCENCE_TIMEOUT_MS = 750
+const COMMAND_BATCH_POLL_INTERVAL_MS = 25
+const GATEWAY_PORT_ACTIVATION_ATTEMPTS = 4
 
 let testPkiRoot = ''
 let clientPkiSequence = 0
@@ -70,7 +76,12 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  if (testPkiRoot !== '') await rm(testPkiRoot, { recursive: true, force: true })
+  if (testPkiRoot !== '') {
+    await cleanupAll({
+      label: 'Test PKI root removal',
+      cleanup: () => rm(testPkiRoot, { recursive: true, force: true }),
+    })
+  }
   testPkiRoot = ''
 })
 const IDENTITY_POSE: RigidTransformV5 = Object.freeze({
@@ -172,8 +183,25 @@ async function openSession(endpointUrl: string): Promise<{ readonly client: OPCU
 }
 
 async function closeSession(value: { readonly client: OPCUAClient; readonly session: ClientSession } | null): Promise<void> {
-  await value?.session.close().catch(() => undefined)
-  await value?.client.disconnect().catch(() => undefined)
+  if (value === null) return
+  await cleanupAll(
+    { label: 'OPC UA Session close', cleanup: () => value.session.close() },
+    { label: 'OPC UA Client disconnect', cleanup: () => value.client.disconnect() },
+  )
+}
+
+type CleanupTask = Readonly<{ label: string; cleanup: () => Promise<void> | void }>
+
+async function cleanupAll(...tasks: readonly CleanupTask[]): Promise<void> {
+  const failures: unknown[] = []
+  for (const task of tasks) {
+    try {
+      await task.cleanup()
+    } catch (error) {
+      failures.push(new Error(`${task.label}: ${error instanceof Error ? error.message : String(error)}`, { cause: error }))
+    }
+  }
+  if (failures.length > 0) throw new AggregateError(failures, 'OPC UA integration cleanup failed')
 }
 
 async function namespaceUris(session: ClientSession): Promise<readonly string[]> {
@@ -242,7 +270,10 @@ async function browseProductNodeIds(session: ClientSession, rootNodeId: string):
   return [...seen]
 }
 
-async function discoverProductRootFromObjects(session: ClientSession, projectId: string): Promise<string> {
+async function discoverProductRootsFromObjects(
+  session: ClientSession,
+  projectId: string,
+): Promise<Readonly<{ openWebRootNodeId: string; productRootNodeId: string }>> {
   const openWeb = (await browseGood(session, 'i=85', BrowseDirection.Forward, 'i=35', true))
     .filter((reference) => reference.browseName.name === 'OpenWebDigitalTwin')
   if (openWeb.length !== 1) throw new Error(`Expected exactly one OpenWebDigitalTwin under Objects, received ${openWeb.length}`)
@@ -252,7 +283,10 @@ async function discoverProductRootFromObjects(session: ClientSession, projectId:
   const project = (await browseGood(session, projects[0]!.nodeId.toString(), BrowseDirection.Forward, 'i=47'))
     .filter((reference) => reference.browseName.name === projectId)
   if (project.length !== 1) throw new Error(`Expected exactly one product Project ${projectId}, received ${project.length}`)
-  return project[0]!.nodeId.toString()
+  return Object.freeze({
+    openWebRootNodeId: openWeb[0]!.nodeId.toString(),
+    productRootNodeId: project[0]!.nodeId.toString(),
+  })
 }
 
 async function write(session: ClientSession, nodeId: string, dataType: DataType, value: unknown): Promise<StatusCode> {
@@ -303,6 +337,10 @@ async function nextMessage(
   })
 }
 
+function sleep(timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, timeoutMs))
+}
+
 interface CommandBatchRecorder {
   readonly batches: CommandBatchV1[]
   dispose(): void
@@ -327,21 +365,71 @@ function recordCommandBatches(socket: WebSocket): CommandBatchRecorder {
   return { batches, dispose: () => socket.off('message', onMessage) }
 }
 
-async function expectBatchCount(recorder: CommandBatchRecorder, expected: number): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (recorder.batches.length === expected) return
-    if (recorder.batches.length > expected) break
-    await new Promise((resolve) => setTimeout(resolve, 10))
+async function expectStableBatchCount(recorder: CommandBatchRecorder, expected: number): Promise<void> {
+  const deliveryDeadline = Date.now() + COMMAND_BATCH_DELIVERY_TIMEOUT_MS
+  while (recorder.batches.length < expected && Date.now() < deliveryDeadline) {
+    await sleep(COMMAND_BATCH_POLL_INTERVAL_MS)
+  }
+  expect(recorder.batches).toHaveLength(expected)
+  const quietDeadline = Date.now() + COMMAND_BATCH_QUIESCENCE_TIMEOUT_MS
+  while (Date.now() < quietDeadline) {
+    expect(recorder.batches).toHaveLength(expected)
+    await sleep(Math.min(COMMAND_BATCH_POLL_INTERVAL_MS, quietDeadline - Date.now()))
   }
   expect(recorder.batches).toHaveLength(expected)
 }
 
 async function closeWebSocket(socket: WebSocket | null): Promise<void> {
   if (socket === null || socket.readyState === WebSocket.CLOSED) return
-  await new Promise<void>((resolve) => {
-    socket.once('close', resolve)
+  await new Promise<void>((resolve, reject) => {
+    const onClose = () => { socket.off('error', onError); resolve() }
+    const onError = (error: Error) => { socket.off('close', onClose); reject(error) }
+    socket.once('close', onClose)
+    socket.once('error', onError)
     socket.close()
   })
+}
+
+function isAddressInUse(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false
+  const candidate = error as Readonly<{ code?: unknown; message?: unknown }>
+  return candidate.code === 'EADDRINUSE'
+    || (typeof candidate.message === 'string' && /EADDRINUSE/u.test(candidate.message))
+}
+
+async function startActivatedGateway(project: WorkcellProjectV5): Promise<Readonly<{
+  gateway: ReturnType<typeof createRuntimeGatewayEntrypointService>
+  httpPort: number
+}>> {
+  let lastAddressInUse: unknown = null
+  for (let attempt = 1; attempt <= GATEWAY_PORT_ACTIVATION_ATTEMPTS; attempt += 1) {
+    const ports = await distinctEphemeralPorts(2)
+    const httpPort = ports[0]
+    const opcUaPort = ports[1]
+    if (httpPort === undefined || opcUaPort === undefined) throw new Error('Expected two distinct ephemeral ports')
+    const config: RuntimeGatewayDeploymentConfigV1 = Object.freeze({
+      gatewayId: 'server-model-integration', runtimeKind: 'native', host: '127.0.0.1', httpPort,
+      opcUaAdvertisedHost: '127.0.0.1', opcUaAdvertisedPort: opcUaPort, opcUaPort,
+    })
+    const gateway = createRuntimeGatewayEntrypointService(config, { pkiRootDir: testPkiRoot })
+    try {
+      await gateway.start()
+      const activation = await fetch(`http://127.0.0.1:${httpPort}/runtime/project`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(project),
+      })
+      if (activation.status !== 200) throw new Error(`Gateway project activation failed with HTTP ${activation.status}`)
+      return Object.freeze({ gateway, httpPort })
+    } catch (error) {
+      try {
+        await cleanupAll({ label: `Gateway stop after port activation attempt ${attempt}`, cleanup: () => gateway.stop() })
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Gateway port activation failed and cleanup failed')
+      }
+      if (!isAddressInUse(error)) throw error
+      lastAddressInUse = error
+    }
+  }
+  throw new Error(`Gateway ports remained unavailable after ${GATEWAY_PORT_ACTIVATION_ATTEMPTS} attempts`, { cause: lastAddressInUse })
 }
 
 async function waitForResult(session: ClientSession, nodeId: string, expected: unknown, timeoutMs = 5_000): Promise<void> {
@@ -356,9 +444,15 @@ async function waitForResult(session: ClientSession, nodeId: string, expected: u
 describe('OPC UA server model real-client integration', () => {
   it.each([2, 7, 16])('loads official NodeSets and exposes the standard %i-Axis model through a real Client', async (jointCount) => {
     const project = projectWithJointCount(jointCount)
+    const capturedOpenWebModel: { model: OpcUaOpenWebModelV1 | null } = { model: null }
     const adapter = createOpcUaServerAdapterV1(project, {
       host: '127.0.0.1', advertisedHost: '127.0.0.1', port: 0, advertisedPort: 0,
       pkiRootDir: testPkiRoot, configRevision: 'a'.repeat(64),
+      openWebModelFactory: (options) => {
+        const model = instantiateOpcUaOpenWebModelV1(options)
+        capturedOpenWebModel.model = model
+        return model
+      },
     })
     let connection: Awaited<ReturnType<typeof openSession>> | null = null
     try {
@@ -400,20 +494,27 @@ describe('OPC UA server model real-client integration', () => {
         .resolves.toEqual(Array.from({ length: jointCount }, () => `ns=${robotics};i=${ROBOTICS_TYPE_NODE_IDS.AxisType}`))
       const absentAxis = await connection.session.read({ nodeId: `${device}/Axes/J${jointCount + 1}`, attributeId: AttributeIds.NodeClass })
       expect(absentAxis.statusCode.equals(StatusCodes.BadNodeIdUnknown)).toBe(true)
-      // Task 4's productNodeIds() unit test owns live-inventory/eviction coverage.
-      // This complementary test discovers the same hierarchy only through a real Client.
-      const productRoot = await discoverProductRootFromObjects(connection.session, project.projectId)
-      expect(productRoot).toBe(adapter.status().productRootNodeId)
-      const productIds = await browseProductNodeIds(connection.session, productRoot)
+      const productRoots = await discoverProductRootsFromObjects(connection.session, project.projectId)
+      expect(productRoots.productRootNodeId).toBe(adapter.status().productRootNodeId)
+      const productIds = await browseProductNodeIds(connection.session, productRoots.openWebRootNodeId)
       expect(productIds).not.toHaveLength(0)
+      if (capturedOpenWebModel.model === null) throw new Error('Expected the OpenWeb model factory to capture the live model instance')
+      const liveProductNodeIds = capturedOpenWebModel.model.productNodeIds()
+      expect([...productIds].sort()).toEqual(liveProductNodeIds.map(({ nodeId }) => nodeId).sort())
+      expect(liveProductNodeIds.every(({ nodeId, namespaceUri }) => {
+        const match = /^ns=(\d+);/u.exec(nodeId)
+        return match !== null && uris[Number(match[1])] === namespaceUri
+      })).toBe(true)
       expect(productIds.every((nodeId) => {
         const match = /^ns=(\d+);/u.exec(nodeId)
         return match !== null && [instances, namespaceIndex(uris, OPENWEB_MODEL_NAMESPACE_URI_V1), namespaceIndex(uris, OPENWEB_INSTANCES_NAMESPACE_URI_V1)].includes(Number(match[1]))
       })).toBe(true)
       expect(robotics).toBeGreaterThan(0)
     } finally {
-      await closeSession(connection)
-      await adapter.stop()
+      await cleanupAll(
+        { label: 'OPC UA Client connection cleanup', cleanup: () => closeSession(connection) },
+        { label: 'OPC UA Server adapter stop', cleanup: () => adapter.stop() },
+      )
     }
   }, 45_000)
 
@@ -435,28 +536,24 @@ describe('OPC UA server model real-client integration', () => {
       expect(await readValue(connection.session, j1Range)).toMatchObject({ low: -270, high: 270 })
       expect(await readValue(connection.session, j2Range)).toMatchObject({ low: -200, high: 1_500 })
       expect(await write(connection.session, j1, DataType.Double, 99)).toBe(StatusCodes.BadNotWritable)
-    } finally { await closeSession(connection); await adapter.stop() }
+    } finally {
+      await cleanupAll(
+        { label: 'OPC UA Client connection cleanup', cleanup: () => closeSession(connection) },
+        { label: 'OPC UA Server adapter stop', cleanup: () => adapter.stop() },
+      )
+    }
   }, 45_000)
 
   it('stages real Session commands independently, fences stale Browser work, and settles through the V5 command owner', async () => {
-    const ports = await distinctEphemeralPorts(2)
-    const httpPort = ports[0]
-    const opcUaPort = ports[1]
-    if (httpPort === undefined || opcUaPort === undefined) throw new Error('Expected two distinct ephemeral ports')
-    const config: RuntimeGatewayDeploymentConfigV1 = Object.freeze({
-      gatewayId: 'server-model-integration', runtimeKind: 'native', host: '127.0.0.1', httpPort,
-      opcUaAdvertisedHost: '127.0.0.1', opcUaAdvertisedPort: opcUaPort, opcUaPort,
-    })
     const project = commandProject()
     const configRevision = await configRevisionForProjectV5(project)
-    const gateway = createRuntimeGatewayEntrypointService(config, { pkiRootDir: testPkiRoot })
+    const activatedGateway = await startActivatedGateway(project)
+    const { gateway, httpPort } = activatedGateway
     let first: Awaited<ReturnType<typeof openSession>> | null = null
     let second: Awaited<ReturnType<typeof openSession>> | null = null
     let socket: WebSocket | null = null
     let recorder: CommandBatchRecorder | null = null
     try {
-      await gateway.start()
-      expect((await fetch(`http://127.0.0.1:${httpPort}/runtime/project`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(project) })).status).toBe(200)
       const endpointUrl = gateway.status().opcUa.server.endpointUrl
       if (endpointUrl === null) throw new Error('Gateway OPC UA listener did not start')
       first = await openSession(endpointUrl); second = await openSession(endpointUrl)
@@ -501,7 +598,7 @@ describe('OPC UA server model real-client integration', () => {
       expect(await write(second.session, objectCommandPath(instances, project, 'RequestId'), DataType.String, 'mixed-session')).toBe(StatusCodes.Good)
       const incompleteBatchCount = recorder.batches.length
       expect((await write(second.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).equals(StatusCodes.BadInvalidArgument)).toBe(true)
-      await expectBatchCount(recorder, incompleteBatchCount)
+      await expectStableBatchCount(recorder, incompleteBatchCount)
 
       for (const field of fields) {
         const expiredValue = field === 'RequestId'
@@ -513,7 +610,7 @@ describe('OPC UA server model real-client integration', () => {
       }
       const expiredBatchCount = recorder.batches.length
       expect((await write(second.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).equals(StatusCodes.BadInvalidArgument)).toBe(true)
-      await expectBatchCount(recorder, expiredBatchCount)
+      await expectStableBatchCount(recorder, expiredBatchCount)
 
       const actualX = `ns=${instances};s=OpenWebDigitalTwin/Projects/${project.projectId}/Actual/SceneObjects/box/Pose/X`
       expect(await readValue(first.session, actualX)).toBe(0)
@@ -523,7 +620,7 @@ describe('OPC UA server model real-client integration', () => {
       const unavailableBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
       await waitForResult(first.session, commandPath(instances, project, 'object-atomic-1', 'FailureCode'), 'BROWSER_PUBLISHER_UNAVAILABLE')
-      await expectBatchCount(recorder, unavailableBatchCount)
+      await expectStableBatchCount(recorder, unavailableBatchCount)
       expect(await readValue(first.session, actualX)).toBe(0)
 
       const replacementLeaseMessage = nextMessage(socket, (message) => typeof message.generation === 'number' && typeof message.expiresAt === 'number')
@@ -534,7 +631,7 @@ describe('OPC UA server model real-client integration', () => {
 
       const acceptedBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
-      await expectBatchCount(recorder, acceptedBatchCount + 1)
+      await expectStableBatchCount(recorder, acceptedBatchCount + 1)
       const batch = recorder.batches[acceptedBatchCount]!
       expect(batch).toMatchObject({ leaseGeneration: generation, commands: [{ commandId: 'object-atomic-1', value: { kind: 'scene-object-pose', pose: { x: 1, y: 2, z: 3, roll: 0, pitch: 0, yaw: Math.PI } } }] })
       await waitForResult(first.session, commandPath(instances, project, 'object-atomic-1', 'ExecutionState'), 'RUNNING')
@@ -549,19 +646,19 @@ describe('OPC UA server model real-client integration', () => {
       const duplicateBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
       await waitForResult(first.session, commandPath(instances, project, 'object-atomic-1', 'ExecutionState'), 'SUCCEEDED')
-      await expectBatchCount(recorder, duplicateBatchCount)
+      await expectStableBatchCount(recorder, duplicateBatchCount)
 
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, false)).toBe(StatusCodes.Good)
       for (const field of fields) expect(await write(first.session, objectCommandPath(instances, project, field), dataTypes[field], field === 'X' ? 99 : values[field])).toBe(StatusCodes.Good)
       const conflictBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
       await waitForResult(first.session, `ns=${instances};s=OpenWebDigitalTwin/Projects/${project.projectId}/Diagnostics/LastCommand/FailureCode`, 'COMMAND_ID_CONFLICT')
-      await expectBatchCount(recorder, conflictBatchCount)
+      await expectStableBatchCount(recorder, conflictBatchCount)
 
       await stageCompleteObjectCommand('lease-replacement-command')
       const staleBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
-      await expectBatchCount(recorder, staleBatchCount + 1)
+      await expectStableBatchCount(recorder, staleBatchCount + 1)
       const staleBatch = recorder.batches[staleBatchCount]!
       expect(staleBatch.leaseGeneration).toBe(generation)
       await waitForResult(first.session, commandPath(instances, project, 'lease-replacement-command', 'ExecutionState'), 'RUNNING')
@@ -571,18 +668,18 @@ describe('OPC UA server model real-client integration', () => {
       expect(activeLease.generation).toBeGreaterThan(generation)
       generation = activeLease.generation
       await waitForResult(first.session, commandPath(instances, project, 'lease-replacement-command', 'FailureCode'), 'COMMAND_LEASE_STALE')
-      await expectBatchCount(recorder, staleBatchCount + 1)
+      await expectStableBatchCount(recorder, staleBatchCount + 1)
       const staleOwnerResult = await owner.execute(staleBatch)
       expect(staleOwnerResult).toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE' })
       expect(browserPoseMutations).toBe(1)
       socket.send(JSON.stringify(staleOwnerResult))
       await waitForResult(first.session, commandPath(instances, project, 'lease-replacement-command', 'FailureCode'), 'COMMAND_LEASE_STALE')
-      await expectBatchCount(recorder, staleBatchCount + 1)
+      await expectStableBatchCount(recorder, staleBatchCount + 1)
 
       await stageCompleteObjectCommand('wrong-result-generation-command')
       const wrongResultBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
-      await expectBatchCount(recorder, wrongResultBatchCount + 1)
+      await expectStableBatchCount(recorder, wrongResultBatchCount + 1)
       await waitForResult(first.session, commandPath(instances, project, 'wrong-result-generation-command', 'ExecutionState'), 'RUNNING')
       socket.send(JSON.stringify(validateCommandResultV1({
         type: 'command-result-v1', protocolVersion: 1, projectId: project.projectId, configRevision,
@@ -592,31 +689,31 @@ describe('OPC UA server model real-client integration', () => {
       })))
       await waitForResult(first.session, commandPath(instances, project, 'wrong-result-generation-command', 'FailureCode'), 'BROWSER_RESULT_INVALID')
       expect(browserPoseMutations).toBe(1)
-      await expectBatchCount(recorder, wrongResultBatchCount + 1)
+      await expectStableBatchCount(recorder, wrongResultBatchCount + 1)
 
       await stageCompleteObjectCommand('passive-lease-expiry-command')
       const expiryBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
-      await expectBatchCount(recorder, expiryBatchCount + 1)
+      await expectStableBatchCount(recorder, expiryBatchCount + 1)
       const expiryBatch = recorder.batches[expiryBatchCount]!
       await waitForResult(first.session, commandPath(instances, project, 'passive-lease-expiry-command', 'ExecutionState'), 'RUNNING')
       await waitForResult(first.session, commandPath(instances, project, 'passive-lease-expiry-command', 'FailureCode'), 'COMMAND_LEASE_STALE', 8_000)
-      await expectBatchCount(recorder, expiryBatchCount + 1)
+      await expectStableBatchCount(recorder, expiryBatchCount + 1)
       const expiredOwnerResult = await owner.execute(expiryBatch)
       expect(expiredOwnerResult).toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE' })
       expect(browserPoseMutations).toBe(1)
       socket.send(JSON.stringify(expiredOwnerResult))
       await waitForResult(first.session, commandPath(instances, project, 'passive-lease-expiry-command', 'FailureCode'), 'COMMAND_LEASE_STALE')
-      await expectBatchCount(recorder, expiryBatchCount + 1)
+      await expectStableBatchCount(recorder, expiryBatchCount + 1)
       expect(await readValue(first.session, actualX)).toBe(0)
     } finally {
       recorder?.dispose()
-      await Promise.all([
-        closeWebSocket(socket).catch(() => undefined),
-        closeSession(second).catch(() => undefined),
-        closeSession(first).catch(() => undefined),
-      ])
-      await gateway.stop().catch(() => undefined)
+      await cleanupAll(
+        { label: 'Gateway WebSocket close', cleanup: () => closeWebSocket(socket) },
+        { label: 'Second OPC UA Client connection cleanup', cleanup: () => closeSession(second) },
+        { label: 'First OPC UA Client connection cleanup', cleanup: () => closeSession(first) },
+        { label: 'Runtime Gateway stop', cleanup: () => gateway.stop() },
+      )
     }
   }, 60_000)
 
@@ -627,8 +724,8 @@ describe('OPC UA server model real-client integration', () => {
     })
     const sessions: ClientSession[] = []
     let client: OPCUAClient | null = null
-    const priorDefaultMaxListeners = getMaxListeners(process)
-    setMaxListeners(0)
+    const priorDefaultMaxListeners = EventEmitter.defaultMaxListeners
+    EventEmitter.defaultMaxListeners = 0
     try {
       await adapter.start()
       client = createClient('sixteen concurrent OPC UA Sessions')
@@ -639,11 +736,13 @@ describe('OPC UA server model real-client integration', () => {
       expect(adapter.status().activeSessionCount).toBe(16)
     } finally {
       try {
-        await Promise.all(sessions.map((session) => session.close().catch(() => undefined)))
-        await client?.disconnect().catch(() => undefined)
-        await adapter.stop()
+        await cleanupAll(
+          ...sessions.map((session, index) => ({ label: `OPC UA Session ${index + 1} close`, cleanup: () => session.close() })),
+          { label: 'Shared OPC UA Client disconnect', cleanup: () => client?.disconnect() },
+          { label: 'OPC UA Server adapter stop', cleanup: () => adapter.stop() },
+        )
       } finally {
-        setMaxListeners(priorDefaultMaxListeners)
+        EventEmitter.defaultMaxListeners = priorDefaultMaxListeners
       }
     }
   }, 60_000)
