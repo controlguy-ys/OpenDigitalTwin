@@ -19,12 +19,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { validateWorkcellProjectV5, type WorkcellProjectV5 } from '../../src/core/project-v5/index.js'
 import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
 import {
-  ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
   createOpcUaServerAdapterV1,
   type OpcUaServerAdapterV1,
 } from './opcua-server-adapter.js'
 
 const CRB_ROBOT_ID = 'robot-1'
+const OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 =
+  'urn:open-web-digital-twin:instances:v1'
 const TEST_PKI_ROOT = join(tmpdir(), `robot-sim-opcua-adapter-${process.pid}`)
 
 function sampleProject(mode: 'off' | 'server' | 'bridge'): WorkcellProjectV5 {
@@ -112,7 +113,7 @@ describe('OPC UA server adapter V1', () => {
       mode: 'off',
       started: false,
       endpointUrl: null,
-      namespaceUri: ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
+      namespaceUri: OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1,
       namespaceIndex: null,
       nodeIds: {},
     })
@@ -141,7 +142,7 @@ describe('OPC UA server adapter V1', () => {
     })
   })
 
-  it('exposes Project V5 Robot telemetry through deterministic read-only Double nodes and publishes updates', async () => {
+  it('exposes official Robotics Axis ActualPosition through deterministic read-only Double nodes and publishes updates', async () => {
     const project = sampleProject('server')
     const adapter = createOpcUaServerAdapterV1(project, {
       host: '0.0.0.0',
@@ -159,12 +160,13 @@ describe('OPC UA server adapter V1', () => {
     expect(status.mode).toBe('server')
     expect(status.started).toBe(true)
     expect(status.endpointUrl).toMatch(/^opc\.tcp:\/\/127\.0\.0\.1:\d+$/u)
-    expect(status.namespaceUri).toBe(ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1)
+    expect(status.namespaceUri).toBe(OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1)
     expect(status.namespaceIndex).toBeGreaterThan(1)
 
     const namespaceIndex = status.namespaceIndex
     expect(namespaceIndex).not.toBeNull()
-    const crbNodeId = `ns=${namespaceIndex};s=RobotSim/Robots/${CRB_ROBOT_ID}/Joints/J1/Actual`
+    const crbNodeId = status.nodeIds[CRB_ROBOT_ID]?.J1
+    expect(crbNodeId).toMatch(new RegExp(`^ns=${namespaceIndex};s=Robotics/`, 'u'))
     expect(status.nodeIds).toEqual({
       [CRB_ROBOT_ID]: expect.objectContaining({ J1: crbNodeId }),
     })
