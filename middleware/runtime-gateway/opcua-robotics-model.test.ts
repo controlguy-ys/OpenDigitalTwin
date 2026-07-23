@@ -23,6 +23,9 @@ type UaNode = {
   readonly nodeId: { readonly namespace: number }
   readonly browseName: { readonly name: string }
   readonly typeDefinitionObj: { readonly browseName: { readonly name: string } } | null
+  readonly description: { readonly text: string | null } | null
+  readonly accessLevel: number
+  readonly userAccessLevel: number
   getComponentByName(name: string, namespaceIndex?: number): unknown
   getPropertyByName(name: string, namespaceIndex?: number): {
     readValue(): { value: { value: unknown } }
@@ -172,5 +175,40 @@ describe('OPC UA Robotics model V1', () => {
 
     model.publishJointActual('robot-1', 'J2', 0.75)
     expect(secondActual.readValue().value.value).toBe(750)
+  }, 30_000)
+
+  it('cleans up deterministically, is idempotent, and rejects publication after disposal', async () => {
+    const { addressSpace, model } = await startModel(projectWithJointCount(2))
+    const actualNodeId = model.axisActualNodeIds['robot-1']!.J1!
+
+    model.dispose()
+
+    expect(addressSpace.findNode(model.motionSystemNodeId)).toBeNull()
+    expect(addressSpace.findNode(actualNodeId)).toBeNull()
+    expect(() => model.publishJointActual('robot-1', 'J1', 10))
+      .toThrow('OPC_UA_ROBOTICS_MODEL_DISPOSED')
+    expect(() => model.dispose()).not.toThrow()
+  }, 30_000)
+
+  it('keeps the SafetyStateType branch informational and read-only without a command or status path', async () => {
+    const { addressSpace, instancesNamespace, model } = await startModel(projectWithJointCount(2))
+    const roboticsNamespaceIndex = addressSpace.getNamespaceIndex('http://opcfoundation.org/UA/Robotics/')
+    const diNamespaceIndex = addressSpace.getNamespaceIndex('http://opcfoundation.org/UA/DI/')
+    const system = addressSpace.findNode(model.motionSystemNodeId) as UaNode
+    const safetyStates = component(system, 'SafetyStates', roboticsNamespaceIndex)
+    const safetyState = component(safetyStates, 'SimulationSafetyState', instancesNamespace.index)
+    const parameterSet = component(safetyState, 'ParameterSet', diNamespaceIndex)
+    const safetyVariables = ['EmergencyStop', 'OperationalMode', 'ProtectiveStop']
+      .map((browseName) => component(parameterSet, browseName, roboticsNamespaceIndex))
+
+    expect(safetyState.typeDefinitionObj?.browseName.name).toBe('SafetyStateType')
+    expect(safetyState.description?.text).toContain('Informational simulation data only')
+    expect(safetyState.getComponents().map(({ browseName }) => browseName.name))
+      .toEqual(['ParameterSet'])
+    expect(safetyVariables.every(({ accessLevel, userAccessLevel }) => (
+      accessLevel === 1 && userAccessLevel === 1
+    ))).toBe(true)
+    expect(safetyState.getComponents().map(({ browseName }) => browseName.name))
+      .not.toEqual(expect.arrayContaining(['Command', 'Result', 'Status']))
   }, 30_000)
 })

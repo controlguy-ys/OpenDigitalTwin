@@ -19,9 +19,6 @@ import {
 } from './opcua-robotics-model.js'
 import { projectRoboticsSystemV1 } from './opcua-robotics-projection.js'
 
-export const ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1 =
-  OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1
-
 export interface OpcUaServerAdapterOptionsV1 {
   readonly host: string
   readonly advertisedHost: string
@@ -34,7 +31,7 @@ export interface OpcUaServerAdapterStatusV1 {
   readonly mode: 'off' | 'server'
   readonly started: boolean
   readonly endpointUrl: string | null
-  readonly namespaceUri: typeof ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1
+  readonly namespaceUri: typeof OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1
   readonly namespaceIndex: number | null
   readonly nodeIds: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
@@ -71,7 +68,7 @@ function createStatus(
     mode,
     started,
     endpointUrl,
-    namespaceUri: ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
+    namespaceUri: OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1,
     namespaceIndex,
     nodeIds: freezeNodeIds(nodeIds),
   })
@@ -190,7 +187,7 @@ export function createOpcUaServerAdapterV1(
         throw new Error('OPC_UA_ADDRESS_SPACE_UNAVAILABLE')
       }
       const namespace = addressSpace.registerNamespace(
-        ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
+        OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1,
       )
       const nextModel = instantiateOpcUaRoboticsModelV1({
         addressSpace,

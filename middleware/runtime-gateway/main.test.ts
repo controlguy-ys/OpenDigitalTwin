@@ -17,10 +17,8 @@ import {
 } from '../../src/core/project-v5/index.js'
 import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
 import type { RuntimeGatewayDeploymentConfigV1 } from './deployment-config.js'
-import {
-  ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
-  type OpcUaServerAdapterV1,
-} from './opcua-server-adapter.js'
+import type { OpcUaServerAdapterV1 } from './opcua-server-adapter.js'
+import { OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 } from './opcua-robotics-model.js'
 import type {
   OpcUaClientAdapterOptionsV1,
   OpcUaClientAdapterV1,
@@ -256,7 +254,7 @@ function fakeServerAdapter(
       mode: 'server',
       started,
       endpointUrl: started ? endpointUrl : null,
-      namespaceUri: ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1,
+      namespaceUri: OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1,
       namespaceIndex: started ? 2 : null,
       nodeIds: {},
     }),

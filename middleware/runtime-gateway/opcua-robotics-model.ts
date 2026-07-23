@@ -386,6 +386,9 @@ export function instantiateOpcUaRoboticsModelV1(options: Readonly<{
   let disposed = false
 
   function publishJointActual(robotId: string, jointId: string, projectValue: number): void {
+    if (disposed) {
+      throw new Error('OPC_UA_ROBOTICS_MODEL_DISPOSED')
+    }
     const axis = publishedAxes.get(robotId)?.get(jointId)
     if (axis === undefined) {
       if (!publishedAxes.has(robotId)) {

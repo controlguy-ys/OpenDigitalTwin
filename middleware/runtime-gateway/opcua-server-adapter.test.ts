@@ -22,6 +22,7 @@ import {
   createOpcUaServerAdapterV1,
   type OpcUaServerAdapterV1,
 } from './opcua-server-adapter.js'
+import * as serverAdapterModule from './opcua-server-adapter.js'
 
 const CRB_ROBOT_ID = 'robot-1'
 const OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 =
@@ -95,6 +96,10 @@ describe('OPC UA server adapter V1', () => {
 
   afterEach(async () => {
     await Promise.all(adapters.splice(0).map(async (adapter) => adapter.stop()))
+  })
+
+  it('does not expose the retired RobotSim namespace alias', () => {
+    expect(serverAdapterModule).not.toHaveProperty('ROBOT_SIM_OPC_UA_NAMESPACE_URI_V1')
   })
 
   it('does not start an OPC UA server when the validated Project mode is off', async () => {
