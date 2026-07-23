@@ -133,6 +133,15 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
     garbageCollect: vi.fn(async () => { events.push('repository.gc') }),
   } satisfies ProjectRepositoryV5
 
+  const runtimeTransition = {
+    rollback: vi.fn(async () => {
+      events.push('runtime.transition.rollback')
+      runtimeActive = previous
+    }),
+    finalize: vi.fn(async () => {
+      events.push('runtime.transition.finalize')
+    }),
+  }
   const runtime = {
     prepare: vi.fn(async (candidate: WorkcellProjectV5, configRevision: string): Promise<RuntimeCandidate> => {
       events.push(`runtime.prepare:${candidate.revisionId}:${configRevision}`)
@@ -147,12 +156,14 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
       events.push(`runtime.commit:${candidate.revisionId}`)
       failure(failurePoint, 'runtime-commit')
       runtimeActive = published(candidate.project, candidate.configRevision)
+      return runtimeTransition
     }),
     rollback: vi.fn(async (candidate: RuntimeCandidate) => {
       events.push(`runtime.rollback:${candidate.revisionId}`)
       runtimeActive = previous
     }),
-  } satisfies ProjectV5BrowserRuntimePublicationPort<RuntimeCandidate>
+  }
+  const runtimePort = runtime satisfies ProjectV5BrowserRuntimePublicationPort<RuntimeCandidate>
 
   const gateway = {
     prepare: vi.fn(async (candidate: WorkcellProjectV5, configRevision: string): Promise<GatewayCandidate> => {
@@ -171,6 +182,11 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
       gatewayActive = previousPublication
       return gatewayStatus(previousPublication.project, previousPublication.configRevision)
     }),
+    readStatus: vi.fn(async () => {
+      events.push(`gateway.read-status:${gatewayActive?.revisionId ?? 'none'}`)
+      if (gatewayActive === null) throw new Error('Gateway has no active Project.')
+      return gatewayStatus(gatewayActive.project, gatewayActive.configRevision)
+    }),
     rollback: vi.fn(async (candidate: GatewayCandidate) => {
       events.push(`gateway.rollback:${candidate.project.revisionId}`)
     }),
@@ -183,21 +199,25 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
     events.push(`hash:${candidate.revisionId}`)
     return HASH_B
   })
+  const cleanupDiagnostics = vi.fn()
   const publication = createProjectPublicationCoordinatorV5({
     repository,
-    runtime,
+    runtime: runtimePort,
     gateway,
     initialPublished: previous,
     configRevisionForProjectV5,
     createCommitToken: () => 'commit-b',
+    onCleanupIssue: cleanupDiagnostics,
   })
   return {
     previous,
     nextProject,
     repository,
     runtime,
+    runtimeTransition,
     gateway,
     configRevisionForProjectV5,
+    cleanupDiagnostics,
     publication,
     events,
     durable: () => durable,
@@ -230,6 +250,7 @@ describe('Project V5 publication coordinator', () => {
       'repository.commit:revision-b',
       'runtime.commit:revision-b',
       'repository.finalize',
+      'runtime.transition.finalize',
       'gateway.cleanup:revision-a',
       'repository.gc',
     ])
@@ -293,5 +314,139 @@ describe('Project V5 publication coordinator', () => {
       candidate: harness.nextProject,
       expectedRevisionId: harness.previous.revisionId,
     })).rejects.toMatchObject({ code: 'PROJECT_RECOVERY_REQUIRED' })
+  })
+
+  it('rolls back Gateway residue, the exact runtime transition, and the repository before reactivating the old Gateway', async () => {
+    const harness = publicationHarness('repository-finalize')
+    let oldGatewayActivated = false
+    const reactivate = harness.gateway.reactivate.getMockImplementation()!
+    const rollbackGateway = harness.gateway.rollback.getMockImplementation()!
+    harness.gateway.reactivate.mockImplementation(async (previousPublication) => {
+      oldGatewayActivated = true
+      return reactivate(previousPublication)
+    })
+    harness.gateway.rollback.mockImplementation(async (candidate) => {
+      if (oldGatewayActivated) throw new Error('Gateway candidate residue was cleaned after old activation.')
+      return rollbackGateway(candidate)
+    })
+
+    await expect(harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })).rejects.toThrow('TEST_REPOSITORY_FINALIZE')
+
+    expect(harness.publication.isRecoveryRequired()).toBe(false)
+    expect(harness.runtimeTransition.rollback).toHaveBeenCalledOnce()
+    const gatewayRollback = harness.events.indexOf('gateway.rollback:revision-b')
+    const runtimeRollback = harness.events.indexOf('runtime.transition.rollback')
+    const repositoryRollback = harness.events.indexOf('repository.compensate')
+    const gatewayReactivate = harness.events.indexOf('gateway.reactivate:revision-a')
+    expect(gatewayRollback).toBeGreaterThanOrEqual(0)
+    expect(runtimeRollback).toBeGreaterThan(gatewayRollback)
+    expect(repositoryRollback).toBeGreaterThan(runtimeRollback)
+    expect(gatewayReactivate).toBeGreaterThan(repositoryRollback)
+    expect(harness.gateway.readStatus).toHaveBeenCalledOnce()
+    expect(harness.events.indexOf('gateway.read-status:revision-a')).toBeGreaterThan(gatewayReactivate)
+    expect(harness.durable()).toEqual(harness.previous)
+    expect(harness.runtimeActive()).toEqual(harness.previous)
+    expect(harness.gatewayActive()).toEqual(harness.previous)
+  })
+
+  it('retains bounded cleanup issues and serializes one retry for the active publication', async () => {
+    const harness = publicationHarness()
+    harness.gateway.cleanupPrevious.mockRejectedValueOnce(new Error('gateway cleanup unavailable'))
+    harness.repository.garbageCollect.mockRejectedValueOnce(new Error('repository cleanup unavailable'))
+
+    await expect(harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })).resolves.toEqual(published(harness.nextProject, HASH_B))
+
+    expect(harness.publication.readCleanupStatus()).toMatchObject({
+      pending: [
+        { kind: 'gateway-previous', revisionId: 'revision-a', attemptCount: 1 },
+        { kind: 'repository-garbage-collection', revisionId: 'revision-b', attemptCount: 1 },
+      ],
+    })
+    await Promise.all([harness.publication.retryCleanup(), harness.publication.retryCleanup()])
+    expect(harness.gateway.cleanupPrevious).toHaveBeenCalledTimes(2)
+    expect(harness.repository.garbageCollect).toHaveBeenCalledTimes(2)
+    expect(harness.cleanupDiagnostics).toHaveBeenCalledTimes(2)
+    expect(harness.cleanupDiagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'gateway-previous', revisionId: 'revision-a', attemptCount: 1,
+    }))
+    expect(harness.cleanupDiagnostics).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'repository-garbage-collection', revisionId: 'revision-b', attemptCount: 1,
+    }))
+    expect(harness.publication.readCleanupStatus()).toEqual({ pending: [] })
+  })
+
+  it('returns a first publication to no active runtime through the committed transition', async () => {
+    const nextProject = project('revision-first', 'First')
+    let runtimeActive: PublishedProjectV5 | null = null
+    let gatewayActive: PublishedProjectV5 | null = null
+    let durable: PublishedProjectV5 | null = null
+    const preparedRevision: PreparedProjectRevisionV5 = Object.freeze({
+      revisionId: nextProject.revisionId,
+      configRevision: HASH_B,
+      project: nextProject,
+    })
+    const transition = {
+      rollback: vi.fn(async () => { runtimeActive = null }),
+      finalize: vi.fn(async () => undefined),
+    }
+    const repository = {
+      prepareRevision: vi.fn(async () => preparedRevision),
+      materializePreparedProject: () => nextProject,
+      discardPreparedRevision: vi.fn(async () => undefined),
+      commitPreparedRevision: vi.fn(async (expectedRevisionId: string | null) => {
+        expect(expectedRevisionId).toBeNull()
+        durable = published(nextProject, HASH_B)
+      }),
+      finalizePublication: vi.fn(async () => { throw new Error('TEST_FIRST_FINALIZE') }),
+      compensatePublication: vi.fn(async () => { durable = null }),
+      readRevision: async () => null,
+      readActive: async () => durable?.project ?? null,
+      readPointer: async () => null,
+      garbageCollect: vi.fn(async () => undefined),
+    } satisfies ProjectRepositoryV5
+    const runtime = {
+      prepare: vi.fn(async () => Object.freeze({ revisionId: nextProject.revisionId })),
+      apply: vi.fn(async () => undefined),
+      commit: vi.fn(() => {
+        runtimeActive = published(nextProject, HASH_B)
+        return transition
+      }),
+      rollback: vi.fn(async () => { throw new Error('Runtime must not be reconstructed during compensation.') }),
+    } satisfies ProjectV5BrowserRuntimePublicationPort<{ readonly revisionId: string }>
+    const gateway = {
+      prepare: vi.fn(async () => Object.freeze({ revisionId: nextProject.revisionId })),
+      activate: vi.fn(async () => {
+        gatewayActive = published(nextProject, HASH_B)
+        return gatewayStatus(nextProject, HASH_B)
+      }),
+      reactivate: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
+      readStatus: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
+      rollback: vi.fn(async () => { gatewayActive = null }),
+      cleanupPrevious: vi.fn(async () => undefined),
+    } satisfies ProjectV5GatewayPublicationPort<{ readonly revisionId: string }>
+    const publication = createProjectPublicationCoordinatorV5({
+      repository,
+      runtime,
+      gateway,
+      configRevisionForProjectV5: async () => HASH_B,
+      createCommitToken: () => 'commit-first',
+    })
+
+    await expect(publication.replace({ candidate: nextProject, expectedRevisionId: null })).rejects.toThrow('TEST_FIRST_FINALIZE')
+
+    expect(transition.rollback).toHaveBeenCalledOnce()
+    expect(runtime.rollback).not.toHaveBeenCalled()
+    expect(gateway.reactivate).not.toHaveBeenCalled()
+    expect(durable).toBeNull()
+    expect(runtimeActive).toBeNull()
+    expect(gatewayActive).toBeNull()
+    expect(publication.readPublished()).toBeNull()
+    expect(publication.isRecoveryRequired()).toBe(false)
   })
 })

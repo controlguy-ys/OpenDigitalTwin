@@ -43,12 +43,14 @@ export interface BrowserRuntimeBundleCellV5 {
 
 type BundleListenerV5 = () => void
 type DiagnosticListenerV5 = (error: unknown) => void
-type InstallPhaseV5 = 'prepared' | 'installed' | 'flushed' | 'rejected'
+type InstallPhaseV5 = 'prepared' | 'installed' | 'flushed' | 'restored' | 'rejected'
 
 interface BrowserRuntimeBundleInstallTokenV5 {
   readonly previousRuntimeGraph: PublishedBrowserRuntimeGraphV5
   installPure(): void
   flushIsolatedNotifications(): void
+  restorePure(): void
+  flushRollbackNotifications(): void
 }
 
 interface BrowserRuntimeBundlePublisherCellV5 extends BrowserRuntimeBundleCellV5 {
@@ -641,6 +643,32 @@ export function createBrowserRuntimeBundleCellV5(
         const record = installRecords.get(this)
         if (record === undefined || record.owner !== owner || record.phase !== 'installed') return
         record.phase = 'flushed'
+        for (const listener of record.listeners) {
+          try {
+            listener()
+          } catch (error) {
+            diagnosticNoThrow(onDiagnostic, error)
+          }
+        }
+      },
+      restorePure(this: BrowserRuntimeBundleInstallTokenV5): void {
+        const record = installRecords.get(this)
+        if (record === undefined || record.owner !== owner) {
+          fail('INSTALL_TOKEN_FOREIGN', 'Install token does not belong to this Bundle cell.')
+        }
+        if (record.phase !== 'installed' && record.phase !== 'flushed') {
+          fail('INSTALL_TOKEN_RESTORE_INVALID', 'Install token cannot restore its base Bundle.')
+        }
+        if (state !== record.next || state.runtimeEpoch !== record.expectedEpoch + 1) {
+          record.phase = 'rejected'
+          fail('INSTALL_TOKEN_STALE', 'Install token candidate Bundle is no longer active.')
+        }
+        record.phase = 'restored'
+        state = record.base
+      },
+      flushRollbackNotifications(this: BrowserRuntimeBundleInstallTokenV5): void {
+        const record = installRecords.get(this)
+        if (record === undefined || record.owner !== owner || record.phase !== 'restored') return
         for (const listener of record.listeners) {
           try {
             listener()

@@ -42,16 +42,18 @@ describe('BrowserProjectRuntimeV5 reentrant graph disposal', () => {
     await runtime.apply(prepared)
 
     let committed = false
+    let finalization: Promise<void> | null = null
     const unsubscribe = oldGraph.jobs.subscribe((state) => {
       if (committed || state.byRobotId['robot-1']?.state !== 'RUNNING') return
       committed = true
-      runtime.commit(prepared)
+      finalization = runtime.commit(prepared).finalize()
     })
 
     try {
       const run = oldGraph.jobExecutor.startJob('job-1', 0)
 
       expect(committed).toBe(true)
+      await finalization
       expect(oldGraph.jobs.getState().byRobotId['robot-1']).toMatchObject({ state: 'IDLE' })
       expect(() => oldGraph.jobExecutor.startJob('job-1', 1)).toThrow('JOB_EXECUTOR_DISPOSED')
       await expect(oldGraph.jobExecutor.waitForTerminal(run.runId)).resolves.toMatchObject({
@@ -74,10 +76,11 @@ describe('BrowserProjectRuntimeV5 reentrant graph disposal', () => {
     await runtime.apply(prepared)
 
     let committed = false
+    let finalization: Promise<void> | null = null
     const unsubscribeCommit = oldGraph.jobs.subscribe((state) => {
       if (committed || state.byRobotId['robot-1']?.state !== 'RUNNING') return
       committed = true
-      runtime.commit(prepared)
+      finalization = runtime.commit(prepared).finalize()
     })
     const unsubscribeHostile = oldGraph.jobs.subscribe((state) => {
       if (state.byRobotId['robot-1']?.state === 'IDLE') throw new Error('idle-hostile')
@@ -86,6 +89,7 @@ describe('BrowserProjectRuntimeV5 reentrant graph disposal', () => {
     try {
       expect(() => oldGraph.jobExecutor.startJob('job-1', 0)).not.toThrow()
       expect(committed).toBe(true)
+      await finalization
       expect(diagnostics).toEqual([expect.objectContaining({ message: 'idle-hostile' })])
     } finally {
       unsubscribeHostile()

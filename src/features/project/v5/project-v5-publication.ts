@@ -19,10 +19,15 @@ export interface PublishedProjectV5 {
   readonly configRevision: string
 }
 
+export interface ProjectV5RuntimeCommitTransitionV5 {
+  rollback(): Promise<void>
+  finalize(): Promise<void>
+}
+
 export interface ProjectV5BrowserRuntimePublicationPort<PreparedRuntime = unknown> {
   prepare(project: WorkcellProjectV5, configRevision: string): Promise<PreparedRuntime>
   apply(prepared: PreparedRuntime): Promise<void>
-  commit(prepared: PreparedRuntime): void | Promise<void>
+  commit(prepared: PreparedRuntime): ProjectV5RuntimeCommitTransitionV5 | Promise<ProjectV5RuntimeCommitTransitionV5>
   rollback(prepared: PreparedRuntime): Promise<void>
 }
 
@@ -30,6 +35,7 @@ export interface ProjectV5GatewayPublicationPort<PreparedGateway = unknown> {
   prepare(project: WorkcellProjectV5, configRevision: string): Promise<PreparedGateway>
   activate(prepared: PreparedGateway): Promise<RuntimeGatewayStatusV1>
   reactivate(previous: PublishedProjectV5): Promise<RuntimeGatewayStatusV1>
+  readStatus(): Promise<RuntimeGatewayStatusV1>
   rollback(prepared: PreparedGateway): Promise<void>
   cleanupPrevious(previous: PublishedProjectV5): Promise<void>
 }
@@ -43,6 +49,24 @@ export interface ProjectPublicationCoordinatorV5 {
   replace(request: ProjectV5PublicationRequest): Promise<PublishedProjectV5>
   readPublished(): PublishedProjectV5 | null
   isRecoveryRequired(): boolean
+  readCleanupStatus(): ProjectV5CleanupStatus
+  retryCleanup(): Promise<void>
+}
+
+export type ProjectV5CleanupKind =
+  | 'runtime-transition-finalize'
+  | 'gateway-previous'
+  | 'repository-garbage-collection'
+
+export interface ProjectV5CleanupIssue {
+  readonly kind: ProjectV5CleanupKind
+  readonly revisionId: string
+  readonly attemptCount: number
+  readonly lastError: { readonly code: string; readonly message: string }
+}
+
+export interface ProjectV5CleanupStatus {
+  readonly pending: readonly ProjectV5CleanupIssue[]
 }
 
 export interface ProjectV5PublicationCoordinatorOptions<PreparedRuntime = unknown, PreparedGateway = unknown> {
@@ -53,6 +77,7 @@ export interface ProjectV5PublicationCoordinatorOptions<PreparedRuntime = unknow
   readonly configRevisionForProjectV5?: (project: WorkcellProjectV5) => Promise<string>
   readonly createCommitToken?: () => string
   readonly onRecoveryRequired?: (error: unknown) => void
+  readonly onCleanupIssue?: (issue: ProjectV5CleanupIssue) => void
 }
 
 export class ProjectPublicationV5Error extends Error {
@@ -148,12 +173,20 @@ function assertGatewayStatus(
   }
 }
 
-async function cleanupBestEffort(operation: () => Promise<void> | void): Promise<void> {
-  try {
-    await operation()
-  } catch {
-    // Cleanup is retry-only after the authoritative switch.
+interface PendingCleanupTaskV5 {
+  readonly kind: ProjectV5CleanupKind
+  readonly revisionId: string
+  readonly operation: () => Promise<void>
+  attemptCount: number
+  lastError: { readonly code: string; readonly message: string } | null
+}
+
+function cleanupError(error: unknown): { readonly code: string; readonly message: string } {
+  if (error instanceof ProjectPublicationV5Error) {
+    return Object.freeze({ code: error.code, message: error.message })
   }
+  if (error instanceof Error) return Object.freeze({ code: error.name, message: error.message })
+  return Object.freeze({ code: 'PROJECT_CLEANUP_FAILED', message: String(error) })
 }
 
 export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown, PreparedGateway = unknown>(
@@ -167,6 +200,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   let published = validateInitialPublished(options.initialPublished)
   let recoveryRequired = false
   let tail = Promise.resolve()
+  const cleanupTasks = new Map<ProjectV5CleanupKind, PendingCleanupTaskV5>()
 
   const enqueue = <Result>(operation: () => Promise<Result>): Promise<Result> => {
     const pending = tail.then(operation, operation)
@@ -177,6 +211,9 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   const requireEditable = (): void => {
     if (recoveryRequired) {
       failPublication('PROJECT_RECOVERY_REQUIRED', 'Reload recovery is required before another Project V5 publication.')
+    }
+    if (cleanupTasks.size > 0) {
+      failPublication('PROJECT_CLEANUP_REQUIRED', 'Resolve retained Project V5 cleanup tasks before another publication.')
     }
   }
 
@@ -195,19 +232,53 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     }
   }
 
-  const restoreCommittedRuntime = async (previous: PublishedProjectV5): Promise<void> => {
-    const prepared = await runtime.prepare(previous.project, previous.configRevision)
+  const cleanupStatus = (): ProjectV5CleanupStatus => Object.freeze({
+    pending: Object.freeze(Array.from(cleanupTasks.values(), (task) => Object.freeze({
+      kind: task.kind,
+      revisionId: task.revisionId,
+      attemptCount: task.attemptCount,
+      lastError: task.lastError!,
+    }))),
+  })
+
+  const emitCleanupIssue = (task: PendingCleanupTaskV5): void => {
+    const issue = cleanupStatus().pending.find((candidate) => candidate.kind === task.kind)
+    if (issue === undefined) return
     try {
-      await runtime.apply(prepared)
-      await runtime.commit(prepared)
-    } catch (error) {
-      try {
-        await runtime.rollback(prepared)
-      } catch {
-        // The caller records the original restoration failure.
-      }
-      throw error
+      options.onCleanupIssue?.(issue)
+    } catch {
+      // Observation cannot alter the active publication or retained task.
     }
+  }
+
+  const runCleanupTask = async (task: PendingCleanupTaskV5): Promise<void> => {
+    task.attemptCount += 1
+    try {
+      await task.operation()
+      cleanupTasks.delete(task.kind)
+    } catch (error) {
+      task.lastError = cleanupError(error)
+      emitCleanupIssue(task)
+    }
+  }
+
+  const retainCleanupTask = async (
+    kind: ProjectV5CleanupKind,
+    revisionId: string,
+    operation: () => Promise<void>,
+  ): Promise<void> => {
+    if (cleanupTasks.has(kind)) {
+      failPublication('PROJECT_CLEANUP_TASK_DUPLICATE', `Project V5 cleanup task ${kind} is already retained.`)
+    }
+    const task: PendingCleanupTaskV5 = {
+      kind,
+      revisionId,
+      operation,
+      attemptCount: 0,
+      lastError: null,
+    }
+    cleanupTasks.set(kind, task)
+    await runCleanupTask(task)
   }
 
   const coordinator: ProjectPublicationCoordinatorV5 = {
@@ -237,7 +308,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
         let commitToken: string | undefined
         let repositoryCommitStarted = false
         let repositoryCommitted = false
-        let runtimeCommitted = false
+        let runtimeTransition: ProjectV5RuntimeCommitTransitionV5 | undefined
         let gatewayActivationAttempted = false
 
         try {
@@ -259,8 +330,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           repositoryCommitStarted = true
           await repository.commitPreparedRevision(request.expectedRevisionId, preparedRevision, commitToken)
           repositoryCommitted = true
-          await runtime.commit(preparedRuntime)
-          runtimeCommitted = true
+          runtimeTransition = await runtime.commit(preparedRuntime)
           await repository.finalizePublication(commitToken)
           published = next
         } catch (error) {
@@ -273,37 +343,34 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
             }
           }
 
-          if (gatewayActivationAttempted && previous !== null) {
-            await compensate(async () => {
-              assertGatewayStatus(await gateway.reactivate(previous), previous)
-            })
-          }
-          if (runtimeCommitted) {
-            if (previous === null) {
-              compensationErrors.push(new ProjectPublicationV5Error(
-                'PROJECT_RUNTIME_RESTORE_UNAVAILABLE',
-                'The first committed Project V5 runtime cannot be restored without a prior publication.',
-              ))
-            } else {
-              await compensate(() => restoreCommittedRuntime(previous))
-            }
-          } else if (preparedRuntime !== undefined) {
-            await compensate(() => runtime.rollback(preparedRuntime!))
-          }
           if (preparedGateway !== undefined) {
             await compensate(() => gateway.rollback(preparedGateway!))
+          }
+          if (runtimeTransition !== undefined) {
+            await compensate(() => runtimeTransition!.rollback())
+          } else if (preparedRuntime !== undefined) {
+            await compensate(() => runtime.rollback(preparedRuntime!))
           }
           if (repositoryCommitted) {
             await compensate(() => repository.compensatePublication(commitToken!))
           } else if (preparedRevision !== undefined && !repositoryCommitStarted) {
             await compensate(() => repository.discardPreparedRevision(preparedRevision!))
           }
+          if (gatewayActivationAttempted && previous !== null) {
+            await compensate(async () => {
+              assertGatewayStatus(await gateway.reactivate(previous), previous)
+              assertGatewayStatus(await gateway.readStatus(), previous)
+            })
+          }
           enterRecovery(compensationErrors)
           throw error
         }
 
-        if (previous !== null) await cleanupBestEffort(() => gateway.cleanupPrevious(previous))
-        await cleanupBestEffort(() => repository.garbageCollect())
+        await retainCleanupTask('runtime-transition-finalize', next.revisionId, () => runtimeTransition!.finalize())
+        if (previous !== null) {
+          await retainCleanupTask('gateway-previous', previous.revisionId, () => gateway.cleanupPrevious(previous))
+        }
+        await retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())
         return publicPublished(next.project, next.revisionId, next.configRevision)
       })
     },
@@ -314,6 +381,16 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
 
     isRecoveryRequired() {
       return recoveryRequired
+    },
+
+    readCleanupStatus() {
+      return cleanupStatus()
+    },
+
+    retryCleanup() {
+      return enqueue(async () => {
+        for (const task of Array.from(cleanupTasks.values())) await runCleanupTask(task)
+      })
     },
   }
   return Object.freeze(coordinator)

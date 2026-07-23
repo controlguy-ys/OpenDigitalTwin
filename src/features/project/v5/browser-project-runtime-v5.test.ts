@@ -342,7 +342,7 @@ describe('BrowserProjectRuntimeV5', () => {
     ])
 
     await runtime.apply(prepared)
-    runtime.commit(prepared)
+    await runtime.commit(prepared).finalize()
 
     const published = runtime.bundle.getState()
     expect(published).toMatchObject({
@@ -369,6 +369,34 @@ describe('BrowserProjectRuntimeV5', () => {
       published.runtimeGraph.attachments.getState().configRevision,
       published.runtimeGraph.streamTarget.configRevision,
     ]).toEqual(Array(7).fill(CONFIG_B))
+  })
+
+  it('rolls a committed candidate back to the exact live base graph before publication finalization', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options())
+    const base = runtime.bundle.getState()
+    let baseRobotNotifications = 0
+    const unsubscribeBaseRobot = base.runtimeGraph.robots.subscribe(() => { baseRobotNotifications += 1 })
+    base.runtimeGraph.robots.getState().writeJointValues('robot-1', { J1: 24 }, 'simulation')
+    const candidate = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(candidate as { revisionId: string }).revisionId = 'revision-transition'
+
+    const prepared = await runtime.prepare(candidate, CONFIG_B)
+    await runtime.apply(prepared)
+    const transition = runtime.commit(prepared)
+
+    expect(runtime.bundle.getState()).not.toBe(base)
+    expect(runtime.bundle.getState().runtimeGraph).not.toBe(base.runtimeGraph)
+    expect(base.runtimeGraph.robots.getState().readRobot('robot-1')?.jointValues).toEqual({ J1: 24 })
+
+    await transition.rollback()
+
+    expect(runtime.bundle.getState()).toBe(base)
+    expect(runtime.bundle.getState().runtimeGraph).toBe(base.runtimeGraph)
+    expect(runtime.bundle.getState().runtimeGraph.robots.getState().readRobot('robot-1')?.jointValues).toEqual({ J1: 24 })
+    base.runtimeGraph.robots.getState().writeJointValues('robot-1', { J1: 25 }, 'simulation')
+    expect(baseRobotNotifications).toBe(2)
+    unsubscribeBaseRobot()
+    await runtime.dispose()
   })
 
   it('keeps the published graph live throughout every detached apply checkpoint', async () => {
@@ -737,9 +765,11 @@ describe('BrowserProjectRuntimeV5', () => {
     const prepared = await runtime.prepare(replacement, CONFIG_B)
     await runtime.apply(prepared)
 
-    expect(() => runtime.commit(prepared)).not.toThrow()
+    let transition: ReturnType<typeof runtime.commit> | null = null
+    expect(() => { transition = runtime.commit(prepared) }).not.toThrow()
     expect(runtime.bundle.getState().projectRevisionId).toBe('revision-5')
     expect(diagnostics.some((error) => error instanceof Error && error.message === 'subscriber failure')).toBe(true)
+    await transition!.finalize()
     expect(() => oldGraph.playback.startJob('job-1')).toThrow('disposed')
     const nestedCandidate = await nested!
     await runtime.rollback(nestedCandidate)

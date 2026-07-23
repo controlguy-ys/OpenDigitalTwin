@@ -130,11 +130,16 @@ export interface PreparedBrowserRuntimeCandidateV5 {
   readonly configRevision: string
 }
 
+export interface CommittedBrowserRuntimeTransitionV5 {
+  rollback(): Promise<void>
+  finalize(): Promise<void>
+}
+
 export interface BrowserProjectResourcesV5 {
   readonly bundle: BrowserRuntimeBundleCellV5
   prepare(project: WorkcellProjectV5, configRevision: string): Promise<PreparedBrowserRuntimeCandidateV5>
   apply(prepared: PreparedBrowserRuntimeCandidateV5): Promise<void>
-  commit(prepared: PreparedBrowserRuntimeCandidateV5): void
+  commit(prepared: PreparedBrowserRuntimeCandidateV5): CommittedBrowserRuntimeTransitionV5
   rollback(prepared: PreparedBrowserRuntimeCandidateV5): Promise<void>
   startGatewayStream(): void
   stopGatewayStream(): void
@@ -144,6 +149,8 @@ export interface BrowserProjectResourcesV5 {
 interface BundleInstallTokenV5 {
   installPure(): void
   flushIsolatedNotifications(): void
+  restorePure(): void
+  flushRollbackNotifications(): void
 }
 
 interface BundlePublisherV5 extends BrowserRuntimeBundleCellV5 {
@@ -176,7 +183,7 @@ interface OwnedBrowserRuntimeGraphV5 {
   disposed: boolean
 }
 
-type CandidateStateV5 = 'prepared' | 'applying' | 'applied' | 'failed' | 'consumed'
+type CandidateStateV5 = 'prepared' | 'applying' | 'applied' | 'failed' | 'committed' | 'consumed'
 type OwnerStateV5 = 'active' | 'disposing' | 'disposed'
 
 interface CandidateRecordV5 {
@@ -190,6 +197,17 @@ interface CandidateRecordV5 {
   state: CandidateStateV5
   applyPromise: Promise<void> | null
   rollbackPromise: Promise<void> | null
+}
+
+type CommittedTransitionStateV5 = 'committed' | 'rolling-back' | 'rolled-back' | 'finalizing' | 'finalized' | 'disposed'
+
+interface CommittedTransitionRecordV5 {
+  readonly candidate: CandidateRecordV5
+  readonly install: BundleInstallTokenV5
+  readonly previousOwned: OwnedBrowserRuntimeGraphV5
+  state: CommittedTransitionStateV5
+  rollbackPromise: Promise<void> | null
+  finalizePromise: Promise<void> | null
 }
 
 interface WorldResolverV5 {
@@ -614,9 +632,13 @@ export function createBrowserProjectRuntimeV5(
   const candidates = new Set<CandidateRecordV5>()
   let ownerState: OwnerStateV5 = 'active'
   let disposePromise: Promise<void> | null = null
+  let activeTransition: CommittedTransitionRecordV5 | null = null
 
   const assertActive = (): void => {
     if (ownerState !== 'active') throw failure('BROWSER_RUNTIME_DISPOSED')
+  }
+  const assertNoActiveTransition = (): void => {
+    if (activeTransition !== null) throw failure('BROWSER_RUNTIME_TRANSITION_PENDING')
   }
   const requireCandidate = (prepared: PreparedBrowserRuntimeCandidateV5): CandidateRecordV5 => {
     if (prepared === null || (typeof prepared !== 'object' && typeof prepared !== 'function')) {
@@ -634,6 +656,49 @@ export function createBrowserProjectRuntimeV5(
     record.state = 'consumed'
     candidates.delete(record)
     disposeOwnedGraph(record.owned, onDiagnostic)
+  }
+  const rollbackCommittedTransition = (
+    transition: CommittedTransitionRecordV5,
+  ): Promise<void> => {
+    if (transition.rollbackPromise !== null) return transition.rollbackPromise
+    if (transition.state !== 'committed') return Promise.reject(failure('BROWSER_RUNTIME_TRANSITION_CONSUMED'))
+    transition.state = 'rolling-back'
+    const rollback = Promise.resolve().then(() => {
+      if (ownerState !== 'active' || activeTransition !== transition || activeOwnedGraph !== transition.candidate.owned) {
+        throw failure('BROWSER_RUNTIME_TRANSITION_STALE')
+      }
+      transition.install.restorePure()
+      activeOwnedGraph = transition.previousOwned
+      runNoThrow(onDiagnostic, () => {
+        stream.refreshActiveTarget()
+        if (ownerState !== 'active') stream.stop()
+      })
+      disposeOwnedGraph(transition.candidate.owned, onDiagnostic)
+      transition.candidate.state = 'consumed'
+      activeTransition = null
+      transition.state = 'rolled-back'
+      runNoThrow(onDiagnostic, () => transition.install.flushRollbackNotifications())
+    })
+    transition.rollbackPromise = rollback
+    return rollback
+  }
+  const finalizeCommittedTransition = (
+    transition: CommittedTransitionRecordV5,
+  ): Promise<void> => {
+    if (transition.finalizePromise !== null) return transition.finalizePromise
+    if (transition.state !== 'committed') return Promise.reject(failure('BROWSER_RUNTIME_TRANSITION_CONSUMED'))
+    transition.state = 'finalizing'
+    const finalize = Promise.resolve().then(() => {
+      if (ownerState !== 'active' || activeTransition !== transition || activeOwnedGraph !== transition.candidate.owned) {
+        throw failure('BROWSER_RUNTIME_TRANSITION_STALE')
+      }
+      disposeOwnedGraph(transition.previousOwned, onDiagnostic)
+      transition.candidate.state = 'consumed'
+      activeTransition = null
+      transition.state = 'finalized'
+    })
+    transition.finalizePromise = finalize
+    return finalize
   }
   const runApply = async (record: CandidateRecordV5): Promise<void> => {
     try {
@@ -712,6 +777,7 @@ export function createBrowserProjectRuntimeV5(
         consumeAndDispose(record)
         throw failure('BROWSER_RUNTIME_CANDIDATE_STALE')
       }
+      assertNoActiveTransition()
       const next: BrowserRuntimeBundleStateV5 = Object.freeze({
         runtimeEpoch: record.baseEpoch + 1,
         project: record.project,
@@ -722,23 +788,36 @@ export function createBrowserProjectRuntimeV5(
       })
       const install = bundle.prepareInstall(next, currentBundle, record.baseEpoch)
       const oldOwnedGraph = activeOwnedGraph
-      record.state = 'consumed'
+      const transition: CommittedTransitionRecordV5 = {
+        candidate: record,
+        install,
+        previousOwned: oldOwnedGraph,
+        state: 'committed',
+        rollbackPromise: null,
+        finalizePromise: null,
+      }
+      record.state = 'committed'
       candidates.delete(record)
       install.installPure()
       activeOwnedGraph = record.owned
+      activeTransition = transition
       runNoThrow(onDiagnostic, () => record.owned.commandClient.clearLease())
       runNoThrow(onDiagnostic, () => {
         stream.refreshActiveTarget()
         if (ownerState !== 'active') stream.stop()
       })
-      runNoThrow(onDiagnostic, () => disposeOwnedGraph(oldOwnedGraph, onDiagnostic))
       runNoThrow(onDiagnostic, () => install.flushIsolatedNotifications())
+      return Object.freeze({
+        rollback: () => rollbackCommittedTransition(transition),
+        finalize: () => finalizeCommittedTransition(transition),
+      })
     },
     rollback(prepared: PreparedBrowserRuntimeCandidateV5) {
       try {
         assertActive()
         const record = requireCandidate(prepared)
         if (record.state === 'consumed') return Promise.reject(failure('BROWSER_RUNTIME_CANDIDATE_CONSUMED'))
+        if (record.state === 'committed') return Promise.reject(failure('BROWSER_RUNTIME_CANDIDATE_COMMITTED'))
         if (record.rollbackPromise !== null) return record.rollbackPromise
         let resolveRollback!: () => void
         let rejectRollback!: (reason: unknown) => void
@@ -780,6 +859,12 @@ export function createBrowserProjectRuntimeV5(
       disposePromise = new Promise<void>((done) => { resolve = done })
       runNoThrow(onDiagnostic, () => stream.stop())
       const snapshot = Array.from(candidates)
+      const transition = activeTransition
+      if (transition !== null) {
+        activeTransition = null
+        transition.state = 'disposed'
+        transition.candidate.state = 'consumed'
+      }
       for (const record of snapshot) {
         if (record.state === 'applying') runNoThrow(onDiagnostic, () => record.controller.abort())
       }
@@ -788,6 +873,7 @@ export function createBrowserProjectRuntimeV5(
           await Promise.allSettled(snapshot.flatMap((record) => [record.applyPromise, record.rollbackPromise]
             .filter((promise): promise is Promise<void> => promise !== null)))
           for (const record of snapshot) consumeAndDispose(record)
+          if (transition !== null) disposeOwnedGraph(transition.previousOwned, onDiagnostic)
           disposeOwnedGraph(activeOwnedGraph, onDiagnostic)
         } finally {
           ownerState = 'disposed'

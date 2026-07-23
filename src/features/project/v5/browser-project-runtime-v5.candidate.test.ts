@@ -117,7 +117,7 @@ describe('BrowserProjectRuntimeV5 candidate lifecycle', () => {
     const newer = await runtime.prepare(project('revision-newer'), 'c'.repeat(64))
 
     await Promise.all([runtime.apply(older), runtime.apply(newer)])
-    runtime.commit(newer)
+    await runtime.commit(newer).finalize()
 
     expect(() => runtime.commit(older)).toThrow('BROWSER_RUNTIME_CANDIDATE_STALE')
     await expect(runtime.apply(older)).rejects.toThrow('BROWSER_RUNTIME_CANDIDATE_CONSUMED')
