@@ -583,11 +583,22 @@ function createOwnedGraph(
     if (!ownerActive && !graphDisposed) throw failure('BROWSER_RUNTIME_GRAPH_INACTIVE')
   }
   const trackDirectAdvance = (advance: () => Promise<void>): Promise<void> => {
+    let resolveSettlement!: () => void
+    let closed = false
+    const settlement = new Promise<void>((resolve) => { resolveSettlement = resolve })
+    directAdvanceSettlements.add(settlement)
+    const closeSettlement = (): void => {
+      if (closed) return
+      closed = true
+      directAdvanceSettlements.delete(settlement)
+      resolveSettlement()
+    }
     let caller: Promise<void>
-    try { caller = advance() } catch (error) { return Promise.reject(error) }
-    const settled = caller.then(() => undefined, () => undefined)
-    directAdvanceSettlements.add(settled)
-    void settled.then(() => { directAdvanceSettlements.delete(settled) })
+    try { caller = advance() } catch (error) {
+      closeSettlement()
+      return Promise.reject(error)
+    }
+    void caller.then(closeSettlement, closeSettlement)
     return caller
   }
   const publishedSignalWrites: GatewaySignalWritePortV1 = Object.freeze({

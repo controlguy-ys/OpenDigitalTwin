@@ -240,6 +240,15 @@ function writableSetDoProject(): WorkcellProjectV5 {
   return project
 }
 
+function moveThenWritableSetDoProject(): WorkcellProjectV5 {
+  const project = writableSetDoProject()
+  ;(project.jobs[0] as { instructions: WorkcellProjectV5['jobs'][number]['instructions'] }).instructions = [
+    { id: 'move-before-set-do', kind: 'move-joint', jointValues: { J1: 10 }, speedPercentToNext: 100 },
+    { id: 'set-part-present', kind: 'set-do', signalId: 'PartPresent', value: true },
+  ]
+  return project
+}
+
 function deferred<T>() {
   let resolve: (value: T | PromiseLike<T>) => void = () => undefined
   let reject: (reason?: unknown) => void = () => undefined
@@ -643,6 +652,52 @@ describe('BrowserProjectRuntimeV5', () => {
     await transition.rollback()
     expect(runtime.bundle.getState().runtimeGraph).toBe(oldGraph)
     expect(oldGraph.jobs.getState().byRobotId['robot-1']).toMatchObject({ state: 'SUCCEEDED' })
+    unsubscribe()
+    await runtime.dispose()
+  })
+
+  it('pre-registers a direct advance before a synchronous subscriber reenters commit', async () => {
+    const commandResponse = deferred<Response>()
+    const fetch = vi.fn((url: string): Promise<Response> => (
+      url.endsWith('/command-lease') ? Promise.resolve(commandLeaseResponse()) : commandResponse.promise
+    ))
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: moveThenWritableSetDoProject(),
+      command: { fetch, nowMs: () => 100 },
+    }))
+    const oldGraph = runtime.bundle.getState().runtimeGraph
+    const candidate = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(candidate as { revisionId: string }).revisionId = 'revision-reentrant-direct-advance'
+    const prepared = await runtime.prepare(candidate, CONFIG_B)
+    await runtime.apply(prepared)
+    let reentrantCommit: ReturnType<typeof runtime.commit> | null = null
+    const unsubscribe = oldGraph.robots.subscribe(() => {
+      if (reentrantCommit === null) reentrantCommit = runtime.commit(prepared)
+    })
+
+    oldGraph.jobExecutor.startJob('job-1', 0)
+    const directAdvance = oldGraph.jobExecutor.advanceRobot('robot-1', 0)
+    if (reentrantCommit === null) throw new Error('Expected a synchronous Robot subscriber commit.')
+    const committing = reentrantCommit as ReturnType<BrowserProjectResourcesV5['commit']>
+    let commitSettled = false
+    void committing.then(() => { commitSettled = true })
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(commitSettled).toBe(false)
+    expect(runtime.bundle.getState().runtimeGraph).toBe(oldGraph)
+
+    commandResponse.reject(new Error('deferred SetDO command failure'))
+    await directAdvance
+    expect(oldGraph.jobs.getState().byRobotId['robot-1']).toMatchObject({ state: 'FAILED' })
+    const transition = await committing
+    expect(runtime.bundle.getState().runtimeGraph).not.toBe(oldGraph)
+
+    await transition.rollback()
+    const laterCandidate = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(laterCandidate as { revisionId: string }).revisionId = 'revision-after-reentrant-failure'
+    const laterPrepared = await runtime.prepare(laterCandidate, 'c'.repeat(64))
+    await runtime.apply(laterPrepared)
+    await (await runtime.commit(laterPrepared)).finalize()
     unsubscribe()
     await runtime.dispose()
   })
