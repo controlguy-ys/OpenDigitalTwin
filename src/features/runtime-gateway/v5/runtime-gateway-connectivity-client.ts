@@ -263,7 +263,7 @@ export function createRuntimeGatewayConnectivityClientV1(
         record.state = 'consumed'
         return 'candidate-deactivated'
       } catch (error) {
-        if (!(isRuntimeGatewayConnectivityClientV1Error(error) && (error.code === 'PROJECT_DEACTIVATION_CONFLICT' || error.code === 'RUNTIME_GATEWAY_UNAVAILABLE' || error.code === 'RUNTIME_GATEWAY_TIMEOUT' || error.code === 'RUNTIME_GATEWAY_RESPONSE_INVALID'))) throw error
+        if (!(isRuntimeGatewayConnectivityClientV1Error(error) && (error.code === 'PROJECT_DEACTIVATION_CONFLICT' || error.code === 'RUNTIME_GATEWAY_UNAVAILABLE' || error.code === 'RUNTIME_GATEWAY_TIMEOUT' || error.code === 'RUNTIME_GATEWAY_RESPONSE_INVALID' || error.code === 'RUNTIME_GATEWAY_RESPONSE_TOO_LARGE'))) throw error
         const explicitConflict = isRuntimeGatewayConnectivityClientV1Error(error) && error.code === 'PROJECT_DEACTIVATION_CONFLICT'
         const current = await readStatus()
         if (current.project.phase === 'not-applied') { record.state = 'consumed'; return explicitConflict ? 'candidate-absent' : 'candidate-deactivated' }
@@ -276,7 +276,7 @@ export function createRuntimeGatewayConnectivityClientV1(
           record.state = 'consumed'
           return 'candidate-deactivated'
         } catch (retryError) {
-          if (!(isRuntimeGatewayConnectivityClientV1Error(retryError) && (retryError.code === 'PROJECT_DEACTIVATION_CONFLICT' || retryError.code === 'RUNTIME_GATEWAY_UNAVAILABLE' || retryError.code === 'RUNTIME_GATEWAY_TIMEOUT' || retryError.code === 'RUNTIME_GATEWAY_RESPONSE_INVALID'))) throw retryError
+          if (!(isRuntimeGatewayConnectivityClientV1Error(retryError) && (retryError.code === 'PROJECT_DEACTIVATION_CONFLICT' || retryError.code === 'RUNTIME_GATEWAY_UNAVAILABLE' || retryError.code === 'RUNTIME_GATEWAY_TIMEOUT' || retryError.code === 'RUNTIME_GATEWAY_RESPONSE_INVALID' || retryError.code === 'RUNTIME_GATEWAY_RESPONSE_TOO_LARGE'))) throw retryError
           const terminal = await readStatus()
           if (terminal.project.phase === 'not-applied') { record.state = 'consumed'; return 'candidate-deactivated' }
           if (!sameAuthority(authorityFromStatus(terminal), candidateAuthority)) { record.state = 'consumed'; return 'other-authority' }

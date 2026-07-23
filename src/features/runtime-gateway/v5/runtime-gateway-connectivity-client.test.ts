@@ -99,6 +99,18 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     await expect(client.activate(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_UNAVAILABLE' })
     await expect(client.rollback(prepared)).resolves.toBe('candidate-deactivated')
   })
+  it('reconciles an oversized successful DELETE response to confirmed inactivity', async () => {
+    const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64); let call = 0
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => {
+      call += 1
+      if (call === 1) return new Response(JSON.stringify(status(project.projectId, project.revisionId, hash)))
+      if (call === 2) return new Response('x', { status: 200, headers: { 'content-length': String(64 * 1024 + 1) } })
+      return new Response(JSON.stringify(status(null, null, null)))
+    } })
+    const prepared = await client.prepare(project, hash, undefined as never)
+    await client.activate(prepared)
+    await expect(client.rollback(prepared)).resolves.toBe('candidate-deactivated')
+  })
   it('accepts a versioned connection diagnostic result', async () => {
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response(JSON.stringify({ type: 'opcua-test-connection-result-v1', protocolVersion: 1, outcome: 'succeeded', namespaces: ['urn:controller'] })) })
     await expect(client.testConnection({ endpointId: 'x', name: 'x', endpointUrl: 'opc.tcp://localhost:4840', enabled: true, publishingIntervalMs: 50, reconnectDelayMs: 0 })).resolves.toMatchObject({ outcome: 'succeeded' })
