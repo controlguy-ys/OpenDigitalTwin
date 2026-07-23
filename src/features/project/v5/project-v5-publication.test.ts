@@ -78,7 +78,7 @@ function gatewayStatus(projectValue: WorkcellProjectV5, configRevision: string):
     },
     project: {
       phase: 'ready', projectId: projectValue.projectId, revisionId: projectValue.revisionId,
-      configRevision, readinessCode: 'READY',
+      configRevision, activationAttemptId: `attempt-${projectValue.revisionId}`, authorityPhase: 'active', readinessCode: 'READY',
     },
     opcUa: {
       mode: 'off',
@@ -103,7 +103,7 @@ function inactiveGatewayStatus(): RuntimeGatewayStatusV1 {
     },
     project: {
       phase: 'not-applied', projectId: null, revisionId: null,
-      configRevision: null, readinessCode: 'NO_ACTIVE_REVISION',
+      configRevision: null, activationAttemptId: null, authorityPhase: 'inactive', readinessCode: 'NO_ACTIVE_REVISION',
     },
     opcUa: {
       mode: 'off',
@@ -224,6 +224,7 @@ function publicationHarness(
     }),
     rollback: vi.fn(async (candidate: GatewayCandidate) => {
       events.push(`gateway.rollback:${candidate.project.revisionId}`)
+      return 'candidate-deactivated' as const
     }),
     deactivate: vi.fn(async () => inactiveGatewayStatus()),
     cleanupPrevious: vi.fn(async (previousPublication: PublishedProjectV5) => {
@@ -374,7 +375,7 @@ describe('Project V5 publication coordinator', () => {
     expect(harness.configRevisionForProjectV5).toHaveBeenCalledTimes(1)
     expect(harness.repository.prepareRevision).toHaveBeenCalledWith(harness.nextProject, HASH_B)
     expect(harness.runtime.prepare).toHaveBeenCalledWith(harness.nextProject, HASH_B)
-    expect(harness.gateway.prepare).toHaveBeenCalledWith(harness.nextProject, HASH_B)
+    expect(harness.gateway.prepare).toHaveBeenCalledWith(harness.nextProject, HASH_B, harness.previous)
     expect(harness.events).toEqual([
       'hash:revision-b',
       `repository.prepare:revision-b:${HASH_B}`,
@@ -708,7 +709,7 @@ describe('Project V5 publication coordinator', () => {
       }),
       reactivate: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
       readStatus: vi.fn(async () => gatewayStatus(nextProject, HASH_B)),
-      rollback: vi.fn(async () => { gatewayActive = null }),
+      rollback: vi.fn(async () => { gatewayActive = null; return 'candidate-deactivated' as const }),
       deactivate: vi.fn(async () => inactiveGatewayStatus()),
       cleanupPrevious: vi.fn(async () => undefined),
     } satisfies ProjectV5GatewayPublicationPort<{ readonly revisionId: string }>
@@ -778,7 +779,7 @@ describe('Project V5 publication coordinator', () => {
       }),
       reactivate: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
       readStatus: vi.fn(async () => inactiveGatewayStatus()),
-      rollback: vi.fn(async () => { gatewayActive = null }),
+      rollback: vi.fn(async () => { gatewayActive = null; return 'candidate-deactivated' as const }),
       deactivate: vi.fn(async () => inactiveGatewayStatus()),
       cleanupPrevious: vi.fn(async () => undefined),
     } satisfies ProjectV5GatewayPublicationPort<{ readonly revisionId: string }>
@@ -820,7 +821,7 @@ describe('Project V5 publication coordinator', () => {
 
     expect(subject.repository.readRevision).toHaveBeenCalledWith(subject.target.revisionId)
     expect(subject.runtime.prepare).toHaveBeenCalledWith(subject.target.project, HASH_B)
-    expect(subject.gateway.prepare).toHaveBeenCalledWith(subject.target.project, HASH_B)
+    expect(subject.gateway.prepare).toHaveBeenCalledWith(subject.target.project, HASH_B, null)
     expect(subject.repository.finalizePublication).not.toHaveBeenCalled()
     expect(subject.publication.readPublished()).toEqual(subject.target)
     expect(observed).toHaveBeenCalledOnce()

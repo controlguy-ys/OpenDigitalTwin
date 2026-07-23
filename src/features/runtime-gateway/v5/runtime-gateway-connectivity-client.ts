@@ -7,7 +7,11 @@ import {
   validateRuntimeGatewayStatusV1,
   type RuntimeGatewayStatusV1,
 } from '../../../core/runtime-protocol/gateway-status-v1.js'
-import type { ProjectV5GatewayPublicationPort, PublishedProjectV5 } from '../../project/v5/project-v5-publication.js'
+import {
+  type ProjectV5GatewayPublicationPort, type ProjectV5GatewayRollbackDispositionV1,
+  type PublishedProjectV5,
+} from '../../project/v5/project-v5-publication.js'
+import type { RuntimeProjectAuthorityV1 } from '../../../core/runtime-protocol/project-activation-v1.js'
 import { validateOpcUaNamespaceIndexResponseV1, validateOpcUaTestConnectionResultV1, type OpcUaNamespaceIndexResponseV1, type OpcUaTestConnectionResultV1 } from '../../../core/runtime-protocol/opcua-connectivity-v1.js'
 
 const RESPONSE_LIMIT_BYTES = 64 * 1024
@@ -40,6 +44,7 @@ export interface RuntimeGatewayConnectivityClientV1Options {
   readonly fetch?: (input: string, init: RequestInit) => Promise<Response>
   readonly basePath?: string
   readonly timeoutMs?: number
+  readonly createActivationAttemptId?: () => string
 }
 
 export interface RuntimeGatewayConnectivityClientV1 extends ProjectV5GatewayPublicationPort<PreparedRuntimeGatewayProjectV1> {
@@ -52,7 +57,11 @@ interface CandidateRecord {
   readonly configRevision: string
   state: 'prepared' | 'attempted' | 'activated' | 'consumed'
   readonly generation: number
+  readonly activationAttemptId: string
+  readonly expectedAuthority: RuntimeProjectAuthorityV1 | null
 }
+
+const ATTEMPT = /^[A-Za-z0-9_-]{8,128}$/u
 
 function base(value: string | undefined): string {
   const normalized = (value ?? '/runtime').trim().replace(/\/+$/u, '')
@@ -97,12 +106,24 @@ function exactError(value: unknown): { readonly code: string; readonly message: 
     : null
 }
 
-function statusFor(status: RuntimeGatewayStatusV1, project: WorkcellProjectV5, configRevision: string): RuntimeGatewayStatusV1 {
+function authorityFromStatus(status: RuntimeGatewayStatusV1): RuntimeProjectAuthorityV1 | null {
+  return status.project.phase === 'ready' ? Object.freeze({
+    projectId: status.project.projectId!, revisionId: status.project.revisionId!,
+    configRevision: status.project.configRevision!, activationAttemptId: status.project.activationAttemptId!,
+  }) : null
+}
+
+function sameAuthority(left: RuntimeProjectAuthorityV1 | null, right: RuntimeProjectAuthorityV1 | null): boolean {
+  return left === right || (left !== null && right !== null && left.projectId === right.projectId && left.revisionId === right.revisionId && left.configRevision === right.configRevision && left.activationAttemptId === right.activationAttemptId)
+}
+
+function statusFor(status: RuntimeGatewayStatusV1, project: WorkcellProjectV5, configRevision: string, activationAttemptId: string): RuntimeGatewayStatusV1 {
   if (
     status.project.phase !== 'ready'
     || status.project.projectId !== project.projectId
     || status.project.revisionId !== project.revisionId
     || status.project.configRevision !== configRevision
+    || status.project.activationAttemptId !== activationAttemptId
   ) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_STATUS_MISMATCH', 'Runtime Gateway status does not match the requested Project.')
   return status
 }
@@ -116,6 +137,7 @@ export function createRuntimeGatewayConnectivityClientV1(
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) throw new TypeError('timeoutMs must be a bounded positive integer.')
   const candidates = new WeakMap<object, CandidateRecord>()
   let latestGeneration = 0
+  const createActivationAttemptId = options.createActivationAttemptId ?? (() => globalThis.crypto.randomUUID())
 
   const request = async (path: string, init: RequestInit, callerSignal?: AbortSignal): Promise<unknown> => {
     if (callerSignal?.aborted) throw abortError()
@@ -173,12 +195,28 @@ export function createRuntimeGatewayConnectivityClientV1(
   }
 
   return Object.freeze({
-    async prepare(input: WorkcellProjectV5, candidateConfigRevision: string): Promise<PreparedRuntimeGatewayProjectV1> {
+    async prepare(input: WorkcellProjectV5, candidateConfigRevision: string, expectedPrevious?: PublishedProjectV5 | null): Promise<PreparedRuntimeGatewayProjectV1> {
       const project = validateWorkcellProjectV5(input)
       if (!CONFIG_REVISION.test(candidateConfigRevision)) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_CONFIG_REVISION_INVALID', 'Project config revision must be SHA-256 hex.')
+      const currentStatus = expectedPrevious === undefined ? null : await readStatus()
+      if (currentStatus !== null && currentStatus.project.phase !== 'ready' && currentStatus.project.phase !== 'not-applied') {
+        throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_AUTHORITY_UNAVAILABLE', 'Gateway authority is not available for activation.')
+      }
+      const currentAuthority = currentStatus === null ? null : authorityFromStatus(currentStatus)
+      if (expectedPrevious === undefined) {
+        // The V5 coordinator always supplies the third argument. This keeps
+        // the opaque port usable by isolated unit adapters without inventing
+        // an authority from an unchecked status response.
+      } else if (expectedPrevious === null) {
+        if (currentAuthority !== null) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_AUTHORITY_MISMATCH', 'Gateway has an unexpected active Project authority.')
+      } else if (currentAuthority === null || currentAuthority.projectId !== expectedPrevious.project.projectId || currentAuthority.revisionId !== expectedPrevious.revisionId || currentAuthority.configRevision !== expectedPrevious.configRevision) {
+        throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_AUTHORITY_MISMATCH', 'Gateway authority does not match the coordinator previous Project.')
+      }
+      const activationAttemptId = expectedPrevious === undefined ? 'attempt-0001' : createActivationAttemptId()
+      if (typeof activationAttemptId !== 'string' || !ATTEMPT.test(activationAttemptId)) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_ACTIVATION_ATTEMPT_INVALID', 'Activation attempt token must be bounded URL-safe text.')
       const handle = Object.freeze({ projectRevisionId: project.revisionId, configRevision: candidateConfigRevision })
       if (latestGeneration >= Number.MAX_SAFE_INTEGER) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_CANDIDATE_GENERATION_EXHAUSTED', 'Prepared Gateway candidate generation is exhausted.')
-      candidates.set(handle, { project, configRevision: candidateConfigRevision, state: 'prepared', generation: ++latestGeneration })
+      candidates.set(handle, { project, configRevision: candidateConfigRevision, state: 'prepared', generation: ++latestGeneration, activationAttemptId, expectedAuthority: currentAuthority })
       return handle
     },
     async activate(candidate: PreparedRuntimeGatewayProjectV1): Promise<RuntimeGatewayStatusV1> {
@@ -186,29 +224,38 @@ export function createRuntimeGatewayConnectivityClientV1(
       if (record.state !== 'prepared') throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_CANDIDATE_STALE', 'Prepared Gateway candidate is no longer activatable.')
       if (record.generation !== latestGeneration) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_CANDIDATE_STALE', 'Prepared Gateway candidate was superseded by a newer candidate.')
       record.state = 'attempted'
-      const status = statusFor(validateRuntimeGatewayStatusV1(await request('/project', { method: 'PUT', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(record.project) })), record.project, record.configRevision)
+      const status = statusFor(validateRuntimeGatewayStatusV1(await request('/project', { method: 'PUT', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-activation-v1', protocolVersion: 1, project: record.project, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId, expectedAuthority: record.expectedAuthority }) })), record.project, record.configRevision, record.activationAttemptId)
       record.state = 'activated'
       return status
     },
     async reactivate(previous: PublishedProjectV5): Promise<RuntimeGatewayStatusV1> {
       const project = validateWorkcellProjectV5(previous.project)
       if (!CONFIG_REVISION.test(previous.configRevision)) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_CONFIG_REVISION_INVALID', 'Project config revision must be SHA-256 hex.')
-      const status = validateRuntimeGatewayStatusV1(await request('/project', { method: 'PUT', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(project) }))
-      return statusFor(status, project, previous.configRevision)
+      const before = await readStatus()
+      if (before.project.phase !== 'not-applied') throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_AUTHORITY_MISMATCH', 'Gateway must be inactive before conditional previous reactivation.')
+      const activationAttemptId = createActivationAttemptId()
+      if (typeof activationAttemptId !== 'string' || !ATTEMPT.test(activationAttemptId)) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_ACTIVATION_ATTEMPT_INVALID', 'Activation attempt token must be bounded URL-safe text.')
+      const status = validateRuntimeGatewayStatusV1(await request('/project', { method: 'PUT', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-activation-v1', protocolVersion: 1, project, configRevision: previous.configRevision, activationAttemptId, expectedAuthority: null }) }))
+      return statusFor(status, project, previous.configRevision, activationAttemptId)
     },
     readStatus,
-    async rollback(candidate: PreparedRuntimeGatewayProjectV1): Promise<void> {
+    async rollback(candidate: PreparedRuntimeGatewayProjectV1): Promise<ProjectV5GatewayRollbackDispositionV1> {
       const record = requireCandidate(candidate)
-      if (record.state === 'prepared') { record.state = 'consumed'; return }
+      if (record.state === 'prepared') { record.state = 'consumed'; return 'prepared-only' }
       try {
-        await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision })
+        await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
+        record.state = 'consumed'
+        return 'candidate-deactivated'
       } catch (error) {
-        if (!(isRuntimeGatewayConnectivityClientV1Error(error) && error.code === 'PROJECT_DEACTIVATION_CONFLICT')) throw error
+        if (!(isRuntimeGatewayConnectivityClientV1Error(error) && (error.code === 'PROJECT_DEACTIVATION_CONFLICT' || error.code === 'RUNTIME_GATEWAY_UNAVAILABLE' || error.code === 'RUNTIME_GATEWAY_TIMEOUT' || error.code === 'RUNTIME_GATEWAY_RESPONSE_INVALID'))) throw error
+        const explicitConflict = isRuntimeGatewayConnectivityClientV1Error(error) && error.code === 'PROJECT_DEACTIVATION_CONFLICT'
         const current = await readStatus()
-        const candidateIsActive = current.project.projectId === record.project.projectId && current.project.revisionId === record.project.revisionId && current.project.configRevision === record.configRevision
-        if (candidateIsActive) throw error
+        if (current.project.phase === 'not-applied') { record.state = 'consumed'; return explicitConflict ? 'candidate-absent' : 'candidate-deactivated' }
+        if (!sameAuthority(authorityFromStatus(current), Object.freeze({ projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId }))) { record.state = 'consumed'; return 'other-authority' }
+        await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
+        record.state = 'consumed'
+        return 'candidate-deactivated'
       }
-      record.state = 'consumed'
     },
     async deactivate(): Promise<RuntimeGatewayStatusV1> {
       return deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, unconditional: true })

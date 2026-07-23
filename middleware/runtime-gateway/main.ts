@@ -13,8 +13,6 @@ import { WebSocket, WebSocketServer } from 'ws'
 import {
   MAX_OPC_UA_VALUES_PER_CALL_V5,
   MAX_RUNTIME_BATCH_BYTES_V5,
-  configRevisionForProjectV5,
-  validateWorkcellProjectV5,
   type WorkcellProjectV5,
 } from '../../src/core/project-v5/index.js'
 import {
@@ -63,6 +61,11 @@ import {
   validateRuntimeGatewayStatusV1,
   type RuntimeGatewayStatusV1,
 } from '../../src/core/runtime-protocol/gateway-status-v1.js'
+import {
+  runtimeProjectAuthorityEqualsV1,
+  validateRuntimeProjectActivationRequestV1,
+  type RuntimeProjectAuthorityV1,
+} from '../../src/core/runtime-protocol/project-activation-v1.js'
 import type { RuntimeIntegrationDiagnosticsV1 } from '../../src/core/runtime-protocol/integration-diagnostics-v1.js'
 import { createBrowserPublisherLeaseManagerV1, type BrowserPublisherLeaseManagerV1 } from './browser-publisher-lease.js'
 import { createRuntimeIntegrationDiagnosticsV1, type RuntimeIntegrationDiagnosticsBuilderV1 } from './integration-diagnostics.js'
@@ -119,6 +122,7 @@ interface ActiveProjectRuntimeV1 {
   readonly runtimeToken: symbol
   readonly project: WorkcellProjectV5
   readonly configRevision: string
+  readonly activationAttemptId: string
   readonly generation: number
   readonly commandDedupe: RuntimeCommandDedupeRegistryV1
   readonly commandService: RuntimeCommandServiceV1 | null
@@ -305,6 +309,7 @@ export function createRuntimeGatewayEntrypointService(
   let stateBatchHub: StateBatchHubV1 | null = createStateBatchHub()
   const incompleteBodyRequests = new Set<IncomingMessage>()
   let activeRuntime: ActiveProjectRuntimeV1 | null = null
+  let projectAuthorityPhase: 'inactive' | 'active' | 'deactivating' | 'recovery-required' = 'inactive'
   let lifecycleTail: Promise<void> = Promise.resolve()
   let runtimeTail: Promise<void> = Promise.resolve()
   let committedCommandGeneration = initialCommittedCommandGeneration
@@ -455,17 +460,23 @@ export function createRuntimeGatewayEntrypointService(
     const project = active === null
       ? {
           phase: 'not-applied' as const,
+          authorityPhase: 'inactive' as const,
           projectId: null,
           revisionId: null,
           configRevision: null,
+          activationAttemptId: null,
           readinessCode: 'NO_ACTIVE_REVISION' as const,
         }
       : {
-          phase: 'ready' as const,
+          phase: projectAuthorityPhase === 'active' ? 'ready' as const : projectAuthorityPhase,
+          authorityPhase: projectAuthorityPhase,
           projectId: active.project.projectId,
           revisionId: active.project.revisionId,
           configRevision: active.configRevision,
-          readinessCode: 'READY' as const,
+          activationAttemptId: active.activationAttemptId,
+          readinessCode: projectAuthorityPhase === 'active'
+            ? 'READY' as const
+            : projectAuthorityPhase === 'deactivating' ? 'DEACTIVATING' as const : 'RECOVERY_REQUIRED' as const,
         }
     const serverStatus = active?.serverAdapter?.status()
     const server = serverStatus?.started === true
@@ -540,9 +551,22 @@ export function createRuntimeGatewayEntrypointService(
     return true
   }
 
-  async function replaceActiveProject(project: WorkcellProjectV5): Promise<void> {
+  function activeAuthority(): RuntimeProjectAuthorityV1 | null {
+    const active = activeRuntime
+    return active === null ? null : Object.freeze({
+      projectId: active.project.projectId,
+      revisionId: active.project.revisionId,
+      configRevision: active.configRevision,
+      activationAttemptId: active.activationAttemptId,
+    })
+  }
+
+  async function replaceActiveProject(
+    project: WorkcellProjectV5,
+    configRevision: string,
+    activationAttemptId: string,
+  ): Promise<void> {
     validateProjectMode(project)
-    const configRevision = await configRevisionForProjectV5(project)
     const previous = activeRuntime
     const candidateGeneration = committedCommandGeneration + 1
     if (!Number.isSafeInteger(candidateGeneration)) {
@@ -664,6 +688,7 @@ export function createRuntimeGatewayEntrypointService(
         runtimeToken: candidateRuntimeToken,
         project,
         configRevision,
+        activationAttemptId,
         generation: candidateGeneration,
         commandDedupe: candidateCommandDedupe,
         commandService: candidateCommandService,
@@ -699,6 +724,7 @@ export function createRuntimeGatewayEntrypointService(
       // tail. A reentrant callback during flush reaches the installed Hub.
       clearCommandStagingSweepTimer()
       activeRuntime = nextRuntime
+      projectAuthorityPhase = 'active'
       scheduleCommandStagingSweep(nextRuntime)
       committedCommandGeneration = candidateGeneration
       preparedActivation.installPrepared()
@@ -740,7 +766,10 @@ export function createRuntimeGatewayEntrypointService(
       }
       if (!recovered) {
         activeRuntime = null
+        projectAuthorityPhase = 'inactive'
         requireStateBatchHub().deactivateRevision()
+      } else {
+        projectAuthorityPhase = 'active'
       }
 
       throw new RuntimeGatewayHttpError(
@@ -885,17 +914,25 @@ export function createRuntimeGatewayEntrypointService(
       incompleteBodyRequests,
       () => shutdownRequested,
     )
-    let project: WorkcellProjectV5
+    let activation: ReturnType<typeof validateRuntimeProjectActivationRequestV1>
     try {
-      project = validateWorkcellProjectV5(body)
+      activation = validateRuntimeProjectActivationRequestV1(body)
     } catch (error) {
       throw new RuntimeGatewayHttpError(
         400,
-        'PROJECT_INVALID',
-        `Project V5 validation failed: ${conciseError(error)}`,
+        'PROJECT_ACTIVATION_INVALID',
+        `Project activation request failed validation: ${conciseError(error)}`,
       )
     }
-    await enqueueRuntimeTransition(async () => replaceActiveProject(project))
+    await enqueueRuntimeTransition(async () => {
+      if (projectAuthorityPhase === 'recovery-required') {
+        throw new RuntimeGatewayHttpError(503, 'PROJECT_RECOVERY_REQUIRED', 'Project runtime requires recovery before activation.')
+      }
+      if (!runtimeProjectAuthorityEqualsV1(activeAuthority(), activation.expectedAuthority)) {
+        throw new RuntimeGatewayHttpError(409, 'PROJECT_ACTIVATION_CONFLICT', 'Expected Gateway authority does not match the active Project.')
+      }
+      await replaceActiveProject(activation.project, activation.configRevision, activation.activationAttemptId)
+    })
     return status()
   }
 
@@ -907,9 +944,9 @@ export function createRuntimeGatewayEntrypointService(
     const unconditional = body.unconditional === true
     if (unconditional) expectExactKeys(body, ['type', 'protocolVersion', 'unconditional'], '$')
     else {
-      expectExactKeys(body, ['type', 'protocolVersion', 'projectId', 'revisionId', 'configRevision'], '$')
-      if (typeof body.projectId !== 'string' || typeof body.revisionId !== 'string' || typeof body.configRevision !== 'string') {
-        throw new RuntimeGatewayHttpError(400, 'PROJECT_DEACTIVATION_INVALID', 'Fenced deactivation requires Project, Revision, and config revision strings.')
+      expectExactKeys(body, ['type', 'protocolVersion', 'projectId', 'revisionId', 'configRevision', 'activationAttemptId'], '$')
+      if (typeof body.projectId !== 'string' || typeof body.revisionId !== 'string' || typeof body.configRevision !== 'string' || typeof body.activationAttemptId !== 'string') {
+        throw new RuntimeGatewayHttpError(400, 'PROJECT_DEACTIVATION_INVALID', 'Fenced deactivation requires Project, Revision, config revision, and activation attempt strings.')
       }
     }
     await enqueueRuntimeTransition(async () => {
@@ -918,6 +955,7 @@ export function createRuntimeGatewayEntrypointService(
         && active.project.projectId === body.projectId
         && active.project.revisionId === body.revisionId
         && active.configRevision === body.configRevision
+        && active.activationAttemptId === body.activationAttemptId
       if (active === null) {
         if (unconditional) return
         throw new RuntimeGatewayHttpError(409, 'PROJECT_DEACTIVATION_CONFLICT', 'Fenced deactivation does not match an active Project revision.')
@@ -926,6 +964,7 @@ export function createRuntimeGatewayEntrypointService(
         throw new RuntimeGatewayHttpError(409, 'PROJECT_DEACTIVATION_CONFLICT', 'Fenced deactivation does not match the active Project revision.')
       }
       if (active === null) return
+      projectAuthorityPhase = 'deactivating'
       const stopResults = await Promise.allSettled([
         Promise.resolve().then(() => active.clientAdapter?.stop()),
         Promise.resolve().then(() => active.serverAdapter?.stop()),
@@ -938,8 +977,10 @@ export function createRuntimeGatewayEntrypointService(
           && activeRuntime?.project.revisionId === active.project.revisionId
           && activeRuntime?.configRevision === active.configRevision
         if (!recoveredExactly) {
+          projectAuthorityPhase = 'recovery-required'
           throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Project deactivation failed and the prior runtime could not be recovered.')
         }
+        projectAuthorityPhase = 'active'
         throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_FAILED', 'Project deactivation failed; the prior runtime was recovered.')
       }
       active.commandService?.close()
@@ -951,6 +992,7 @@ export function createRuntimeGatewayEntrypointService(
       browserPublisherSocket = null
       browserLeasesBySocket.clear()
       activeRuntime = null
+      projectAuthorityPhase = 'inactive'
       requireStateBatchHub().deactivateRevision()
     })
     return status()

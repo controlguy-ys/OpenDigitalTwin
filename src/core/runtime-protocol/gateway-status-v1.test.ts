@@ -18,6 +18,7 @@ function bridgeStatusFixtureV1() {
     project: {
       phase: 'ready' as const, projectId: 'project-a', revisionId: 'revision-a',
       configRevision: 'a'.repeat(64),
+      activationAttemptId: 'attempt-0001', authorityPhase: 'active' as const,
       readinessCode: 'READY' as const,
     },
     opcUa: {
@@ -72,5 +73,32 @@ describe('validateRuntimeGatewayStatusV1', () => {
       ...source,
       opcUa: { ...source.opcUa, server: { ...source.opcUa.server, endpointUrl: null } },
     })).toThrow('RUNTIME_GATEWAY_STATUS_INVALID')
+  })
+
+  it('requires an exact activation token and inactive authority for no Project', () => {
+    const source = bridgeStatusFixtureV1()
+    expect(() => validateRuntimeGatewayStatusV1({
+      ...source,
+      project: { ...source.project, activationAttemptId: 'bad' },
+    })).toThrow('RUNTIME_GATEWAY_STATUS_INVALID')
+    expect(() => validateRuntimeGatewayStatusV1({
+      ...source,
+      project: {
+        phase: 'not-applied', authorityPhase: 'active', projectId: null, revisionId: null,
+        configRevision: null, activationAttemptId: null, readinessCode: 'NO_ACTIVE_REVISION',
+      },
+    })).toThrow('RUNTIME_GATEWAY_STATUS_INVALID')
+  })
+
+  it.each([
+    ['ready', 'active', 'READY'],
+    ['deactivating', 'deactivating', 'DEACTIVATING'],
+    ['recovery-required', 'recovery-required', 'RECOVERY_REQUIRED'],
+  ] as const)('accepts the complete %s authority cross-field combination', (phase, authorityPhase, readinessCode) => {
+    const source = bridgeStatusFixtureV1()
+    expect(validateRuntimeGatewayStatusV1({
+      ...source,
+      project: { ...source.project, phase, authorityPhase, readinessCode },
+    }).project).toMatchObject({ phase, authorityPhase, readinessCode, activationAttemptId: 'attempt-0001' })
   })
 })

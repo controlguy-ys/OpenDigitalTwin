@@ -7,8 +7,8 @@ import {
   isRuntimeGatewayConnectivityClientV1Error,
 } from './runtime-gateway-connectivity-client.js'
 
-function status(projectId: string | null, revisionId: string | null, configRevision: string | null) {
-  return { type: 'runtime-gateway-status-v1', protocolVersion: 1, observedAtMs: 1, gateway: { gatewayId: 'g', phase: 'online', runtimeKind: 'native' }, deployment: { http: { bindHost: '127.0.0.1', port: 1 }, opcUaServer: { bindHost: '127.0.0.1', port: 1, advertisedHost: '127.0.0.1', advertisedPort: 1 } }, project: projectId === null ? { phase: 'not-applied', projectId: null, revisionId: null, configRevision: null, readinessCode: 'NO_ACTIVE_REVISION' } : { phase: 'ready', projectId, revisionId, configRevision, readinessCode: 'READY' }, opcUa: { mode: 'off', server: { phase: 'disabled', endpointUrl: null, lastError: null }, clientEndpoints: [] } }
+function status(projectId: string | null, revisionId: string | null, configRevision: string | null, activationAttemptId = 'attempt-0001') {
+  return { type: 'runtime-gateway-status-v1', protocolVersion: 1, observedAtMs: 1, gateway: { gatewayId: 'g', phase: 'online', runtimeKind: 'native' }, deployment: { http: { bindHost: '127.0.0.1', port: 1 }, opcUaServer: { bindHost: '127.0.0.1', port: 1, advertisedHost: '127.0.0.1', advertisedPort: 1 } }, project: projectId === null ? { phase: 'not-applied', authorityPhase: 'inactive', projectId: null, revisionId: null, configRevision: null, activationAttemptId: null, readinessCode: 'NO_ACTIVE_REVISION' } : { phase: 'ready', authorityPhase: 'active', projectId, revisionId, configRevision, activationAttemptId, readinessCode: 'READY' }, opcUa: { mode: 'off', server: { phase: 'disabled', endpointUrl: null, lastError: null }, clientEndpoints: [] } }
 }
 
 describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
@@ -17,7 +17,8 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify(status(project.projectId, project.revisionId, hash)), { status: 200 }))
     const client = createRuntimeGatewayConnectivityClientV1({ fetch }); const prepared = await client.prepare(project, hash)
     await expect(client.activate(prepared)).resolves.toMatchObject({ project: { configRevision: hash } })
-    expect(fetch).toHaveBeenCalledWith('/runtime/project', expect.objectContaining({ method: 'PUT', body: JSON.stringify(project) }))
+    expect(fetch).toHaveBeenCalledWith('/runtime/project', expect.objectContaining({ method: 'PUT' }))
+    expect(JSON.parse(String(fetch.mock.calls[0]![1].body))).toMatchObject({ type: 'runtime-project-activation-v1', project, configRevision: hash, activationAttemptId: 'attempt-0001', expectedAuthority: null })
   })
   it('rejects a ready status for a different Project or hash', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64)
@@ -34,12 +35,12 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async (_url, init) => { calls.push(init); return new Response(JSON.stringify(calls.length === 1 ? {} : status(null, null, null)), { status: 200 }) } })
     const prepared = await client.prepare(project, hash)
     await expect(client.activate(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_STATUS_INVALID' })
-    await expect(client.rollback(prepared)).resolves.toBeUndefined()
-    expect(JSON.parse(String(calls[1]!.body))).toEqual({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: hash })
+    await expect(client.rollback(prepared)).resolves.toBe('candidate-deactivated')
+    expect(JSON.parse(String(calls[1]!.body))).toMatchObject({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: hash, activationAttemptId: 'attempt-0001' })
   })
   it('consumes a never-attempted prepared candidate without a request', async () => {
     const fetch = vi.fn()
-    const client = createRuntimeGatewayConnectivityClientV1({ fetch })
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch, createActivationAttemptId: () => 'attempt-0001' })
     const prepared = await client.prepare(validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()), 'a'.repeat(64))
     await client.rollback(prepared)
     expect(fetch).not.toHaveBeenCalled()
@@ -49,13 +50,13 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64); let call = 0
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => { call += 1; if (call === 1) throw new Error('lost'); if (call === 2) return new Response(JSON.stringify({ code: 'PROJECT_DEACTIVATION_CONFLICT', message: 'conflict' }), { status: 409 }); return new Response(JSON.stringify(status('previous', 'previous', 'b'.repeat(64))), { status: 200 }) } })
     const prepared = await client.prepare(project, hash); await expect(client.activate(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_UNAVAILABLE' })
-    await expect(client.rollback(prepared)).resolves.toBeUndefined(); await expect(client.rollback(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_CANDIDATE_CONSUMED' })
+    await expect(client.rollback(prepared)).resolves.toBe('other-authority'); await expect(client.rollback(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_CANDIDATE_CONSUMED' })
   })
   it('does not consume rollback conflict when status still matches candidate', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64); let call = 0
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => { call += 1; if (call === 1) throw new Error('lost'); if (call === 2) return new Response(JSON.stringify({ code: 'PROJECT_DEACTIVATION_CONFLICT', message: 'conflict' }), { status: 409 }); return new Response(JSON.stringify(status(project.projectId, project.revisionId, hash)), { status: 200 }) } })
     const prepared = await client.prepare(project, hash); await client.activate(prepared).catch(() => undefined)
-    await expect(client.rollback(prepared)).rejects.toMatchObject({ code: 'PROJECT_DEACTIVATION_CONFLICT' })
+    await expect(client.rollback(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_STATUS_MISMATCH' })
   })
   it('accepts a versioned connection diagnostic result', async () => {
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response(JSON.stringify({ type: 'opcua-test-connection-result-v1', protocolVersion: 1, outcome: 'succeeded', namespaces: ['urn:controller'] })) })
@@ -89,10 +90,10 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
   })
   it('validates and reactivates the supplied previous publication exactly', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const previous = { project, revisionId: project.revisionId, configRevision: 'a'.repeat(64) }
-    const fetch = vi.fn(async () => new Response(JSON.stringify(status(project.projectId, project.revisionId, previous.configRevision))))
-    const client = createRuntimeGatewayConnectivityClientV1({ fetch })
+    let call = 0; const fetch = vi.fn(async () => new Response(JSON.stringify(call++ === 0 ? status(null, null, null) : status(project.projectId, project.revisionId, previous.configRevision))))
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch, createActivationAttemptId: () => 'attempt-0001' })
     await expect(client.reactivate({ ...previous, configRevision: 'bad' })).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_CONFIG_REVISION_INVALID' }); expect(fetch).not.toHaveBeenCalled()
-    await expect(client.reactivate(previous)).resolves.toMatchObject({ project: { configRevision: previous.configRevision } }); expect(fetch).toHaveBeenCalledWith('/runtime/project', expect.objectContaining({ method: 'PUT', body: JSON.stringify(project) }))
+    await expect(client.reactivate(previous)).resolves.toMatchObject({ project: { configRevision: previous.configRevision } }); expect(fetch).toHaveBeenCalledWith('/runtime/project', expect.objectContaining({ method: 'PUT' }))
   })
   it('cleans previous only when it is not the active Gateway revision', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const previous = { project, revisionId: project.revisionId, configRevision: 'a'.repeat(64) }

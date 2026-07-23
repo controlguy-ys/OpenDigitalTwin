@@ -324,12 +324,36 @@ async function requestJson(
   path: string,
   body: unknown,
 ): Promise<Response> {
-  return fetch(`http://127.0.0.1:${port}${path}`, {
+  let requestBody = body
+  if (method === 'PUT' && path === '/runtime/project') {
+    try {
+      const project = validateWorkcellProjectV5(body)
+      requestBody = {
+        type: 'runtime-project-activation-v1', protocolVersion: 1, project,
+        configRevision: await configRevisionForProjectV5(project),
+        activationAttemptId: `attempt-${project.revisionId}`,
+        expectedAuthority: await (async () => {
+          try {
+            const status = gatewayStatus(await (await fetch(`http://127.0.0.1:${port}/runtime/status`)).json())
+            return status.project.phase === 'ready' ? {
+              projectId: status.project.projectId, revisionId: status.project.revisionId,
+              configRevision: status.project.configRevision,
+              activationAttemptId: status.project.activationAttemptId,
+            } : null
+          } catch { return null }
+        })(),
+      }
+    } catch {
+      // Intentionally preserve malformed/V4 payloads for the boundary test.
+    }
+  }
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
 
     method,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
   })
+  return response
 }
 
 async function requestCommand(port: number, body: unknown): Promise<Response> {
@@ -2761,12 +2785,12 @@ describe('runtime Gateway entrypoint', () => {
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
       const request = async (body: unknown) => fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
       const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
-      expect((await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: 'other', revisionId: project.revisionId, configRevision: revision })).status).toBe(409)
-      const success = await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision })
+      expect((await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: 'other', revisionId: project.revisionId, configRevision: revision, activationAttemptId: `attempt-${project.revisionId}` })).status).toBe(409)
+      const success = await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision, activationAttemptId: `attempt-${project.revisionId}` })
       expect(success.status).toBe(200)
       expect(await success.json()).toMatchObject({ project: { phase: 'not-applied', projectId: null, revisionId: null, configRevision: null, readinessCode: 'NO_ACTIVE_REVISION' } })
       expect(client.stop).toHaveBeenCalledOnce()
-      expect((await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision })).status).toBe(409)
+      expect((await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision, activationAttemptId: `attempt-${project.revisionId}` })).status).toBe(409)
       expect((await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, unconditional: true })).status).toBe(200)
     } finally { await service.stop() }
   })
@@ -2846,7 +2870,7 @@ describe('runtime Gateway entrypoint', () => {
     try {
       const project = sampleProject('bridge'); expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
       const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
-      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision }) })
+      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision, activationAttemptId: `attempt-${project.revisionId}` }) })
       expect(response.status).toBe(503); expect(server.stop).toHaveBeenCalledOnce()
       expect((await service.status()).project.phase).toBe('ready')
     } finally { ;(client.adapter as unknown as { stop: () => Promise<void> }).stop = async () => undefined; await service.stop() }
@@ -2859,7 +2883,7 @@ describe('runtime Gateway entrypoint', () => {
     const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter, createOpcUaServerAdapter: () => server.adapter }); await service.start()
     try {
       const project = sampleProject('bridge'); await requestJson(port, 'PUT', '/runtime/project', project); const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
-      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision }) })
+      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision, activationAttemptId: `attempt-${project.revisionId}` }) })
       expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_FAILED' }); expect(service.status().project).toMatchObject({ phase: 'ready', revisionId: project.revisionId })
     } finally { ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = originalStop; await service.stop() }
   })
@@ -2873,8 +2897,30 @@ describe('runtime Gateway entrypoint', () => {
       ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = vi.fn(async () => { throw new Error('server stop') })
       ;(client.adapter as unknown as { start: () => Promise<void> }).start = vi.fn(async () => { throw new Error('client restart') })
       const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
-      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision }) })
-      expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED' }); expect(service.status().project.phase).toBe('ready')
+      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision, activationAttemptId: `attempt-${project.revisionId}` }) })
+      expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED' }); expect(service.status().project).toMatchObject({ phase: 'recovery-required', authorityPhase: 'recovery-required', readinessCode: 'RECOVERY_REQUIRED', revisionId: project.revisionId })
     } finally { ;(client.adapter as unknown as { start: () => Promise<void> }).start = originalClientStart; ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = originalServerStop; await service.stop() }
+  })
+
+  it('rejects a stale activation authority without stopping or replacing the durable winner', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
+    const client = fakeClientAdapter(); const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter })
+    await service.start()
+    try {
+      const winner = sampleProject('client', 'revision-cas-winner')
+      expect((await requestJson(port, 'PUT', '/runtime/project', winner)).status).toBe(200)
+      const candidate = sampleProject('client', 'revision-cas-loser')
+      const configRevision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(candidate))
+      const stale = await fetch(`http://127.0.0.1:${port}/runtime/project`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+          type: 'runtime-project-activation-v1', protocolVersion: 1, project: candidate,
+          configRevision, activationAttemptId: 'attempt-cas-loser', expectedAuthority: null,
+        }),
+      })
+      expect(stale.status).toBe(409)
+      expect(await stale.json()).toMatchObject({ code: 'PROJECT_ACTIVATION_CONFLICT' })
+      expect(gatewayStatus(service.status()).project).toMatchObject({ phase: 'ready', revisionId: winner.revisionId, activationAttemptId: `attempt-${winner.revisionId}` })
+      expect(client.stop).not.toHaveBeenCalled()
+    } finally { await service.stop() }
   })
 })

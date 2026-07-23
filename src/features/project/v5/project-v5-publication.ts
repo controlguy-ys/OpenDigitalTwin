@@ -34,14 +34,20 @@ export interface ProjectV5BrowserRuntimePublicationPort<PreparedRuntime = unknow
 }
 
 export interface ProjectV5GatewayPublicationPort<PreparedGateway = unknown> {
-  prepare(project: WorkcellProjectV5, configRevision: string): Promise<PreparedGateway>
+  prepare(project: WorkcellProjectV5, configRevision: string, expectedPrevious: PublishedProjectV5 | null): Promise<PreparedGateway>
   activate(prepared: PreparedGateway): Promise<RuntimeGatewayStatusV1>
   reactivate(previous: PublishedProjectV5): Promise<RuntimeGatewayStatusV1>
   readStatus(): Promise<RuntimeGatewayStatusV1>
-  rollback(prepared: PreparedGateway): Promise<void>
+  rollback(prepared: PreparedGateway): Promise<ProjectV5GatewayRollbackDispositionV1>
   deactivate(): Promise<RuntimeGatewayStatusV1>
   cleanupPrevious(previous: PublishedProjectV5): Promise<void>
 }
+
+export type ProjectV5GatewayRollbackDispositionV1 =
+  | 'prepared-only'
+  | 'candidate-deactivated'
+  | 'candidate-absent'
+  | 'other-authority'
 
 export interface ProjectV5PublicationRequest {
   readonly candidate: WorkcellProjectV5
@@ -455,7 +461,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     let gatewayActivationAttempted = false
     try {
       preparedRuntime = await runtime.prepare(next.project, next.configRevision)
-      preparedGateway = await gateway.prepare(next.project, next.configRevision)
+      preparedGateway = await gateway.prepare(next.project, next.configRevision, null)
       await runtime.apply(preparedRuntime)
       gatewayActivationAttempted = true
       assertGatewayStatus(await gateway.activate(preparedGateway), next)
@@ -544,7 +550,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
             )
           }
           preparedRuntime = await runtime.prepare(project, configRevision)
-          preparedGateway = await gateway.prepare(project, configRevision)
+          preparedGateway = await gateway.prepare(project, configRevision, previous)
           await runtime.apply(preparedRuntime)
           gatewayActivationAttempted = true
           assertGatewayStatus(await gateway.activate(preparedGateway), next)
@@ -565,10 +571,11 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
             }
           }
 
+          let gatewayRollback: ProjectV5GatewayRollbackDispositionV1 | undefined
           if (preparedGateway !== undefined) {
-            await compensate(() => gateway.rollback(preparedGateway!))
+            await compensate(async () => { gatewayRollback = await gateway.rollback(preparedGateway!) })
           }
-          if (gatewayActivationAttempted && previous === null) {
+          if (gatewayActivationAttempted && previous === null && gatewayRollback === 'candidate-deactivated') {
             await compensate(async () => {
               assertGatewayInactiveStatus(await gateway.readStatus())
             })
@@ -583,7 +590,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           } else if (preparedRevision !== undefined && !repositoryCommitStarted) {
             await compensate(() => repository.discardPreparedRevision(preparedRevision!))
           }
-          if (gatewayActivationAttempted && previous !== null) {
+          if (gatewayActivationAttempted && previous !== null && gatewayRollback === 'candidate-deactivated') {
             await compensate(async () => {
               assertGatewayStatus(await gateway.reactivate(previous), previous)
               assertGatewayStatus(await gateway.readStatus(), previous)

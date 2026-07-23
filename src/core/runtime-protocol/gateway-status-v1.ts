@@ -45,11 +45,18 @@ export interface RuntimeGatewayStatusV1 {
     }
   }
   readonly project: {
-    readonly phase: 'not-applied' | 'ready'
+    readonly phase: 'not-applied' | 'ready' | 'deactivating' | 'recovery-required'
+    /**
+     * Authority is deliberately more specific than readiness.  A recovery
+     * required runtime can still retain the old active tuple, but it must not
+     * accept a new mutation until an operator has recovered it.
+     */
+    readonly authorityPhase: 'inactive' | 'active' | 'deactivating' | 'recovery-required'
     readonly projectId: string | null
     readonly revisionId: string | null
     readonly configRevision: string | null
-    readonly readinessCode: 'NO_ACTIVE_REVISION' | 'READY'
+    readonly activationAttemptId: string | null
+    readonly readinessCode: 'NO_ACTIVE_REVISION' | 'READY' | 'DEACTIVATING' | 'RECOVERY_REQUIRED'
   }
   readonly opcUa: {
     readonly mode: RuntimeGatewayModeV1
@@ -72,6 +79,7 @@ export class RuntimeGatewayStatusValidationError extends Error {
 }
 
 const CONFIG_REVISION_PATTERN = /^[0-9a-f]{64}$/
+const ACTIVATION_ATTEMPT_PATTERN = /^[A-Za-z0-9_-]{8,128}$/
 
 function invalid(path: string, reason: string): never {
   throw new RuntimeGatewayStatusValidationError(path, reason)
@@ -242,34 +250,55 @@ export function validateRuntimeGatewayStatusV1(value: unknown): RuntimeGatewaySt
   const projectSource = record(source.project, '$.project')
   exactKeys(projectSource, [
     'phase',
+    'authorityPhase',
     'projectId',
     'revisionId',
     'configRevision',
+    'activationAttemptId',
     'readinessCode',
   ], '$.project')
-  const projectPhase = enumValue(projectSource.phase, ['not-applied', 'ready'] as const, '$.project.phase')
+  const projectPhase = enumValue(projectSource.phase, ['not-applied', 'ready', 'deactivating', 'recovery-required'] as const, '$.project.phase')
+  const authorityPhase = enumValue(projectSource.authorityPhase, [
+    'inactive', 'active', 'deactivating', 'recovery-required',
+  ] as const, '$.project.authorityPhase')
   const projectId = nullableNonEmptyString(projectSource.projectId, '$.project.projectId')
   const revisionId = nullableNonEmptyString(projectSource.revisionId, '$.project.revisionId')
   const configRevision = nullableNonEmptyString(projectSource.configRevision, '$.project.configRevision')
+  const activationAttemptId = nullableNonEmptyString(projectSource.activationAttemptId, '$.project.activationAttemptId')
   const readinessCode = enumValue(
     projectSource.readinessCode,
-    ['NO_ACTIVE_REVISION', 'READY'] as const,
+    ['NO_ACTIVE_REVISION', 'READY', 'DEACTIVATING', 'RECOVERY_REQUIRED'] as const,
     '$.project.readinessCode',
   )
   if (
     projectPhase === 'not-applied'
-    && (projectId !== null || revisionId !== null || configRevision !== null || readinessCode !== 'NO_ACTIVE_REVISION')
+    && (projectId !== null || revisionId !== null || configRevision !== null || activationAttemptId !== null || readinessCode !== 'NO_ACTIVE_REVISION' || authorityPhase !== 'inactive')
   ) {
     invalid('$.project', 'not-applied requires null ids and NO_ACTIVE_REVISION')
   }
   if (
     projectPhase === 'ready'
-    && (projectId === null || revisionId === null || configRevision === null || readinessCode !== 'READY')
+    && (projectId === null || revisionId === null || configRevision === null || activationAttemptId === null || readinessCode !== 'READY' || authorityPhase !== 'active')
   ) {
     invalid('$.project', 'ready requires ids, configRevision, and READY')
   }
+  if (
+    projectPhase === 'deactivating'
+    && (projectId === null || revisionId === null || configRevision === null || activationAttemptId === null || readinessCode !== 'DEACTIVATING' || authorityPhase !== 'deactivating')
+  ) {
+    invalid('$.project', 'deactivating requires exact active authority and DEACTIVATING')
+  }
+  if (
+    projectPhase === 'recovery-required'
+    && (projectId === null || revisionId === null || configRevision === null || activationAttemptId === null || readinessCode !== 'RECOVERY_REQUIRED' || authorityPhase !== 'recovery-required')
+  ) {
+    invalid('$.project', 'recovery-required retains exact authority fencing')
+  }
   if (configRevision !== null && !CONFIG_REVISION_PATTERN.test(configRevision)) {
     invalid('$.project.configRevision', 'must be lowercase 64-hex')
+  }
+  if (activationAttemptId !== null && !ACTIVATION_ATTEMPT_PATTERN.test(activationAttemptId)) {
+    invalid('$.project.activationAttemptId', 'must be a bounded activation attempt token')
   }
 
   const opcUaSource = record(source.opcUa, '$.opcUa')
@@ -315,9 +344,11 @@ export function validateRuntimeGatewayStatusV1(value: unknown): RuntimeGatewaySt
     }),
     project: Object.freeze({
       phase: projectPhase,
+      authorityPhase,
       projectId,
       revisionId,
       configRevision,
+      activationAttemptId,
       readinessCode,
     }),
     opcUa: Object.freeze({
