@@ -229,11 +229,15 @@ export function createOpcUaServerAdapterV1(
       },
       nodeset_filename: [...ROBOTICS_NODESET_FILES_V1],
       maxConnectionsPerEndpoint: 16,
+      serverCapabilities: { maxSessions: 16 },
     })
 
     try {
       await candidate.initialize()
       keepAnonymousUserTokenOnly(candidate)
+      candidate.on('session_activated', onSessionActivated)
+      candidate.on('session_closed', onSessionClosed)
+      sessionEventServer = candidate
 
       const addressSpace = candidate.engine.addressSpace
       if (addressSpace === null) {
@@ -260,9 +264,6 @@ export function createOpcUaServerAdapterV1(
       if (options.onProductCommandWrite !== undefined) nextOpenWebModel.bindCommandWrites(options.onProductCommandWrite)
 
       await candidate.start()
-      candidate.on('session_activated', onSessionActivated)
-      candidate.on('session_closed', onSessionClosed)
-      sessionEventServer = candidate
       server = candidate
       roboticsModel = nextModel
       openWebModel = nextOpenWebModel
@@ -279,6 +280,11 @@ export function createOpcUaServerAdapterV1(
         activeSessionIds.size,
       )
     } catch (error) {
+      if (sessionEventServer === candidate) {
+        candidate.off('session_activated', onSessionActivated)
+        candidate.off('session_closed', onSessionClosed)
+        sessionEventServer = null
+      }
       await candidate.shutdown(0).catch(() => undefined)
       throw error
     }

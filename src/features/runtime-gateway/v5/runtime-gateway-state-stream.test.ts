@@ -204,6 +204,22 @@ describe('V5 Runtime Gateway transport lifecycle', () => {
     expect(onCommandBatch).toHaveBeenCalledOnce()
     expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('command-result-v1'))
   })
+  it('does not dispatch a delayed command after its accepted Browser lease expires', async () => {
+    let now = 1_000
+    const onCommandBatch = vi.fn()
+    const rig = streamWith({
+      nowMs: () => now,
+      readActiveTarget: () => target({ browserPublisherId: 'gateway:browser-simulation', onCommandBatch }),
+    })
+    const socket = startOpen(rig)
+    socket.frame({ projectId: 'project', configRevision: REVISION_A, publisherId: 'gateway:browser-simulation', generation: 1, expiresAt: 1_100 })
+    now = 1_100
+    socket.frame({ type: 'command-batch-v1', protocolVersion: 1, projectId: 'project', configRevision: REVISION_A, leaseGeneration: 1, commands: [{ commandId: 'expired-lease', expiresAt: 2_000, targetId: 'robot-1', value: { kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 1 } } }] })
+    expect(onCommandBatch).not.toHaveBeenCalled()
+    expect(JSON.parse(socket.send.mock.calls.at(-1)![0] as string)).toMatchObject({
+      acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE', commandId: 'expired-lease',
+    })
+  })
   it('selects same-origin ws and wss URLs and rejects unsupported locations', () => {
     expect(runtimeGatewayWebSocketUrlV5({ protocol: 'http:', host: '127.0.0.1:5173' })).toBe('ws://127.0.0.1:5173/runtime/ws')
     expect(runtimeGatewayWebSocketUrlV5({ protocol: 'https:', host: 'cell.local' })).toBe('wss://cell.local/runtime/ws')

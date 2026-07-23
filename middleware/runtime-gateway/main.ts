@@ -107,6 +107,7 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
 }
 
 interface ActiveProjectRuntimeV1 {
+  readonly runtimeToken: symbol
   readonly project: WorkcellProjectV5
   readonly configRevision: string
   readonly generation: number
@@ -303,6 +304,7 @@ export function createRuntimeGatewayEntrypointService(
   let browserPublisherSocket: WebSocket | null = null
   const browserLeasesBySocket = new Map<WebSocket, RuntimePublisherLeaseV1>()
   const pendingBrowserCommands = new Map<string, Readonly<{
+    runtimeToken: symbol
     generation: number
     batch: CommandBatchV1
     resolve: (result: CommandResultV1) => void
@@ -380,6 +382,7 @@ export function createRuntimeGatewayEntrypointService(
       if (socket !== null && browserLeasesBySocket.get(socket)?.generation === lease.generation) {
         browserLeasesBySocket.delete(socket)
         browserPublisherSocket = null
+        try { socket.close() } catch { /* Expiry settlement must not depend on transport close. */ }
       }
       settlePendingBrowserCommands(lease.generation, 'COMMAND_LEASE_STALE', 'Browser publisher lease expired.')
       void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
@@ -412,7 +415,7 @@ export function createRuntimeGatewayEntrypointService(
         pendingBrowserCommands.delete(key)
         pending.resolve(failedBrowserBatch(batch, 'COMMAND_EXPIRED', 'Browser command expired before settlement.'))
       }, Math.max(0, batch.commands[0]!.expiresAt - nowMs()))
-      pendingBrowserCommands.set(key, Object.freeze({ generation: batch.leaseGeneration, batch, resolve: resolveCommand, timeout }))
+      pendingBrowserCommands.set(key, Object.freeze({ runtimeToken: active.runtimeToken, generation: batch.leaseGeneration, batch, resolve: resolveCommand, timeout }))
       try {
         socket.send(JSON.stringify(batch), (error) => {
           if (error == null) return
@@ -544,6 +547,7 @@ export function createRuntimeGatewayEntrypointService(
     let candidateCommandDedupe: RuntimeCommandDedupeRegistryV1 | null = null
     let candidateCommandService: RuntimeCommandServiceV1 | null = null
     const candidateBrowserLease = createBrowserPublisherLeaseManagerV1({ nowMs })
+    const candidateRuntimeToken = Symbol('runtime')
     const candidateCommandStaging = createProductCommandStagingV1()
     candidateCommandDedupe = createRuntimeCommandDedupeRegistryV1()
     const candidateBrowserCommandDispatch = createBrowserCommandDispatchV1({
@@ -552,7 +556,7 @@ export function createRuntimeGatewayEntrypointService(
       send: sendBrowserCommand,
       publishResult: (result) => {
         const active = activeRuntime
-        if (active !== null && active.configRevision === result.configRevision && active.project.projectId === result.projectId) {
+        if (active !== null && active.runtimeToken === candidateRuntimeToken) {
           publishProductResult(active, result)
         } else if (result.configRevision === configRevision && result.projectId === project.projectId) {
           // A revision fence can settle an already-admitted command after the
@@ -562,9 +566,10 @@ export function createRuntimeGatewayEntrypointService(
           void candidateServerAdapter?.publishProductResult?.(result).catch(() => undefined)
         }
       },
-      publishDiagnostic: () => {
+      publishDiagnostic: (result) => {
         const active = activeRuntime
-        if (active !== null && active.configRevision === configRevision && active.project.projectId === project.projectId) {
+        if (active !== null && active.runtimeToken === candidateRuntimeToken) {
+          active.integrationDiagnostics.publishCommand(result)
           void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
         }
       },
@@ -646,6 +651,7 @@ export function createRuntimeGatewayEntrypointService(
         })
       }
       const nextRuntime = Object.freeze({
+        runtimeToken: candidateRuntimeToken,
         project,
         configRevision,
         generation: candidateGeneration,
@@ -1250,6 +1256,7 @@ export function createRuntimeGatewayEntrypointService(
             }
             browserLeasesBySocket.delete(webSocket)
             if (browserPublisherSocket === webSocket) browserPublisherSocket = null
+            void active?.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
           })
         })
         return

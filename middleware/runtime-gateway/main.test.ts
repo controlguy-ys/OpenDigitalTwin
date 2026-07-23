@@ -573,7 +573,7 @@ describe('runtime Gateway entrypoint', () => {
     await service.start()
     try {
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
-      const serverOptions = options as OpcUaServerAdapterOptionsV1
+      const serverOptions = options as unknown as OpcUaServerAdapterOptionsV1
       expect(serverOptions.onSessionClose).toBeTypeOf('function')
       serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-a', target, field: 'RequestId', value: 'closed-stage' })
       serverOptions.onSessionClose!('opcua:session-a')
@@ -636,13 +636,22 @@ describe('runtime Gateway entrypoint', () => {
       const batchMessage = nextWebSocketMessage(socket)
       write({ sessionId: 'opcua:session-a', target, field: 'Execute', value: true })
       expect(JSON.parse(await batchMessage)).toMatchObject({ type: 'command-batch-v1', leaseGeneration: lease.generation })
+      const closed = new Promise<void>((resolve) => socket!.once('close', () => resolve()))
       now = lease.expiresAt
       timers.runDueAt(now)
+      await closed
       await vi.waitFor(() => expect(productResults).toHaveBeenLastCalledWith(expect.objectContaining({
         commandId: 'external-expiry', acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
       })))
       // The bounded staging sweep remains the only live lifecycle timer.
       expect(timers.count()).toBe(1)
+      socket = await openWebSocket(port)
+      const reacquired = nextWebSocketMessage(socket)
+      socket.send(JSON.stringify({
+        type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1, projectId: project.projectId,
+        configRevision: revision, publisherId: 'browser-a',
+      }))
+      expect(JSON.parse(await reacquired)).toMatchObject({ generation: lease.generation + 1 })
     } finally {
       socket?.close()
       await service.stop()

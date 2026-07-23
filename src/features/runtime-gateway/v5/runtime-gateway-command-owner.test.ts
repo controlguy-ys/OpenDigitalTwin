@@ -26,6 +26,27 @@ function batch(value: RuntimeScalarOrStructureV1, commandId = 'command-1', targe
 }
 
 describe('RuntimeGatewayCommandOwnerV5', () => {
+  it('time-fences an expired accepted lease before and after a delayed Simulation mutation', async () => {
+    const project = projectWithBox()
+    let now = 1_000
+    let releaseWrite!: () => void
+    const delayedWrite = vi.fn(() => new Promise<void>((resolve) => { releaseWrite = resolve }))
+    const owner = createRuntimeGatewayCommandOwnerV5({
+      project, configRevision: REVISION, nowMs: () => now,
+      readLease: () => ({ projectId: 'project-v5', configRevision: REVISION, publisherId: 'browser-a', generation: 7, expiresAt: 1_100 }),
+      simulation: { writeJointValues: delayedWrite, commitObjectPose: vi.fn(), writeLogicalSignal: vi.fn(), startJob: vi.fn(), cancelJob: vi.fn() },
+    })
+    const executing = owner.execute(batch({ kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 12 } }))
+    now = 1_100
+    releaseWrite()
+    await expect(executing).resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE' })
+
+    now = 1_100
+    await expect(owner.execute(batch({ kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 13 } }, 'expired-before-write')))
+      .resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE' })
+    expect(delayedWrite).toHaveBeenCalledOnce()
+  })
+
   it('requires the currently accepted Browser lease generation before a Simulation mutation', async () => {
     const project = projectWithBox()
     let acceptedGeneration: number | null = null

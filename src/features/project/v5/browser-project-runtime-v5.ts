@@ -484,13 +484,13 @@ function createOwnedGraph(
   const graphContext = { robots, robotFrames, objects, signals }
   const logicalSignalsById = new Map(project.logicalSignals.map((signal) => [signal.id, signal]))
   let ownerActive = true
-  let browserLeaseGeneration: number | null = null
+  let browserLease: RuntimePublisherLeaseV1 | null = null
   const commandOwner = createRuntimeGatewayCommandOwnerV5({
     project,
     configRevision,
     nowMs,
     isActive: () => ownerActive,
-    readLeaseGeneration: () => browserLeaseGeneration,
+    readLease: () => browserLease,
     simulation: {
       writeJointValues: (robotId, values) => robots.getState().writeJointValues(robotId, values, 'simulation'),
       commitObjectPose: (objectId, pose) => { simulationObjectPoses.set(objectId, pose) },
@@ -552,7 +552,7 @@ function createOwnedGraph(
         runNoThrow(onDiagnostic, () => signals.getState().markEndpointDisconnected(endpointId, receivedTimestampMs))
       }
     },
-    onBrowserPublisherLease: (lease: RuntimePublisherLeaseV1 | null) => { browserLeaseGeneration = lease?.generation ?? null },
+    onBrowserPublisherLease: (lease: RuntimePublisherLeaseV1 | null) => { browserLease = lease },
     onCommandBatch: (batch: import('../../../core/runtime-protocol/v1.js').CommandBatchV1) => commandOwner.execute(batch),
   })
   const graph: PublishedBrowserRuntimeGraphV5 = Object.freeze({

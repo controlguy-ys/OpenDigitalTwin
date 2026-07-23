@@ -823,7 +823,11 @@ export function createRuntimeGatewayStateStreamV5(
           || openedTarget.onCommandBatch === undefined
         ) throw new TypeError('Runtime Gateway Browser command context is invalid.')
         const acceptedLease = target.browserLease
-        if (acceptedLease === null || acceptedLease.generation !== command.leaseGeneration) {
+        if (
+          acceptedLease === null
+          || acceptedLease.generation !== command.leaseGeneration
+          || acceptedLease.expiresAt <= atMs
+        ) {
           const item = command.commands[0]
           if (item === undefined || command.commands.length !== 1) throw new TypeError('Runtime Gateway Browser command batch is invalid.')
           target.native.send?.(JSON.stringify(validateCommandResultV1({
@@ -834,6 +838,7 @@ export function createRuntimeGatewayStateStreamV5(
             failureCode: 'COMMAND_LEASE_STALE', message: 'Browser publisher lease is stale.',
             attachedObjectId: null, completedAt: atMs,
           })))
+          if (acceptedLease !== null && acceptedLease.expiresAt <= atMs) clearBrowserLeaseV5(target, false)
           return
         }
         void openedTarget.onCommandBatch(command).then((result) => {

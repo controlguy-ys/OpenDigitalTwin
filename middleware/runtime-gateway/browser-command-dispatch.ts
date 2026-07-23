@@ -117,15 +117,17 @@ export function createBrowserCommandDispatchV1(options: Readonly<{
         options.lease.tick()
         const beforeSend = options.lease.current()
         if (beforeSend === null || beforeSend.generation !== publisher.generation) {
-          return Promise.resolve(rejected(snapshot, publisher.generation, 'BROWSER_PUBLISHER_UNAVAILABLE', 'Browser publisher lease expired before dispatch.', now()))
+          const result = rejected(snapshot, publisher.generation, 'BROWSER_PUBLISHER_UNAVAILABLE', 'Browser publisher lease expired before dispatch.', now())
+          options.publishResult(result)
+          return Promise.resolve(result)
         }
-        const started = running(snapshot, publisher.generation)
-        options.publishResult(started)
         const batch = validateCommandBatchV1({
           type: 'command-batch-v1', protocolVersion: 1, projectId: snapshot.projectId,
           configRevision: snapshot.configRevision, leaseGeneration: publisher.generation,
           commands: [{ commandId: snapshot.requestId, expiresAt: snapshot.expiresAt, targetId: snapshot.targetId, value: snapshot.payload }],
         })
+        const started = running(snapshot, publisher.generation)
+        options.publishResult(started)
         return Promise.resolve(options.send(batch)).then((result) => {
           const terminal = validateCommandResultV1(result)
           options.lease.tick()

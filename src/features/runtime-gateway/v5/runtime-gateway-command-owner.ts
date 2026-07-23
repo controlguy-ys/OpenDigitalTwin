@@ -3,6 +3,7 @@ import {
   validateCommandResultV1,
   type CommandBatchV1,
   type CommandResultV1,
+  type RuntimePublisherLeaseV1,
 } from '../../../core/runtime-protocol/v1.js'
 import {
   validateWorkcellProjectV5,
@@ -79,8 +80,10 @@ export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
   project: WorkcellProjectV5
   configRevision: string
   leaseGeneration?: number
-  /** Reads the currently accepted Gateway Browser lease for every execution fence. */
+  /** Legacy generation-only fence for callers that do not hold a lease record. */
   readLeaseGeneration?: () => number | null
+  /** Reads the complete Gateway-issued Browser lease for time and identity fencing. */
+  readLease?: () => RuntimePublisherLeaseV1 | null
   nowMs: () => number
   simulation: RuntimeGatewaySimulationCommandPortV5
   isActive?: () => boolean
@@ -94,6 +97,17 @@ export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
   const now = (): number => options.nowMs()
   const active = (): boolean => options.isActive?.() ?? true
   const acceptedLease = (): number | null => options.readLeaseGeneration?.() ?? options.leaseGeneration ?? null
+  const leaseMatches = (batch: CommandBatchV1): boolean => {
+    const lease = options.readLease?.()
+    if (lease !== undefined) {
+      return lease !== null
+        && lease.projectId === project.projectId
+        && lease.configRevision === options.configRevision
+        && lease.generation === batch.leaseGeneration
+        && lease.expiresAt > now()
+    }
+    return acceptedLease() === batch.leaseGeneration
+  }
 
   return Object.freeze({
     async execute(batchInput: CommandBatchV1) {
@@ -103,12 +117,12 @@ export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
       if (
         batch.projectId !== project.projectId
         || batch.configRevision !== options.configRevision
-        || acceptedLease() !== batch.leaseGeneration
+        || !leaseMatches(batch)
         || !active()
       ) {
         return terminal(batch, command, 'ACCEPTED', 'COMMAND_LEASE_STALE', 'Browser command owner is not active.', now())
       }
-      if (command.expiresAt <= now()) return terminal(batch, command, 'REJECTED', 'COMMAND_EXPIRED', 'Command has expired.', now())
+      if (command.expiresAt <= now()) return terminal(batch, command, 'ACCEPTED', 'COMMAND_EXPIRED', 'Command has expired.', now())
       const candidate = payload(command.value)
       if (candidate === null) return terminal(batch, command, 'ACCEPTED', 'COMMAND_TARGET_INVALID', 'Command payload is invalid.', now())
       try {
@@ -130,9 +144,10 @@ export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
           if (candidate.operation === 'start') await options.simulation.startJob(candidate.jobId)
           else await options.simulation.cancelJob(candidate.jobId)
         }
-        if (!active() || acceptedLease() !== batch.leaseGeneration) {
+        if (!active() || !leaseMatches(batch)) {
           return terminal(batch, command, 'ACCEPTED', 'COMMAND_LEASE_STALE', 'Browser command owner changed during execution.', now())
         }
+        if (command.expiresAt <= now()) return terminal(batch, command, 'ACCEPTED', 'COMMAND_EXPIRED', 'Command expired during execution.', now())
         return terminal(batch, command, 'ACCEPTED', null, 'Browser command succeeded.', now())
       } catch (error) {
         const code = error instanceof Error && error.message === 'COMMAND_TARGET_INVALID' ? 'COMMAND_TARGET_INVALID' : 'BROWSER_COMMAND_FAILED'

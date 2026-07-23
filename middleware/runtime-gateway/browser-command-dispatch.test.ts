@@ -30,6 +30,19 @@ function succeeded(commandId: string, completedAt = 1_250): CommandResultV1 {
 }
 
 describe('BrowserCommandDispatchV1', () => {
+  it('validates the entire outbound batch before publishing RUNNING', async () => {
+    const lease = createBrowserPublisherLeaseManagerV1({ nowMs: () => 1_000 })
+    lease.acquire({ projectId: 'project-v5', configRevision: REVISION, publisherId: 'browser-a' })
+    const publishResult = vi.fn()
+    const send = vi.fn()
+    const dispatch = createBrowserCommandDispatchV1({
+      lease, dedupe: createRuntimeCommandDedupeRegistryV1(), send, publishResult, nowMs: () => 1_000,
+    })
+    await expect(dispatch.execute(snapshot('x'.repeat(129)))).rejects.toThrow('RUNTIME_PROTOCOL_INVALID')
+    expect(send).not.toHaveBeenCalled()
+    expect(publishResult).not.toHaveBeenCalledWith(expect.objectContaining({ executionState: 'RUNNING' }))
+  })
+
   it('publishes ACCEPTED/RUNNING before a deferred terminal result', async () => {
     const pending = deferred<CommandResultV1>()
     const lease = createBrowserPublisherLeaseManagerV1({ nowMs: () => 1_000 })
