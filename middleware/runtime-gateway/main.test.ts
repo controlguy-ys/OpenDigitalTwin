@@ -3070,6 +3070,84 @@ describe('runtime Gateway entrypoint', () => {
     } finally { await service.stop() }
   })
 
+  it('resolves a session NodeId through the closed route without changing Project authority', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const resolve = vi.fn(async () => ({
+      namespaceUri: 'urn:virtual-plc',
+      identifierType: 'string' as const,
+      identifier: 'ObjectPos',
+    }))
+    ;(client.adapter as unknown as { resolveNodeAddress: typeof resolve }).resolveNodeAddress = resolve
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+    })
+    await service.start()
+    try {
+      const project = sampleProject('client')
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const before = gatewayStatus(service.status())
+      const response = await requestJson(port, 'POST', '/runtime/opcua/resolve-node-address', {
+        endpointId: project.opcUa.endpoints[0]!.endpointId,
+        sessionNodeId: 'ns=2;s=ObjectPos',
+      })
+      expect({ status: response.status, body: await response.json() }).toEqual({
+        status: 200,
+        body: {
+          nodeAddress: {
+            namespaceUri: 'urn:virtual-plc',
+            identifierType: 'string',
+            identifier: 'ObjectPos',
+          },
+        },
+      })
+      expect(resolve).toHaveBeenCalledWith(project.opcUa.endpoints[0]!.endpointId, 'ns=2;s=ObjectPos')
+      expect(gatewayStatus(service.status())).toMatchObject({ project: before.project, opcUa: before.opcUa })
+      expect((await requestJson(port, 'POST', '/runtime/opcua/resolve-node-address', {
+        endpointId: project.opcUa.endpoints[0]!.endpointId,
+        sessionNodeId: 'ns=2;s=ObjectPos',
+        extra: true,
+      })).status).toBe(400)
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('rejects NodeId resolution when the exact Browse Session changes', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const first = {}
+    const replacement = {}
+    let proof: object = first
+    ;(client.adapter as unknown as { resolveNodeAddress: () => Promise<unknown> }).resolveNodeAddress = async () => {
+      proof = replacement
+      return { namespaceUri: 'urn:virtual-plc', identifierType: 'string', identifier: 'ObjectPos' }
+    }
+    ;(client.adapter as unknown as { readNamespaceSessionProof: () => { endpointId: string; generation: number; session: object } }).readNamespaceSessionProof = () => ({
+      endpointId: 'endpoint-main',
+      generation: proof === first ? 1 : 2,
+      session: proof,
+    })
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+    })
+    await service.start()
+    try {
+      const project = sampleProject('client')
+      await requestJson(port, 'PUT', '/runtime/project', project)
+      const response = await requestJson(port, 'POST', '/runtime/opcua/resolve-node-address', {
+        endpointId: project.opcUa.endpoints[0]!.endpointId,
+        sessionNodeId: 'ns=2;s=ObjectPos',
+      })
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({ code: 'OPC_UA_NAMESPACE_SESSION_STALE' })
+    } finally {
+      await service.stop()
+    }
+  })
+
   it('rejects namespace resolution when the exact Endpoint Session proof changes during the read', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
     const client = connectedClientAdapter(); const first = {}; const replacement = {}; let proof: object = first
@@ -3135,7 +3213,7 @@ describe('runtime Gateway entrypoint', () => {
     const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter, testOpcUaConnection: diagnostic }); await service.start()
     try {
       const project = sampleProject('client'); await requestJson(port, 'PUT', '/runtime/project', project); const before = gatewayStatus(service.status()); const body = jsonBodyAtByteLength(64 * 1024 + 1)
-      for (const path of ['/runtime/opcua/test-connection', '/runtime/opcua/namespace-index']) { const response = await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }); const text = await response.text(); expect(response.status).toBe(413); expect(response.headers.get('content-type')).toContain('application/json'); expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024) }
+      for (const path of ['/runtime/opcua/test-connection', '/runtime/opcua/namespace-index', '/runtime/opcua/resolve-node-address']) { const response = await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }); const text = await response.text(); expect(response.status).toBe(413); expect(response.headers.get('content-type')).toContain('application/json'); expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024) }
       expect(diagnostic).not.toHaveBeenCalled(); expect(gatewayStatus(service.status())).toMatchObject({ project: before.project })
     } finally { await service.stop() }
   })

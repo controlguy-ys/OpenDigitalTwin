@@ -82,6 +82,7 @@ import {
   MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1,
   boundedTestConnectionResultV1,
   validateNamespaceIndexRequestV1,
+  validateNodeAddressResolutionRequestV1,
   validateTestConnectionRequestV1,
 } from './connectivity-diagnostics-routes.js'
 
@@ -1139,6 +1140,69 @@ export function createRuntimeGatewayEntrypointService(
     }
   }
 
+  async function nodeAddressResolutionRequest(request: IncomingMessage): Promise<unknown> {
+    const body = await readJsonBody(request, MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1, incompleteBodyRequests, () => shutdownRequested)
+    const query = validateNodeAddressResolutionRequestV1(body)
+    const captured = await enqueueRuntimeTransition(async () => {
+      const active = activeRuntime
+      if (active === null) throw new RuntimeGatewayHttpError(409, 'OPC_UA_ENDPOINT_MISMATCH', 'Endpoint is not configured by the active Project.')
+      const configured = active.project.opcUa.endpoints.some(({ endpointId }) => endpointId === query.endpointId)
+      if (!configured) throw new RuntimeGatewayHttpError(409, 'OPC_UA_ENDPOINT_MISMATCH', 'Endpoint is not configured by the active Project.')
+      const clientAdapter = active.clientAdapter
+      const resolveNodeAddress = clientAdapter?.resolveNodeAddress
+      if (clientAdapter === null || resolveNodeAddress === undefined) {
+        throw new RuntimeGatewayHttpError(409, 'OPC_UA_BROWSE_SESSION_UNAVAILABLE', 'Endpoint has no live OPC UA Browse Session.')
+      }
+      const sessionProof = clientAdapter.readNamespaceSessionProof?.(query.endpointId) ?? null
+      if (clientAdapter.readNamespaceSessionProof !== undefined && sessionProof === null) {
+        throw new RuntimeGatewayHttpError(409, 'OPC_UA_BROWSE_SESSION_UNAVAILABLE', 'Endpoint has no live OPC UA Browse Session.')
+      }
+      return Object.freeze({
+        runtimeToken: active.runtimeToken,
+        generation: active.generation,
+        adapter: clientAdapter,
+        resolveNodeAddress,
+        sessionProof,
+      })
+    })
+    try {
+      const resolutionOperation = captured.resolveNodeAddress(query.endpointId, query.sessionNodeId)
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('OPC_UA_NAMESPACE_READ_TIMEOUT')), namespaceResolutionTimeoutMs)
+        if (timer !== null && typeof timer === 'object' && 'unref' in timer && typeof timer.unref === 'function') timer.unref()
+      })
+      try {
+        const nodeAddress = await Promise.race([resolutionOperation, timeout])
+        return await enqueueRuntimeTransition(async () => {
+          const active = activeRuntime
+          if (active === null || active.runtimeToken !== captured.runtimeToken || active.generation !== captured.generation || active.clientAdapter !== captured.adapter) {
+            throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_SESSION_STALE', 'Node Address could not be resolved from the live OPC UA Session.')
+          }
+          const currentProof = captured.adapter.readNamespaceSessionProof?.(query.endpointId) ?? null
+          if (captured.sessionProof !== null && (
+            currentProof === null
+            || currentProof.endpointId !== captured.sessionProof.endpointId
+            || currentProof.generation !== captured.sessionProof.generation
+            || currentProof.session !== captured.sessionProof.session
+          )) {
+            throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_SESSION_STALE', 'Node Address could not be resolved from the live OPC UA Session.')
+          }
+          return Object.freeze({ nodeAddress })
+        })
+      } finally {
+        if (timer !== null) clearTimeout(timer)
+        void resolutionOperation.catch(() => undefined)
+      }
+    } catch (error) {
+      if (error instanceof RuntimeGatewayHttpError) throw error
+      const code = error instanceof Error && /^OPC_UA_[A-Z_]+$/u.test(error.message)
+        ? error.message
+        : 'OPC_UA_NODE_ADDRESS_RESOLUTION_FAILED'
+      throw new RuntimeGatewayHttpError(409, code, 'Node Address could not be resolved from the live OPC UA Session.')
+    }
+  }
+
   async function publishStateRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
     const body = await readJsonBody(
       request,
@@ -1491,6 +1555,11 @@ export function createRuntimeGatewayEntrypointService(
 
     if (request.method === 'POST' && request.url === '/runtime/opcua/namespace-index') {
       writeJson(response, 200, await namespaceIndexRequest(request))
+      return
+    }
+
+    if (request.method === 'POST' && request.url === '/runtime/opcua/resolve-node-address') {
+      writeJson(response, 200, await nodeAddressResolutionRequest(request))
       return
     }
 

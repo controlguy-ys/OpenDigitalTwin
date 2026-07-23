@@ -1936,6 +1936,28 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     await expect(adapter.resolveNamespaceIndex?.(endpointId, 'urn:virtual-plc')).rejects.toThrow('OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED')
   })
 
+  it('resolves a session NodeId to a stable Namespace URI address', async () => {
+    const namespaces = ['http://opcfoundation.org/UA/', 'urn:virtual-plc']
+    const connection = fakeConnection(namespaces)
+    const adapter = createOpcUaClientAdapterV1(sharedRootStringProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status().some(({ phase }) => phase === 'connected'))
+    const endpointId = adapter.status().find(({ phase }) => phase === 'connected')!.endpointId
+    await expect(adapter.resolveNodeAddress?.(endpointId, 'ns=1;s=ObjectPos')).resolves.toEqual({
+      namespaceUri: 'urn:virtual-plc',
+      identifierType: 'string',
+      identifier: 'ObjectPos',
+    })
+    await adapter.stop()
+    await expect(adapter.resolveNodeAddress?.(endpointId, 'ns=1;s=ObjectPos')).rejects.toThrow('OPC_UA_BROWSE_SESSION_UNAVAILABLE')
+  })
+
   it('rejects NamespaceArray read failures and malformed arrays without writes or subscriptions', async () => {
     const namespaces = ['http://opcfoundation.org/UA/', 'urn:virtual-plc']
     const connection = fakeConnection(namespaces)

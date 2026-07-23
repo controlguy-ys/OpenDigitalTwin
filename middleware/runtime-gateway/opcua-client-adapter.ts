@@ -48,6 +48,10 @@ import {
   type OpcUaClientWriteRequestV1,
   type OpcUaClientWriteResultV1,
 } from './opcua-client-write-service.js'
+import {
+  createOpcUaNodeAddressResolverV1,
+  type OpcUaNodeAddressResolverV1,
+} from './opcua-node-address-resolver.js'
 
 export interface OpcUaClientSnapshotAssemblerOptionsV1 {
   readonly project: WorkcellProjectV5
@@ -93,6 +97,7 @@ export interface OpcUaClientAdapterV1 {
   status(): readonly RuntimeGatewayOpcUaClientEndpointStatusV1[]
   write(request: OpcUaClientWriteRequestV1): Promise<OpcUaClientWriteResultV1>
   resolveNamespaceIndex?: (endpointId: string, namespaceUri: string) => Promise<number>
+  resolveNodeAddress?: OpcUaNodeAddressResolverV1['resolve']
   readNamespaceSessionProof?: (endpointId: string) => Readonly<{ readonly endpointId: string; readonly generation: number; readonly session: object }> | null
 }
 
@@ -1275,6 +1280,7 @@ export function createOpcUaClientAdapterV1(
     return Object.freeze({ endpointId, generation: runtime.generation, session: runtime.session })
   }
   const writeService = createOpcUaClientWriteServiceV1(project, { currentSession })
+  const nodeAddressResolver = createOpcUaNodeAddressResolverV1({ currentSession })
 
   function enqueue(transition: () => Promise<void>): Promise<void> {
     const requested = lifecycleTail.then(transition)
@@ -1369,6 +1375,7 @@ export function createOpcUaClientAdapterV1(
       lastError: runtime.lastError,
     }))),
     write: (request: OpcUaClientWriteRequestV1) => writeService.write(request),
+    resolveNodeAddress: (endpointId: string, sessionNodeId: string) => nodeAddressResolver.resolve(endpointId, sessionNodeId),
     readNamespaceSessionProof: (endpointId: string) => currentSession(endpointId),
     async resolveNamespaceIndex(endpointId: string, namespaceUri: string): Promise<number> {
       const first = currentSession(endpointId)

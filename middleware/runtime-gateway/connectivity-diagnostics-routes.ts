@@ -42,6 +42,17 @@ export function validateNamespaceIndexRequestV1(value: unknown): { readonly endp
   return Object.freeze({ endpointId: boundedText(source.endpointId, 'endpointId'), namespaceUri: boundedText(source.namespaceUri, 'namespaceUri', 4_096) })
 }
 
+export function validateNodeAddressResolutionRequestV1(value: unknown): {
+  readonly endpointId: string
+  readonly sessionNodeId: string
+} {
+  const source = record(value); exact(source, ['endpointId', 'sessionNodeId'])
+  return Object.freeze({
+    endpointId: boundedText(source.endpointId, 'endpointId'),
+    sessionNodeId: boundedText(source.sessionNodeId, 'sessionNodeId', 8 * 1024),
+  })
+}
+
 const TEST_CONNECTION_CODES = new Set([
   'OPC_UA_CONNECTION_TIMEOUT', 'OPC_UA_CONNECT_FAILED', 'OPC_UA_SESSION_FAILED',
   'OPC_UA_NAMESPACE_READ_FAILED', 'OPC_UA_NAMESPACE_ARRAY_INVALID',
