@@ -654,7 +654,13 @@ export function createRuntimeGatewayEntrypointService(
           configRevision,
           publisherGeneration: candidateGeneration,
           publish: (batch: NormalizedOpcUaClientPublicationV1) => {
-            if (clientBatchPublisherLive) {
+            const active = activeRuntime
+            if (
+              clientBatchPublisherLive
+              && projectAuthorityPhase === 'active'
+              && active?.runtimeToken === candidateRuntimeToken
+              && active.generation === candidateGeneration
+            ) {
               requireStateBatchHub().publish(batch)
             } else {
               // Candidate callbacks cannot throw into node-opcua.  The
