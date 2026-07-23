@@ -2923,4 +2923,22 @@ describe('runtime Gateway entrypoint', () => {
       expect(client.stop).not.toHaveBeenCalled()
     } finally { await service.stop() }
   })
+
+  it('keeps the first of two coordinators prepared from the same inactive authority as Gateway winner', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const { createRuntimeGatewayConnectivityClientV1 } = await import('../../src/features/runtime-gateway/v5/runtime-gateway-connectivity-client.js'); const { configRevisionForProjectV5 } = await import('../../src/core/project-v5/index.js')
+    const port = await findAvailablePort(); const service = createRuntimeGatewayEntrypointService(createTestConfig(port)); await service.start()
+    try {
+      const first = sampleProject('off', 'revision-race-first'); const second = sampleProject('off', 'revision-race-second')
+      const gatewayFetch = (input: string, init: RequestInit) => fetch(`http://127.0.0.1:${port}${input}`, init)
+      const firstCoordinator = createRuntimeGatewayConnectivityClientV1({ fetch: gatewayFetch, createActivationAttemptId: () => 'attempt-race-first' })
+      const secondCoordinator = createRuntimeGatewayConnectivityClientV1({ fetch: gatewayFetch, createActivationAttemptId: () => 'attempt-race-second' })
+      const [firstPrepared, secondPrepared] = await Promise.all([
+        firstCoordinator.prepare(first, await configRevisionForProjectV5(first), null),
+        secondCoordinator.prepare(second, await configRevisionForProjectV5(second), null),
+      ])
+      await expect(firstCoordinator.activate(firstPrepared)).resolves.toMatchObject({ project: { revisionId: first.revisionId, activationAttemptId: 'attempt-race-first' } })
+      await expect(secondCoordinator.activate(secondPrepared)).rejects.toMatchObject({ code: 'PROJECT_ACTIVATION_CONFLICT', statusCode: 409 })
+      expect(gatewayStatus(service.status()).project).toMatchObject({ phase: 'ready', revisionId: first.revisionId, activationAttemptId: 'attempt-race-first' })
+    } finally { await service.stop() }
+  })
 })

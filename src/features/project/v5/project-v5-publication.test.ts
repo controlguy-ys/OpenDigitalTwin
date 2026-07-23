@@ -120,9 +120,10 @@ function failure(point: FailurePoint | null, target: FailurePoint): void {
 function publicationHarness(
   failurePoint: FailurePoint | null = null,
   onCleanupIssue?: (retry: () => Promise<void>) => void,
+  identicalReplacement = false,
 ) {
   const previousProject = project('revision-a', 'Previous')
-  const nextProject = project('revision-b', 'Next')
+  const nextProject = identicalReplacement ? previousProject : project('revision-b', 'Next')
   const previous = published(previousProject, HASH_A)
   const events: string[] = []
   let durable: PublishedProjectV5 | null = previous
@@ -163,7 +164,9 @@ function publicationHarness(
     }),
     readRevision: async (_revisionId: string) => null,
     readActive: async () => durable?.project ?? null,
-    readPointer: async () => null,
+    readPointer: async () => ({
+      key: 'active', state: 'stable', revisionId: previous.revisionId, commitToken: 'commit-a',
+    }),
     garbageCollect: vi.fn(async () => { events.push('repository.gc') }),
   } satisfies ProjectRepositoryV5
 
@@ -234,7 +237,7 @@ function publicationHarness(
 
   const configRevisionForProjectV5 = vi.fn(async (candidate: WorkcellProjectV5) => {
     events.push(`hash:${candidate.revisionId}`)
-    return HASH_B
+    return identicalReplacement ? HASH_A : HASH_B
   })
   const cleanupDiagnostics = vi.fn()
   let publication!: ReturnType<typeof createProjectPublicationCoordinatorV5<RuntimeCandidate, GatewayCandidate>>
@@ -394,6 +397,50 @@ describe('Project V5 publication coordinator', () => {
     expect(harness.durable()).toEqual(published(harness.nextProject, HASH_B))
     expect(harness.runtimeActive()).toEqual(published(harness.nextProject, HASH_B))
     expect(harness.gatewayActive()).toEqual(published(harness.nextProject, HASH_B))
+  })
+
+  it('does not retain previous Gateway cleanup for an identical logical replacement', async () => {
+    const harness = publicationHarness(null, undefined, true)
+    await expect(harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })).resolves.toEqual(published(harness.nextProject, HASH_A))
+    await Promise.resolve()
+    expect(harness.gateway.cleanupPrevious).not.toHaveBeenCalled()
+    await expect(harness.publication.replace({
+      candidate: project('revision-b', 'After unchanged import'),
+      expectedRevisionId: harness.nextProject.revisionId,
+    })).resolves.toMatchObject({ revisionId: 'revision-b' })
+  })
+
+  it('compensates valid void runtime and Gateway prepared handles after apply fails', async () => {
+    const harness = publicationHarness()
+    harness.runtime.prepare.mockResolvedValueOnce(undefined as never)
+    harness.gateway.prepare.mockResolvedValueOnce(undefined as never)
+    harness.runtime.apply.mockRejectedValueOnce(new Error('TEST_VOID_APPLY'))
+    harness.runtime.rollback.mockImplementationOnce(async (handle) => { expect(handle).toBeUndefined() })
+    harness.gateway.rollback.mockImplementationOnce(async (handle) => { expect(handle).toBeUndefined(); return 'prepared-only' })
+    await expect(harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })).rejects.toThrow('TEST_VOID_APPLY')
+    expect(harness.runtime.rollback).toHaveBeenCalledOnce()
+    expect(harness.gateway.rollback).toHaveBeenCalledOnce()
+  })
+
+  it('reconciles a commit that takes effect before rejecting by exact pointer and token', async () => {
+    const harness = publicationHarness()
+    harness.repository.commitPreparedRevision.mockImplementationOnce(async () => { throw new Error('TEST_COMMIT_RESPONSE_LOST') })
+    harness.repository.readPointer = async () => ({
+      key: 'active', state: 'publishing', revisionId: harness.nextProject.revisionId,
+      commitToken: 'commit-b', previousRevisionId: harness.previous.revisionId, previousCommitToken: 'commit-a',
+    })
+    await expect(harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })).rejects.toThrow('TEST_COMMIT_RESPONSE_LOST')
+    expect(harness.repository.compensatePublication).toHaveBeenCalledWith('commit-b')
+    expect(harness.repository.discardPreparedRevision).not.toHaveBeenCalled()
   })
 
   it.each([

@@ -135,6 +135,12 @@ function publicPublished(
   return Object.freeze({ project, revisionId, configRevision: requireConfigRevision(configRevision) })
 }
 
+function samePublishedPublication(left: PublishedProjectV5, right: PublishedProjectV5): boolean {
+  return left.revisionId === right.revisionId
+    && left.configRevision === right.configRevision
+    && left.project.projectId === right.project.projectId
+}
+
 function validateInitialPublished(value: PublishedProjectV5 | null | undefined): PublishedProjectV5 | null {
   if (value === undefined || value === null) return null
   try {
@@ -457,11 +463,15 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   }> => {
     let preparedRuntime: PreparedRuntime | undefined
     let preparedGateway: PreparedGateway | undefined
+    let runtimePrepared = false
+    let gatewayPrepared = false
     let runtimeTransition: ProjectV5RuntimeCommitTransitionV5 | undefined
     let gatewayActivationAttempted = false
     try {
       preparedRuntime = await runtime.prepare(next.project, next.configRevision)
+      runtimePrepared = true
       preparedGateway = await gateway.prepare(next.project, next.configRevision, null)
+      gatewayPrepared = true
       await runtime.apply(preparedRuntime)
       gatewayActivationAttempted = true
       assertGatewayStatus(await gateway.activate(preparedGateway), next)
@@ -476,14 +486,14 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           compensationErrors.push(compensationError)
         }
       }
-      if (preparedGateway !== undefined) await compensate(() => gateway.rollback(preparedGateway!))
+      if (gatewayPrepared) await compensate(() => gateway.rollback(preparedGateway as PreparedGateway))
       if (gatewayActivationAttempted) await compensate(async () => {
         assertGatewayInactiveStatus(await gateway.readStatus())
       })
       if (runtimeTransition !== undefined) {
         await compensate(() => runtimeTransition!.rollback())
-      } else if (preparedRuntime !== undefined) {
-        await compensate(() => runtime.rollback(preparedRuntime!))
+      } else if (runtimePrepared) {
+        await compensate(() => runtime.rollback(preparedRuntime as PreparedRuntime))
       }
       enterRecovery(compensationErrors)
       throw error
@@ -533,6 +543,8 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
         let preparedRevision: PreparedProjectRevisionV5 | undefined
         let preparedRuntime: PreparedRuntime | undefined
         let preparedGateway: PreparedGateway | undefined
+        let runtimePrepared = false
+        let gatewayPrepared = false
         let commitToken: string | undefined
         let repositoryCommitStarted = false
         let repositoryCommitted = false
@@ -550,7 +562,9 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
             )
           }
           preparedRuntime = await runtime.prepare(project, configRevision)
+          runtimePrepared = true
           preparedGateway = await gateway.prepare(project, configRevision, previous)
+          gatewayPrepared = true
           await runtime.apply(preparedRuntime)
           gatewayActivationAttempted = true
           assertGatewayStatus(await gateway.activate(preparedGateway), next)
@@ -571,9 +585,39 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
             }
           }
 
+          // A repository implementation may commit the pointer and lose the
+          // response. Never infer the outcome from the rejected Promise:
+          // reconcile the exact target revision plus coordinator commit token
+          // before choosing compensation or prepared-row discard.
+          let repositoryCommitNoEffect = !repositoryCommitStarted
+          if (repositoryCommitStarted && !repositoryCommitted && preparedRevision !== undefined && commitToken !== undefined) {
+            try {
+              const pointer = await repository.readPointer()
+              if (pointer !== null && pointer.revisionId === preparedRevision.revisionId && pointer.commitToken === commitToken) {
+                repositoryCommitted = true
+              } else if (
+                (pointer === null && previous === null)
+                || (pointer !== null && pointer.state === 'stable' && previous !== null && pointer.revisionId === previous.revisionId)
+              ) {
+                repositoryCommitNoEffect = true
+              } else {
+                compensationErrors.push(new ProjectPublicationV5Error(
+                  'PROJECT_COMMIT_OUTCOME_UNKNOWN',
+                  'Repository commit rejected without a reconcilable exact durable pointer.',
+                ))
+              }
+            } catch (reconciliationError) {
+              compensationErrors.push(new ProjectPublicationV5Error(
+                'PROJECT_COMMIT_OUTCOME_UNKNOWN',
+                'Repository commit rejected and durable pointer reconciliation failed.',
+                reconciliationError,
+              ))
+            }
+          }
+
           let gatewayRollback: ProjectV5GatewayRollbackDispositionV1 | undefined
-          if (preparedGateway !== undefined) {
-            await compensate(async () => { gatewayRollback = await gateway.rollback(preparedGateway!) })
+          if (gatewayPrepared) {
+            await compensate(async () => { gatewayRollback = await gateway.rollback(preparedGateway as PreparedGateway) })
           }
           if (gatewayActivationAttempted && previous === null && gatewayRollback === 'candidate-deactivated') {
             await compensate(async () => {
@@ -582,12 +626,12 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           }
           if (runtimeTransition !== undefined) {
             await compensate(() => runtimeTransition!.rollback())
-          } else if (preparedRuntime !== undefined) {
-            await compensate(() => runtime.rollback(preparedRuntime!))
+          } else if (runtimePrepared) {
+            await compensate(() => runtime.rollback(preparedRuntime as PreparedRuntime))
           }
           if (repositoryCommitted) {
             await compensate(() => repository.compensatePublication(commitToken!))
-          } else if (preparedRevision !== undefined && !repositoryCommitStarted) {
+          } else if (preparedRevision !== undefined && repositoryCommitNoEffect) {
             await compensate(() => repository.discardPreparedRevision(preparedRevision!))
           }
           if (gatewayActivationAttempted && previous !== null && gatewayRollback === 'candidate-deactivated') {
@@ -602,7 +646,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
 
         notifyPublished()
         retainCleanupTask('runtime-transition-finalize', next.revisionId, () => runtimeTransition!.finalize())
-        if (previous !== null) {
+        if (previous !== null && !samePublishedPublication(previous, next)) {
           retainCleanupTask('gateway-previous', previous.revisionId, () => gateway.cleanupPrevious(previous))
         }
         retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())
@@ -730,7 +774,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
         published = next
         notifyPublished()
         retainCleanupTask('runtime-transition-finalize', next.revisionId, () => activation.runtimeTransition.finalize())
-        if (previous !== null) {
+        if (previous !== null && !samePublishedPublication(previous, next)) {
           retainCleanupTask('gateway-previous', previous.revisionId, () => gateway.cleanupPrevious(previous!))
         }
         retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())

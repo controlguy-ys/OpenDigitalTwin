@@ -208,7 +208,14 @@ export function createRuntimeGatewayConnectivityClientV1(
         // the opaque port usable by isolated unit adapters without inventing
         // an authority from an unchecked status response.
       } else if (expectedPrevious === null) {
-        if (currentAuthority !== null) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_AUTHORITY_MISMATCH', 'Gateway has an unexpected active Project authority.')
+        // Hydration owns no Browser publication yet.  It may safely converge
+        // an inactive Gateway or resume only the exact durable target; any
+        // other active authority is a race and must not be replaced.
+        if (currentAuthority !== null && (
+          currentAuthority.projectId !== project.projectId
+          || currentAuthority.revisionId !== project.revisionId
+          || currentAuthority.configRevision !== candidateConfigRevision
+        )) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_AUTHORITY_MISMATCH', 'Gateway has an unexpected active Project authority.')
       } else if (currentAuthority === null || currentAuthority.projectId !== expectedPrevious.project.projectId || currentAuthority.revisionId !== expectedPrevious.revisionId || currentAuthority.configRevision !== expectedPrevious.configRevision) {
         throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_AUTHORITY_MISMATCH', 'Gateway authority does not match the coordinator previous Project.')
       }

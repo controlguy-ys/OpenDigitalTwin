@@ -25,6 +25,18 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response(JSON.stringify(status(project.projectId, project.revisionId, 'b'.repeat(64))), { status: 200 }) })
     await expect(client.activate(await client.prepare(project, hash))).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_STATUS_MISMATCH' })
   })
+  it('hydrates only an inactive Gateway or the exact durable active authority', async () => {
+    const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64)
+    const exact = createRuntimeGatewayConnectivityClientV1({
+      fetch: async () => new Response(JSON.stringify(status(project.projectId, project.revisionId, hash))),
+      createActivationAttemptId: () => 'attempt-0001',
+    })
+    await expect(exact.prepare(project, hash, null)).resolves.toMatchObject({ configRevision: hash })
+    const other = createRuntimeGatewayConnectivityClientV1({
+      fetch: async () => new Response(JSON.stringify(status('other', 'other', hash))),
+    })
+    await expect(other.prepare(project, hash, null)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_AUTHORITY_MISMATCH' })
+  })
   it('sends exact unconditional DELETE and requires canonical inactive status', async () => {
     const calls: RequestInit[] = []; const client = createRuntimeGatewayConnectivityClientV1({ fetch: async (_url, init) => { calls.push(init); return new Response(JSON.stringify(status(null, null, null)), { status: 200 }) } })
     await expect(client.deactivate()).resolves.toMatchObject({ project: { phase: 'not-applied' } })
