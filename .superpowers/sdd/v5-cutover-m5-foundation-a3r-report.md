@@ -96,3 +96,26 @@ Focused A3R4 suite: 3 files / 134 tests passed. `test:job-io`: 49 files /
 failures. Gateway/browser builds, lint, and diff check passed with only existing
 warnings. The V4 App publisher cutover remains the sole separate integration
 blocker.
+
+## A3R5 repair completion
+
+- `3f5a74f` makes DELETE and `service.stop()` use one authoritative adapter
+  cleanup primitive. It retries the exact active runtime and every residual
+  handle, retains the exact Project authority as recovery-required on any
+  failure, and advertises canonical inactive authority only after the complete
+  set is clean. Exact and unconditional DELETE forms cover a recovered prior
+  runtime plus failed residual candidate through failure and repeated success.
+- `2787e19` snapshots pending connect/createSession ownership at the timeout
+  boundary. Settlement during normal cleanup cannot cancel the late owner;
+  a late Session is closed before the Client disconnects, while operations
+  already settled at timeout retain exactly one normal cleanup.
+
+Focused A3R5 suites passed 2 files / 100 tests. `npm run test:job-io` passed
+49 files / 823 tests. `npm run test:gateway` ran 29 files / 439 tests with
+435 passing; only the four documented V4 mechanics/publisher fixture failures
+remain. `npm run build:gateway` and `npm run build` passed with the existing
+Vite externalization and chunk-size warnings. `npm run lint` passed with only
+the pre-existing `middleware/runtime-gateway/main.test.ts:544`
+`unicorn(no-useless-spread)` warning. `git diff --check` passed. No V4
+compatibility path was added. A fresh independent SOL Ultra A3 safety review
+remains an external acceptance gate.
