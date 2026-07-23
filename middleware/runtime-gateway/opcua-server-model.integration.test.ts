@@ -12,9 +12,11 @@ import {
   Variant,
   standardUnits,
   type ClientSession,
+  type ReferenceDescription,
   type StatusCode,
 } from 'node-opcua'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { getMaxListeners, setMaxListeners } from 'node:events'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,7 +31,13 @@ import {
   type WorkcellProjectV5,
 } from '../../src/core/project-v5/index.js'
 import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
-import type { CommandBatchV1 } from '../../src/core/runtime-protocol/v1.js'
+import {
+  validateCommandResultV1,
+  validateRuntimePublisherLeaseV1,
+  type CommandBatchV1,
+  type RuntimePublisherLeaseV1,
+} from '../../src/core/runtime-protocol/v1.js'
+import { createRuntimeGatewayCommandOwnerV5 } from '../../src/features/runtime-gateway/v5/runtime-gateway-command-owner.js'
 import type { RuntimeGatewayDeploymentConfigV1 } from './deployment-config.js'
 import { createRuntimeGatewayEntrypointService } from './main.js'
 import { createOpcUaServerAdapterV1 } from './opcua-server-adapter.js'
@@ -188,7 +196,7 @@ async function browseGood(
   browseDirection: BrowseDirection,
   referenceTypeId?: string,
   includeSubtypes = false,
-): Promise<NonNullable<Awaited<ReturnType<ClientSession['browse']>>['references']>> {
+): Promise<ReferenceDescription[]> {
   const browse = await session.browse({
     nodeId,
     browseDirection,
@@ -268,6 +276,9 @@ function objectCommandPath(instanceNamespaceIndex: number, project: WorkcellProj
 async function openWebSocket(port: number): Promise<WebSocket> {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/runtime/ws`)
   await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject) })
+  // This black-box harness intentionally keeps a persistent batch recorder plus
+  // short-lived lease/result waiters on one socket.
+  socket.setMaxListeners(0)
   return socket
 }
 
@@ -297,8 +308,11 @@ interface CommandBatchRecorder {
   dispose(): void
 }
 
-function isCommandBatch(value: Record<string, unknown>): value is CommandBatchV1 {
-  return value.type === 'command-batch-v1'
+function isCommandBatch(value: unknown): value is CommandBatchV1 {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (value as { readonly type?: unknown }).type === 'command-batch-v1'
 }
 
 function recordCommandBatches(socket: WebSocket): CommandBatchRecorder {
@@ -330,8 +344,9 @@ async function closeWebSocket(socket: WebSocket | null): Promise<void> {
   })
 }
 
-async function waitForResult(session: ClientSession, nodeId: string, expected: unknown): Promise<void> {
-  for (let attempts = 0; attempts < 50; attempts += 1) {
+async function waitForResult(session: ClientSession, nodeId: string, expected: unknown, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     if (await readValue(session, nodeId) === expected) return
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
@@ -423,8 +438,11 @@ describe('OPC UA server model real-client integration', () => {
     } finally { await closeSession(connection); await adapter.stop() }
   }, 45_000)
 
-  it('stages real Session commands independently, fences invalid work, publishes RUNNING, and settles atomically through the Browser lease transport', async () => {
-    const [httpPort, opcUaPort] = await distinctEphemeralPorts(2)
+  it('stages real Session commands independently, fences stale Browser work, and settles through the V5 command owner', async () => {
+    const ports = await distinctEphemeralPorts(2)
+    const httpPort = ports[0]
+    const opcUaPort = ports[1]
+    if (httpPort === undefined || opcUaPort === undefined) throw new Error('Expected two distinct ephemeral ports')
     const config: RuntimeGatewayDeploymentConfigV1 = Object.freeze({
       gatewayId: 'server-model-integration', runtimeKind: 'native', host: '127.0.0.1', httpPort,
       opcUaAdvertisedHost: '127.0.0.1', opcUaAdvertisedPort: opcUaPort, opcUaPort,
@@ -447,13 +465,37 @@ describe('OPC UA server model real-client integration', () => {
       recorder = recordCommandBatches(socket)
       const leaseMessage = nextMessage(socket, (message) => typeof message.generation === 'number' && typeof message.expiresAt === 'number')
       socket.send(JSON.stringify({ type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1, projectId: project.projectId, configRevision, publisherId: 'browser-integration' }))
-      const lease = await leaseMessage
-      let generation = lease.generation
-      if (typeof generation !== 'number') throw new Error('Expected Browser lease generation')
-      const expiresAt = Date.now() + 30_000
+      let activeLease: RuntimePublisherLeaseV1 | null = validateRuntimePublisherLeaseV1(await leaseMessage)
+      let generation = activeLease.generation
       const fields = ['RequestId', 'ExpiresAt', 'X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw'] as const
-      const values: Readonly<Record<(typeof fields)[number], unknown>> = Object.freeze({ RequestId: 'object-atomic-1', ExpiresAt: new Date(expiresAt), X: 1, Y: 2, Z: 3, Roll: 10, Pitch: 20, Yaw: 30 })
+      const values: Readonly<Record<(typeof fields)[number], unknown>> = Object.freeze({ RequestId: 'object-atomic-1', ExpiresAt: new Date(Date.now() + 30_000), X: 1, Y: 2, Z: 3, Roll: 0, Pitch: 0, Yaw: Math.PI })
       const dataTypes: Readonly<Record<(typeof fields)[number], DataType>> = Object.freeze({ RequestId: DataType.String, ExpiresAt: DataType.DateTime, X: DataType.Double, Y: DataType.Double, Z: DataType.Double, Roll: DataType.Double, Pitch: DataType.Double, Yaw: DataType.Double })
+      const browserPoses = new Map<string, RigidTransformV5>()
+      let browserPoseMutations = 0
+      const owner = createRuntimeGatewayCommandOwnerV5({
+        project,
+        configRevision,
+        nowMs: Date.now,
+        readLease: () => activeLease !== null && activeLease.expiresAt > Date.now() ? activeLease : null,
+        simulation: {
+          writeJointValues: () => undefined,
+          commitObjectPose: (objectId, pose) => { browserPoseMutations += 1; browserPoses.set(objectId, pose) },
+          writeLogicalSignal: () => undefined,
+          startJob: () => undefined,
+          cancelJob: () => undefined,
+        },
+      })
+      const stageCompleteObjectCommand = async (requestId: string): Promise<void> => {
+        expect(await write(first!.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, false)).toBe(StatusCodes.Good)
+        for (const field of fields) {
+          const value = field === 'RequestId'
+            ? requestId
+            : field === 'ExpiresAt'
+              ? new Date(Date.now() + 30_000)
+              : values[field]
+          expect(await write(first!.session, objectCommandPath(instances, project, field), dataTypes[field], value)).toBe(StatusCodes.Good)
+        }
+      }
 
       for (const field of fields) expect(await write(first.session, objectCommandPath(instances, project, field), dataTypes[field], values[field])).toBe(StatusCodes.Good)
       expect(await write(second.session, objectCommandPath(instances, project, 'RequestId'), DataType.String, 'mixed-session')).toBe(StatusCodes.Good)
@@ -477,6 +519,7 @@ describe('OPC UA server model real-client integration', () => {
       expect(await readValue(first.session, actualX)).toBe(0)
       socket.send(JSON.stringify({ type: 'browser-publisher-lease-release-v1', protocolVersion: 1, projectId: project.projectId, configRevision, publisherId: 'browser-integration', generation }))
       await new Promise((resolve) => setTimeout(resolve, 25))
+      activeLease = null
       const unavailableBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
       await waitForResult(first.session, commandPath(instances, project, 'object-atomic-1', 'FailureCode'), 'BROWSER_PUBLISHER_UNAVAILABLE')
@@ -485,23 +528,24 @@ describe('OPC UA server model real-client integration', () => {
 
       const replacementLeaseMessage = nextMessage(socket, (message) => typeof message.generation === 'number' && typeof message.expiresAt === 'number')
       socket.send(JSON.stringify({ type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1, projectId: project.projectId, configRevision, publisherId: 'browser-integration' }))
-      const replacementLease = await replacementLeaseMessage
-      if (typeof replacementLease.generation !== 'number') throw new Error('Expected replacement Browser lease generation')
-      generation = replacementLease.generation
-      expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, false)).toBe(StatusCodes.Good)
-      for (const field of fields) expect(await write(first.session, objectCommandPath(instances, project, field), dataTypes[field], values[field])).toBe(StatusCodes.Good)
+      activeLease = validateRuntimePublisherLeaseV1(await replacementLeaseMessage)
+      generation = activeLease.generation
+      await stageCompleteObjectCommand('object-atomic-1')
 
       const acceptedBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
       await expectBatchCount(recorder, acceptedBatchCount + 1)
       const batch = recorder.batches[acceptedBatchCount]!
-      expect(batch).toMatchObject({ leaseGeneration: generation, commands: [{ commandId: 'object-atomic-1', value: { kind: 'scene-object-pose', pose: { x: 1, y: 2, z: 3, roll: 10, pitch: 20, yaw: 30 } } }] })
+      expect(batch).toMatchObject({ leaseGeneration: generation, commands: [{ commandId: 'object-atomic-1', value: { kind: 'scene-object-pose', pose: { x: 1, y: 2, z: 3, roll: 0, pitch: 0, yaw: Math.PI } } }] })
       await waitForResult(first.session, commandPath(instances, project, 'object-atomic-1', 'ExecutionState'), 'RUNNING')
-      socket.send(JSON.stringify({ type: 'command-result-v1', protocolVersion: 1, projectId: project.projectId, configRevision, leaseGeneration: generation, targetId: 'box', commandId: 'object-atomic-1', acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED', failureCode: null, message: 'Applied atomically by the Browser Simulation.', attachedObjectId: null, completedAt: Date.now() }))
+      const ownerResult = await owner.execute(batch)
+      expect(ownerResult).toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED', failureCode: null })
+      expect(browserPoseMutations).toBe(1)
+      expect(browserPoses.get('box')).toEqual({ positionM: [1, 2, 3], quaternion: [0, 0, 1, 0] })
+      socket.send(JSON.stringify(ownerResult))
       await waitForResult(first.session, commandPath(instances, project, 'object-atomic-1', 'ExecutionState'), 'SUCCEEDED')
 
-      expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, false)).toBe(StatusCodes.Good)
-      for (const field of fields) expect(await write(first.session, objectCommandPath(instances, project, field), dataTypes[field], values[field])).toBe(StatusCodes.Good)
+      await stageCompleteObjectCommand('object-atomic-1')
       const duplicateBatchCount = recorder.batches.length
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
       await waitForResult(first.session, commandPath(instances, project, 'object-atomic-1', 'ExecutionState'), 'SUCCEEDED')
@@ -513,8 +557,66 @@ describe('OPC UA server model real-client integration', () => {
       expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
       await waitForResult(first.session, `ns=${instances};s=OpenWebDigitalTwin/Projects/${project.projectId}/Diagnostics/LastCommand/FailureCode`, 'COMMAND_ID_CONFLICT')
       await expectBatchCount(recorder, conflictBatchCount)
+
+      await stageCompleteObjectCommand('lease-replacement-command')
+      const staleBatchCount = recorder.batches.length
+      expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
+      await expectBatchCount(recorder, staleBatchCount + 1)
+      const staleBatch = recorder.batches[staleBatchCount]!
+      expect(staleBatch.leaseGeneration).toBe(generation)
+      await waitForResult(first.session, commandPath(instances, project, 'lease-replacement-command', 'ExecutionState'), 'RUNNING')
+      const nextLeaseMessage = nextMessage(socket, (message) => typeof message.generation === 'number' && typeof message.expiresAt === 'number')
+      socket.send(JSON.stringify({ type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1, projectId: project.projectId, configRevision, publisherId: 'browser-integration' }))
+      activeLease = validateRuntimePublisherLeaseV1(await nextLeaseMessage)
+      expect(activeLease.generation).toBeGreaterThan(generation)
+      generation = activeLease.generation
+      await waitForResult(first.session, commandPath(instances, project, 'lease-replacement-command', 'FailureCode'), 'COMMAND_LEASE_STALE')
+      await expectBatchCount(recorder, staleBatchCount + 1)
+      const staleOwnerResult = await owner.execute(staleBatch)
+      expect(staleOwnerResult).toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE' })
+      expect(browserPoseMutations).toBe(1)
+      socket.send(JSON.stringify(staleOwnerResult))
+      await waitForResult(first.session, commandPath(instances, project, 'lease-replacement-command', 'FailureCode'), 'COMMAND_LEASE_STALE')
+      await expectBatchCount(recorder, staleBatchCount + 1)
+
+      await stageCompleteObjectCommand('wrong-result-generation-command')
+      const wrongResultBatchCount = recorder.batches.length
+      expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
+      await expectBatchCount(recorder, wrongResultBatchCount + 1)
+      await waitForResult(first.session, commandPath(instances, project, 'wrong-result-generation-command', 'ExecutionState'), 'RUNNING')
+      socket.send(JSON.stringify(validateCommandResultV1({
+        type: 'command-result-v1', protocolVersion: 1, projectId: project.projectId, configRevision,
+        leaseGeneration: staleBatch.leaseGeneration, targetId: 'box', commandId: 'wrong-result-generation-command',
+        acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'BROWSER_COMMAND_FAILED',
+        message: 'Wrong lease-generation result.', attachedObjectId: null, completedAt: Date.now(),
+      })))
+      await waitForResult(first.session, commandPath(instances, project, 'wrong-result-generation-command', 'FailureCode'), 'BROWSER_RESULT_INVALID')
+      expect(browserPoseMutations).toBe(1)
+      await expectBatchCount(recorder, wrongResultBatchCount + 1)
+
+      await stageCompleteObjectCommand('passive-lease-expiry-command')
+      const expiryBatchCount = recorder.batches.length
+      expect(await write(first.session, objectCommandPath(instances, project, 'Execute'), DataType.Boolean, true)).toBe(StatusCodes.Good)
+      await expectBatchCount(recorder, expiryBatchCount + 1)
+      const expiryBatch = recorder.batches[expiryBatchCount]!
+      await waitForResult(first.session, commandPath(instances, project, 'passive-lease-expiry-command', 'ExecutionState'), 'RUNNING')
+      await waitForResult(first.session, commandPath(instances, project, 'passive-lease-expiry-command', 'FailureCode'), 'COMMAND_LEASE_STALE', 8_000)
+      await expectBatchCount(recorder, expiryBatchCount + 1)
+      const expiredOwnerResult = await owner.execute(expiryBatch)
+      expect(expiredOwnerResult).toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE' })
+      expect(browserPoseMutations).toBe(1)
+      socket.send(JSON.stringify(expiredOwnerResult))
+      await waitForResult(first.session, commandPath(instances, project, 'passive-lease-expiry-command', 'FailureCode'), 'COMMAND_LEASE_STALE')
+      await expectBatchCount(recorder, expiryBatchCount + 1)
+      expect(await readValue(first.session, actualX)).toBe(0)
     } finally {
-      recorder?.dispose(); await closeWebSocket(socket); await closeSession(second); await closeSession(first); await gateway.stop()
+      recorder?.dispose()
+      await Promise.all([
+        closeWebSocket(socket).catch(() => undefined),
+        closeSession(second).catch(() => undefined),
+        closeSession(first).catch(() => undefined),
+      ])
+      await gateway.stop().catch(() => undefined)
     }
   }, 60_000)
 
@@ -525,6 +627,8 @@ describe('OPC UA server model real-client integration', () => {
     })
     const sessions: ClientSession[] = []
     let client: OPCUAClient | null = null
+    const priorDefaultMaxListeners = getMaxListeners(process)
+    setMaxListeners(0)
     try {
       await adapter.start()
       client = createClient('sixteen concurrent OPC UA Sessions')
@@ -534,9 +638,13 @@ describe('OPC UA server model real-client integration', () => {
       await expect(client.createSession()).rejects.toThrow(StatusCodes.BadTooManySessions.toString())
       expect(adapter.status().activeSessionCount).toBe(16)
     } finally {
-      await Promise.all(sessions.map((session) => session.close().catch(() => undefined)))
-      await client?.disconnect().catch(() => undefined)
-      await adapter.stop()
+      try {
+        await Promise.all(sessions.map((session) => session.close().catch(() => undefined)))
+        await client?.disconnect().catch(() => undefined)
+        await adapter.stop()
+      } finally {
+        setMaxListeners(priorDefaultMaxListeners)
+      }
     }
   }, 60_000)
 })
