@@ -567,6 +567,15 @@ export function createRuntimeGatewayEntrypointService(
     })
   }
 
+  function requireRuntimeMutationAuthority(): void {
+    if (projectAuthorityPhase === 'recovery-required') {
+      throw new RuntimeGatewayHttpError(503, 'PROJECT_RECOVERY_REQUIRED', 'Project runtime requires recovery before mutation.')
+    }
+    if (projectAuthorityPhase === 'deactivating') {
+      throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATING', 'Project runtime is deactivating.')
+    }
+  }
+
   async function replaceActiveProject(
     project: WorkcellProjectV5,
     configRevision: string,
@@ -630,6 +639,7 @@ export function createRuntimeGatewayEntrypointService(
           pkiRootDir,
           configRevision,
           onProductCommandWrite: (write) => {
+            if (projectAuthorityPhase !== 'active' || activeRuntime?.runtimeToken !== candidateRuntimeToken) return
             const snapshot = candidateCommandStaging.write(write.sessionId, write.target, write.field, write.value, nowMs())
             if (snapshot !== null) void candidateBrowserCommandDispatch.execute(snapshot)
           },
@@ -771,9 +781,10 @@ export function createRuntimeGatewayEntrypointService(
         browserLeasesBySocket.clear()
       }
       if (!recovered) {
-        activeRuntime = null
-        projectAuthorityPhase = 'inactive'
-        requireStateBatchHub().deactivateRevision()
+        // The prior adapters may have stopped only partially. Retain their
+        // exact authority fence until an explicit recovery can prove cleanup.
+        activeRuntime = previous
+        projectAuthorityPhase = previous === null ? 'inactive' : 'recovery-required'
       } else {
         projectAuthorityPhase = 'active'
       }
@@ -1071,6 +1082,7 @@ export function createRuntimeGatewayEntrypointService(
     )
 
     await enqueueRuntimeTransition(async () => {
+      requireRuntimeMutationAuthority()
       const active = activeRuntime
       if (active === null) {
         throw new RuntimeGatewayHttpError(
@@ -1121,6 +1133,7 @@ export function createRuntimeGatewayEntrypointService(
 
   async function commandLeaseRequest(): Promise<unknown> {
     return enqueueRuntimeTransition(async () => {
+      requireRuntimeMutationAuthority()
       const commandService = activeRuntime?.commandService
       if (commandService === null || commandService === undefined) {
         throw new RuntimeGatewayHttpError(
@@ -1152,6 +1165,7 @@ export function createRuntimeGatewayEntrypointService(
     }
     let result: Promise<CommandResultV1> | null = null
     await enqueueRuntimeTransition(async () => {
+      requireRuntimeMutationAuthority()
       const commandService = activeRuntime?.commandService
       result = commandService === null || commandService === undefined
         ? Promise.resolve(noClientCommandResult(command))
@@ -1164,7 +1178,7 @@ export function createRuntimeGatewayEntrypointService(
     let value: unknown
     try { value = JSON.parse(data.toString()) as unknown } catch { return }
     const active = activeRuntime
-    if (active === null) return
+    if (active === null || projectAuthorityPhase !== 'active') return
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
       const type = (value as { readonly type?: unknown }).type
       try {
@@ -1286,6 +1300,7 @@ export function createRuntimeGatewayEntrypointService(
     action: 'disconnect' | 'reconnect',
   ): Promise<RuntimeGatewayStatusV1> {
     await enqueueRuntimeTransition(async () => {
+      requireRuntimeMutationAuthority()
       const active = activeRuntime
       if (
         active === null

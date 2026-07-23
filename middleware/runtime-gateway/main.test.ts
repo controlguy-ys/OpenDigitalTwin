@@ -2093,7 +2093,7 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
-  it('becomes non-ready when both candidate activation and prior Client restart fail', async () => {
+  it('retains the exact prior authority as recovery-required when replacement recovery cannot prove cleanup', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
     const prior = fakeClientAdapter()
@@ -2113,6 +2113,7 @@ describe('runtime Gateway entrypoint', () => {
     const replacement = sampleProject('client', 'revision-client-double-failure')
 
     await service.start()
+    let socket: WebSocket | null = null
     try {
       expect((await requestJson(port, 'PUT', '/runtime/project', firstProject)).status).toBe(200)
       const failed = await requestJson(port, 'PUT', '/runtime/project', replacement)
@@ -2124,22 +2125,30 @@ describe('runtime Gateway entrypoint', () => {
         recoveryError: 'prior-restart-failure',
       })
       expect(gatewayStatus(service.status())).toMatchObject({
-        project: { phase: 'not-applied', readinessCode: 'NO_ACTIVE_REVISION' },
-        opcUa: { mode: 'off' },
+        project: {
+          phase: 'recovery-required', authorityPhase: 'recovery-required',
+          revisionId: firstProject.revisionId, readinessCode: 'RECOVERY_REQUIRED',
+        },
+        opcUa: { mode: 'client' },
       })
       expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(503)
       expect(prior.stop).toHaveBeenCalledTimes(2)
       expect(candidate.stop).toHaveBeenCalledOnce()
       const oldRevision = await configRevisionForProjectV5(firstProject)
       const afterDoubleFailure = await requestCommand(port, commandRequest(oldRevision))
-      expect(afterDoubleFailure.status).toBe(200)
-      expect(await afterDoubleFailure.json()).toEqual({
-        type: 'command-result-v1', protocolVersion: 1, projectId: firstProject.projectId,
-        configRevision: oldRevision, leaseGeneration: 1, targetId: 'mapping-1', commandId: 'command-http-1',
-        acknowledgement: 'REJECTED', executionState: 'FAILED', failureCode: 'OPC_UA_CLIENT_NOT_ACTIVE',
-        message: 'Runtime command requires an active OPC UA Client Project.', attachedObjectId: null, completedAt: 1_000,
-      })
+      expect(afterDoubleFailure.status).toBe(503)
+      expect(await afterDoubleFailure.json()).toMatchObject({ code: 'PROJECT_RECOVERY_REQUIRED' })
+      expect((await requestLease(port)).status).toBe(503)
+      expect((await requestJson(port, 'POST', '/runtime/state', {})).status).toBe(503)
+      expect((await requestJson(port, 'POST', `/runtime/client-endpoints/${encodeURIComponent(firstProject.opcUa.endpoints[0]!.endpointId)}/disconnect`, {})).status).toBe(503)
+      socket = await openWebSocket(port)
+      socket.send(JSON.stringify({
+        type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1,
+        projectId: firstProject.projectId, configRevision: oldRevision, publisherId: 'recovery-test',
+      }))
+      await expectNoWebSocketMessage(socket)
     } finally {
+      socket?.close()
       await service.stop()
     }
   })
@@ -2192,7 +2201,7 @@ describe('runtime Gateway entrypoint', () => {
       expect(priorServer.stop).toHaveBeenCalledTimes(2)
       expect(priorClient.stop).toHaveBeenCalledTimes(2)
       expect(gatewayStatus(service.status())).toMatchObject({
-        project: { phase: 'not-applied', readinessCode: 'NO_ACTIVE_REVISION' },
+        project: { phase: 'recovery-required', readinessCode: 'RECOVERY_REQUIRED', revisionId: firstProject.revisionId },
       })
       expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(503)
 
@@ -2201,8 +2210,8 @@ describe('runtime Gateway entrypoint', () => {
       const serverStopCount = priorServer.stop.mock.calls.length
       const clientStopCount = priorClient.stop.mock.calls.length
       await service.stop()
-      expect(priorServer.stop).toHaveBeenCalledTimes(serverStopCount)
-      expect(priorClient.stop).toHaveBeenCalledTimes(clientStopCount)
+      expect(priorServer.stop).toHaveBeenCalledTimes(serverStopCount + 1)
+      expect(priorClient.stop).toHaveBeenCalledTimes(clientStopCount + 1)
     } finally {
       socket?.close()
       await service.stop()
