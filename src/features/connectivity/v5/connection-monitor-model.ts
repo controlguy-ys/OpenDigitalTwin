@@ -10,14 +10,26 @@ export interface ConnectionMonitorRowV1 {
   readonly endpoint: string | null
   readonly lastUpdateAtMs: number | null
   readonly quality: string | null
-  readonly error: RuntimeGatewayDiagnosticErrorV1 | null
-  readonly details: readonly { readonly label: string; readonly value: string }[]
+  readonly error: {
+    readonly code: string
+    readonly message: string
+    readonly occurredAtMs: number | null
+  } | null
+  readonly details: readonly ConnectionMonitorDetailV1[]
 }
+
+export type ConnectionMonitorDetailV1 =
+  | { readonly kind: 'text'; readonly label: string; readonly value: string }
+  | { readonly kind: 'timestamp'; readonly label: string; readonly timestampMs: number | null }
 
 type DetailV1 = ConnectionMonitorRowV1['details'][number]
 
 function detail(label: string, value: string): DetailV1 {
-  return Object.freeze({ label, value })
+  return Object.freeze({ kind: 'text', label, value })
+}
+
+function timestampDetail(label: string, timestampMs: number | null): DetailV1 {
+  return Object.freeze({ kind: 'timestamp', label, timestampMs })
 }
 
 function unavailable(id: string, component: string, reason: string): ConnectionMonitorRowV1 {
@@ -35,6 +47,13 @@ function unavailable(id: string, component: string, reason: string): ConnectionM
 
 function statusFreshness(stale: boolean): DetailV1 {
   return detail('Freshness', stale ? 'Stale retained data' : 'Current decoded data')
+}
+
+function humanize(value: string): string {
+  return value
+    .split('-')
+    .map((word) => word.length === 0 ? word : `${word[0]!.toUpperCase()}${word.slice(1).toLowerCase()}`)
+    .join(' ')
 }
 
 function sameAuthorityTuple(
@@ -63,9 +82,9 @@ function proxyRow(presentation: ConnectivityPresentationStateV1): ConnectionMoni
       component: 'Web proxy',
       state: 'Error',
       endpoint: null,
-      lastUpdateAtMs: presentation.lastObservedAtMs ?? 0,
+      lastUpdateAtMs: null,
       quality: null,
-      error: Object.freeze({ code: 'RUNTIME_GATEWAY_TRANSPORT_ERROR', message: presentation.transportError, occurredAtMs: presentation.lastObservedAtMs ?? 0 }),
+      error: Object.freeze({ code: 'RUNTIME_GATEWAY_TRANSPORT_ERROR', message: presentation.transportError, occurredAtMs: null }),
       details: Object.freeze([detail('Freshness', 'Current transport error')]),
     })
   }
@@ -79,26 +98,33 @@ function proxyRow(presentation: ConnectivityPresentationStateV1): ConnectionMoni
 
 function statusRows(status: RuntimeGatewayStatusV1, stale: boolean): readonly ConnectionMonitorRowV1[] {
   const freshness = statusFreshness(stale)
-  const observed = String(status.observedAtMs)
+  const httpBinding = `${status.deployment.http.bindHost}:${status.deployment.http.port}`
   const gateway = Object.freeze({
-    id: 'gateway', component: 'Runtime Gateway', state: 'Online', endpoint: null,
+    id: 'gateway', component: 'Runtime Gateway', state: 'Online', endpoint: httpBinding,
     lastUpdateAtMs: status.observedAtMs, quality: 'GOOD', error: null,
-    details: Object.freeze([detail('Gateway ID', status.gateway.gatewayId), detail('Runtime kind', status.gateway.runtimeKind), detail('Observed', observed), freshness]),
+    details: Object.freeze([
+      detail('Gateway ID', status.gateway.gatewayId),
+      detail('Runtime kind', status.gateway.runtimeKind),
+      detail('HTTP bind', httpBinding),
+      timestampDetail('Observed', status.observedAtMs),
+      freshness,
+    ]),
   })
   const project = Object.freeze({
-    id: 'project', component: 'Project', state: status.project.phase, endpoint: null,
+    id: 'project', component: 'Project', state: humanize(status.project.phase), endpoint: null,
     lastUpdateAtMs: status.observedAtMs, quality: status.project.readinessCode, error: null,
     details: Object.freeze([
       detail('Authority', status.project.authorityPhase),
       detail('Project ID', status.project.projectId ?? 'None'),
       detail('Revision', status.project.revisionId ?? 'None'),
       detail('Configuration revision', status.project.configRevision ?? 'None'),
+      detail('Activation attempt', status.project.activationAttemptId ?? 'None'),
       detail('Readiness', status.project.readinessCode),
       freshness,
     ]),
   })
   const server = Object.freeze({
-    id: 'opcua-server', component: 'OPC UA Server', state: status.opcUa.server.phase,
+    id: 'opcua-server', component: 'OPC UA Server', state: humanize(status.opcUa.server.phase),
     endpoint: status.opcUa.server.endpointUrl, lastUpdateAtMs: status.observedAtMs,
     quality: status.opcUa.server.phase === 'listening' ? 'GOOD' : null,
     error: errorOrNull(status.opcUa.server.lastError),
@@ -110,7 +136,7 @@ function statusRows(status: RuntimeGatewayStatusV1, stale: boolean): readonly Co
     ]),
   })
   const clients = orderedEndpoints(status).map((endpoint) => Object.freeze({
-    id: `opcua-client:${endpoint.endpointId}`, component: 'OPC UA Client', state: endpoint.phase,
+    id: `opcua-client:${endpoint.endpointId}`, component: 'OPC UA Client', state: humanize(endpoint.phase),
     endpoint: endpoint.endpointUrl, lastUpdateAtMs: endpoint.lastNotificationAtMs ?? status.observedAtMs,
     quality: endpoint.lastValueQuality, error: errorOrNull(endpoint.lastError),
     details: Object.freeze([
@@ -119,10 +145,10 @@ function statusRows(status: RuntimeGatewayStatusV1, stale: boolean): readonly Co
       detail('Subscription', endpoint.subscriptionActive ? 'Active' : 'Inactive'),
       detail('Monitored items', String(endpoint.monitoredItemCount)),
       detail('Mappings', String(endpoint.mappingCount)),
-      detail('Last notification', endpoint.lastNotificationAtMs === null ? 'None' : String(endpoint.lastNotificationAtMs)),
-      detail('Last GOOD', endpoint.lastGoodValueAtMs === null ? 'None' : String(endpoint.lastGoodValueAtMs)),
+      timestampDetail('Last notification', endpoint.lastNotificationAtMs),
+      timestampDetail('Last GOOD', endpoint.lastGoodValueAtMs),
       detail('Reconnect attempt', String(endpoint.reconnectAttempt)),
-      detail('Next retry', endpoint.nextRetryAtMs === null ? 'None' : String(endpoint.nextRetryAtMs)),
+      timestampDetail('Next retry', endpoint.nextRetryAtMs),
       freshness,
     ]),
   }))
@@ -148,9 +174,19 @@ function diagnosticsRows(
   }
   const freshness = statusFreshness(stale)
   const model = diagnostics.serverModel
+  const modelFaulted = model.lastError !== null
+    || model.standardNodeSets === 'faulted'
+    || model.roboticsModel === 'faulted'
+    || model.productModel === 'faulted'
+  const modelDisabled = model.standardNodeSets === 'disabled'
+    && model.roboticsModel === 'disabled'
+    && model.productModel === 'disabled'
+  const modelReady = model.standardNodeSets === 'loaded'
+    && model.roboticsModel === 'ready'
+    && model.productModel === 'ready'
   const serverModel = Object.freeze({
-    id: 'server-model', component: 'Server model', state: model.lastError === null ? model.roboticsModel : 'faulted', endpoint: null,
-    lastUpdateAtMs: diagnostics.observedAtMs, quality: model.lastError === null ? 'GOOD' : null,
+    id: 'server-model', component: 'Server model', state: modelFaulted ? 'Faulted' : modelDisabled ? 'Disabled' : modelReady ? 'Ready' : 'Loading', endpoint: null,
+    lastUpdateAtMs: diagnostics.observedAtMs, quality: modelReady ? 'GOOD' : null,
     error: model.lastError === null ? null : Object.freeze({ code: 'SERVER_MODEL_ERROR', message: model.lastError, occurredAtMs: diagnostics.observedAtMs }),
     details: Object.freeze([
       detail('Standard NodeSet', model.standardNodeSets), detail('Robotics', model.roboticsModel), detail('Product', model.productModel),
@@ -159,11 +195,11 @@ function diagnosticsRows(
   })
   const publisher = diagnostics.browserPublisher
   const browserPublisher = Object.freeze({
-    id: 'browser-publisher', component: 'Browser publisher', state: publisher.phase, endpoint: null,
+    id: 'browser-publisher', component: 'Browser publisher', state: humanize(publisher.phase), endpoint: null,
     lastUpdateAtMs: diagnostics.observedAtMs, quality: publisher.phase === 'active' ? 'GOOD' : null, error: null,
     details: Object.freeze([
       detail('Publisher ID', publisher.publisherId ?? 'None'), detail('Generation', publisher.generation === null ? 'None' : String(publisher.generation)),
-      detail('Expires', publisher.expiresAt === null ? 'None' : String(publisher.expiresAt)), freshness,
+      timestampDetail('Expires', publisher.expiresAt), freshness,
     ]),
   })
   const command = diagnostics.lastCommandResult
@@ -175,10 +211,12 @@ function diagnosticsRows(
     : !commandMatches
       ? unavailable('outgoing-command', 'Outgoing command', 'Command Project/configuration does not match status.')
       : Object.freeze({
-        id: 'outgoing-command', component: 'Outgoing command', state: `${command.acknowledgement}/${command.executionState}`, endpoint: null,
+        id: 'outgoing-command', component: 'Outgoing command', state: `${command.acknowledgement} / ${command.executionState}`, endpoint: null,
         lastUpdateAtMs: command.completedAt, quality: command.acknowledgement,
         error: command.failureCode === null ? null : Object.freeze({ code: command.failureCode, message: command.message, occurredAtMs: command.completedAt ?? diagnostics.observedAtMs }),
         details: Object.freeze([
+          detail('Project ID', command.projectId),
+          detail('Configuration revision', command.configRevision),
           detail('Target', command.targetId), detail('Command', command.commandId), detail('Lease generation', String(command.leaseGeneration)),
           detail('Attached object', command.attachedObjectId ?? 'None'), detail('Message', command.message), freshness,
         ]),

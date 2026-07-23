@@ -2268,14 +2268,33 @@ button {
    deliberately leaves the viewport and the rest of the workspace interactive. */
 .connection-monitor-trigger {
   position: fixed;
-  z-index: 20;
-  top: 12px;
+  z-index: 25;
+  top: calc(var(--top-bar-height) + var(--ribbon-height, 0px) + 8px);
   right: 12px;
+}
+
+.connection-monitor-trigger,
+.connection-monitor-panel > header button {
+  padding: 7px 10px;
+  color: var(--color-text);
+  cursor: pointer;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.connection-monitor-trigger:hover,
+.connection-monitor-trigger:focus-visible,
+.connection-monitor-panel > header button:hover,
+.connection-monitor-panel > header button:focus-visible {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  outline: none;
 }
 
 .connection-monitor-panel {
   position: fixed;
-  z-index: 20;
+  z-index: 25;
   top: calc(var(--top-bar-height) + var(--ribbon-height, 0px) + 8px);
   right: 8px;
   bottom: 8px;
@@ -2298,8 +2317,8 @@ button {
 
 .connection-monitor-panel h2,
 .connection-monitor-panel p { margin: 0; }
-.connection-monitor-panel header p { color: var(--color-text-muted); font-size: 0.8rem; }
-.connection-monitor-transport-error { margin-top: 12px !important; color: var(--color-danger); }
+.connection-monitor-panel header p { color: var(--color-muted); font-size: 0.8rem; }
+.connection-monitor-transport-error { margin-top: 12px !important; color: var(--color-fault); }
 .connection-monitor-table-wrap { overflow: auto; margin-top: 14px; }
 .connection-monitor-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .connection-monitor-table th,
@@ -2310,7 +2329,7 @@ button {
 .connection-monitor-details dl > div,
 .connection-monitor-card dl > div { display: grid; grid-template-columns: minmax(92px, 0.65fr) minmax(0, 1fr); gap: 8px; }
 .connection-monitor-details dt,
-.connection-monitor-card dt { color: var(--color-text-muted); }
+.connection-monitor-card dt { color: var(--color-muted); }
 .connection-monitor-details dd,
 .connection-monitor-card dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .connection-monitor-cards { display: none; gap: 10px; margin-top: 14px; }

@@ -46,22 +46,87 @@ describe('connectionMonitorRowsV1', () => {
       'web-proxy', 'gateway', 'project', 'opcua-server', 'server-model',
       'browser-publisher', 'opcua-client:plc-a', 'opcua-client:plc-z', 'outgoing-command',
     ])
-    expect(rows[1]).toMatchObject({ state: 'Online', details: expect.arrayContaining([{ label: 'Runtime kind', value: 'docker' }, { label: 'Observed', value: '1000' }]) })
-    expect(rows[2]).toMatchObject({ state: 'ready', details: expect.arrayContaining([{ label: 'Authority', value: 'active' }, { label: 'Revision', value: 'revision-a' }]) })
-    expect(rows[3]).toMatchObject({ state: 'listening', endpoint: 'opc.tcp://gateway:4841' })
-    expect(rows[4]).toMatchObject({ state: 'ready', details: expect.arrayContaining([{ label: 'Standard NodeSet', value: 'loaded' }, { label: 'Robotics', value: 'ready' }, { label: 'Product', value: 'ready' }, { label: 'Sessions', value: '2 / 16' }]) })
-    expect(rows[5]).toMatchObject({ state: 'active', details: expect.arrayContaining([{ label: 'Generation', value: '7' }, { label: 'Expires', value: '1500' }]) })
-    expect(rows[6]).toMatchObject({ endpoint: 'opc.tcp://a:4840', state: 'connected', quality: 'GOOD', details: expect.arrayContaining([{ label: 'Session', value: 'Active' }, { label: 'Subscription', value: 'Active' }, { label: 'Monitored items', value: '2' }, { label: 'Mappings', value: '1' }, { label: 'Last notification', value: '990' }, { label: 'Last GOOD', value: '990' }]) })
-    expect(rows[7]).toMatchObject({ endpoint: 'opc.tcp://z:4840', state: 'reconnecting', quality: 'UNCERTAIN', error: { code: 'RETRYING', message: 'Waiting to reconnect.', occurredAtMs: 905 }, details: expect.arrayContaining([{ label: 'Reconnect attempt', value: '3' }, { label: 'Next retry', value: '1200' }]) })
-    expect(rows[8]).toMatchObject({ state: 'ACCEPTED/SUCCEEDED', quality: 'ACCEPTED', lastUpdateAtMs: 980, details: expect.arrayContaining([{ label: 'Target', value: 'job-a' }, { label: 'Command', value: 'start' }, { label: 'Lease generation', value: '7' }]) })
+    expect(rows[1]).toMatchObject({ state: 'Online', endpoint: '127.0.0.1:8081', details: expect.arrayContaining([
+      { kind: 'text', label: 'Runtime kind', value: 'docker' },
+      { kind: 'text', label: 'HTTP bind', value: '127.0.0.1:8081' },
+      { kind: 'timestamp', label: 'Observed', timestampMs: 1_000 },
+    ]) })
+    expect(rows[2]).toMatchObject({ state: 'Ready', details: expect.arrayContaining([
+      { kind: 'text', label: 'Authority', value: 'active' },
+      { kind: 'text', label: 'Revision', value: 'revision-a' },
+      { kind: 'text', label: 'Activation attempt', value: 'attempt-0001' },
+    ]) })
+    expect(rows[3]).toMatchObject({ state: 'Listening', endpoint: 'opc.tcp://gateway:4841' })
+    expect(rows[4]).toMatchObject({ state: 'Ready', details: expect.arrayContaining([
+      { kind: 'text', label: 'Standard NodeSet', value: 'loaded' },
+      { kind: 'text', label: 'Robotics', value: 'ready' },
+      { kind: 'text', label: 'Product', value: 'ready' },
+      { kind: 'text', label: 'Sessions', value: '2 / 16' },
+    ]) })
+    expect(rows[5]).toMatchObject({ state: 'Active', details: expect.arrayContaining([
+      { kind: 'text', label: 'Generation', value: '7' },
+      { kind: 'timestamp', label: 'Expires', timestampMs: 1_500 },
+    ]) })
+    expect(rows[6]).toMatchObject({ endpoint: 'opc.tcp://a:4840', state: 'Connected', quality: 'GOOD', details: expect.arrayContaining([
+      { kind: 'text', label: 'Session', value: 'Active' },
+      { kind: 'text', label: 'Subscription', value: 'Active' },
+      { kind: 'text', label: 'Monitored items', value: '2' },
+      { kind: 'text', label: 'Mappings', value: '1' },
+      { kind: 'timestamp', label: 'Last notification', timestampMs: 990 },
+      { kind: 'timestamp', label: 'Last GOOD', timestampMs: 990 },
+    ]) })
+    expect(rows[7]).toMatchObject({ endpoint: 'opc.tcp://z:4840', state: 'Reconnecting', quality: 'UNCERTAIN', error: { code: 'RETRYING', message: 'Waiting to reconnect.', occurredAtMs: 905 }, details: expect.arrayContaining([
+      { kind: 'text', label: 'Reconnect attempt', value: '3' },
+      { kind: 'timestamp', label: 'Next retry', timestampMs: 1_200 },
+    ]) })
+    expect(rows[8]).toMatchObject({ state: 'ACCEPTED / SUCCEEDED', quality: 'ACCEPTED', lastUpdateAtMs: 980, details: expect.arrayContaining([
+      { kind: 'text', label: 'Project ID', value: 'project-a' },
+      { kind: 'text', label: 'Configuration revision', value: revision },
+      { kind: 'text', label: 'Target', value: 'job-a' },
+      { kind: 'text', label: 'Command', value: 'start' },
+      { kind: 'text', label: 'Lease generation', value: '7' },
+    ]) })
   })
 
   it('keeps the current proxy error fresh while retained status and diagnostics are stale', () => {
     const rows = connectionMonitorRowsV1(presentation({ transportError: 'Gateway disconnected.' }))
 
     expect(rows[0]).toMatchObject({ state: 'Error', error: { code: 'RUNTIME_GATEWAY_TRANSPORT_ERROR', message: 'Gateway disconnected.' } })
-    expect(rows[0]!.details).toContainEqual({ label: 'Freshness', value: 'Current transport error' })
-    expect(rows.slice(1).every((row) => row.details.some((detail) => detail.label === 'Freshness' && detail.value === 'Stale retained data'))).toBe(true)
+    expect(rows[0]).toMatchObject({ lastUpdateAtMs: null, error: { occurredAtMs: null } })
+    expect(rows[0]!.details).toContainEqual({ kind: 'text', label: 'Freshness', value: 'Current transport error' })
+    expect(rows.slice(1).every((row) => row.details.some((detail) => detail.kind === 'text' && detail.label === 'Freshness' && detail.value === 'Stale retained data'))).toBe(true)
+  })
+
+  it('reports the aggregate server model as faulted when any model surface faults', () => {
+    const current = presentation()
+    const diagnostics = current.integrationDiagnostics!
+    const rows = connectionMonitorRowsV1(presentation({
+      integrationDiagnostics: {
+        ...diagnostics,
+        serverModel: {
+          ...diagnostics.serverModel,
+          productModel: 'faulted',
+        },
+      },
+    }))
+
+    expect(rows[4]).toMatchObject({ state: 'Faulted', quality: null })
+  })
+
+  it('does not report the aggregate server model GOOD before every model surface is ready', () => {
+    const current = presentation()
+    const diagnostics = current.integrationDiagnostics!
+    const rows = connectionMonitorRowsV1(presentation({
+      integrationDiagnostics: {
+        ...diagnostics,
+        serverModel: {
+          ...diagnostics.serverModel,
+          roboticsModel: 'disabled',
+        },
+      },
+    }))
+
+    expect(rows[4]).toMatchObject({ state: 'Loading', quality: null })
   })
 
   it('rejects cross-revision diagnostics and a command owned by another status Project/configuration', () => {
