@@ -119,3 +119,33 @@ the pre-existing `middleware/runtime-gateway/main.test.ts:544`
 `unicorn(no-useless-spread)` warning. `git diff --check` passed. No V4
 compatibility path was added. A fresh independent SOL Ultra A3 safety review
 remains an external acceptance gate.
+
+## A3R6 repair completion
+
+- `fa3ae68` keeps the production native Server handle and started status until
+  `shutdown(0)` succeeds. A rejected shutdown propagates unchanged; the next
+  `stop()` invokes shutdown on the same handle and clears status only after
+  success.
+- `c440160` makes production Client cleanup ordered, authoritative, and
+  retryable across monitored groups, Subscription, Session, Client, and
+  detached late resources. Failed exact handles remain visible as faulted,
+  publication/commands/reconnect remain fenced, and later stop retries only
+  unresolved handles.
+- `42bdafd` recognizes successful native Subscription termination as proof that
+  its child monitored items are retired. If both group and Subscription
+  termination fail, both handles remain retryable and stop rejects.
+- `762743c` exercises the production Client adapter through Gateway DELETE:
+  Session-close failure retains exact recovery-required Project authority, and
+  repeated exact DELETE returns inactive only after the retained Session closes.
+  `f03041a` and `5409f58` keep the new fixtures and cleanup loop build/lint clean.
+
+Focused production adapter and A3 integration suites passed 4 files / 153
+tests. `npm run test:job-io` passed 49 files / 823 tests. `npm run
+test:gateway` ran 29 files / 446 tests with 442 passing; only the four
+documented V4 mechanics/publisher fixture failures remain. `npm run
+build:gateway` and `npm run build` passed with the existing Vite
+externalization and chunk-size warnings. `npm run lint` passed with only the
+pre-existing `middleware/runtime-gateway/main.test.ts` useless-spread warning,
+now at line 570 after the added integration fixture. `git diff --check` passed.
+No V4 compatibility path was added. A fresh independent SOL Ultra A3 safety
+review remains an external acceptance gate.
