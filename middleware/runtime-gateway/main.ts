@@ -67,6 +67,7 @@ import {
   type RuntimeProjectAuthorityV1,
 } from '../../src/core/runtime-protocol/project-activation-v1.js'
 import type { RuntimeIntegrationDiagnosticsV1 } from '../../src/core/runtime-protocol/integration-diagnostics-v1.js'
+import { canonicalizeRuntimeGatewayErrorEnvelopeV1 } from '../../src/core/runtime-protocol/gateway-error-envelope-v1.js'
 import { createBrowserPublisherLeaseManagerV1, type BrowserPublisherLeaseManagerV1 } from './browser-publisher-lease.js'
 import { createRuntimeIntegrationDiagnosticsV1, type RuntimeIntegrationDiagnosticsBuilderV1 } from './integration-diagnostics.js'
 import { createBrowserCommandDispatchV1, type BrowserCommandDispatchV1 } from './browser-command-dispatch.js'
@@ -1355,12 +1356,7 @@ export function createRuntimeGatewayEntrypointService(
       message: string,
       details: Readonly<Record<string, unknown>> = {},
     ): void => {
-      const envelope: Record<string, string | null> = { code: code.slice(0, 128), message: message.slice(0, 512) }
-      for (const key of ['recoveredProjectId', 'recoveredRevisionId', 'recoveryError'] as const) {
-        const value = details[key]
-        if (value === null || typeof value === 'string') envelope[key] = value === null ? null : value.slice(0, 512)
-      }
-      writeJson(response, statusCode, envelope)
+      writeJson(response, statusCode, canonicalizeRuntimeGatewayErrorEnvelopeV1(code, message, details))
     }
     if (error instanceof ConnectivityDiagnosticsRouteErrorV1) {
       writeGatewayError(error.statusCode, error.code, error.message)

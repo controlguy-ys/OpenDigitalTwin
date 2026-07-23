@@ -13,6 +13,7 @@ import {
 } from '../../project/v5/project-v5-publication.js'
 import type { RuntimeProjectAuthorityV1 } from '../../../core/runtime-protocol/project-activation-v1.js'
 import { validateOpcUaNamespaceIndexResponseV1, validateOpcUaTestConnectionResultV1, type OpcUaNamespaceIndexResponseV1, type OpcUaTestConnectionResultV1 } from '../../../core/runtime-protocol/opcua-connectivity-v1.js'
+import { validateRuntimeGatewayErrorEnvelopeV1 } from '../../../core/runtime-protocol/gateway-error-envelope-v1.js'
 
 const RESPONSE_LIMIT_BYTES = 64 * 1024
 const CONFIG_REVISION = /^[0-9a-f]{64}$/u
@@ -101,17 +102,16 @@ async function boundedJson(response: Response): Promise<unknown> {
 }
 
 function exactError(value: unknown): { readonly code: string; readonly message: string; readonly details: Readonly<Record<string, string | null>> | null } | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const record = value as Record<string, unknown>
-  const allowed = new Set(['code', 'message', 'recoveredProjectId', 'recoveredRevisionId', 'recoveryError'])
-  if (typeof record.code !== 'string' || !/^[A-Z][A-Z0-9_]{0,127}$/u.test(record.code) || typeof record.message !== 'string' || new TextEncoder().encode(record.message).byteLength > 512 || Object.keys(record).some((key) => !allowed.has(key))) return null
-  const details: Record<string, string | null> = {}
-  for (const key of ['recoveredProjectId', 'recoveredRevisionId', 'recoveryError']) {
-    if (!(key in record)) continue
-    if (record[key] !== null && (typeof record[key] !== 'string' || new TextEncoder().encode(record[key] as string).byteLength > 512)) return null
-    details[key] = record[key] as string | null
+  try {
+    const envelope = validateRuntimeGatewayErrorEnvelopeV1(value)
+    const details: Record<string, string | null> = {}
+    for (const key of ['recoveredProjectId', 'recoveredRevisionId', 'recoveryError'] as const) {
+      if (key in envelope) details[key] = envelope[key]
+    }
+    return { code: envelope.code, message: envelope.message, details: Object.keys(details).length === 0 ? null : Object.freeze(details) }
+  } catch {
+    return null
   }
-  return { code: record.code, message: record.message, details: Object.keys(details).length === 0 ? null : Object.freeze(details) }
 }
 
 function authorityFromStatus(status: RuntimeGatewayStatusV1): RuntimeProjectAuthorityV1 | null {
