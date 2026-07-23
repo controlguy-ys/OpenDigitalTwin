@@ -1153,13 +1153,13 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     await eventually(() => connection.groups.length === 1)
     const groupTerminate = (connection.groups[0] as unknown as { terminate: typeof connection.session.close }).terminate
     const subscriptionTerminate = (connection.subscriptions[0] as unknown as { terminate: typeof connection.session.close }).terminate
-    const cleanup = resource === 'monitored-group'
+    const cleanup = (resource === 'monitored-group'
       ? groupTerminate
       : resource === 'subscription'
         ? subscriptionTerminate
         : resource === 'session'
           ? connection.session.close
-          : connection.client.disconnect
+          : connection.client.disconnect) as typeof connection.session.close
     cleanup.mockRejectedValueOnce(new Error(`${resource} cleanup failed`))
     if (resource === 'monitored-group') {
       subscriptionTerminate.mockRejectedValueOnce(new Error('subscription cleanup proof failed'))
@@ -1192,7 +1192,7 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
   it('retains a Session created after the stop fence when its first close fails', async () => {
     const connection = fakeConnection()
     let resolveSession!: (session: typeof connection.session) => void
-    connection.client.createSession = vi.fn(() => new Promise((resolve) => {
+    connection.client.createSession = vi.fn(() => new Promise<typeof connection.session>((resolve) => {
       resolveSession = resolve
     }))
     connection.session.close.mockRejectedValueOnce(new Error('late Session close failed'))
