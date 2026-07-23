@@ -257,6 +257,7 @@ export function createRuntimeGatewayConnectivityClientV1(
     async rollback(candidate: PreparedRuntimeGatewayProjectV1): Promise<ProjectV5GatewayRollbackDispositionV1> {
       const record = requireCandidate(candidate)
       if (record.state === 'prepared') { record.state = 'consumed'; return 'prepared-only' }
+      const candidateAuthority = Object.freeze({ projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
       try {
         try {
           await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
@@ -275,14 +276,21 @@ export function createRuntimeGatewayConnectivityClientV1(
         const explicitConflict = isRuntimeGatewayConnectivityClientV1Error(error) && error.code === 'PROJECT_DEACTIVATION_CONFLICT'
         const current = await readStatus()
         if (current.project.phase === 'not-applied') { record.state = 'consumed'; return explicitConflict ? 'candidate-absent' : 'candidate-deactivated' }
-        const candidateAuthority = Object.freeze({ projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
         if (!sameAuthority(authorityFromStatus(current), candidateAuthority)) { record.state = 'consumed'; return 'other-authority' }
         if (current.project.phase === 'recovery-required') {
           throw new RuntimeGatewayConnectivityClientV1Error('PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Gateway candidate requires recovery before rollback can complete.', 503)
         }
-        await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
-        record.state = 'consumed'
-        return 'candidate-deactivated'
+        try {
+          await deactivate({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: record.project.projectId, revisionId: record.project.revisionId, configRevision: record.configRevision, activationAttemptId: record.activationAttemptId })
+          record.state = 'consumed'
+          return 'candidate-deactivated'
+        } catch (retryError) {
+          if (!(isRuntimeGatewayConnectivityClientV1Error(retryError) && (retryError.code === 'PROJECT_DEACTIVATION_CONFLICT' || retryError.code === 'RUNTIME_GATEWAY_UNAVAILABLE' || retryError.code === 'RUNTIME_GATEWAY_TIMEOUT' || retryError.code === 'RUNTIME_GATEWAY_RESPONSE_INVALID'))) throw retryError
+          const terminal = await readStatus()
+          if (terminal.project.phase === 'not-applied') { record.state = 'consumed'; return 'candidate-deactivated' }
+          if (!sameAuthority(authorityFromStatus(terminal), candidateAuthority)) { record.state = 'consumed'; return 'other-authority' }
+          throw new RuntimeGatewayConnectivityClientV1Error('PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Gateway candidate deactivation did not reach a terminal state.', 503)
+        }
       }
     },
     async deactivate(): Promise<RuntimeGatewayStatusV1> {
