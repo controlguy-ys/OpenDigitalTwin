@@ -275,6 +275,7 @@ function publicationHarness(
 function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options: {
   readonly failTargetActivation?: boolean
   readonly staleActiveWhenEmpty?: boolean
+  readonly healthyGatewayCasLoser?: boolean
   readonly movePointerOnTargetCommit?: StoredProjectPointerV5
   readonly movePointerOnPreviousCommit?: StoredProjectPointerV5
 } = {}) {
@@ -282,7 +283,7 @@ function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options
   const target = published(project('hydration-target', 'Target'), HASH_B)
   let pointer = initialPointer
   let runtimeActive: PublishedProjectV5 | null = options.staleActiveWhenEmpty ? target : null
-  let gatewayActive: PublishedProjectV5 | null = options.staleActiveWhenEmpty ? target : null
+  let gatewayActive: PublishedProjectV5 | null = options.staleActiveWhenEmpty || options.healthyGatewayCasLoser ? target : null
   const events: string[] = []
   const record = (value: PublishedProjectV5): ProjectRevisionRecordV5 => ({
     revisionId: value.revisionId,
@@ -345,6 +346,11 @@ function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options
   const gateway = {
     prepare: vi.fn(async (candidate: WorkcellProjectV5, configRevision: string) => ({ candidate, configRevision })),
     activate: vi.fn(async (prepared: { readonly candidate: WorkcellProjectV5; readonly configRevision: string }) => {
+      if (options.healthyGatewayCasLoser && prepared.candidate.revisionId === target.revisionId) {
+        const error = new Error('Gateway activation lost a healthy same-target CAS race.') as Error & { code: string }
+        error.code = 'PROJECT_ACTIVATION_CONFLICT'
+        throw error
+      }
       if (options.failTargetActivation && prepared.candidate.revisionId === target.revisionId) throw new Error('target activation failed')
       gatewayActive = published(prepared.candidate, prepared.configRevision)
       return gatewayStatus(prepared.candidate, prepared.configRevision)
@@ -354,7 +360,11 @@ function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options
       return gatewayStatus(value.project, value.configRevision)
     }),
     readStatus: vi.fn(async () => gatewayActive === null ? inactiveGatewayStatus() : gatewayStatus(gatewayActive.project, gatewayActive.configRevision)),
-    rollback: vi.fn(async () => { gatewayActive = null; return 'candidate-deactivated' as ProjectV5GatewayRollbackDispositionV1 }),
+    rollback: vi.fn(async () => {
+      if (options.healthyGatewayCasLoser) return 'other-authority' as ProjectV5GatewayRollbackDispositionV1
+      gatewayActive = null
+      return 'candidate-deactivated' as ProjectV5GatewayRollbackDispositionV1
+    }),
     deactivate: vi.fn(async () => { gatewayActive = null; return inactiveGatewayStatus() }),
     cleanupPrevious: vi.fn(async (value: PublishedProjectV5) => { events.push(`gateway.cleanup:${value.revisionId}`) }),
   } satisfies ProjectV5GatewayPublicationPort<{ readonly candidate: WorkcellProjectV5; readonly configRevision: string }>
@@ -873,6 +883,19 @@ describe('Project V5 publication coordinator', () => {
     expect(subject.repository.finalizePublication).not.toHaveBeenCalled()
     expect(subject.publication.readPublished()).toEqual(subject.target)
     expect(observed).toHaveBeenCalledOnce()
+  })
+
+  it('converges two same-target hydration coordinators when this tab loses Gateway activation CAS', async () => {
+    const subject = hydrationHarness(
+      { key: 'active', state: 'stable', revisionId: 'hydration-target', commitToken: 'stable-target' },
+      { healthyGatewayCasLoser: true },
+    )
+
+    await expect(subject.publication.hydrate()).resolves.toEqual(subject.target)
+
+    expect(subject.gateway.readStatus).toHaveBeenCalled()
+    expect(subject.gatewayActive()).toEqual(subject.target)
+    expect(subject.publication.isRecoveryRequired()).toBe(false)
   })
 
   it('hydrates an empty durable pointer without creating a publication', async () => {

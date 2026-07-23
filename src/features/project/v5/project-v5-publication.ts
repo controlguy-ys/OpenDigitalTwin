@@ -191,6 +191,21 @@ function assertGatewayStatus(
   }
 }
 
+function gatewayStatusMatchesPublishedTarget(
+  value: RuntimeGatewayStatusV1,
+  expected: PublishedProjectV5,
+): boolean {
+  return value.project.phase === 'ready'
+    && value.project.projectId === expected.project.projectId
+    && value.project.revisionId === expected.revisionId
+    && value.project.configRevision === expected.configRevision
+}
+
+function isGatewayActivationConflict(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && error.code === 'PROJECT_ACTIVATION_CONFLICT'
+}
+
 function assertGatewayInactiveStatus(value: RuntimeGatewayStatusV1): void {
   let status: RuntimeGatewayStatusV1
   try {
@@ -458,8 +473,8 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
 
   const restoreRuntimeAndGateway = async (next: PublishedProjectV5): Promise<{
     readonly preparedRuntime: PreparedRuntime
-    readonly preparedGateway: PreparedGateway
     readonly runtimeTransition: ProjectV5RuntimeCommitTransitionV5
+    rollbackGateway(): Promise<ProjectV5GatewayRollbackDispositionV1>
   }> => {
     let preparedRuntime: PreparedRuntime | undefined
     let preparedGateway: PreparedGateway | undefined
@@ -474,9 +489,20 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
       gatewayPrepared = true
       await runtime.apply(preparedRuntime)
       gatewayActivationAttempted = true
-      assertGatewayStatus(await gateway.activate(preparedGateway), next)
+      let rollbackGateway = (): Promise<ProjectV5GatewayRollbackDispositionV1> => gateway.rollback(preparedGateway as PreparedGateway)
+      try {
+        assertGatewayStatus(await gateway.activate(preparedGateway), next)
+      } catch (activationError) {
+        if (!isGatewayActivationConflict(activationError)) throw activationError
+        const winner = await gateway.readStatus()
+        if (!gatewayStatusMatchesPublishedTarget(winner, next)) throw activationError
+        // Another tab owns a healthy exact durable target. Its Gateway
+        // authority is convergence, not residue that this tab may remove.
+        await gateway.rollback(preparedGateway)
+        rollbackGateway = async () => 'other-authority'
+      }
       runtimeTransition = await runtime.commit(preparedRuntime)
-      return { preparedRuntime, preparedGateway, runtimeTransition }
+      return { preparedRuntime, runtimeTransition, rollbackGateway }
     } catch (error) {
       const compensationErrors: unknown[] = []
       const compensate = async (operation: () => Promise<void> | void): Promise<void> => {
@@ -502,8 +528,8 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
 
   const rollbackHydratedRuntimeAndGateway = async (activation: {
     readonly preparedRuntime: PreparedRuntime
-    readonly preparedGateway: PreparedGateway
     readonly runtimeTransition: ProjectV5RuntimeCommitTransitionV5
+    rollbackGateway(): Promise<ProjectV5GatewayRollbackDispositionV1>
   }): Promise<readonly unknown[]> => {
     const errors: unknown[] = []
     const compensate = async (operation: () => Promise<void> | void): Promise<void> => {
@@ -513,8 +539,10 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
         errors.push(error)
       }
     }
-    await compensate(async () => { await gateway.rollback(activation.preparedGateway) })
-    await compensate(async () => { assertGatewayInactiveStatus(await gateway.readStatus()) })
+    const disposition = await activation.rollbackGateway().catch((error) => { errors.push(error); return undefined })
+    if (disposition !== 'other-authority') {
+      await compensate(async () => { assertGatewayInactiveStatus(await gateway.readStatus()) })
+    }
     await compensate(() => activation.runtimeTransition.rollback())
     return errors
   }
