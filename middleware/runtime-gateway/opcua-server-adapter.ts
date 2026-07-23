@@ -37,6 +37,8 @@ export interface OpcUaServerAdapterOptionsV1 {
   readonly pkiRootDir: string
   readonly configRevision: string
   readonly onProductCommandWrite?: (write: Readonly<{ sessionId: string; target: ProductCommandTargetV1; field: string; value: unknown }>) => void
+  readonly onSessionOpen?: (sessionId: string) => void
+  readonly onSessionClose?: (sessionId: string) => void
 }
 
 export interface OpcUaServerAdapterStatusV1 {
@@ -49,6 +51,7 @@ export interface OpcUaServerAdapterStatusV1 {
   readonly productNamespaceUri: typeof OPENWEB_MODEL_NAMESPACE_URI_V1
   readonly productNamespaceIndex: number | null
   readonly productRootNodeId: string | null
+  readonly activeSessionCount: number
 }
 
 export interface OpcUaServerAdapterV1 {
@@ -83,6 +86,7 @@ function createStatus(
   nodeIds: Readonly<Record<string, Readonly<Record<string, string>>>>,
   productNamespaceIndex: number | null,
   productRootNodeId: string | null,
+  activeSessionCount = 0,
 ): OpcUaServerAdapterStatusV1 {
   return Object.freeze({
     mode,
@@ -94,6 +98,7 @@ function createStatus(
     productNamespaceUri: OPENWEB_MODEL_NAMESPACE_URI_V1,
     productNamespaceIndex,
     productRootNodeId,
+    activeSessionCount,
   })
 }
 
@@ -157,6 +162,28 @@ export function createOpcUaServerAdapterV1(
   let openWebModel: OpcUaOpenWebModelV1 | null = null
   let currentStatus = createStatus(mode, false, null, null, {}, null, null)
   let lifecycleTail: Promise<void> = Promise.resolve()
+  const activeSessionIds = new Set<string>()
+  let sessionEventServer: OPCUAServer | null = null
+
+  const sessionId = (session: Readonly<{ getSessionId(): { toString(): string } }>): string => (
+    `opcua:${session.getSessionId().toString()}`
+  )
+  const refreshSessionCount = (): void => {
+    currentStatus = Object.freeze({ ...currentStatus, activeSessionCount: activeSessionIds.size })
+  }
+  const onSessionActivated = (session: Readonly<{ getSessionId(): { toString(): string } }>): void => {
+    const id = sessionId(session)
+    if (activeSessionIds.has(id)) return
+    activeSessionIds.add(id)
+    refreshSessionCount()
+    try { options.onSessionOpen?.(id) } catch { /* Session accounting remains authoritative. */ }
+  }
+  const onSessionClosed = (session: Readonly<{ getSessionId(): { toString(): string } }>): void => {
+    const id = sessionId(session)
+    if (!activeSessionIds.delete(id)) return
+    refreshSessionCount()
+    try { options.onSessionClose?.(id) } catch { /* Session accounting remains authoritative. */ }
+  }
 
   function enqueue(transition: () => Promise<void>): Promise<void> {
     const requested = lifecycleTail.then(transition)
@@ -233,6 +260,9 @@ export function createOpcUaServerAdapterV1(
       if (options.onProductCommandWrite !== undefined) nextOpenWebModel.bindCommandWrites(options.onProductCommandWrite)
 
       await candidate.start()
+      candidate.on('session_activated', onSessionActivated)
+      candidate.on('session_closed', onSessionClosed)
+      sessionEventServer = candidate
       server = candidate
       roboticsModel = nextModel
       openWebModel = nextOpenWebModel
@@ -246,6 +276,7 @@ export function createOpcUaServerAdapterV1(
         nextModel.axisActualNodeIds,
         productNamespace.index,
         nextOpenWebModel.rootNodeId,
+        activeSessionIds.size,
       )
     } catch (error) {
       await candidate.shutdown(0).catch(() => undefined)
@@ -257,11 +288,17 @@ export function createOpcUaServerAdapterV1(
     const activeServer = server
     if (activeServer === null) return
     server = null
+    if (sessionEventServer === activeServer) {
+      activeServer.off('session_activated', onSessionActivated)
+      activeServer.off('session_closed', onSessionClosed)
+      sessionEventServer = null
+    }
+    activeSessionIds.clear()
     openWebModel?.dispose()
     openWebModel = null
     roboticsModel?.dispose()
     roboticsModel = null
-    currentStatus = createStatus(mode, false, null, null, {}, null, null)
+    currentStatus = createStatus(mode, false, null, null, {}, null, null, 0)
     await activeServer.shutdown(0)
   }
 

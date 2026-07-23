@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   cloneWorkcellProjectV5,
   makeMinimalWorkcellProjectV5,
@@ -244,6 +244,9 @@ describe('BrowserProjectRuntimeV5', () => {
   it('registers one revision-fenced V5 command owner on the Browser stream target', async () => {
     const runtime = createBrowserProjectRuntimeV5(options())
     const target = runtime.bundle.getState().runtimeGraph.streamTarget
+    target.onBrowserPublisherLease?.({
+      projectId: 'project-v5', configRevision: CONFIG_A, publisherId: 'gateway-1:browser-simulation', generation: 1, expiresAt: 6_000,
+    })
     await expect(target.onCommandBatch?.({
       type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
       leaseGeneration: 1, commands: [{ commandId: 'external-joint', expiresAt: 200, targetId: 'robot-1', value: { kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 12 } } }],
@@ -260,13 +263,60 @@ describe('BrowserProjectRuntimeV5', () => {
     await expect(target.onCommandBatch?.({
       type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
       leaseGeneration: 1, commands: [{ commandId: 'after-dispose', expiresAt: 200, targetId: 'robot-1', value: { kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 1 } } }],
-    })).resolves.toMatchObject({ acknowledgement: 'REJECTED', failureCode: 'COMMAND_LEASE_STALE' })
+    })).resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE' })
+  })
+
+  it('runs Browser product job start and cancellation through the scheduled playback controller', async () => {
+    const callbacks: Array<(simulationMs: number) => void> = []
+    const request = vi.fn((callback: (simulationMs: number) => void) => {
+      callbacks.push(callback)
+      return callbacks.length
+    })
+    const cancel = vi.fn()
+    const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(project.jobs[0] as unknown as { instructions: WorkcellProjectV5['jobs'][number]['instructions'] }).instructions = [{
+      id: 'scheduled-motion', kind: 'move-joint', jointValues: { J1: 30 }, speedPercentToNext: 100,
+    }]
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: project,
+      scheduler: { now: () => 100, request, cancel },
+    }))
+    try {
+      const target = runtime.bundle.getState().runtimeGraph.streamTarget
+      target.onBrowserPublisherLease?.({
+        projectId: 'project-v5', configRevision: CONFIG_A, publisherId: 'gateway-1:browser-simulation', generation: 1, expiresAt: 6_000,
+      })
+      await expect(target.onCommandBatch?.({
+        type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
+        leaseGeneration: 1, commands: [{
+          commandId: 'external-job-start', expiresAt: 200, targetId: 'job-1', value: { kind: 'job', jobId: 'job-1', operation: 'start' },
+        }],
+      })).resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED' })
+      expect(request).toHaveBeenCalledTimes(1)
+      expect(runtime.bundle.getState().runtimeGraph.jobs.getState().byRobotId['robot-1']).toMatchObject({ state: 'RUNNING' })
+
+      await expect(target.onCommandBatch?.({
+        type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
+        leaseGeneration: 1, commands: [{
+          commandId: 'external-job-cancel', expiresAt: 200, targetId: 'job-1', value: { kind: 'job', jobId: 'job-1', operation: 'cancel' },
+        }],
+      })).resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED' })
+      expect(cancel).toHaveBeenCalledWith(1)
+      expect(runtime.bundle.getState().runtimeGraph.jobs.getState().byRobotId['robot-1']).toMatchObject({ state: 'CANCELLED' })
+      expect(callbacks).toHaveLength(1)
+    } finally {
+      await runtime.dispose()
+    }
   })
 
   it('commits a product Object pose through the V5 Browser Simulation owner', async () => {
     const runtime = createBrowserProjectRuntimeV5(options({ initialProject: attachmentProject() }))
     try {
-      await expect(runtime.bundle.getState().runtimeGraph.streamTarget.onCommandBatch?.({
+      const target = runtime.bundle.getState().runtimeGraph.streamTarget
+      target.onBrowserPublisherLease?.({
+        projectId: 'project-v5', configRevision: CONFIG_A, publisherId: 'gateway-1:browser-simulation', generation: 1, expiresAt: 6_000,
+      })
+      await expect(target.onCommandBatch?.({
         type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
         leaseGeneration: 1, commands: [{
           commandId: 'external-pose', expiresAt: 200, targetId: 'part',

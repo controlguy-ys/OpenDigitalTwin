@@ -17,7 +17,8 @@ import {
 } from '../../src/core/project-v5/index.js'
 import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/core/project-v5/test-support.js'
 import type { RuntimeGatewayDeploymentConfigV1 } from './deployment-config.js'
-import type { OpcUaServerAdapterV1 } from './opcua-server-adapter.js'
+import type { OpcUaServerAdapterOptionsV1, OpcUaServerAdapterV1 } from './opcua-server-adapter.js'
+import type { ProductCommandTargetV1 } from './opcua-command-staging.js'
 import { OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 } from './opcua-robotics-model.js'
 import { OPENWEB_MODEL_NAMESPACE_URI_V1 } from './opcua-openweb-model.js'
 import type {
@@ -263,6 +264,7 @@ function fakeServerAdapter(
       productNamespaceUri: OPENWEB_MODEL_NAMESPACE_URI_V1,
       productNamespaceIndex: started ? 3 : null,
       productRootNodeId: started ? 'ns=3;s=OpenWebDigitalTwin' : null,
+      activeSessionCount: 0,
     }),
   }
   return { adapter, start, stop, publishRobotJointState }
@@ -500,6 +502,31 @@ async function nextWebSocketMessage(socket: WebSocket): Promise<string> {
   })
 }
 
+function fakeTimeouts() {
+  let nextId = 0
+  const pending = new Map<number, { readonly dueAt: number; readonly callback: () => void }>()
+  const setTimeout = vi.fn((callback: () => void, delayMs: number) => {
+    nextId += 1
+    pending.set(nextId, { dueAt: delayMs, callback })
+    return nextId
+  })
+  const clearTimeout = vi.fn((timer: unknown) => {
+    if (typeof timer === 'number') pending.delete(timer)
+  })
+  return {
+    setTimeout,
+    clearTimeout,
+    runDueAt(nowMs: number) {
+      for (const [timer, scheduled] of [...pending]) {
+        if (scheduled.dueAt > nowMs) continue
+        pending.delete(timer)
+        scheduled.callback()
+      }
+    },
+    count: () => pending.size,
+  }
+}
+
 async function expectNoWebSocketMessage(socket: WebSocket, durationMs = 75): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const onMessage = () => settle(new Error('Unexpected stale State Batch replay.'))
@@ -522,6 +549,234 @@ afterEach(() => {
 })
 
 describe('runtime Gateway entrypoint', () => {
+  it('cleans product command stages on OPC UA session close and bounded lifecycle sweep', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const timers = fakeTimeouts()
+    let now = 1_000
+    let options: OpcUaServerAdapterOptionsV1 | null = null
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      nowMs: () => now,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+      createOpcUaServerAdapter: (_project, candidate) => {
+        options = candidate
+        return fakeServerAdapter().adapter
+      },
+    })
+    const project = sampleProject('server')
+    const revision = await configRevisionForProjectV5(project)
+    const target: ProductCommandTargetV1 = {
+      targetId: 'robot-1', projectId: project.projectId, revisionId: project.revisionId, configRevision: revision,
+      payload: { kind: 'robot-joint-target', robotId: 'robot-1', jointIds: ['J1'] },
+    }
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const serverOptions = options as OpcUaServerAdapterOptionsV1
+      expect(serverOptions.onSessionClose).toBeTypeOf('function')
+      serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-a', target, field: 'RequestId', value: 'closed-stage' })
+      serverOptions.onSessionClose!('opcua:session-a')
+      serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-a', target, field: 'ExpiresAt', value: 50_000 })
+      serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-a', target, field: 'J1', value: 1 })
+      expect(() => serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-a', target, field: 'Execute', value: true }))
+        .toThrow('COMMAND_STAGE_INCOMPLETE')
+
+      serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-b', target, field: 'RequestId', value: 'swept-stage' })
+      now = 61_000
+      timers.runDueAt(now)
+      serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-b', target, field: 'ExpiresAt', value: 120_000 })
+      serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-b', target, field: 'J1', value: 1 })
+      expect(() => serverOptions.onProductCommandWrite!({ sessionId: 'opcua:session-b', target, field: 'Execute', value: true }))
+        .toThrow('COMMAND_STAGE_INCOMPLETE')
+    } finally {
+      await service.stop()
+      expect(timers.count()).toBe(0)
+    }
+  })
+
+  it('settles an admitted product command on a fake-clock Browser lease expiry without leaking timers', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const fake = fakeServerAdapter()
+    const productResults = vi.fn(async () => undefined)
+    const timers = fakeTimeouts()
+    let now = 1_000
+    let onProductCommandWrite: OpcUaServerAdapterOptionsV1['onProductCommandWrite']
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      nowMs: () => now,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+      createOpcUaServerAdapter: (_project, options) => {
+        onProductCommandWrite = options.onProductCommandWrite
+        return { ...fake.adapter, publishProductResult: productResults }
+      },
+    })
+    const project = sampleProject('server')
+    const revision = await configRevisionForProjectV5(project)
+    const target: ProductCommandTargetV1 = {
+      targetId: 'robot-1', projectId: project.projectId, revisionId: project.revisionId, configRevision: revision,
+      payload: { kind: 'robot-joint-target', robotId: 'robot-1', jointIds: ['J1'] },
+    }
+    let socket: WebSocket | null = null
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      socket = await openWebSocket(port)
+      const leaseMessage = nextWebSocketMessage(socket)
+      socket.send(JSON.stringify({
+        type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1, projectId: project.projectId,
+        configRevision: revision, publisherId: 'browser-a',
+      }))
+      const lease = JSON.parse(await leaseMessage) as { generation: number; expiresAt: number }
+      const write = onProductCommandWrite!
+      write({ sessionId: 'opcua:session-a', target, field: 'RequestId', value: 'external-expiry' })
+      write({ sessionId: 'opcua:session-a', target, field: 'ExpiresAt', value: lease.expiresAt })
+      write({ sessionId: 'opcua:session-a', target, field: 'J1', value: 12 })
+      const batchMessage = nextWebSocketMessage(socket)
+      write({ sessionId: 'opcua:session-a', target, field: 'Execute', value: true })
+      expect(JSON.parse(await batchMessage)).toMatchObject({ type: 'command-batch-v1', leaseGeneration: lease.generation })
+      now = lease.expiresAt
+      timers.runDueAt(now)
+      await vi.waitFor(() => expect(productResults).toHaveBeenLastCalledWith(expect.objectContaining({
+        commandId: 'external-expiry', acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
+      })))
+      // The bounded staging sweep remains the only live lifecycle timer.
+      expect(timers.count()).toBe(1)
+    } finally {
+      socket?.close()
+      await service.stop()
+      expect(timers.count()).toBe(0)
+    }
+  })
+
+  it('settles an admitted product command when its Browser publisher releases the lease', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const fake = fakeServerAdapter()
+    const productResults = vi.fn(async () => undefined)
+    let onProductCommandWrite: OpcUaServerAdapterOptionsV1['onProductCommandWrite']
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaServerAdapter: (_project, options) => {
+        onProductCommandWrite = options.onProductCommandWrite
+        return { ...fake.adapter, publishProductResult: productResults }
+      },
+    })
+    const project = sampleProject('server')
+    const revision = await configRevisionForProjectV5(project)
+    const target: ProductCommandTargetV1 = {
+      targetId: 'robot-1', projectId: project.projectId, revisionId: project.revisionId, configRevision: revision,
+      payload: { kind: 'robot-joint-target', robotId: 'robot-1', jointIds: ['J1'] },
+    }
+    let socket: WebSocket | null = null
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      expect(onProductCommandWrite).toBeTypeOf('function')
+      socket = await openWebSocket(port)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      const leaseMessage = nextWebSocketMessage(socket)
+      socket.send(JSON.stringify({
+        type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1, projectId: project.projectId,
+        configRevision: revision, publisherId: 'browser-a',
+      }))
+      const lease = JSON.parse(await leaseMessage) as { generation: number }
+      const expiresAt = Date.now() + 5_000
+      const write = onProductCommandWrite!
+      write({ sessionId: 'opcua:session-a', target, field: 'RequestId', value: 'external-release' })
+      write({ sessionId: 'opcua:session-a', target, field: 'ExpiresAt', value: expiresAt })
+      write({ sessionId: 'opcua:session-a', target, field: 'J1', value: 12 })
+      const batchMessage = nextWebSocketMessage(socket)
+      write({ sessionId: 'opcua:session-a', target, field: 'Execute', value: true })
+      expect(JSON.parse(await batchMessage)).toMatchObject({ type: 'command-batch-v1', leaseGeneration: lease.generation })
+      socket.send(JSON.stringify({
+        type: 'browser-publisher-lease-release-v1', protocolVersion: 1, projectId: project.projectId,
+        configRevision: revision, publisherId: 'browser-a', generation: lease.generation,
+      }))
+      await vi.waitFor(() => expect(productResults).toHaveBeenLastCalledWith(expect.objectContaining({
+        commandId: 'external-release', acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
+      })))
+    } finally {
+      socket?.close()
+      await service.stop()
+    }
+  })
+
+  it('settles admitted product commands on Browser socket close, lease replacement, and revision replacement', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const fake = fakeServerAdapter()
+    const productResults = vi.fn(async () => undefined)
+    let onProductCommandWrite: OpcUaServerAdapterOptionsV1['onProductCommandWrite']
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaServerAdapter: (_project, options) => {
+        onProductCommandWrite = options.onProductCommandWrite
+        return { ...fake.adapter, publishProductResult: productResults }
+      },
+    })
+    const project = sampleProject('server')
+    const revision = await configRevisionForProjectV5(project)
+    const target: ProductCommandTargetV1 = {
+      targetId: 'robot-1', projectId: project.projectId, revisionId: project.revisionId, configRevision: revision,
+      payload: { kind: 'robot-joint-target', robotId: 'robot-1', jointIds: ['J1'] },
+    }
+    const acquire = async (socket: WebSocket, publisherId: string): Promise<{ readonly generation: number }> => {
+      const message = nextWebSocketMessage(socket)
+      socket.send(JSON.stringify({
+        type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1, projectId: project.projectId,
+        configRevision: revision, publisherId,
+      }))
+      return JSON.parse(await message) as { generation: number }
+    }
+    const stage = async (socket: WebSocket, commandId: string, generation: number): Promise<void> => {
+      const message = nextWebSocketMessage(socket)
+      const write = onProductCommandWrite!
+      write({ sessionId: `opcua:${commandId}`, target, field: 'RequestId', value: commandId })
+      write({ sessionId: `opcua:${commandId}`, target, field: 'ExpiresAt', value: Date.now() + 5_000 })
+      write({ sessionId: `opcua:${commandId}`, target, field: 'J1', value: 12 })
+      write({ sessionId: `opcua:${commandId}`, target, field: 'Execute', value: true })
+      expect(JSON.parse(await message)).toMatchObject({ type: 'command-batch-v1', leaseGeneration: generation })
+    }
+    let socketA: WebSocket | null = null
+    let socketB: WebSocket | null = null
+    let socketC: WebSocket | null = null
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      socketA = await openWebSocket(port)
+      const leaseA = await acquire(socketA, 'browser-a')
+      await stage(socketA, 'socket-close', leaseA.generation)
+      const closed = new Promise<void>((resolve) => socketA!.once('close', () => resolve()))
+      socketA.close()
+      await closed
+      await vi.waitFor(() => expect(productResults).toHaveBeenLastCalledWith(expect.objectContaining({
+        commandId: 'socket-close', acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
+      })))
+
+      socketB = await openWebSocket(port)
+      const leaseB = await acquire(socketB, 'browser-b')
+      await stage(socketB, 'lease-replacement', leaseB.generation)
+      socketC = await openWebSocket(port)
+      await acquire(socketC, 'browser-c')
+      await vi.waitFor(() => expect(productResults).toHaveBeenLastCalledWith(expect.objectContaining({
+        commandId: 'lease-replacement', acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
+      })))
+
+      const leaseC = await acquire(socketC, 'browser-c')
+      await stage(socketC, 'revision-replacement', leaseC.generation)
+      const next = sampleProject('server', 'revision-main-server-next')
+      expect((await requestJson(port, 'PUT', '/runtime/project', next)).status).toBe(200)
+      await vi.waitFor(() => expect(productResults).toHaveBeenLastCalledWith(expect.objectContaining({
+        commandId: 'revision-replacement', acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
+      })))
+    } finally {
+      socketA?.close()
+      socketB?.close()
+      socketC?.close()
+      await service.stop()
+    }
+  })
+
   it('serves a closed non-mutating integration diagnostics snapshot', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()

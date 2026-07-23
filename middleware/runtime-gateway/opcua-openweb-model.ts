@@ -684,7 +684,16 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
       const dataValue = args[1] as { readonly value?: { readonly value?: unknown } } | undefined
       const listener = commandWriteListener
       if (listener !== null) {
-        try { listener({ sessionId: sessionIdFromWriteContext(args[0]), target, field, value: dataValue?.value?.value }) } catch { /* OPC UA value persistence remains independent of product dispatch. */ }
+        try {
+          listener({ sessionId: sessionIdFromWriteContext(args[0]), target, field, value: dataValue?.value?.value })
+        } catch {
+          const callback = args.at(-1)
+          if (typeof callback === 'function') {
+            ;(callback as (error: Error | null, status: typeof StatusCodes.BadInvalidArgument) => void)(null, StatusCodes.BadInvalidArgument)
+            return undefined
+          }
+          return Promise.resolve(StatusCodes.BadInvalidArgument)
+        }
       }
       return original(...args)
     }

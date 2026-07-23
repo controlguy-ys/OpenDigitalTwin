@@ -67,6 +67,8 @@ export interface RuntimeGatewayStreamTargetV5 extends RuntimeGatewayStreamContex
   ) => EndpointCatchupGuardV5
   readonly onSessionStart?: (receivedTimestampMs: number) => void
   readonly onSessionDisconnect?: (receivedTimestampMs: number) => void
+  /** Receives the Gateway-accepted lease that fences product command execution. */
+  readonly onBrowserPublisherLease?: (lease: RuntimePublisherLeaseV1 | null) => void
   /** Product commands are routed to one revision-fenced V5 Simulation owner. */
   readonly onCommandBatch?: (batch: CommandBatchV1) => Promise<import('../../../core/runtime-protocol/v1.js').CommandResultV1>
 }
@@ -279,6 +281,9 @@ export function createRuntimeGatewayStateStreamV5(
     const lease = target.browserLease
     target.browserLease = null
     const openedTarget = target.openedTarget
+    if (lease !== null) {
+      try { openedTarget?.onBrowserPublisherLease?.(null) } catch { /* Lease cleanup remains transport-local. */ }
+    }
     if (
       !release
       || lease === null
@@ -318,6 +323,7 @@ export function createRuntimeGatewayStateStreamV5(
     ) throw new TypeError('Runtime Gateway Browser lease context is invalid.')
     clearBrowserLeaseV5(target, false)
     target.browserLease = lease
+    try { openedTarget.onBrowserPublisherLease?.(lease) } catch { /* Lease observers cannot break transport admission. */ }
     target.browserLeaseRenewalTimer = setInterval(() => {
       if (candidate !== target || target.failed || !target.accepting || target.native.readyState !== 1) return
       const current = target.browserLease
@@ -816,6 +822,20 @@ export function createRuntimeGatewayStateStreamV5(
           || command.configRevision !== openedTarget.configRevision
           || openedTarget.onCommandBatch === undefined
         ) throw new TypeError('Runtime Gateway Browser command context is invalid.')
+        const acceptedLease = target.browserLease
+        if (acceptedLease === null || acceptedLease.generation !== command.leaseGeneration) {
+          const item = command.commands[0]
+          if (item === undefined || command.commands.length !== 1) throw new TypeError('Runtime Gateway Browser command batch is invalid.')
+          target.native.send?.(JSON.stringify(validateCommandResultV1({
+            type: 'command-result-v1', protocolVersion: 1,
+            projectId: command.projectId, configRevision: command.configRevision,
+            leaseGeneration: command.leaseGeneration, targetId: item.targetId,
+            commandId: item.commandId, acknowledgement: 'ACCEPTED', executionState: 'FAILED',
+            failureCode: 'COMMAND_LEASE_STALE', message: 'Browser publisher lease is stale.',
+            attachedObjectId: null, completedAt: atMs,
+          })))
+          return
+        }
         void openedTarget.onCommandBatch(command).then((result) => {
           if (candidate !== target || target.failed || target.native.readyState !== 1) return
           target.native.send?.(JSON.stringify(validateCommandResultV1(result)))

@@ -72,4 +72,21 @@ describe('BrowserCommandDispatchV1', () => {
     })
     expect(send).not.toHaveBeenCalled()
   })
+
+  it('keeps the canonical terminal Result when a conflicting retry is rejected and republishes it for an identical retry', async () => {
+    const lease = createBrowserPublisherLeaseManagerV1({ nowMs: () => 1_000 })
+    lease.acquire({ projectId: 'project-v5', configRevision: REVISION, publisherId: 'browser-a' })
+    const publishResult = vi.fn()
+    const dispatch = createBrowserCommandDispatchV1({
+      lease, dedupe: createRuntimeCommandDedupeRegistryV1(), send: vi.fn(async () => succeeded('request-1')),
+      publishResult, nowMs: () => 1_000,
+    })
+    const original = await dispatch.execute(snapshot('request-1'))
+    const conflict = await dispatch.execute({ ...snapshot('request-1'), expiresAt: 2_001 })
+    expect(conflict).toMatchObject({ acknowledgement: 'REJECTED', failureCode: 'COMMAND_ID_CONFLICT' })
+    expect(publishResult).toHaveBeenLastCalledWith(original)
+
+    await expect(dispatch.execute(snapshot('request-1'))).resolves.toEqual(original)
+    expect(publishResult).toHaveBeenLastCalledWith(original)
+  })
 })

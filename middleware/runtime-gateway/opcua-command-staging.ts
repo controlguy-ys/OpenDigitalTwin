@@ -34,6 +34,8 @@ export type ProductCommandFieldV1 = 'RequestId' | 'ExpiresAt' | 'Execute' | 'X' 
 export interface ProductCommandStagingV1 {
   write(sessionId: string, target: ProductCommandTargetV1, field: ProductCommandFieldV1, value: unknown, nowMs: number): ProductCommandSnapshotV1 | null
   closeSession(sessionId: string): void
+  /** Removes stages whose latest field write is at least sixty seconds old. */
+  sweep(nowMs: number): number
   clear(): void
   size(): number
 }
@@ -168,6 +170,22 @@ export function createProductCommandStagingV1(): ProductCommandStagingV1 {
       return snapshot
     },
     closeSession(sessionId: string) { stagesBySession.delete(sessionId); executeLevelsBySession.delete(sessionId) },
+    sweep(nowMs: number) {
+      if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new ProductCommandStagingErrorV1('COMMAND_STAGE_INVALID')
+      let removed = 0
+      for (const [sessionId, targets] of stagesBySession) {
+        const levels = executeLevelsBySession.get(sessionId)
+        for (const [targetId, stage] of targets) {
+          if (nowMs - stage.updatedAtMs < PRODUCT_COMMAND_STAGING_TIMEOUT_MS_V1) continue
+          targets.delete(targetId)
+          levels?.delete(targetId)
+          removed += 1
+        }
+        if (targets.size === 0) stagesBySession.delete(sessionId)
+        if (levels?.size === 0) executeLevelsBySession.delete(sessionId)
+      }
+      return removed
+    },
     clear() { stagesBySession.clear(); executeLevelsBySession.clear() },
     size() { return [...stagesBySession.values()].reduce((count, targets) => count + targets.size, 0) },
   })

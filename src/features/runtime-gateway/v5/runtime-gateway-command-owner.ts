@@ -79,6 +79,8 @@ export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
   project: WorkcellProjectV5
   configRevision: string
   leaseGeneration?: number
+  /** Reads the currently accepted Gateway Browser lease for every execution fence. */
+  readLeaseGeneration?: () => number | null
   nowMs: () => number
   simulation: RuntimeGatewaySimulationCommandPortV5
   isActive?: () => boolean
@@ -91,14 +93,20 @@ export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
   const jobs = new Set(project.jobs.map(({ id }) => id))
   const now = (): number => options.nowMs()
   const active = (): boolean => options.isActive?.() ?? true
+  const acceptedLease = (): number | null => options.readLeaseGeneration?.() ?? options.leaseGeneration ?? null
 
   return Object.freeze({
     async execute(batchInput: CommandBatchV1) {
       const batch = validateCommandBatchV1(batchInput)
       const command = batch.commands[0]
       if (command === undefined || batch.commands.length !== 1) throw new Error('BROWSER_COMMAND_BATCH_SIZE_INVALID')
-      if (batch.projectId !== project.projectId || batch.configRevision !== options.configRevision || (options.leaseGeneration !== undefined && batch.leaseGeneration !== options.leaseGeneration) || !active()) {
-        return terminal(batch, command, 'REJECTED', 'COMMAND_LEASE_STALE', 'Browser command owner is not active.', now())
+      if (
+        batch.projectId !== project.projectId
+        || batch.configRevision !== options.configRevision
+        || acceptedLease() !== batch.leaseGeneration
+        || !active()
+      ) {
+        return terminal(batch, command, 'ACCEPTED', 'COMMAND_LEASE_STALE', 'Browser command owner is not active.', now())
       }
       if (command.expiresAt <= now()) return terminal(batch, command, 'REJECTED', 'COMMAND_EXPIRED', 'Command has expired.', now())
       const candidate = payload(command.value)
@@ -122,7 +130,9 @@ export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
           if (candidate.operation === 'start') await options.simulation.startJob(candidate.jobId)
           else await options.simulation.cancelJob(candidate.jobId)
         }
-        if (!active()) return terminal(batch, command, 'ACCEPTED', 'COMMAND_LEASE_STALE', 'Browser command owner changed during execution.', now())
+        if (!active() || acceptedLease() !== batch.leaseGeneration) {
+          return terminal(batch, command, 'ACCEPTED', 'COMMAND_LEASE_STALE', 'Browser command owner changed during execution.', now())
+        }
         return terminal(batch, command, 'ACCEPTED', null, 'Browser command succeeded.', now())
       } catch (error) {
         const code = error instanceof Error && error.message === 'COMMAND_TARGET_INVALID' ? 'COMMAND_TARGET_INVALID' : 'BROWSER_COMMAND_FAILED'

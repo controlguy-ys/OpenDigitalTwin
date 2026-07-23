@@ -26,6 +26,25 @@ function batch(value: RuntimeScalarOrStructureV1, commandId = 'command-1', targe
 }
 
 describe('RuntimeGatewayCommandOwnerV5', () => {
+  it('requires the currently accepted Browser lease generation before a Simulation mutation', async () => {
+    const project = projectWithBox()
+    let acceptedGeneration: number | null = null
+    const writeJointValues = vi.fn()
+    const owner = createRuntimeGatewayCommandOwnerV5({
+      project, configRevision: REVISION, nowMs: () => 1_000,
+      readLeaseGeneration: () => acceptedGeneration,
+      simulation: { writeJointValues, commitObjectPose: vi.fn(), writeLogicalSignal: vi.fn(), startJob: vi.fn(), cancelJob: vi.fn() },
+    })
+    await expect(owner.execute(batch({ kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 12 } })))
+      .resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE' })
+    expect(writeJointValues).not.toHaveBeenCalled()
+
+    acceptedGeneration = 7
+    await expect(owner.execute(batch({ kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 12 } })))
+      .resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED' })
+    expect(writeJointValues).toHaveBeenCalledOnce()
+  })
+
   it('validates exact Robot Joint IDs before one V5 Simulation commit', async () => {
     const project = projectWithBox()
     const writeJointValues = vi.fn()

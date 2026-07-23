@@ -152,6 +152,19 @@ beforeEach(() => { validateStreamMessageSpy.mockClear() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('V5 Runtime Gateway transport lifecycle', () => {
+  it('returns an accepted terminal stale failure without calling the owner before a Browser lease is granted', async () => {
+    const onCommandBatch = vi.fn()
+    const socket = startOpen(streamWith({
+      readActiveTarget: () => target({ browserPublisherId: 'gateway:browser-simulation', onCommandBatch }),
+    }))
+    socket.frame({ type: 'command-batch-v1', protocolVersion: 1, projectId: 'project', configRevision: REVISION_A, leaseGeneration: 1, commands: [{ commandId: 'command-no-lease', expiresAt: 2_000, targetId: 'robot-1', value: { kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 1 } } }] })
+    await Promise.resolve()
+    expect(onCommandBatch).not.toHaveBeenCalled()
+    expect(JSON.parse(socket.send.mock.calls.at(-1)![0] as string)).toMatchObject({
+      type: 'command-result-v1', acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE', commandId: 'command-no-lease',
+    })
+  })
+
   it('acquires, renews, and intentionally releases the Browser publisher lease', () => {
     vi.useFakeTimers()
     const rig = streamWith({
@@ -184,7 +197,8 @@ describe('V5 Runtime Gateway transport lifecycle', () => {
       leaseGeneration: batch.leaseGeneration, targetId: batch.commands[0]!.targetId, commandId: batch.commands[0]!.commandId,
       acknowledgement: 'ACCEPTED' as const, executionState: 'SUCCEEDED' as const, failureCode: null, message: 'Done.', attachedObjectId: null, completedAt: 1_000,
     }))
-    const socket = startOpen(streamWith({ readActiveTarget: () => target({ onCommandBatch }) }))
+    const socket = startOpen(streamWith({ readActiveTarget: () => target({ browserPublisherId: 'gateway:browser-simulation', onCommandBatch }) }))
+    socket.frame({ projectId: 'project', configRevision: REVISION_A, publisherId: 'gateway:browser-simulation', generation: 1, expiresAt: 6_000 })
     socket.frame({ type: 'command-batch-v1', protocolVersion: 1, projectId: 'project', configRevision: REVISION_A, leaseGeneration: 1, commands: [{ commandId: 'command-1', expiresAt: 2_000, targetId: 'robot-1', value: { kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 1 } } }] })
     await Promise.resolve()
     expect(onCommandBatch).toHaveBeenCalledOnce()

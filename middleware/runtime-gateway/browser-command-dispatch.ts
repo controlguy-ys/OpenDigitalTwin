@@ -61,6 +61,8 @@ export function createBrowserCommandDispatchV1(options: Readonly<{
   dedupe: RuntimeCommandDedupeRegistryV1
   send: (batch: CommandBatchV1) => Promise<CommandResultV1>
   publishResult: (result: CommandResultV1) => void
+  /** Observes rejections that must not replace the canonical product Result record. */
+  publishDiagnostic?: (result: CommandResultV1) => void
   nowMs: () => number
 }>): BrowserCommandDispatchV1 {
   const handled = new WeakMap<Promise<CommandResultV1>, Promise<CommandResultV1>>()
@@ -71,9 +73,11 @@ export function createBrowserCommandDispatchV1(options: Readonly<{
   }
 
   const execute = (snapshot: ProductCommandSnapshotV1): Promise<CommandResultV1> => {
+    options.lease.tick()
     const active = options.lease.current()
     const generation = active?.generation ?? 1
-    const preflight = (): CommandResultV1 | null => {
+      const preflight = (): CommandResultV1 | null => {
+      options.lease.tick()
       const publisher = options.lease.current()
       if (publisher === null) {
         const result = rejected(snapshot, generation, 'BROWSER_PUBLISHER_UNAVAILABLE', 'No active Browser publisher is available.', now())
@@ -110,6 +114,7 @@ export function createBrowserCommandDispatchV1(options: Readonly<{
     }, {
       preflight,
       operation: () => {
+        options.lease.tick()
         const beforeSend = options.lease.current()
         if (beforeSend === null || beforeSend.generation !== publisher.generation) {
           return Promise.resolve(rejected(snapshot, publisher.generation, 'BROWSER_PUBLISHER_UNAVAILABLE', 'Browser publisher lease expired before dispatch.', now()))
@@ -123,6 +128,7 @@ export function createBrowserCommandDispatchV1(options: Readonly<{
         })
         return Promise.resolve(options.send(batch)).then((result) => {
           const terminal = validateCommandResultV1(result)
+          options.lease.tick()
           const current = options.lease.current()
           const fenced = current === null || current.generation !== publisher.generation
             ? acceptedFailure(snapshot, publisher.generation, 'COMMAND_LEASE_STALE', 'Browser publisher lease changed before command completion.', now())
@@ -137,7 +143,12 @@ export function createBrowserCommandDispatchV1(options: Readonly<{
       },
     })
     const existing = handled.get(original)
-    if (existing !== undefined) return existing
+    if (existing !== undefined) {
+      return existing.then((result) => {
+        if (result.failureCode !== 'COMMAND_ID_CONFLICT') options.publishResult(result)
+        return result
+      })
+    }
     const converted = original.catch((error: unknown) => {
       const code = error instanceof RuntimeCommandDedupeAdmissionErrorV1 ? error.code : 'BROWSER_COMMAND_FAILED'
       const message = code === 'COMMAND_ID_CONFLICT'
@@ -146,7 +157,8 @@ export function createBrowserCommandDispatchV1(options: Readonly<{
           ? 'Command deduplication capacity is exhausted.'
           : 'Browser command transport failed.'
       const result = rejected(snapshot, publisher.generation, code, message, now())
-      options.publishResult(result)
+      if (code === 'COMMAND_ID_CONFLICT') options.publishDiagnostic?.(result)
+      else options.publishResult(result)
       return result
     })
     handled.set(original, converted)

@@ -54,6 +54,7 @@ import {
   type RuntimeGatewayStateStreamOptionsV5,
   type RuntimeGatewayStreamTargetV5,
 } from '../../runtime-gateway/v5/runtime-gateway-state-stream.js'
+import type { RuntimePublisherLeaseV1 } from '../../../core/runtime-protocol/v1.js'
 import {
   createRuntimeGatewayCommandOwnerV5,
   type RuntimeGatewayCommandOwnerV5,
@@ -483,11 +484,13 @@ function createOwnedGraph(
   const graphContext = { robots, robotFrames, objects, signals }
   const logicalSignalsById = new Map(project.logicalSignals.map((signal) => [signal.id, signal]))
   let ownerActive = true
+  let browserLeaseGeneration: number | null = null
   const commandOwner = createRuntimeGatewayCommandOwnerV5({
     project,
     configRevision,
     nowMs,
     isActive: () => ownerActive,
+    readLeaseGeneration: () => browserLeaseGeneration,
     simulation: {
       writeJointValues: (robotId, values) => robots.getState().writeJointValues(robotId, values, 'simulation'),
       commitObjectPose: (objectId, pose) => { simulationObjectPoses.set(objectId, pose) },
@@ -508,11 +511,11 @@ function createOwnedGraph(
         })
         signals.setState({ bySignalId: Object.freeze({ ...signals.getState().bySignalId, [signalId]: next }) })
       },
-      startJob: (jobId) => { jobExecutor.startJob(jobId, nowMs()) },
+      startJob: (jobId) => { playback.startJob(jobId) },
       cancelJob: (jobId) => {
         const job = project.jobs.find((candidate) => candidate.id === jobId)
         if (job === undefined) throw new Error('COMMAND_TARGET_INVALID')
-        jobExecutor.cancelRobotJob(job.robotId, 'Cancelled by Browser product command.')
+        playback.cancelRobotJob(job.robotId, 'Cancelled by Browser product command.')
       },
     },
   })
@@ -549,6 +552,7 @@ function createOwnedGraph(
         runNoThrow(onDiagnostic, () => signals.getState().markEndpointDisconnected(endpointId, receivedTimestampMs))
       }
     },
+    onBrowserPublisherLease: (lease: RuntimePublisherLeaseV1 | null) => { browserLeaseGeneration = lease?.generation ?? null },
     onCommandBatch: (batch: import('../../../core/runtime-protocol/v1.js').CommandBatchV1) => commandOwner.execute(batch),
   })
   const graph: PublishedBrowserRuntimeGraphV5 = Object.freeze({

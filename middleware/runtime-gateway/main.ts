@@ -67,7 +67,11 @@ import type { RuntimeIntegrationDiagnosticsV1 } from '../../src/core/runtime-pro
 import { createBrowserPublisherLeaseManagerV1, type BrowserPublisherLeaseManagerV1 } from './browser-publisher-lease.js'
 import { createRuntimeIntegrationDiagnosticsV1, type RuntimeIntegrationDiagnosticsBuilderV1 } from './integration-diagnostics.js'
 import { createBrowserCommandDispatchV1, type BrowserCommandDispatchV1 } from './browser-command-dispatch.js'
-import { createProductCommandStagingV1, type ProductCommandStagingV1 } from './opcua-command-staging.js'
+import {
+  PRODUCT_COMMAND_STAGING_TIMEOUT_MS_V1,
+  createProductCommandStagingV1,
+  type ProductCommandStagingV1,
+} from './opcua-command-staging.js'
 
 export const MAX_RUNTIME_PROJECT_BODY_BYTES_V1 = 1024 * 1024
 export const MAX_RUNTIME_INTEGRATION_DIAGNOSTICS_BYTES_V1 = 64 * 1024
@@ -77,6 +81,8 @@ export interface RuntimeGatewayEntrypointServiceV1 {
   stop(): Promise<void>
   status(): RuntimeGatewayStatusV1
 }
+
+type RuntimeGatewayTimerV1 = unknown
 
 export interface RuntimeGatewayEntrypointDependenciesV1 {
   readonly createHttpServer?: (requestListener: RequestListener) => Server
@@ -91,6 +97,10 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
   readonly createStateBatchHub?: () => StateBatchHubV1
   readonly pkiRootDir?: string
   readonly nowMs?: () => number
+  /** Injected only by deterministic lifecycle tests. */
+  readonly setTimeout?: (callback: () => void, delayMs: number) => RuntimeGatewayTimerV1
+  /** Injected only by deterministic lifecycle tests. */
+  readonly clearTimeout?: (timer: RuntimeGatewayTimerV1) => void
   readonly initialCommittedCommandGeneration?: number
   /** Test-only synchronous injection point immediately before the final staging health check. */
   readonly beforeCandidateTimelineSealForTest?: () => void
@@ -274,6 +284,8 @@ export function createRuntimeGatewayEntrypointService(
   const pkiRootDir = dependencies.pkiRootDir
     ?? join(tmpdir(), 'web-digital-twin-runtime-gateway', config.gatewayId)
   const nowMs = dependencies.nowMs ?? Date.now
+  const scheduleTimeout = dependencies.setTimeout ?? ((callback: () => void, delayMs: number) => setTimeout(callback, delayMs))
+  const cancelTimeout = dependencies.clearTimeout ?? ((timer: RuntimeGatewayTimerV1) => clearTimeout(timer as ReturnType<typeof setTimeout>))
   const initialCommittedCommandGeneration = dependencies.initialCommittedCommandGeneration ?? 0
   if (!Number.isSafeInteger(initialCommittedCommandGeneration) || initialCommittedCommandGeneration < 0) {
     throw new Error('INITIAL_COMMITTED_COMMAND_GENERATION_INVALID')
@@ -292,18 +304,86 @@ export function createRuntimeGatewayEntrypointService(
   const browserLeasesBySocket = new Map<WebSocket, RuntimePublisherLeaseV1>()
   const pendingBrowserCommands = new Map<string, Readonly<{
     generation: number
+    batch: CommandBatchV1
     resolve: (result: CommandResultV1) => void
-    reject: (reason: unknown) => void
+    timeout: RuntimeGatewayTimerV1
   }>>()
+  let browserLeaseExpiryTimer: RuntimeGatewayTimerV1 | null = null
+  let commandStagingSweepTimer: RuntimeGatewayTimerV1 | null = null
 
   function browserCommandKey(batch: CommandBatchV1): string {
     const command = batch.commands[0]!
     return JSON.stringify([batch.projectId, batch.configRevision, batch.leaseGeneration, command.commandId])
   }
 
-  function rejectPendingBrowserCommands(reason: unknown): void {
-    for (const pending of pendingBrowserCommands.values()) pending.reject(reason)
-    pendingBrowserCommands.clear()
+  function failedBrowserBatch(
+    batch: CommandBatchV1,
+    failureCode: string,
+    message: string,
+  ): CommandResultV1 {
+    const command = batch.commands[0]
+    if (command === undefined || batch.commands.length !== 1) throw new Error('BROWSER_COMMAND_BATCH_INVALID')
+    return validateCommandResultV1({
+      type: 'command-result-v1', protocolVersion: 1, projectId: batch.projectId,
+      configRevision: batch.configRevision, leaseGeneration: batch.leaseGeneration,
+      targetId: command.targetId, commandId: command.commandId, acknowledgement: 'ACCEPTED',
+      executionState: 'FAILED', failureCode, message, attachedObjectId: null, completedAt: nowMs(),
+    })
+  }
+
+  function settlePendingBrowserCommands(
+    generation: number | null,
+    failureCode: string,
+    message: string,
+  ): void {
+    for (const [key, pending] of pendingBrowserCommands) {
+      if (generation !== null && pending.generation !== generation) continue
+      pendingBrowserCommands.delete(key)
+      cancelTimeout(pending.timeout)
+      pending.resolve(failedBrowserBatch(pending.batch, failureCode, message))
+    }
+  }
+
+  function clearBrowserLeaseExpiryTimer(): void {
+    if (browserLeaseExpiryTimer === null) return
+    cancelTimeout(browserLeaseExpiryTimer)
+    browserLeaseExpiryTimer = null
+  }
+
+  function clearCommandStagingSweepTimer(): void {
+    if (commandStagingSweepTimer === null) return
+    cancelTimeout(commandStagingSweepTimer)
+    commandStagingSweepTimer = null
+  }
+
+  function scheduleCommandStagingSweep(active: ActiveProjectRuntimeV1): void {
+    clearCommandStagingSweepTimer()
+    const run = (): void => {
+      commandStagingSweepTimer = null
+      if (activeRuntime !== active) return
+      active.commandStaging.sweep(nowMs())
+      scheduleCommandStagingSweep(active)
+    }
+    commandStagingSweepTimer = scheduleTimeout(run, PRODUCT_COMMAND_STAGING_TIMEOUT_MS_V1)
+  }
+
+  function scheduleBrowserLeaseExpiry(
+    active: ActiveProjectRuntimeV1,
+    lease: RuntimePublisherLeaseV1,
+  ): void {
+    clearBrowserLeaseExpiryTimer()
+    const delayMs = Math.max(0, lease.expiresAt - nowMs())
+    browserLeaseExpiryTimer = scheduleTimeout(() => {
+      browserLeaseExpiryTimer = null
+      if (activeRuntime !== active || !active.browserLease.tick()) return
+      const socket = browserPublisherSocket
+      if (socket !== null && browserLeasesBySocket.get(socket)?.generation === lease.generation) {
+        browserLeasesBySocket.delete(socket)
+        browserPublisherSocket = null
+      }
+      settlePendingBrowserCommands(lease.generation, 'COMMAND_LEASE_STALE', 'Browser publisher lease expired.')
+      void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
+    }, delayMs)
   }
 
   function publishProductResult(active: ActiveProjectRuntimeV1, result: CommandResultV1): void {
@@ -319,22 +399,35 @@ export function createRuntimeGatewayEntrypointService(
     if (active === null || socket === null || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('BROWSER_PUBLISHER_UNAVAILABLE'))
     }
+    active.browserLease.tick()
     const lease = active.browserLease.current()
     if (lease === null || lease.generation !== batch.leaseGeneration || browserLeasesBySocket.get(socket)?.generation !== lease.generation) {
       return Promise.reject(new Error('BROWSER_PUBLISHER_UNAVAILABLE'))
     }
     const key = browserCommandKey(batch)
-    return new Promise<CommandResultV1>((resolveCommand, rejectCommand) => {
-      pendingBrowserCommands.set(key, Object.freeze({ generation: batch.leaseGeneration, resolve: resolveCommand, reject: rejectCommand }))
+    return new Promise<CommandResultV1>((resolveCommand) => {
+      const timeout = scheduleTimeout(() => {
+        const pending = pendingBrowserCommands.get(key)
+        if (pending === undefined) return
+        pendingBrowserCommands.delete(key)
+        pending.resolve(failedBrowserBatch(batch, 'COMMAND_EXPIRED', 'Browser command expired before settlement.'))
+      }, Math.max(0, batch.commands[0]!.expiresAt - nowMs()))
+      pendingBrowserCommands.set(key, Object.freeze({ generation: batch.leaseGeneration, batch, resolve: resolveCommand, timeout }))
       try {
         socket.send(JSON.stringify(batch), (error) => {
-          if (error === undefined) return
+          if (error == null) return
+          const pending = pendingBrowserCommands.get(key)
+          if (pending === undefined) return
           pendingBrowserCommands.delete(key)
-          rejectCommand(error)
+          cancelTimeout(pending.timeout)
+          pending.resolve(failedBrowserBatch(batch, 'BROWSER_COMMAND_FAILED', 'Browser command transport failed.'))
         })
-      } catch (error) {
+      } catch {
+        const pending = pendingBrowserCommands.get(key)
+        if (pending === undefined) return
         pendingBrowserCommands.delete(key)
-        rejectCommand(error)
+        cancelTimeout(pending.timeout)
+        pending.resolve(failedBrowserBatch(batch, 'BROWSER_COMMAND_FAILED', 'Browser command transport failed.'))
       }
     })
   }
@@ -461,6 +554,18 @@ export function createRuntimeGatewayEntrypointService(
         const active = activeRuntime
         if (active !== null && active.configRevision === result.configRevision && active.project.projectId === result.projectId) {
           publishProductResult(active, result)
+        } else if (result.configRevision === configRevision && result.projectId === project.projectId) {
+          // A revision fence can settle an already-admitted command after the
+          // old runtime has been replaced.  Preserve the terminal result for
+          // adapters that retain the old product model; disposed adapters
+          // reject this isolated best-effort publication.
+          void candidateServerAdapter?.publishProductResult?.(result).catch(() => undefined)
+        }
+      },
+      publishDiagnostic: () => {
+        const active = activeRuntime
+        if (active !== null && active.configRevision === configRevision && active.project.projectId === project.projectId) {
+          void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
         }
       },
       nowMs,
@@ -483,6 +588,7 @@ export function createRuntimeGatewayEntrypointService(
             const snapshot = candidateCommandStaging.write(write.sessionId, write.target, write.field, write.value, nowMs())
             if (snapshot !== null) void candidateBrowserCommandDispatch.execute(snapshot)
           },
+          onSessionClose: (sessionId) => { candidateCommandStaging.closeSession(sessionId) },
         })
       }
       if (project.opcUa.mode === 'client' || project.opcUa.mode === 'bridge') {
@@ -520,9 +626,10 @@ export function createRuntimeGatewayEntrypointService(
         nowMs,
         readContext: () => ({ projectId: project.projectId, revisionId: project.revisionId, configRevision }),
         readServerModel: () => {
-          const started = candidateServerAdapter?.status().started === true
+          const adapterStatus = candidateServerAdapter?.status()
+          const started = adapterStatus?.started === true
           return started
-            ? { standardNodeSets: 'loaded' as const, roboticsModel: 'ready' as const, productModel: 'ready' as const, activeSessionCount: 0, lastError: null }
+            ? { standardNodeSets: 'loaded' as const, roboticsModel: 'ready' as const, productModel: 'ready' as const, activeSessionCount: adapterStatus?.activeSessionCount ?? 0, lastError: null }
             : { standardNodeSets: 'disabled' as const, roboticsModel: 'disabled' as const, productModel: 'disabled' as const, activeSessionCount: 0, lastError: null }
         },
         lease: candidateBrowserLease,
@@ -574,7 +681,9 @@ export function createRuntimeGatewayEntrypointService(
 
       // No await, user callback, send/close, or disposal may appear in this
       // tail. A reentrant callback during flush reaches the installed Hub.
+      clearCommandStagingSweepTimer()
       activeRuntime = nextRuntime
+      scheduleCommandStagingSweep(nextRuntime)
       committedCommandGeneration = candidateGeneration
       preparedActivation.installPrepared()
       clientBatchPublisherLive = true
@@ -585,7 +694,10 @@ export function createRuntimeGatewayEntrypointService(
       try { previous?.commandService?.close() } catch { /* post-commit cleanup is isolated */ }
       try { previous?.commandDedupe.clear() } catch { /* post-commit cleanup is isolated */ }
       try { previous?.browserLease.invalidateRevision() } catch { /* revision fencing cleanup is isolated */ }
-      rejectPendingBrowserCommands(new Error('COMMAND_LEASE_STALE'))
+      clearBrowserLeaseExpiryTimer()
+      settlePendingBrowserCommands(null, 'COMMAND_LEASE_STALE', 'Runtime Revision changed before command settlement.')
+      browserPublisherSocket = null
+      browserLeasesBySocket.clear()
     } catch (error) {
       candidateCommandService?.close()
       candidateCommandDedupe?.clear()
@@ -604,7 +716,11 @@ export function createRuntimeGatewayEntrypointService(
         previous?.commandService?.close()
         previous?.commandDedupe.clear()
         previous?.browserLease.invalidateRevision()
-        rejectPendingBrowserCommands(new Error('COMMAND_LEASE_STALE'))
+        clearBrowserLeaseExpiryTimer()
+        clearCommandStagingSweepTimer()
+        settlePendingBrowserCommands(null, 'COMMAND_LEASE_STALE', 'Runtime Revision changed before command settlement.')
+        browserPublisherSocket = null
+        browserLeasesBySocket.clear()
       }
       if (!recovered) {
         activeRuntime = null
@@ -877,14 +993,19 @@ export function createRuntimeGatewayEntrypointService(
           const request = validateBrowserPublisherLeaseAcquireV1(value)
           if (request.projectId !== active.project.projectId || request.configRevision !== active.configRevision) return
           const displacedSocket = browserPublisherSocket
+          const displacedLease = active.browserLease.current()
           const lease = active.browserLease.acquire(request)
+          clearBrowserLeaseExpiryTimer()
+          if (displacedLease !== null) {
+            settlePendingBrowserCommands(displacedLease.generation, 'COMMAND_LEASE_STALE', 'Browser publisher lease was replaced.')
+          }
           if (displacedSocket !== null && displacedSocket !== socket) {
             browserLeasesBySocket.delete(displacedSocket)
-            rejectPendingBrowserCommands(new Error('COMMAND_LEASE_STALE'))
           }
           browserPublisherSocket = socket
           browserLeasesBySocket.set(socket, lease)
           socket.send(JSON.stringify(lease))
+          scheduleBrowserLeaseExpiry(active, lease)
           void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
           return
         }
@@ -902,6 +1023,7 @@ export function createRuntimeGatewayEntrypointService(
           const lease = active.browserLease.renew(existing)
           browserLeasesBySocket.set(socket, lease)
           socket.send(JSON.stringify(lease))
+          scheduleBrowserLeaseExpiry(active, lease)
           void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
           return
         }
@@ -918,6 +1040,8 @@ export function createRuntimeGatewayEntrypointService(
           active.browserLease.release(existing)
           browserLeasesBySocket.delete(socket)
           if (browserPublisherSocket === socket) browserPublisherSocket = null
+          clearBrowserLeaseExpiryTimer()
+          settlePendingBrowserCommands(existing.generation, 'COMMAND_LEASE_STALE', 'Browser publisher lease was released.')
           void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
           return
         }
@@ -937,6 +1061,7 @@ export function createRuntimeGatewayEntrypointService(
           const pending = pendingBrowserCommands.get(key)
           if (pending === undefined || pending.generation !== result.leaseGeneration) return
           pendingBrowserCommands.delete(key)
+          cancelTimeout(pending.timeout)
           pending.resolve(result)
         }
       } catch {
@@ -1118,7 +1243,11 @@ export function createRuntimeGatewayEntrypointService(
           webSocket.on('close', () => {
             const lease = browserLeasesBySocket.get(webSocket)
             const active = activeRuntime
-            if (lease !== undefined && active !== null) active.browserLease.release(lease)
+            if (lease !== undefined && active !== null) {
+              active.browserLease.release(lease)
+              clearBrowserLeaseExpiryTimer()
+              settlePendingBrowserCommands(lease.generation, 'COMMAND_LEASE_STALE', 'Browser publisher socket closed.')
+            }
             browserLeasesBySocket.delete(webSocket)
             if (browserPublisherSocket === webSocket) browserPublisherSocket = null
           })
@@ -1206,7 +1335,9 @@ export function createRuntimeGatewayEntrypointService(
         active?.commandService?.close()
         active?.commandDedupe.clear()
         active?.browserLease.invalidateRevision()
-        rejectPendingBrowserCommands(new Error('COMMAND_LEASE_STALE'))
+        clearBrowserLeaseExpiryTimer()
+        clearCommandStagingSweepTimer()
+        settlePendingBrowserCommands(null, 'COMMAND_LEASE_STALE', 'Runtime Gateway stopped before command settlement.')
         browserPublisherSocket = null
         browserLeasesBySocket.clear()
         for (const request of incompleteBodyRequests) {

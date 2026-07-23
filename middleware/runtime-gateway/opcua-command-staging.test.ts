@@ -67,4 +67,12 @@ describe('ProductCommandStagingV1', () => {
     staging.closeSession('session-a')
     expect(staging.size()).toBe(0)
   })
+
+  it('sweeps staged commands after sixty seconds without another OPC UA write', () => {
+    const staging = createProductCommandStagingV1()
+    staging.write('session-a', poseTarget, 'RequestId', 'request-a', 1_000)
+    expect(staging.size()).toBe(1)
+    expect(staging.sweep(61_000)).toBe(1)
+    expect(staging.size()).toBe(0)
+  })
 })

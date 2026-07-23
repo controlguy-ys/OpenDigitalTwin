@@ -353,6 +353,7 @@ function canonicalStreamTarget(
     onEndpointCatchupStart: readField(target, 'onEndpointCatchupStart', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     onSessionStart: readField(target, 'onSessionStart', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     onSessionDisconnect: readField(target, 'onSessionDisconnect', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
+    onBrowserPublisherLease: readField(target, 'onBrowserPublisherLease', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     onCommandBatch: readField(target, 'onCommandBatch', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
   }
   if (
@@ -365,6 +366,7 @@ function canonicalStreamTarget(
     || typeof snapshot.onEndpointCatchupStart !== 'function'
     || (snapshot.onSessionStart !== undefined && typeof snapshot.onSessionStart !== 'function')
     || (snapshot.onSessionDisconnect !== undefined && typeof snapshot.onSessionDisconnect !== 'function')
+    || (snapshot.onBrowserPublisherLease !== undefined && typeof snapshot.onBrowserPublisherLease !== 'function')
     || (snapshot.onCommandBatch !== undefined && typeof snapshot.onCommandBatch !== 'function')
   ) {
     fail('RUNTIME_GRAPH_STREAM_TARGET_INVALID', 'Runtime stream target is incomplete.')
@@ -397,6 +399,7 @@ function canonicalStreamTarget(
   const catchupCallback = snapshot.onEndpointCatchupStart as RuntimeGatewayStreamTargetV5['onEndpointCatchupStart']
   const sessionStartCallback = snapshot.onSessionStart as RuntimeGatewayStreamTargetV5['onSessionStart']
   const sessionDisconnectCallback = snapshot.onSessionDisconnect as RuntimeGatewayStreamTargetV5['onSessionDisconnect']
+  const browserLeaseCallback = snapshot.onBrowserPublisherLease as RuntimeGatewayStreamTargetV5['onBrowserPublisherLease']
   const commandBatchCallback = snapshot.onCommandBatch as RuntimeGatewayStreamTargetV5['onCommandBatch']
   const onEndpointCatchupStart: RuntimeGatewayStreamTargetV5['onEndpointCatchupStart'] = (
     endpointId,
@@ -411,6 +414,9 @@ function canonicalStreamTarget(
   const onCommandBatch: RuntimeGatewayStreamTargetV5['onCommandBatch'] = commandBatchCallback === undefined
     ? undefined
     : (batch) => Reflect.apply(commandBatchCallback, target, [batch]) as ReturnType<NonNullable<RuntimeGatewayStreamTargetV5['onCommandBatch']>>
+  const onBrowserPublisherLease: RuntimeGatewayStreamTargetV5['onBrowserPublisherLease'] = browserLeaseCallback === undefined
+    ? undefined
+    : (lease) => { Reflect.apply(browserLeaseCallback, target, [lease]) }
   return Object.freeze({
     projectId: snapshot.projectId,
     configRevision: snapshot.configRevision,
@@ -421,6 +427,7 @@ function canonicalStreamTarget(
     onEndpointCatchupStart,
     ...(onSessionStart === undefined ? {} : { onSessionStart }),
     ...(onSessionDisconnect === undefined ? {} : { onSessionDisconnect }),
+    ...(onBrowserPublisherLease === undefined ? {} : { onBrowserPublisherLease }),
     ...(onCommandBatch === undefined ? {} : { onCommandBatch }),
   })
 }

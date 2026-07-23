@@ -8,6 +8,8 @@ export interface BrowserPublisherLeaseManagerV1 {
   renew(lease: RuntimePublisherLeaseV1): RuntimePublisherLeaseV1
   release(lease: RuntimePublisherLeaseV1): void
   invalidateRevision(): number
+  /** Applies time-based expiration as an explicit lifecycle action. */
+  tick(): boolean
   current(): RuntimePublisherLeaseV1 | null
   snapshot(): Readonly<{ phase: 'absent' | 'active' | 'expired'; publisherId: string | null; generation: number | null; expiresAt: number | null }>
   renewalIntervalMs(): number
@@ -36,17 +38,24 @@ export function createBrowserPublisherLeaseManagerV1(options: Readonly<{ nowMs: 
     if (!Number.isSafeInteger(value) || value < 0) throw new TypeError('BROWSER_PUBLISHER_CLOCK_INVALID')
     return value
   }
-  function readCurrent(): RuntimePublisherLeaseV1 | null {
+  function expireIfDue(): boolean {
     if (active !== null && active.expiresAt <= now()) {
       active = null
       expired = true
+      return true
     }
-    return active
+    return false
   }
   function issue(request: Readonly<{ projectId: string; configRevision: string; publisherId: string }>): RuntimePublisherLeaseV1 {
     generation += 1
     if (!Number.isSafeInteger(generation)) throw new Error('BROWSER_PUBLISHER_GENERATION_EXHAUSTED')
-    active = validateRuntimePublisherLeaseV1({ ...request, generation, expiresAt: now() + BROWSER_PUBLISHER_LEASE_TTL_MS_V1 })
+    active = validateRuntimePublisherLeaseV1({
+      projectId: request.projectId,
+      configRevision: request.configRevision,
+      publisherId: request.publisherId,
+      generation,
+      expiresAt: now() + BROWSER_PUBLISHER_LEASE_TTL_MS_V1,
+    })
     expired = false
     return active
   }
@@ -54,13 +63,15 @@ export function createBrowserPublisherLeaseManagerV1(options: Readonly<{ nowMs: 
   return Object.freeze({
     acquire: issue,
     renew(lease: RuntimePublisherLeaseV1) {
-      const current = readCurrent()
+      expireIfDue()
+      const current = active
       if (current === null || !sameLease(current, lease)) throw new BrowserPublisherLeaseErrorV1()
       active = validateRuntimePublisherLeaseV1({ ...current, expiresAt: now() + BROWSER_PUBLISHER_LEASE_TTL_MS_V1 })
       return active
     },
     release(lease: RuntimePublisherLeaseV1) {
-      const current = readCurrent()
+      expireIfDue()
+      const current = active
       if (current !== null && sameLease(current, lease)) active = null
     },
     invalidateRevision() {
@@ -70,9 +81,10 @@ export function createBrowserPublisherLeaseManagerV1(options: Readonly<{ nowMs: 
       expired = false
       return generation
     },
-    current: readCurrent,
+    tick: expireIfDue,
+    current: () => active,
     snapshot() {
-      const current = readCurrent()
+      const current = active
       return Object.freeze(current === null
         ? { phase: expired ? 'expired' as const : 'absent' as const, publisherId: null, generation: null, expiresAt: null }
         : { phase: 'active' as const, publisherId: current.publisherId, generation: current.generation, expiresAt: current.expiresAt })

@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { DataType, OPCUAServer } from 'node-opcua'
+import { DataType, DataValue, OPCUAServer, StatusCodes, Variant } from 'node-opcua'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { RigidTransformV5, WorkcellProjectV5 } from '../../src/core/project-v5/index.js'
@@ -265,6 +265,19 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
     expect(object.payload.Roll.readValue().value.dataType).toBe(DataType.Double)
     expect(robot.payload.J1!.readValue().value.dataType).toBe(DataType.Double)
   })
+
+  it.each(['COMMAND_STAGE_INCOMPLETE', 'COMMAND_EXPIRED', 'COMMAND_STAGE_INVALID'])(
+    'returns a deterministic BadInvalidArgument status when command staging rejects %s',
+    async (code) => {
+      const { model } = await startModel()
+      model.bindCommandWrites(() => { throw new Error(code) })
+      const status = await model.commandFields.robotJointTargets['robot-1']!.execute.writeValue(
+        null as never,
+        new DataValue({ value: new Variant({ dataType: DataType.Boolean, value: true }) }),
+      )
+      expect(status).toBe(StatusCodes.BadInvalidArgument)
+    },
+  )
 
   it('publishes Result records and diagnostics updates as read-only product state', async () => {
     const { model } = await startModel()

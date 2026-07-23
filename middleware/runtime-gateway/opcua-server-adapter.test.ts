@@ -151,6 +151,36 @@ async function openAnonymousSession(
 }
 
 describe('OPC UA server adapter V1', () => {
+  it('tracks two live OPC UA Sessions and reports their exact open/close identities', async () => {
+    const opened: string[] = []
+    const closed: string[] = []
+    const adapter = createOpcUaServerAdapterV1(sampleProject('server'), {
+      host: '127.0.0.1', advertisedHost: '127.0.0.1', advertisedPort: 0, port: 0,
+      pkiRootDir: TEST_PKI_ROOT, configRevision: CONFIG_REVISION,
+      onSessionOpen: (sessionId) => opened.push(sessionId),
+      onSessionClose: (sessionId) => closed.push(sessionId),
+    })
+    let first: Awaited<ReturnType<typeof openAnonymousSession>> | null = null
+    let second: Awaited<ReturnType<typeof openAnonymousSession>> | null = null
+    try {
+      await adapter.start()
+      const endpointUrl = adapter.status().endpointUrl!
+      first = await openAnonymousSession(endpointUrl)
+      second = await openAnonymousSession(endpointUrl)
+      expect(adapter.status().activeSessionCount).toBe(2)
+      expect(opened).toHaveLength(2)
+      await first.session.close(); await first.client.disconnect(); first = null
+      expect(adapter.status().activeSessionCount).toBe(1)
+      expect(closed).toEqual([opened[0]!])
+    } finally {
+      await first?.session.close().catch(() => undefined)
+      await first?.client.disconnect().catch(() => undefined)
+      await second?.session.close().catch(() => undefined)
+      await second?.client.disconnect().catch(() => undefined)
+      await adapter.stop()
+    }
+  })
+
   const adapters: OpcUaServerAdapterV1[] = []
 
   afterEach(async () => {
@@ -184,6 +214,7 @@ describe('OPC UA server adapter V1', () => {
       productNamespaceUri: OPENWEB_MODEL_NAMESPACE_URI_V1,
       productNamespaceIndex: null,
       productRootNodeId: null,
+      activeSessionCount: 0,
     })
     await expect(adapter.publishRobotJointState(CRB_ROBOT_ID, { J1: 5 }))
       .rejects.toThrow('OPC_UA_SERVER_MODE_OFF')

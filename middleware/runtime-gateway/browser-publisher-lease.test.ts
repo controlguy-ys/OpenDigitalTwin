@@ -32,7 +32,18 @@ describe('BrowserPublisherLeaseManagerV1', () => {
     const lease = createBrowserPublisherLeaseManagerV1({ nowMs: () => now })
     lease.acquire({ projectId: 'project-v5', configRevision: REVISION, publisherId: 'browser-a' })
     now = 6_001
+    expect(lease.tick()).toBe(true)
     expect(lease.current()).toBeNull()
     expect(lease.snapshot()).toMatchObject({ phase: 'expired', publisherId: null })
+  })
+
+  it('does not expire a lease merely by observing diagnostics and expires it on an explicit lifecycle tick', () => {
+    let now = 1_000
+    const lease = createBrowserPublisherLeaseManagerV1({ nowMs: () => now })
+    lease.acquire({ projectId: 'project-v5', configRevision: REVISION, publisherId: 'browser-a' })
+    now = 6_001
+    expect(lease.snapshot()).toMatchObject({ phase: 'active', generation: 1 })
+    expect(lease.tick()).toBe(true)
+    expect(lease.snapshot()).toMatchObject({ phase: 'expired', generation: null })
   })
 })
