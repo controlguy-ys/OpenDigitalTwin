@@ -915,6 +915,8 @@ describe('runtime Gateway entrypoint', () => {
       expect(caught).toBe(clientFailure)
       expect(createStateBatchHub).toHaveBeenCalledTimes(2)
 
+      await expect(service.stop()).resolves.toBeUndefined()
+      expect(gatewayStatus(service.status()).project).toMatchObject({ phase: 'not-applied' })
       await service.start()
       expect(createStateBatchHub).toHaveBeenCalledTimes(3)
       const project = sampleProject('client', 'revision-hub-reset-restarted')
@@ -2754,7 +2756,7 @@ describe('runtime Gateway entrypoint', () => {
 
   it('retains a partially started first candidate as recovery-required when its stop cleanup fails', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
-    const candidate = fakeClientAdapter(); candidate.start.mockRejectedValueOnce(new Error('candidate-start-failure')); candidate.stop.mockRejectedValueOnce(new Error('candidate-stop-failure'))
+    const candidate = fakeClientAdapter(); candidate.start.mockRejectedValueOnce(new Error('candidate-start-failure')); candidate.stop.mockRejectedValueOnce(new Error('candidate-stop-failure')).mockRejectedValueOnce(new Error('candidate-stop-retry-failure'))
     const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => candidate.adapter })
     const project = sampleProject('client', 'revision-first-candidate-cleanup-fails')
     await service.start()
@@ -2762,6 +2764,10 @@ describe('runtime Gateway entrypoint', () => {
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(503)
       expect(gatewayStatus(service.status())).toMatchObject({ project: { phase: 'recovery-required', revisionId: project.revisionId, readinessCode: 'RECOVERY_REQUIRED' } })
       expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(503)
+      await expect(service.stop()).rejects.toThrow('candidate-stop-retry-failure')
+      expect(gatewayStatus(service.status()).project).toMatchObject({ phase: 'recovery-required', revisionId: project.revisionId })
+      await expect(service.stop()).resolves.toBeUndefined()
+      expect(gatewayStatus(service.status()).project).toMatchObject({ phase: 'not-applied', revisionId: null })
     } finally { await service.stop() }
   })
 

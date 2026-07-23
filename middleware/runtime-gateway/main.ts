@@ -312,6 +312,7 @@ export function createRuntimeGatewayEntrypointService(
   let stateBatchHub: StateBatchHubV1 | null = createStateBatchHub()
   const incompleteBodyRequests = new Set<IncomingMessage>()
   let activeRuntime: ActiveProjectRuntimeV1 | null = null
+  const residualRuntimeCleanup = new Set<Readonly<{ clientAdapter: OpcUaClientAdapterV1 | null; serverAdapter: OpcUaServerAdapterV1 | null }>>()
   let projectAuthorityPhase: 'inactive' | 'active' | 'deactivating' | 'recovery-required' = 'inactive'
   let lifecycleTail: Promise<void> = Promise.resolve()
   let runtimeTail: Promise<void> = Promise.resolve()
@@ -771,6 +772,7 @@ export function createRuntimeGatewayEntrypointService(
         Promise.resolve().then(() => candidateServerAdapter?.stop()),
       ])
       const candidateCleanupFailed = candidateCleanup.some((result) => result.status === 'rejected')
+      if (candidateCleanupFailed) residualRuntimeCleanup.add(Object.freeze({ clientAdapter: candidateClientAdapter, serverAdapter: candidateServerAdapter }))
       let recovered = false
       let recoveryError: unknown = null
       try {
@@ -1590,7 +1592,6 @@ export function createRuntimeGatewayEntrypointService(
     try {
       await enqueueRuntimeTransition(async () => {
         const active = activeRuntime
-        activeRuntime = null
         active?.commandService?.close()
         active?.commandDedupe.clear()
         active?.browserLease.invalidateRevision()
@@ -1604,23 +1605,30 @@ export function createRuntimeGatewayEntrypointService(
           request.destroy()
         }
 
-        let adapterFailure: unknown
-        let hasAdapterFailure = false
-        try {
-          await active?.clientAdapter?.stop()
-        } catch (error) {
-          hasAdapterFailure = true
-          adapterFailure = error
+        let adapterFailure: unknown = null
+        const stopPair = async (clientAdapter: OpcUaClientAdapterV1 | null, serverAdapter: OpcUaServerAdapterV1 | null): Promise<boolean> => {
+          const results = await Promise.allSettled([
+            Promise.resolve().then(() => clientAdapter?.stop()),
+            Promise.resolve().then(() => serverAdapter?.stop()),
+          ])
+          const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+          if (rejected !== undefined && adapterFailure === null) adapterFailure = rejected.reason
+          return rejected === undefined
         }
-        try {
-          await active?.serverAdapter?.stop()
-        } catch (error) {
-          if (!hasAdapterFailure) {
-            hasAdapterFailure = true
-            adapterFailure = error
+        const activeClean = await stopPair(active?.clientAdapter ?? null, active?.serverAdapter ?? null)
+        for (const residual of [...residualRuntimeCleanup]) {
+          if (residual.clientAdapter === active?.clientAdapter && residual.serverAdapter === active?.serverAdapter) {
+            if (activeClean) residualRuntimeCleanup.delete(residual)
+            continue
           }
+          if (await stopPair(residual.clientAdapter, residual.serverAdapter)) residualRuntimeCleanup.delete(residual)
         }
-        if (hasAdapterFailure) throw adapterFailure
+        if (!activeClean || residualRuntimeCleanup.size > 0) {
+          projectAuthorityPhase = 'recovery-required'
+          throw adapterFailure ?? new Error('RUNTIME_RESIDUAL_CLEANUP_REQUIRED')
+        }
+        activeRuntime = null
+        projectAuthorityPhase = 'inactive'
       })
     } catch (error) {
       retainFirstFailure(error)
