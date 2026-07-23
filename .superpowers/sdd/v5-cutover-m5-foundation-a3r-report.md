@@ -79,3 +79,20 @@ Focused Gateway/client/diagnostic tests passed. `npm run test:job-io` passed 49
 files / 822 tests. `test:gateway` retains only the documented four V4 mechanics
 fixture failures. The V4 App publisher cutover remains separate; no compatibility
 path was added.
+
+## A3R4 repair completion
+
+- `d88d4a4` persists failed candidate adapter handles independently from active
+  authority and makes `service.stop()` retain recovery-required until active and
+  residual cleanup both succeed.
+- `f0a9a4d` treats oversized DELETE responses as ambiguous completion and
+  reconciles confirmed inactive authority.
+- `619bd8e` assigns exactly one normal/late cleanup owner per diagnostic
+  resource; namespace-read timeout cleans once while late connect/Session work
+  remains bounded and ordered.
+
+Focused A3R4 suite: 3 files / 134 tests passed. `test:job-io`: 49 files /
+823 tests passed. `test:gateway` retains only the four documented V4 fixture
+failures. Gateway/browser builds, lint, and diff check passed with only existing
+warnings. The V4 App publisher cutover remains the sole separate integration
+blocker.
