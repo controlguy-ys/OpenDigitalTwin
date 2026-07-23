@@ -51,9 +51,17 @@ The deactivation local cleanup tail is authoritative and covered by the existing
   exact recovery-required DELETE candidate instead of classifying it as another
   authority.
 
-Focused evidence: publication 38 tests, Gateway entrypoint 84 tests,
-temporary-diagnostic 7 tests, and V5 connectivity client 36 tests passed for
-the respective commits. Endpoint-session-generation proof and the unified
-error-envelope byte contract still require implementation and a fresh SOL Ultra
-review. The V4 App publisher cutover remains the explicit separate integration
-blocker.
+Additional completion commits: `62d392f` converges a healthy same-durable
+target hydration CAS loser, `66b65b9`/`e893452`/`2155f88` share the UTF-8
+byte-bounded Gateway error-envelope contract between native and browser,
+`9610a5d` attests and fences exact Endpoint Session generation, and `787a0d4`
+re-verifies exact Gateway authority after durable finalization before reporting
+publication success.
+
+Focused evidence: publication 39 tests, Gateway entrypoint plus client-adapter
+131 tests, temporary-diagnostic 7 tests, error-envelope/connectivity-client 37
+tests, and `test:job-io` 49 files / 821 tests passed. `build:gateway` passed.
+`test:gateway` retained only the documented four V4 publisher/mechanics fixture
+failures. `npm run lint` retained its pre-existing `main.test.ts:544`
+`unicorn(no-useless-spread)` warning. The V4 App publisher cutover remains the
+explicit separate integration blocker; fresh SOL Ultra review remains required.
