@@ -69,9 +69,15 @@ type OpenElement = {
 function parseRoboticsModels(xml: string): readonly ParsedModel[] {
   const models: ParsedModel[] = []
   const elements: OpenElement[] = []
+  let documentRoot: OpenElement | undefined
+  let documentRootCount = 0
   const parser = new SaxesParser({ xmlns: true })
 
   parser.on('opentag', (tag) => {
+    if (elements.length === 0) {
+      documentRoot = { local: tag.local, uri: tag.uri }
+      documentRootCount += 1
+    }
     const parent = elements.at(-1)
     const grandparent = elements.at(-2)
     let model: ParsedModel | undefined
@@ -109,6 +115,13 @@ function parseRoboticsModels(xml: string): readonly ParsedModel[] {
   })
 
   parser.write(xml).close()
+  if (
+    documentRootCount !== 1
+    || documentRoot?.local !== 'UANodeSet'
+    || documentRoot.uri !== OPC_UA_NODESET_XML_NAMESPACE_URI
+  ) {
+    mismatch('expected exactly one UANodeSet document root.')
+  }
   return models
 }
 

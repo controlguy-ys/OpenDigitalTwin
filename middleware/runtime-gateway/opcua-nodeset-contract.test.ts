@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { nodesets } from 'node-opcua-nodesets'
+import { SaxesParser } from 'saxes'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -111,11 +112,23 @@ describe('OPC UA Robotics NodeSet contract v1', () => {
     await expectMismatch(reads(source))
   })
 
-  it('rejects duplicate live Robotics Model entries', async () => {
-    const secondModel = roboticsXml()
-      .match(/<Model[\s\S]*?<\/Model>/u)?.[0]
-    expect(secondModel).toBeDefined()
+  it('rejects a UANodeSet nested below a Wrapper root', async () => {
+    const nestedNodeSet = roboticsXml().replace('<?xml version="1.0" encoding="utf-8"?>', '')
+    await expectMismatch(reads(`<?xml version="1.0" encoding="utf-8"?><Wrapper>${nestedNodeSet}</Wrapper>`))
+  })
 
-    await expectMismatch(reads(roboticsXml().replace('</Models>', `${secondModel}</Models>`)))
+  it('rejects duplicate live Robotics Model entries', async () => {
+    const secondModel = `<Model ModelUri="${ROBOTICS_URI}" Version="1.02" PublicationDate="2025-09-08T00:00:00Z">
+      <RequiredModel ModelUri="${STANDARD_URI}" />
+      <RequiredModel ModelUri="${DI_URI}" />
+      <RequiredModel ModelUri="${IA_URI}" />
+    </Model>`
+    const source = roboticsXml().replace('</Models>', `${secondModel}</Models>`)
+    expect(() => new SaxesParser({ xmlns: true }).write(source).close()).not.toThrow()
+
+    await expect(assertRoboticsNodeSetContractV1({ readFile: reads(source) })).rejects.toMatchObject({
+      code: 'OPC_UA_ROBOTICS_NODESET_MISMATCH',
+      message: 'OPC_UA_ROBOTICS_NODESET_MISMATCH: expected exactly one live Robotics Model, received 2.',
+    })
   })
 })
