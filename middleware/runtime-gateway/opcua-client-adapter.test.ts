@@ -1240,6 +1240,58 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     await expect(adapter.stop()).resolves.toBeUndefined()
   })
 
+  it('keeps background recovery residue faulted and fences start while runtime is not stopped', async () => {
+    const first = fakeConnection()
+    const second = fakeConnection()
+    const connections = [first, second]
+    const createClient = vi.fn(() => connections.shift()!.client as never)
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
+      publish: () => undefined, createClient,
+    })
+    await adapter.start()
+    await eventually(() => first.groups.length === 1)
+    first.session.close.mockRejectedValueOnce(new Error('background Session close failed'))
+    first.client.emit('connection_lost')
+    await eventually(() => adapter.status()[0]?.phase === 'faulted')
+
+    await expect(adapter.start()).rejects.toThrow('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
+    expect(createClient).toHaveBeenCalledOnce()
+    expect(adapter.status()[0]).toMatchObject({ phase: 'faulted', sessionActive: true })
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+  })
+
+  it('serializes recovery and connect-finally cleanup for the same rejected Client handle', async () => {
+    const connection = fakeConnection()
+    connection.client.connect = vi.fn(async () => { throw new Error('connect rejected') })
+    let activeDisconnects = 0
+    let maxActiveDisconnects = 0
+    let resolveDisconnect!: () => void
+    connection.client.disconnect = vi.fn(() => new Promise<void>((resolve) => {
+      activeDisconnects += 1
+      maxActiveDisconnects = Math.max(maxActiveDisconnects, activeDisconnects)
+      resolveDisconnect = () => {
+        activeDisconnects -= 1
+        resolve()
+      }
+    }))
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
+      publish: () => undefined, createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => connection.client.disconnect.mock.calls.length === 1)
+    await Promise.resolve()
+
+    expect(connection.client.disconnect).toHaveBeenCalledOnce()
+    expect(maxActiveDisconnects).toBe(1)
+    resolveDisconnect()
+    await adapter.stop()
+    expect(maxActiveDisconnects).toBe(1)
+    expect(connection.client.disconnect).toHaveBeenCalledOnce()
+  })
+
   it('retains a Session created after the stop fence when its first close fails', async () => {
     const connection = fakeConnection()
     const order: string[] = []

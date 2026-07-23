@@ -128,6 +128,9 @@ interface EndpointRuntimeV1 extends EndpointRuntimeDiagnosticsV1 {
   subscription: ClientSubscription | null
   groups: ClientMonitoredItemGroup[]
   readonly residualCleanup: Set<NativeCleanupHandlesV1>
+  cleanupTail: Promise<void>
+  cleanupPendingCount: number
+  cleanupFailed: boolean
   assembler: OpcUaClientSnapshotAssemblerV1 | null
   reconnectTimer: NodeJS.Timeout | null
   recovery: Promise<void> | null
@@ -304,12 +307,19 @@ function isClientMode(project: WorkcellProjectV5): boolean {
   return project.opcUa.mode === 'client' || project.opcUa.mode === 'bridge'
 }
 
-function hasNativeCleanupPending(runtime: EndpointRuntimeV1): boolean {
+function hasNativeHandles(runtime: EndpointRuntimeV1): boolean {
   return runtime.client !== null
     || runtime.session !== null
     || runtime.subscription !== null
     || runtime.groups.length > 0
     || runtime.residualCleanup.size > 0
+}
+
+function hasNativeCleanupPending(runtime: EndpointRuntimeV1): boolean {
+  return runtime.cleanupPendingCount > 0
+    || runtime.cleanupFailed
+    || runtime.residualCleanup.size > 0
+    || (!runtime.connected && hasNativeHandles(runtime))
 }
 
 function endpointPhase(runtime: EndpointRuntimeV1): RuntimeGatewayOpcUaClientEndpointPhaseV1 {
@@ -452,25 +462,26 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
   runtime.nextEarlyArrivalOrdinal = 1
   runtime.drainingEarlyRoots = false
   runtime.connected = false
-  const owners: NativeCleanupHandlesV1[] = [runtime, ...runtime.residualCleanup]
+  const currentOwners = (): NativeCleanupHandlesV1[] => [runtime, ...runtime.residualCleanup]
+  const owners = currentOwners()
   const failures: Array<Readonly<{ error: unknown; pending: () => boolean }>> = []
   const removeGroup = (group: ClientMonitoredItemGroup): void => {
-    for (const owner of owners) {
+    for (const owner of currentOwners()) {
       owner.groups = owner.groups.filter((candidate) => candidate !== group)
     }
   }
   const removeSubscription = (subscription: ClientSubscription): void => {
-    for (const owner of owners) {
+    for (const owner of currentOwners()) {
       if (owner.subscription === subscription) owner.subscription = null
     }
   }
   const removeSession = (session: ClientSession): void => {
-    for (const owner of owners) {
+    for (const owner of currentOwners()) {
       if (owner.session === session) owner.session = null
     }
   }
   const removeClient = (client: OPCUAClient): void => {
-    for (const owner of owners) {
+    for (const owner of currentOwners()) {
       if (owner.client === client) owner.client = null
     }
   }
@@ -483,7 +494,7 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
     } catch (error) {
       failures.push({
         error,
-        pending: () => owners.some((owner) => owner.groups.includes(group)),
+        pending: () => currentOwners().some((owner) => owner.groups.includes(group)),
       })
     }
   }
@@ -503,7 +514,7 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
     } catch (error) {
       failures.push({
         error,
-        pending: () => owners.some((owner) => owner.subscription === subscription),
+        pending: () => currentOwners().some((owner) => owner.subscription === subscription),
       })
     }
   }
@@ -518,7 +529,7 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
     } catch (error) {
       failures.push({
         error,
-        pending: () => owners.some((owner) => owner.session === session),
+        pending: () => currentOwners().some((owner) => owner.session === session),
       })
     }
   }
@@ -533,7 +544,7 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
     } catch (error) {
       failures.push({
         error,
-        pending: () => owners.some((owner) => owner.client === client),
+        pending: () => currentOwners().some((owner) => owner.client === client),
       })
     }
   }
@@ -548,6 +559,24 @@ async function closeRuntime(runtime: EndpointRuntimeV1): Promise<void> {
   }
   const unresolved = failures.find(({ pending }) => pending())
   if (unresolved !== undefined) throw unresolved.error
+}
+
+function enqueueRuntimeCleanup(runtime: EndpointRuntimeV1): Promise<void> {
+  runtime.cleanupPendingCount += 1
+  const requested = runtime.cleanupTail.then(() => closeRuntime(runtime))
+  runtime.cleanupTail = requested.then(() => undefined, () => undefined)
+  void requested.then(
+    () => {
+      runtime.cleanupPendingCount -= 1
+      if (!hasNativeHandles(runtime)) runtime.cleanupFailed = false
+    },
+    (error: unknown) => {
+      runtime.cleanupPendingCount -= 1
+      runtime.cleanupFailed = true
+      runtime.lastError = diagnosticError(error, runtime.lastGatewayTimestampMs)
+    },
+  )
+  return requested
 }
 
 async function closeDetachedConnection(
@@ -565,7 +594,7 @@ async function closeDetachedConnection(
   }
   runtime.residualCleanup.add(residual)
   if (runtime.stopped) return
-  await closeRuntime(runtime)
+  await enqueueRuntimeCleanup(runtime)
 }
 
 export function createOpcUaClientAdapterV1(
@@ -618,6 +647,9 @@ export function createOpcUaClientAdapterV1(
       subscription: null,
       groups: [],
       residualCleanup: new Set(),
+      cleanupTail: Promise.resolve(),
+      cleanupPendingCount: 0,
+      cleanupFailed: false,
       assembler: null,
       reconnectTimer: null,
       recovery: null,
@@ -757,11 +789,12 @@ export function createOpcUaClientAdapterV1(
       new Error('OPC_UA_SOURCE_SEQUENCE_EXHAUSTED'),
       runtime.lastGatewayTimestampMs,
     )
-    const recovery = closeRuntime(runtime).catch(() => undefined)
+    const recovery = enqueueRuntimeCleanup(runtime)
     runtime.recovery = recovery
-    void recovery.finally(() => {
-      if (runtime.recovery === recovery) runtime.recovery = null
-    })
+    void recovery.then(
+      () => { if (runtime.recovery === recovery) runtime.recovery = null },
+      () => { if (runtime.recovery === recovery) runtime.recovery = null },
+    )
   }
 
   function createStateSource(
@@ -924,6 +957,7 @@ export function createOpcUaClientAdapterV1(
       runtime.connectTask !== null
       || runtime.sessionGenerationExhausted
       || runtime.gatewayClockFailed
+      || hasNativeCleanupPending(runtime)
     ) return
     const task = connect(runtime)
     runtime.connectTask = task
@@ -977,13 +1011,18 @@ export function createOpcUaClientAdapterV1(
         runtime.lastError = diagnosticError(clockError, runtime.lastGatewayTimestampMs)
       }
     }
-    const recovery = closeRuntime(runtime).catch(() => undefined)
+    const recovery = enqueueRuntimeCleanup(runtime)
     runtime.recovery = recovery
-    void recovery.finally(() => {
-      if (runtime.recovery !== recovery) return
-      runtime.recovery = null
-      if (!runtime.stopped) scheduleReconnect(runtime)
-    })
+    void recovery.then(
+      () => {
+        if (runtime.recovery !== recovery) return
+        runtime.recovery = null
+        if (!runtime.stopped) scheduleReconnect(runtime)
+      },
+      () => {
+        if (runtime.recovery === recovery) runtime.recovery = null
+      },
+    )
   }
 
   function attachMonitoredGroup(
@@ -1042,6 +1081,7 @@ export function createOpcUaClientAdapterV1(
       || runtime.connecting
       || runtime.connected
       || runtime.recovery !== null
+      || hasNativeCleanupPending(runtime)
       || runtime.mappingCount === 0
     ) return
     runtime.connecting = true
@@ -1177,13 +1217,13 @@ export function createOpcUaClientAdapterV1(
     runtime.reconnectAttempt = 0
     runtime.nextRetryAtMs = null
     await Promise.allSettled([runtime.recovery, runtime.connectTask])
-    await closeRuntime(runtime)
+    await enqueueRuntimeCleanup(runtime)
   }
 
   return Object.freeze({
     start: () => enqueue(async () => {
       for (const runtime of runtimes.values()) {
-        if (runtime.stopped && hasNativeCleanupPending(runtime)) {
+        if (hasNativeCleanupPending(runtime)) {
           throw new Error('OPC_UA_ENDPOINT_CLEANUP_REQUIRED')
         }
       }
