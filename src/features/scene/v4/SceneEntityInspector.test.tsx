@@ -280,6 +280,43 @@ describe('SceneEntityInspectorV4', () => {
     expect(screen.queryByRole('heading', { name: 'Robot Base' })).not.toBeInTheDocument()
   })
 
+  it('replaces the raw V4 Object binding form with an optional Project V5 handoff', async () => {
+    const user = userEvent.setup()
+    const selection = { kind: 'spatial-entity', entityId: 'platform' } as const
+    const harness = renderInspector(selection)
+    const onOpenBinding = vi.fn()
+    harness.rerender(<SceneEntityInspectorV4 {...harness.props} onOpenBinding={onOpenBinding} />)
+    await user.click(screen.getByText('OPC UA Binding'))
+    expect(screen.queryByLabelText('OPC UA Endpoint URL')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open Binding' }))
+    expect(onOpenBinding).toHaveBeenCalledWith(selection)
+  })
+
+  it('offers the same optional binding handoff for a Robot selection', async () => {
+    const user = userEvent.setup()
+    const harness = renderInspector({ kind: 'robot', robotId: 'robot-2' })
+    const onOpenBinding = vi.fn()
+    harness.rerender(<SceneEntityInspectorV4
+      {...harness.props}
+      onBindOpcUaJoints={vi.fn(async () => undefined)}
+      onOpenBinding={onOpenBinding}
+    />)
+    expect(screen.queryByText('OPC UA Robot Joint Binding')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Bind B&R Rob Q1-Q6' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open Binding' }))
+    expect(onOpenBinding).toHaveBeenCalledWith({ kind: 'robot', robotId: 'robot-2' })
+  })
+
+  it('preserves the selected Robot Frame in the optional binding handoff', async () => {
+    const user = userEvent.setup()
+    const selection = { kind: 'robot-frame', robotId: 'robot-2', frameId: 'TCP' } as const
+    const harness = renderInspector(selection)
+    const onOpenBinding = vi.fn()
+    harness.rerender(<SceneEntityInspectorV4 {...harness.props} onOpenBinding={onOpenBinding} />)
+    await user.click(screen.getByRole('button', { name: 'Open Binding' }))
+    expect(onOpenBinding).toHaveBeenCalledWith(selection)
+  })
+
   it('routes the exact selected Robot, every local Tool role, tcp-only choices, and Joints', async () => {
     const user = userEvent.setup()
     const harness = renderInspector({ kind: 'robot', robotId: 'robot-2' })

@@ -2829,11 +2829,25 @@ button {
 .opcua-bridge-route { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; border: 1px solid var(--color-border); border-radius: var(--radius); }
 .opcua-settings-footer { padding: 12px 16px; border-top: 1px solid var(--color-border); }
 .opcua-settings-footer button:last-child { color: var(--color-canvas); background: var(--color-accent); border-color: var(--color-accent); }
+.binding-editor-dialog { width: min(760px, 100%); }
+.binding-editor-dialog .opcua-settings-footer { justify-content: flex-end; flex-wrap: wrap; }
+.binding-session-node-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.binding-leaf-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.binding-overview-dialog { width: min(980px, 100%); }
+.binding-overview-table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 12px; }
+.binding-overview-table th,
+.binding-overview-table td { padding: 7px; text-align: left; overflow-wrap: anywhere; border-bottom: 1px solid var(--color-border); }
+.binding-overview-table thead th { color: var(--color-muted); font-size: 11px; }
+.binding-overview-table button,
+.binding-target-list button { min-height: 30px; padding: 4px 9px; color: var(--color-text); font: inherit; cursor: pointer; background: var(--color-canvas); border: 1px solid var(--color-border); border-radius: var(--radius); }
+.binding-target-list { display: grid; gap: 6px; }
 
 @media (max-width: 620px) {
   .opcua-settings-overlay { padding: 8px; }
   .opcua-settings-dialog { max-height: calc(100dvh - 16px); }
   .opcua-settings-summary,
-  .opcua-bridge-route { grid-template-columns: 1fr; }
+  .opcua-bridge-route,
+  .binding-leaf-grid,
+  .binding-session-node-row { grid-template-columns: 1fr; }
   .opcua-settings-header { align-items: flex-start; flex-direction: column; }
 }

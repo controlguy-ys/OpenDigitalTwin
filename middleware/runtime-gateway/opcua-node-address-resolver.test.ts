@@ -28,6 +28,7 @@ function harness() {
 describe('createOpcUaNodeAddressResolverV1', () => {
   it.each([
     ['ns=1;s=ObjectPos', { namespaceUri: 'urn:virtual-plc', identifierType: 'string', identifier: 'ObjectPos' }],
+    ['ns=1;s= ObjectPos ', { namespaceUri: 'urn:virtual-plc', identifierType: 'string', identifier: ' ObjectPos ' }],
     ['ns=1;i=42', { namespaceUri: 'urn:virtual-plc', identifierType: 'numeric', identifier: '42' }],
     ['ns=2;g=12345678-1234-1234-1234-123456789abc', { namespaceUri: 'https://example.com/model', identifierType: 'guid', identifier: '12345678-1234-1234-1234-123456789abc' }],
     ['ns=1;b=AQID', { namespaceUri: 'urn:virtual-plc', identifierType: 'byteString', identifier: 'AQID' }],
@@ -63,5 +64,21 @@ describe('createOpcUaNodeAddressResolverV1', () => {
 
     await expect(resolver.resolve('plc-a', 's=ObjectPos')).rejects.toThrow('OPC_UA_SESSION_NODE_ID_INVALID')
     await expect(resolver.resolve('plc-a', 'ns=9;s=ObjectPos')).rejects.toThrow('OPC_UA_NAMESPACE_INDEX_OUT_OF_RANGE')
+  })
+
+  it('rejects a duplicate Namespace URI instead of persisting an ambiguous index', async () => {
+    const session = {
+      readNamespaceArray: vi.fn(async () => [
+        'http://opcfoundation.org/UA/',
+        'urn:duplicate',
+        'urn:duplicate',
+      ]),
+    }
+    const resolver = createOpcUaNodeAddressResolverV1({
+      currentSession: () => ({ endpointId: 'plc-a', generation: 1, session }),
+    })
+
+    await expect(resolver.resolve('plc-a', 'ns=2;s=ObjectPos'))
+      .rejects.toThrow('OPC_UA_NAMESPACE_ARRAY_INVALID')
   })
 })

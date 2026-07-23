@@ -27,7 +27,7 @@ export function validateOpcUaNodeAddressDraftV1(
   return validateOpcUaNodeAddressV1({
     namespaceUri: draft.namespaceUri.trim(),
     identifierType: draft.identifierType,
-    identifier: draft.identifier.trim(),
+    identifier: draft.identifier,
   }, '$.nodeAddress')
 }
 

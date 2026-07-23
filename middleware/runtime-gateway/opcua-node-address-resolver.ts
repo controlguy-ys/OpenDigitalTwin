@@ -94,12 +94,20 @@ export function createOpcUaNodeAddressResolverV1(
       if (!Array.isArray(namespaceArray) || namespaceArray.length > 256) {
         return fail('OPC_UA_NAMESPACE_ARRAY_INVALID')
       }
-      if (namespaceArray.some((value) => (
-        typeof value !== 'string'
-        || value.length === 0
-        || Buffer.byteLength(value) > 4_096
-      ))) {
-        return fail('OPC_UA_NAMESPACE_ARRAY_INVALID')
+      const unique = new Set<string>()
+      let totalBytes = 0
+      for (const value of namespaceArray) {
+        if (
+          typeof value !== 'string'
+          || value.length === 0
+          || Buffer.byteLength(value) > 4_096
+          || unique.has(value)
+        ) {
+          return fail('OPC_UA_NAMESPACE_ARRAY_INVALID')
+        }
+        unique.add(value)
+        totalBytes += Buffer.byteLength(value)
+        if (totalBytes > 48 * 1024) return fail('OPC_UA_NAMESPACE_ARRAY_INVALID')
       }
       const namespaceUri = namespaceArray[parsed.namespaceIndex]
       if (namespaceUri === undefined) {

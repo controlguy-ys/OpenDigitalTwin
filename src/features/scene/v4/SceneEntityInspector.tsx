@@ -48,6 +48,7 @@ export interface SceneEntityInspectorPropsV4 {
   readonly commandBindings: AppCommandBindingsV4
   readonly objectRuntime?: ObjectRuntimeStateV4 | null
   readonly onBindOpcUaJoints?: (robotId: RobotIdV4) => Promise<void>
+  readonly onOpenBinding?: (selection: SceneSelectionTargetV4) => void
   readonly focusRequest?: SceneEntityInspectorFocusRequestV4 | null
 }
 
@@ -83,6 +84,7 @@ function RobotSelectionInspectorV4({
   sceneCommands,
   commandBindings,
   onBindOpcUaJoints,
+  onOpenBinding,
 }: RobotInspectorPropsV4): ReactNode {
   const robot = project.robots.find(({ id }) => id === robotId)
   const definition = robot === undefined
@@ -182,6 +184,15 @@ function RobotSelectionInspectorV4({
         <p>Joint source: {runtimeRobot.jointSource}</p>
         <p>Numeric status: {runtimeRobot.numericStatus}</p>
         <p>Status owner: {robot.numericStatus.sourceOwnership}</p>
+        {onOpenBinding === undefined ? null : (
+          <button
+            data-inspector-section-v4="binding"
+            onClick={() => onOpenBinding(selection)}
+            type="button"
+          >
+            Open Binding
+          </button>
+        )}
         {metadata}
         <label>
           <span>Tool Frame</span>
@@ -255,7 +266,7 @@ function RobotSelectionInspectorV4({
         project={project}
         robotId={robotId}
         robots={robots}
-        {...(onBindOpcUaJoints === undefined ? {} : { onBindOpcUaJoints })}
+        {...(onOpenBinding !== undefined || onBindOpcUaJoints === undefined ? {} : { onBindOpcUaJoints })}
       />
       </div>
     </div>
@@ -280,6 +291,7 @@ interface SpatialInspectorPropsV4 {
   readonly entityId: SpatialEntityIdV4
   readonly commands: SceneCommandServiceV4
   readonly objectRuntime?: ObjectRuntimeStateV4 | null
+  readonly onOpenBinding?: (selection: SceneSelectionTargetV4) => void
 }
 
 function SpatialEntityInspectorV4({
@@ -288,6 +300,7 @@ function SpatialEntityInspectorV4({
   entityId,
   commands,
   objectRuntime = null,
+  onOpenBinding,
 }: SpatialInspectorPropsV4): ReactNode {
   const entity = project.spatialEntities.find(({ id }) => id === entityId)
   const projected = runtime.entities.get(entityId)
@@ -474,7 +487,7 @@ function SpatialEntityInspectorV4({
         onChange={setDraft}
         prefix="Entity Local"
       />
-      <details className="scene-entity-opcua-binding-v4">
+      {onOpenBinding === undefined ? <details className="scene-entity-opcua-binding-v4">
         <summary data-inspector-section-v4="binding">OPC UA Pose Binding</summary>
         {opcUaBinding === null ? null : (
           <p>Bound to {boundEndpoint?.endpointUrl ?? opcUaBinding.endpointId} ({entity.transformOwner}).</p>
@@ -548,7 +561,13 @@ function SpatialEntityInspectorV4({
             </button>
           )}
         </div>
-      </details>
+      </details> : (
+        <details className="scene-entity-opcua-binding-v4">
+          <summary data-inspector-section-v4="binding">OPC UA Binding</summary>
+          <p>Pose and Status mappings are managed by the Project V5 Binding Editor.</p>
+          <button onClick={() => onOpenBinding({ kind: 'spatial-entity', entityId })} type="button">Open Binding</button>
+        </details>
+      )}
       <label>
         <span>Group</span>
         <select
@@ -849,6 +868,7 @@ export function SceneEntityInspectorV4({
   commandBindings,
   objectRuntime = null,
   onBindOpcUaJoints,
+  onOpenBinding,
   focusRequest = null,
 }: SceneEntityInspectorPropsV4): ReactNode {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -892,6 +912,7 @@ export function SceneEntityInspectorV4({
           sceneCommands={sceneCommands}
           selection={selection}
           {...(onBindOpcUaJoints === undefined ? {} : { onBindOpcUaJoints })}
+          {...(onOpenBinding === undefined ? {} : { onOpenBinding })}
         />
       )
       break
@@ -904,6 +925,7 @@ export function SceneEntityInspectorV4({
           project={project}
           runtime={runtime}
           objectRuntime={objectRuntime}
+          {...(onOpenBinding === undefined ? {} : { onOpenBinding })}
         />
       )
       break

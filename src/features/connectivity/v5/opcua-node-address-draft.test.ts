@@ -7,7 +7,7 @@ import {
 } from './opcua-node-address-draft.js'
 
 describe('OPC UA Node Address Draft V1', () => {
-  it('canonicalizes a directly authored stable address', () => {
+  it('canonicalizes the Namespace URI without changing a String identifier', () => {
     expect(validateOpcUaNodeAddressDraftV1({
       namespaceUri: ' urn:virtual-plc ',
       identifierType: 'string',
@@ -15,7 +15,7 @@ describe('OPC UA Node Address Draft V1', () => {
     })).toEqual({
       namespaceUri: 'urn:virtual-plc',
       identifierType: 'string',
-      identifier: 'ObjectPos',
+      identifier: ' ObjectPos ',
     })
   })
 

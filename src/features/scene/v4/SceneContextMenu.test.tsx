@@ -160,6 +160,85 @@ describe('SceneContextMenuV4', () => {
     expect(harness.presentation.openInspector).toHaveBeenCalledWith({ selection: { kind: 'spatial-entity', entityId: 'entity-a' }, section: 'binding' })
   })
 
+  it('hands Open Binding to the optional Project V5 callback without invoking the V4 editor command', async () => {
+    const user = userEvent.setup()
+    const selection = { kind: 'spatial-entity', entityId: 'entity-a' } as const
+    const harness = renderMenu(selection)
+    const onOpenBinding = vi.fn()
+    harness.rerender(
+      <SceneContextMenuV4
+        commandBindings={harness.commandBindings}
+        interaction={harness.interaction}
+        onClose={harness.onClose}
+        onOpenBinding={onOpenBinding}
+        project={harness.workcell}
+        request={{ selection, position: { x: 10, y: 20 } }}
+        safeAreaInsets={INSETS}
+      />,
+    )
+    await user.click(screen.getByRole('menuitem', { name: 'Open Binding' }))
+    expect(onOpenBinding).toHaveBeenCalledWith(selection)
+    expect(harness.presentation.openInspector).not.toHaveBeenCalled()
+    expect(harness.onClose).toHaveBeenCalledOnce()
+  })
+
+  it('adds Robot Open Binding only when the optional Project V5 callback exists', async () => {
+    const user = userEvent.setup()
+    const selection = { kind: 'robot', robotId: 'robot-1' } as const
+    const harness = renderMenu(selection)
+    expect(screen.queryByRole('menuitem', { name: 'Open Binding' })).not.toBeInTheDocument()
+    const onOpenBinding = vi.fn()
+    harness.rerender(
+      <SceneContextMenuV4
+        commandBindings={harness.commandBindings}
+        interaction={harness.interaction}
+        onClose={harness.onClose}
+        onOpenBinding={onOpenBinding}
+        project={harness.workcell}
+        request={{ selection, position: { x: 10, y: 20 } }}
+        safeAreaInsets={INSETS}
+      />,
+    )
+    await user.click(screen.getByRole('menuitem', { name: 'Open Binding' }))
+    expect(onOpenBinding).toHaveBeenCalledWith(selection)
+    expect(harness.onClose).toHaveBeenCalledOnce()
+  })
+
+  it('hands a valid Robot Frame to V5 binding and suppresses stale Robot targets', async () => {
+    const user = userEvent.setup()
+    const frame = { kind: 'robot-frame', robotId: 'robot-1', frameId: 'TCP' } as const
+    const harness = renderMenu(frame)
+    const onOpenBinding = vi.fn()
+    harness.rerender(
+      <SceneContextMenuV4
+        commandBindings={harness.commandBindings}
+        interaction={harness.interaction}
+        onClose={harness.onClose}
+        onOpenBinding={onOpenBinding}
+        project={harness.workcell}
+        request={{ selection: frame, position: { x: 10, y: 20 } }}
+        safeAreaInsets={INSETS}
+      />,
+    )
+    await user.click(screen.getByRole('menuitem', { name: 'Open Binding' }))
+    expect(onOpenBinding).toHaveBeenCalledWith(frame)
+
+    const missing = { kind: 'robot', robotId: 'missing' } as const
+    harness.rerender(
+      <SceneContextMenuV4
+        commandBindings={harness.commandBindings}
+        interaction={harness.interaction}
+        onClose={harness.onClose}
+        onOpenBinding={onOpenBinding}
+        project={harness.workcell}
+        request={{ selection: missing, position: { x: 10, y: 20 } }}
+        safeAreaInsets={INSETS}
+      />,
+    )
+    expect(screen.queryByRole('menuitem', { name: 'Open Binding' })).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('no longer available')
+  })
+
   it('creates deterministic empty-space primitives and routes Fit All and Show All through their own shared IDs', async () => {
     const user = userEvent.setup(); const harness = renderMenu(null); const originalProject = harness.workcell
     harness.interaction.getState().isolate({ kind: 'robot', robotId: 'robot-1' })

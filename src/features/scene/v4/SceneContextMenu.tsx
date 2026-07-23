@@ -17,6 +17,7 @@ import type { StoreApi } from 'zustand/vanilla'
 import type { ViewportSafeAreaInsetsV4 } from '../../viewport/v4/viewport-safe-area.js'
 import { sceneContextCommandIdsV4 } from './scene-context-commands.js'
 import type { SceneContextRequestV4 } from './scene-context-request.js'
+import type { SceneSelectionTargetV4 } from '../../interaction/v4/scene-selection.js'
 
 export interface SceneContextMenuPropsV4 {
   readonly request: SceneContextRequestV4
@@ -25,6 +26,7 @@ export interface SceneContextMenuPropsV4 {
   readonly commandBindings: AppCommandBindingsV4
   readonly safeAreaInsets: ViewportSafeAreaInsetsV4
   readonly onClose: () => void
+  readonly onOpenBinding?: (selection: SceneSelectionTargetV4) => void
 }
 
 interface PositionV4 { readonly x: number; readonly y: number }
@@ -74,6 +76,7 @@ export function SceneContextMenuV4({
   commandBindings,
   safeAreaInsets,
   onClose,
+  onOpenBinding,
 }: SceneContextMenuPropsV4): ReactNode {
   const runtimeState = useSyncExternalStore(
     commandBindings.runtime.subscribe,
@@ -92,6 +95,9 @@ export function SceneContextMenuV4({
     )
     ? 'The requested Scene target is no longer available in this Project revision.'
     : null
+  const directRobotBinding = onOpenBinding !== undefined
+    && staleError === null
+    && (request.selection?.kind === 'robot' || request.selection?.kind === 'robot-frame')
   const menuRef = useRef<HTMLDivElement>(null)
   const presentationRef = useRef<HTMLDivElement>(null)
   const activeRequestRef = useRef(request)
@@ -101,7 +107,7 @@ export function SceneContextMenuV4({
   const [size, setSize] = useState<SizeV4 | null>(null)
 
   const errors = ids.map((id) => runtimeState.errorByCommandId.get(id)).filter((value): value is string => value !== undefined)
-  const signature = `${ids.join('|')}|${errors.join('|')}|${[...runtimeState.pendingCommandIds].join('|')}|${safeAreaInsets.top}:${safeAreaInsets.right}:${safeAreaInsets.bottom}:${safeAreaInsets.left}`
+  const signature = `${ids.join('|')}|robot-binding:${directRobotBinding}|${errors.join('|')}|${[...runtimeState.pendingCommandIds].join('|')}|${safeAreaInsets.top}:${safeAreaInsets.right}:${safeAreaInsets.bottom}:${safeAreaInsets.left}`
 
   useLayoutEffect(() => {
     if (document.activeElement instanceof HTMLElement) focusOwnerRef.current = document.activeElement
@@ -187,7 +193,37 @@ export function SceneContextMenuV4({
         role="menu"
         tabIndex={-1}
       >
-        {ids.map((id) => <BoundSceneContextItemV4 commandBindings={commandBindings} commandId={id} key={id} onCompleted={closeCompleted} />)}
+        {ids.map((id) => (
+          id === 'scene.binding.open' && onOpenBinding !== undefined && request.selection !== null
+            ? (
+                <button
+                  key={id}
+                  onClick={() => {
+                    onOpenBinding(request.selection!)
+                    closeCompleted()
+                  }}
+                  role="menuitem"
+                  tabIndex={-1}
+                  type="button"
+                >
+                  Open Binding
+                </button>
+              )
+            : <BoundSceneContextItemV4 commandBindings={commandBindings} commandId={id} key={id} onCompleted={closeCompleted} />
+        ))}
+        {directRobotBinding ? (
+          <button
+            onClick={() => {
+              onOpenBinding(request.selection!)
+              closeCompleted()
+            }}
+            role="menuitem"
+            tabIndex={-1}
+            type="button"
+          >
+            Open Binding
+          </button>
+        ) : null}
       </div>
       {errors[0] === undefined && staleError === null ? null : <p className="scene-context-menu-error-v4" role="alert">{errors[0] ?? staleError}</p>}
     </div>,
