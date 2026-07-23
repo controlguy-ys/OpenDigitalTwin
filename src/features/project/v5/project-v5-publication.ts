@@ -200,12 +200,19 @@ function assertGatewayInactiveStatus(value: RuntimeGatewayStatusV1): void {
   }
 }
 
+interface CleanupRetryGenerationV5 {
+  readonly identity: symbol
+  readonly promise: Promise<void>
+  readonly resolve: () => void
+}
+
 interface PendingCleanupTaskV5 {
   readonly kind: ProjectV5CleanupKind
   readonly revisionId: string
   readonly operation: () => Promise<void>
   attemptCount: number
   lastError: { readonly code: string; readonly message: string } | null
+  failureOwner: CleanupRetryGenerationV5 | null | undefined
 }
 
 function cleanupError(error: unknown): { readonly code: string; readonly message: string } {
@@ -219,11 +226,6 @@ function cleanupError(error: unknown): { readonly code: string; readonly message
 export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown, PreparedGateway = unknown>(
   options: ProjectV5PublicationCoordinatorOptions<PreparedRuntime, PreparedGateway>,
 ): ProjectPublicationCoordinatorV5 {
-  interface CleanupRetryGeneration {
-    readonly promise: Promise<void>
-    readonly resolve: () => void
-  }
-
   const repository = options.repository
   const runtime = options.runtime
   const gateway = options.gateway
@@ -235,11 +237,8 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   let tail = Promise.resolve()
   const cleanupTasks: PendingCleanupTaskV5[] = []
   let cleanupDrainPromise: Promise<void> | null = null
-  let cleanupDrainOwner: CleanupRetryGeneration | null = null
-  let activeCleanupRetry: CleanupRetryGeneration | null = null
-  let queuedCleanupRetry: CleanupRetryGeneration | null = null
-  let cleanupRetryWorkerPromise: Promise<void> | null = null
-  let cleanupIssueEmissionOwner: CleanupRetryGeneration | null | undefined
+  let activeCleanupRetry: CleanupRetryGenerationV5 | null = null
+  let queuedCleanupRetry: CleanupRetryGenerationV5 | null = null
   const listeners = new Set<() => void>()
 
   const enqueue = <Result>(operation: () => Promise<Result>): Promise<Result> => {
@@ -296,14 +295,10 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   const emitCleanupIssue = (task: PendingCleanupTaskV5): void => {
     const issue = cleanupStatus().pending.find((candidate) => candidate.kind === task.kind && candidate.revisionId === task.revisionId)
     if (issue === undefined) return
-    const previousEmissionOwner = cleanupIssueEmissionOwner
-    cleanupIssueEmissionOwner = cleanupDrainOwner
     try {
       options.onCleanupIssue?.(issue)
     } catch {
       // Observation cannot alter the active publication or retained task.
-    } finally {
-      cleanupIssueEmissionOwner = previousEmissionOwner
     }
   }
 
@@ -321,83 +316,96 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
       operation,
       attemptCount: 0,
       lastError: null,
+      failureOwner: undefined,
     }
     cleanupTasks.push(task)
   }
 
-  const kickCleanupDrain = (owner: CleanupRetryGeneration | null = null): Promise<void> => {
+  const kickCleanupDrain = (owner: CleanupRetryGenerationV5 | null = null): Promise<void> => {
     if (cleanupDrainPromise !== null) return cleanupDrainPromise
     if (cleanupTasks.length === 0) return Promise.resolve()
-    let drain!: Promise<void>
-    cleanupDrainOwner = owner
-    drain = (async () => {
+    let resolveDrain!: () => void
+    const drain = new Promise<void>((resolve) => { resolveDrain = resolve })
+    cleanupDrainPromise = drain
+    const running = Promise.resolve().then(async () => {
       while (cleanupTasks.length > 0) {
         const task = cleanupTasks[0]!
         task.attemptCount += 1
         task.lastError = null
+        task.failureOwner = undefined
         try {
           await task.operation()
           if (cleanupTasks[0] === task) cleanupTasks.shift()
         } catch (error) {
           task.lastError = cleanupError(error)
+          task.failureOwner = owner
           emitCleanupIssue(task)
           return
         }
       }
-    })().finally(() => {
+    })
+    const finish = (): void => {
       if (cleanupDrainPromise === drain) {
         cleanupDrainPromise = null
-        cleanupDrainOwner = null
       }
+      resolveDrain()
+    }
+    void running.then(finish, (error) => {
+      const task = cleanupTasks[0]
+      if (task !== undefined) {
+        task.lastError = cleanupError(error)
+        task.failureOwner = owner
+        emitCleanupIssue(task)
+      }
+      finish()
     })
-    cleanupDrainPromise = drain
     return drain
   }
 
-  const createCleanupRetryGeneration = (): CleanupRetryGeneration => {
+  const createCleanupRetryGeneration = (): CleanupRetryGenerationV5 => {
     let resolve!: () => void
     const promise = new Promise<void>((settle) => { resolve = settle })
-    return Object.freeze({ promise, resolve })
+    return Object.freeze({ identity: Symbol('project-v5-cleanup-retry'), promise, resolve })
   }
 
-  const startCleanupRetryWorker = (): void => {
-    if (cleanupRetryWorkerPromise !== null) return
-    let worker!: Promise<void>
-    worker = (async () => {
-      while (activeCleanupRetry !== null) {
-        const generation = activeCleanupRetry
-        const activeDrain = cleanupDrainPromise
-        if (activeDrain !== null) await activeDrain
-        if (cleanupTasks.length > 0) await kickCleanupDrain(generation)
-        generation.resolve()
-        if (activeCleanupRetry === generation) {
-          activeCleanupRetry = queuedCleanupRetry
-          queuedCleanupRetry = null
-        }
-      }
-    })().finally(() => {
-      if (cleanupRetryWorkerPromise === worker) {
-        cleanupRetryWorkerPromise = null
-        if (activeCleanupRetry !== null) startCleanupRetryWorker()
-      }
+  const finishCleanupRetryGeneration = (generation: CleanupRetryGenerationV5): void => {
+    if (activeCleanupRetry === generation) {
+      const next = queuedCleanupRetry
+      queuedCleanupRetry = null
+      activeCleanupRetry = next
+      if (next !== null) startCleanupRetryGeneration(next)
+    }
+    generation.resolve()
+  }
+
+  const startCleanupRetryGeneration = (generation: CleanupRetryGenerationV5): void => {
+    const running = Promise.resolve().then(async () => {
+      const activeDrain = cleanupDrainPromise
+      if (activeDrain !== null) await activeDrain
+      if (activeCleanupRetry !== generation) return
+      if (cleanupTasks.length > 0) await kickCleanupDrain(generation)
     })
-    cleanupRetryWorkerPromise = worker
-    void worker
+    void running.then(
+      () => finishCleanupRetryGeneration(generation),
+      () => finishCleanupRetryGeneration(generation),
+    )
   }
 
   const retryCleanup = (): Promise<void> => {
-    if (
-      cleanupIssueEmissionOwner !== undefined
-      && cleanupIssueEmissionOwner !== null
-      && activeCleanupRetry === cleanupIssueEmissionOwner
-    ) {
-      queuedCleanupRetry ??= createCleanupRetryGeneration()
+    const current = activeCleanupRetry
+    if (current === null) {
+      const generation = createCleanupRetryGeneration()
+      activeCleanupRetry = generation
+      startCleanupRetryGeneration(generation)
+      return generation.promise
+    }
+    if (cleanupTasks[0]?.failureOwner === current) {
+      if (queuedCleanupRetry === null) {
+        queuedCleanupRetry = createCleanupRetryGeneration()
+      }
       return queuedCleanupRetry.promise
     }
-    if (activeCleanupRetry !== null) return activeCleanupRetry.promise
-    activeCleanupRetry = createCleanupRetryGeneration()
-    startCleanupRetryWorker()
-    return activeCleanupRetry.promise
+    return current.promise
   }
 
   const loadDurablePublication = async (revisionId: string): Promise<PublishedProjectV5> => {

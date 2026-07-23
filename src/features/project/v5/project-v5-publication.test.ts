@@ -562,14 +562,25 @@ describe('Project V5 publication coordinator', () => {
     expect(harness.publication.retryCleanup()).toBe(afterSuccess)
     let afterSuccessSettled = false
     void afterSuccess.then(() => { afterSuccessSettled = true })
-    await Promise.resolve()
-    await Promise.resolve()
-    expect(afterSuccessSettled).toBe(true)
+    await vi.waitFor(() => expect(afterSuccessSettled).toBe(true))
   })
 
-  it('queues one following retry generation when the current retry fails inside its issue observer', async () => {
+  it('shares a fully quiescent retry generation for same-stack callers and settles it', async () => {
+    const harness = publicationHarness()
+
+    const first = harness.publication.retryCleanup()
+    const second = harness.publication.retryCleanup()
+
+    expect(second).toBe(first)
+    await expect(first).resolves.toBeUndefined()
+    expect(harness.runtimeTransition.finalize).not.toHaveBeenCalled()
+  })
+
+  it('queues one following retry generation across synchronous then deferred cleanup failures', async () => {
     const retryGenerations: Promise<void>[] = []
-    let releaseThird!: () => void
+    let releaseSecond!: () => void
+    let inFlight = 0
+    let maximumInFlight = 0
     const harness = publicationHarness(null, (retry) => {
       const first = retry()
       const concurrent = retry()
@@ -577,33 +588,41 @@ describe('Project V5 publication coordinator', () => {
       if (retryGenerations.at(-1) !== first) retryGenerations.push(first)
     })
     const finalize = harness.runtimeTransition.finalize.getMockImplementation()!
-    harness.runtimeTransition.finalize
-      .mockRejectedValueOnce(new Error('first finalize failure'))
-      .mockRejectedValueOnce(new Error('second finalize failure'))
-      .mockImplementationOnce(async () => {
-        await new Promise<void>((resolve) => { releaseThird = resolve })
-        await finalize()
-      })
+    let attempt = 0
+    harness.runtimeTransition.finalize.mockImplementation(() => {
+      attempt += 1
+      inFlight += 1
+      maximumInFlight = Math.max(maximumInFlight, inFlight)
+      if (attempt === 1) {
+        inFlight -= 1
+        throw new Error('first synchronous finalize failure')
+      }
+      if (attempt === 2) {
+        return new Promise<void>((_resolve, reject) => {
+          releaseSecond = () => {
+            inFlight -= 1
+            reject(new Error('second deferred finalize failure'))
+          }
+        })
+      }
+      inFlight -= 1
+      return finalize()
+    })
 
     await harness.publication.replace({
       candidate: harness.nextProject,
       expectedRevisionId: harness.previous.revisionId,
     })
+    await vi.waitFor(() => expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(2))
+    expect(retryGenerations).toHaveLength(1)
+    releaseSecond()
     await vi.waitFor(() => expect(retryGenerations).toHaveLength(2))
     expect(retryGenerations[1]).not.toBe(retryGenerations[0])
     await vi.waitFor(() => expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(3))
-    let firstSettled = false
-    let secondSettled = false
-    void retryGenerations[0]!.then(() => { firstSettled = true })
-    void retryGenerations[1]!.then(() => { secondSettled = true })
-    await Promise.resolve()
-    expect(firstSettled).toBe(true)
-    expect(secondSettled).toBe(false)
-
-    releaseThird()
     await expect(Promise.all(retryGenerations)).resolves.toEqual([undefined, undefined])
 
     expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(3)
+    expect(maximumInFlight).toBe(1)
     expect(harness.events.indexOf('gateway.cleanup:revision-a'))
       .toBeGreaterThan(harness.events.indexOf('runtime.transition.finalize'))
     expect(harness.events.indexOf('repository.gc'))
@@ -615,6 +634,31 @@ describe('Project V5 publication coordinator', () => {
       candidate: later,
       expectedRevisionId: harness.nextProject.revisionId,
     })).resolves.toEqual(published(later, HASH_B))
+  })
+
+  it('retains retry generations requested from microtask-delayed issue observers', async () => {
+    const retryGenerations: Promise<void>[] = []
+    const harness = publicationHarness(null, (retry) => {
+      queueMicrotask(() => {
+        const first = retry()
+        const concurrent = retry()
+        expect(concurrent).toBe(first)
+        if (retryGenerations.at(-1) !== first) retryGenerations.push(first)
+      })
+    })
+    harness.runtimeTransition.finalize
+      .mockImplementationOnce(() => { throw new Error('first synchronous failure') })
+      .mockRejectedValueOnce(new Error('second asynchronous failure'))
+
+    await harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })
+    await vi.waitFor(() => expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(retryGenerations).toHaveLength(2))
+    expect(retryGenerations[1]).not.toBe(retryGenerations[0])
+    await expect(Promise.all(retryGenerations)).resolves.toEqual([undefined, undefined])
+    expect(harness.publication.readCleanupStatus().pending).toEqual([])
   })
 
   it('marks recovery when a first-publication Gateway rollback readback is not canonical', async () => {
