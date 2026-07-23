@@ -2718,4 +2718,163 @@ describe('runtime Gateway entrypoint', () => {
       expect(source).not.toContain('WorkcellProjectV4')
     }
   })
+
+  it('isolates the bounded OPC UA test-connection diagnostic and rejects arbitrary control paths', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort(); const client = fakeClientAdapter(); const server = fakeServerAdapter()
+    const diagnostic = vi.fn(async () => ({ type: 'opcua-test-connection-result-v1' as const, protocolVersion: 1 as const, outcome: 'succeeded' as const, namespaces: ['urn:test'] }))
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter, createOpcUaServerAdapter: () => server.adapter, testOpcUaConnection: diagnostic })
+    await service.start()
+    try {
+      const project = sampleProject('client'); expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const before = gatewayStatus(service.status()); const request = { type: 'opcua-test-connection-request-v1', protocolVersion: 1, endpoint: project.opcUa.endpoints[0] }
+      const response = await requestJson(port, 'POST', '/runtime/opcua/test-connection', request)
+      expect(response.status).toBe(200); expect(await response.json()).toEqual(await diagnostic.mock.results[0]!.value); expect(diagnostic).toHaveBeenCalledOnce()
+      expect(gatewayStatus(service.status())).toMatchObject({ project: before.project, opcUa: before.opcUa })
+      expect((await requestJson(port, 'POST', '/runtime/opcua/test-connection', { ...request, extra: true })).status).toBe(400)
+      for (const path of ['/runtime/opcua/browse', '/runtime/opcua/read', '/runtime/opcua/write', '/runtime/opcua/security', '/runtime/container']) expect((await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST' })).status).toBe(404)
+      expect(diagnostic).toHaveBeenCalledOnce()
+    } finally { await service.stop() }
+  })
+
+  it.each([
+    { endpointUrl: 'invalid' }, { publishingIntervalMs: 49 }, { publishingIntervalMs: 1.5 }, { reconnectDelayMs: -1 }, { reconnectDelayMs: 1.5 }, { endpointId: 'x'.repeat(129) }, { name: 'x'.repeat(129) }, { endpointUrl: `opc.tcp://${'x'.repeat(2048)}` },
+  ])('rejects invalid diagnostic endpoint contract before delegation', async (override) => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort(); const diagnostic = vi.fn()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { testOpcUaConnection: diagnostic }); await service.start()
+    try {
+      const endpoint = { endpointId: 'x', name: 'x', endpointUrl: 'opc.tcp://localhost:4840', enabled: true, publishingIntervalMs: 50, reconnectDelayMs: 0, ...override }
+      expect((await requestJson(port, 'POST', '/runtime/opcua/test-connection', { type: 'opcua-test-connection-request-v1', protocolVersion: 1, endpoint })).status).toBe(400); expect(diagnostic).not.toHaveBeenCalled()
+    } finally { await service.stop() }
+  })
+
+  it('fences Project deactivation and returns canonical inactive state only after exact success', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: () => client.adapter,
+    })
+    await service.start()
+    try {
+      const project = sampleProject('client')
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const request = async (body: unknown) => fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
+      expect((await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: 'other', revisionId: project.revisionId, configRevision: revision })).status).toBe(409)
+      const success = await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision })
+      expect(success.status).toBe(200)
+      expect(await success.json()).toMatchObject({ project: { phase: 'not-applied', projectId: null, revisionId: null, configRevision: null, readinessCode: 'NO_ACTIVE_REVISION' } })
+      expect(client.stop).toHaveBeenCalledOnce()
+      expect((await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision })).status).toBe(409)
+      expect((await request({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, unconditional: true })).status).toBe(200)
+    } finally { await service.stop() }
+  })
+
+  it('resolves one configured live namespace through the closed diagnostic route', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const resolve = vi.fn(async () => 2)
+    ;(client.adapter as unknown as { resolveNamespaceIndex: typeof resolve }).resolveNamespaceIndex = resolve
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter })
+    await service.start()
+    try {
+      const project = sampleProject('client')
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const before = gatewayStatus(service.status())
+      const body = { type: 'opcua-namespace-index-request-v1', protocolVersion: 1, endpointId: project.opcUa.endpoints[0]!.endpointId, namespaceUri: 'urn:controller' }
+      const response = await requestJson(port, 'POST', '/runtime/opcua/namespace-index', body)
+      expect(await response.json()).toEqual({ type: 'opcua-namespace-index-response-v1', protocolVersion: 1, endpointId: body.endpointId, namespaceUri: body.namespaceUri, namespaceIndex: 2 })
+      expect(resolve).toHaveBeenCalledWith(body.endpointId, body.namespaceUri)
+      expect(gatewayStatus(service.status())).toMatchObject({ project: before.project, opcUa: before.opcUa })
+      expect((await requestJson(port, 'POST', '/runtime/opcua/namespace-index', { ...body, extra: true })).status).toBe(400)
+      expect(resolve).toHaveBeenCalledOnce()
+    } finally { await service.stop() }
+  })
+
+  it('maps unconfigured and disconnected namespace routes without mutating the Project', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = connectedClientAdapter()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter })
+    await service.start()
+    try {
+      const project = sampleProject('client')
+      await requestJson(port, 'PUT', '/runtime/project', project)
+      const before = gatewayStatus(service.status())
+      const body = { type: 'opcua-namespace-index-request-v1', protocolVersion: 1, endpointId: project.opcUa.endpoints[0]!.endpointId, namespaceUri: 'urn:controller' }
+      const wrong = await requestJson(port, 'POST', '/runtime/opcua/namespace-index', { ...body, endpointId: 'other' })
+      expect({ status: wrong.status, body: await wrong.json() }).toMatchObject({ status: 409, body: { code: 'OPC_UA_NAMESPACE_ENDPOINT_MISMATCH' } })
+      const disconnected = await requestJson(port, 'POST', '/runtime/opcua/namespace-index', body)
+      expect({ status: disconnected.status, body: await disconnected.json() }).toMatchObject({ status: 409, body: { code: 'OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED' } })
+      expect(gatewayStatus(service.status())).toMatchObject({ project: before.project, opcUa: before.opcUa })
+    } finally { await service.stop() }
+  })
+
+  it.each(['OPC_UA_NAMESPACE_URI_MISSING', 'OPC_UA_NAMESPACE_URI_DUPLICATE', 'OPC_UA_NAMESPACE_READ_FAILED', 'OPC_UA_NAMESPACE_SESSION_STALE', 'OPC_UA_NAMESPACE_ARRAY_INVALID'])('preserves namespace resolver code %s', async (code) => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort(); const client = connectedClientAdapter()
+    ;(client.adapter as unknown as { resolveNamespaceIndex: () => Promise<number> }).resolveNamespaceIndex = async () => { throw new Error(code) }
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter }); await service.start()
+    try {
+      const project = sampleProject('client'); await requestJson(port, 'PUT', '/runtime/project', project); const before = gatewayStatus(service.status())
+      const response = await requestJson(port, 'POST', '/runtime/opcua/namespace-index', { type: 'opcua-namespace-index-request-v1', protocolVersion: 1, endpointId: project.opcUa.endpoints[0]!.endpointId, namespaceUri: 'urn:controller' })
+      expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 409, body: { code } }); expect(gatewayStatus(service.status())).toMatchObject({ project: before.project })
+    } finally { await service.stop() }
+  })
+
+  it('caps both connectivity diagnostic request bodies before delegates run', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort(); const client = connectedClientAdapter(); const diagnostic = vi.fn()
+    ;(client.adapter as unknown as { resolveNamespaceIndex: () => Promise<number> }).resolveNamespaceIndex = vi.fn(async () => 2)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter, testOpcUaConnection: diagnostic }); await service.start()
+    try {
+      const project = sampleProject('client'); await requestJson(port, 'PUT', '/runtime/project', project); const before = gatewayStatus(service.status()); const body = jsonBodyAtByteLength(64 * 1024 + 1)
+      for (const path of ['/runtime/opcua/test-connection', '/runtime/opcua/namespace-index']) { const response = await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }); const text = await response.text(); expect(response.status).toBe(413); expect(response.headers.get('content-type')).toContain('application/json'); expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024) }
+      expect(diagnostic).not.toHaveBeenCalled(); expect(gatewayStatus(service.status())).toMatchObject({ project: before.project })
+    } finally { await service.stop() }
+  })
+
+  it.each(['synchronous', 'asynchronous'] as const)('attempts Server stop when Client stop %sly fails', async (kind) => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const client = fakeClientAdapter(); const server = fakeServerAdapter()
+    const clientStop = vi.fn(kind === 'synchronous' ? () => { throw new Error('client stop') } : async () => { throw new Error('client stop') })
+    ;(client.adapter as unknown as { stop: () => Promise<void> }).stop = clientStop
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter, createOpcUaServerAdapter: () => server.adapter })
+    await service.start()
+    try {
+      const project = sampleProject('bridge'); expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
+      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision }) })
+      expect(response.status).toBe(503); expect(server.stop).toHaveBeenCalledOnce()
+      expect((await service.status()).project.phase).toBe('ready')
+    } finally { ;(client.adapter as unknown as { stop: () => Promise<void> }).stop = async () => undefined; await service.stop() }
+  })
+
+  it('recovers the exact prior runtime when Server stop fails after Client stop', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
+    const client = fakeClientAdapter(); const server = fakeServerAdapter(); const originalStop = server.adapter.stop
+    ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = vi.fn(async () => { throw new Error('server stop') })
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter, createOpcUaServerAdapter: () => server.adapter }); await service.start()
+    try {
+      const project = sampleProject('bridge'); await requestJson(port, 'PUT', '/runtime/project', project); const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
+      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision }) })
+      expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_FAILED' }); expect(service.status().project).toMatchObject({ phase: 'ready', revisionId: project.revisionId })
+    } finally { ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = originalStop; await service.stop() }
+  })
+
+  it('does not claim canonical empty authority when partial recovery fails', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
+    const client = fakeClientAdapter(); const server = fakeServerAdapter(); const originalClientStart = client.adapter.start; const originalServerStop = server.adapter.stop
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter, createOpcUaServerAdapter: () => server.adapter }); await service.start()
+    try {
+      const project = sampleProject('bridge'); await requestJson(port, 'PUT', '/runtime/project', project)
+      ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = vi.fn(async () => { throw new Error('server stop') })
+      ;(client.adapter as unknown as { start: () => Promise<void> }).start = vi.fn(async () => { throw new Error('client restart') })
+      const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
+      const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision }) })
+      expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED' }); expect(service.status().project.phase).toBe('ready')
+    } finally { ;(client.adapter as unknown as { start: () => Promise<void> }).start = originalClientStart; ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = originalServerStop; await service.stop() }
+  })
 })

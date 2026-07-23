@@ -4,6 +4,7 @@ import {
   MAX_LOGICAL_URI_UTF8_BYTES_V5,
   MAX_NAME_UTF8_BYTES_V5,
   MAX_OPC_UA_ENDPOINT_URL_UTF8_BYTES_V5,
+  MIN_OPC_UA_PUBLISHING_INTERVAL_MS_V5,
   MAX_SOURCE_FILENAME_UTF8_BYTES_V5,
   PROJECT_V5_SCHEMA_VERSION,
 } from './limits.js'
@@ -22,7 +23,7 @@ import {
   invalidProjectV5,
   validateBoundedText,
 } from './validation-support.js'
-import type { RobotDefinitionV5, WorkcellProjectV5 } from './types.js'
+import type { OpcUaEndpointV5, RobotDefinitionV5, WorkcellProjectV5 } from './types.js'
 
 const ROOT_KEYS = [
   'schemaVersion',
@@ -556,6 +557,18 @@ function validateEndpointUrl(value: unknown, path: string): string {
   return url
 }
 
+function endpointShape(value: unknown, path: string): OpcUaEndpointV5 {
+  const endpoint = expectClosedRecord(value, path, ['endpointId', 'name', 'endpointUrl', 'enabled', 'publishingIntervalMs', 'reconnectDelayMs'])
+  return Object.freeze({ endpointId: validateId(endpoint.endpointId, `${path}.endpointId`), name: validateName(endpoint.name, `${path}.name`), endpointUrl: validateEndpointUrl(endpoint.endpointUrl, `${path}.endpointUrl`), enabled: expectBoolean(endpoint.enabled, `${path}.enabled`), publishingIntervalMs: expectFiniteNumber(endpoint.publishingIntervalMs, `${path}.publishingIntervalMs`), reconnectDelayMs: expectFiniteNumber(endpoint.reconnectDelayMs, `${path}.reconnectDelayMs`) })
+}
+
+export function validateOpcUaEndpointV5(value: unknown, path = '$'): OpcUaEndpointV5 {
+  const endpoint = endpointShape(value, path)
+  if (!Number.isSafeInteger(endpoint.publishingIntervalMs) || endpoint.publishingIntervalMs < MIN_OPC_UA_PUBLISHING_INTERVAL_MS_V5) invalidProjectV5(`${path}.publishingIntervalMs`, 'OPC UA publishing interval is invalid.', 'OPCUA_PUBLISHING_INTERVAL_INVALID')
+  if (!Number.isSafeInteger(endpoint.reconnectDelayMs) || endpoint.reconnectDelayMs < 0) invalidProjectV5(`${path}.reconnectDelayMs`, 'OPC UA reconnect delay is invalid.', 'OPCUA_RECONNECT_DELAY_INVALID')
+  return endpoint
+}
+
 function validatePath(value: unknown, path: string): void {
   const segments = expectDenseArray(value, path)
   segments.forEach((segment, index) => {
@@ -648,21 +661,7 @@ function validateOpcUa(value: unknown, path: string): void {
   const endpoints = expectDenseArray(record.endpoints, `${path}.endpoints`)
   endpoints.forEach((endpoint, index) => {
     const endpointPath = `${path}.endpoints[${index}]`
-    const endpointRecord = expectClosedRecord(endpoint, endpointPath, [
-      'endpointId', 'name', 'endpointUrl', 'enabled', 'publishingIntervalMs', 'reconnectDelayMs',
-    ])
-    validateId(endpointRecord.endpointId, `${endpointPath}.endpointId`)
-    validateName(endpointRecord.name, `${endpointPath}.name`)
-    validateEndpointUrl(endpointRecord.endpointUrl, `${endpointPath}.endpointUrl`)
-    expectBoolean(endpointRecord.enabled, `${endpointPath}.enabled`)
-    endpointRecord.publishingIntervalMs = expectFiniteNumber(
-      endpointRecord.publishingIntervalMs,
-      `${endpointPath}.publishingIntervalMs`,
-    )
-    endpointRecord.reconnectDelayMs = expectFiniteNumber(
-      endpointRecord.reconnectDelayMs,
-      `${endpointPath}.reconnectDelayMs`,
-    )
+    endpointShape(endpoint, endpointPath)
   })
   const mappings = expectDenseArray(record.mappings, `${path}.mappings`)
   mappings.forEach((mapping, index) => validateMapping(mapping, `${path}.mappings[${index}]`))

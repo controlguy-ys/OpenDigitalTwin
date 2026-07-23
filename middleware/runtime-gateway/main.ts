@@ -72,6 +72,14 @@ import {
   createProductCommandStagingV1,
   type ProductCommandStagingV1,
 } from './opcua-command-staging.js'
+import { testOpcUaConnectionV1, type OpcUaConnectionTestResultV1 } from './opcua-connection-test.js'
+import {
+  ConnectivityDiagnosticsRouteErrorV1,
+  MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1,
+  boundedTestConnectionResultV1,
+  validateNamespaceIndexRequestV1,
+  validateTestConnectionRequestV1,
+} from './connectivity-diagnostics-routes.js'
 
 export const MAX_RUNTIME_PROJECT_BODY_BYTES_V1 = 1024 * 1024
 export const MAX_RUNTIME_INTEGRATION_DIAGNOSTICS_BYTES_V1 = 64 * 1024
@@ -104,6 +112,7 @@ export interface RuntimeGatewayEntrypointDependenciesV1 {
   readonly initialCommittedCommandGeneration?: number
   /** Test-only synchronous injection point immediately before the final staging health check. */
   readonly beforeCandidateTimelineSealForTest?: () => void
+  readonly testOpcUaConnection?: (endpoint: import('../../src/core/project-v5/index.js').OpcUaEndpointV5) => Promise<OpcUaConnectionTestResultV1>
 }
 
 interface ActiveProjectRuntimeV1 {
@@ -890,6 +899,89 @@ export function createRuntimeGatewayEntrypointService(
     return status()
   }
 
+  async function deactivateProjectRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
+    const body = await readJsonBody(request, MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1, incompleteBodyRequests, () => shutdownRequested)
+    if (!isRecord(body) || body.type !== 'runtime-project-deactivate-v1' || body.protocolVersion !== 1) {
+      throw new RuntimeGatewayHttpError(400, 'PROJECT_DEACTIVATION_INVALID', 'Project deactivation request is invalid.')
+    }
+    const unconditional = body.unconditional === true
+    if (unconditional) expectExactKeys(body, ['type', 'protocolVersion', 'unconditional'], '$')
+    else {
+      expectExactKeys(body, ['type', 'protocolVersion', 'projectId', 'revisionId', 'configRevision'], '$')
+      if (typeof body.projectId !== 'string' || typeof body.revisionId !== 'string' || typeof body.configRevision !== 'string') {
+        throw new RuntimeGatewayHttpError(400, 'PROJECT_DEACTIVATION_INVALID', 'Fenced deactivation requires Project, Revision, and config revision strings.')
+      }
+    }
+    await enqueueRuntimeTransition(async () => {
+      const active = activeRuntime
+      const matches = active !== null && !unconditional
+        && active.project.projectId === body.projectId
+        && active.project.revisionId === body.revisionId
+        && active.configRevision === body.configRevision
+      if (active === null) {
+        if (unconditional) return
+        throw new RuntimeGatewayHttpError(409, 'PROJECT_DEACTIVATION_CONFLICT', 'Fenced deactivation does not match an active Project revision.')
+      }
+      if (!unconditional && !matches) {
+        throw new RuntimeGatewayHttpError(409, 'PROJECT_DEACTIVATION_CONFLICT', 'Fenced deactivation does not match the active Project revision.')
+      }
+      if (active === null) return
+      const stopResults = await Promise.allSettled([
+        Promise.resolve().then(() => active.clientAdapter?.stop()),
+        Promise.resolve().then(() => active.serverAdapter?.stop()),
+      ])
+      if (stopResults.some((result) => result.status === 'rejected')) {
+        let recovered = false
+        try { recovered = await recoverPreviousRuntime(active, true) } catch { recovered = false }
+        const recoveredExactly = recovered
+          && activeRuntime?.project.projectId === active.project.projectId
+          && activeRuntime?.project.revisionId === active.project.revisionId
+          && activeRuntime?.configRevision === active.configRevision
+        if (!recoveredExactly) {
+          throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Project deactivation failed and the prior runtime could not be recovered.')
+        }
+        throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_FAILED', 'Project deactivation failed; the prior runtime was recovered.')
+      }
+      active.commandService?.close()
+      active.commandDedupe.clear()
+      active.browserLease.invalidateRevision()
+      clearBrowserLeaseExpiryTimer()
+      clearCommandStagingSweepTimer()
+      settlePendingBrowserCommands(null, 'COMMAND_LEASE_STALE', 'Runtime Gateway Project was deactivated.')
+      browserPublisherSocket = null
+      browserLeasesBySocket.clear()
+      activeRuntime = null
+      requireStateBatchHub().deactivateRevision()
+    })
+    return status()
+  }
+
+  async function testConnectionRequest(request: IncomingMessage): Promise<OpcUaConnectionTestResultV1> {
+    const body = await readJsonBody(request, MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1, incompleteBodyRequests, () => shutdownRequested)
+    const endpoint = validateTestConnectionRequestV1(body)
+    return boundedTestConnectionResultV1(await (dependencies.testOpcUaConnection ?? testOpcUaConnectionV1)(endpoint))
+  }
+
+  async function namespaceIndexRequest(request: IncomingMessage): Promise<unknown> {
+    const body = await readJsonBody(request, MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1, incompleteBodyRequests, () => shutdownRequested)
+    const query = validateNamespaceIndexRequestV1(body)
+    return enqueueRuntimeTransition(async () => {
+      const active = activeRuntime
+      const configured = active?.project.opcUa.endpoints.some(({ endpointId }) => endpointId === query.endpointId) === true
+      if (!configured) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_MISMATCH', 'Endpoint is not configured by the active Project.')
+      const resolveNamespaceIndex = active?.clientAdapter?.resolveNamespaceIndex
+      if (resolveNamespaceIndex === undefined) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED', 'Endpoint has no live OPC UA Client Session.')
+      try {
+        const namespaceIndex = await resolveNamespaceIndex(query.endpointId, query.namespaceUri)
+        if (!Number.isSafeInteger(namespaceIndex) || namespaceIndex < 0) throw new Error('OPC_UA_NAMESPACE_INDEX_INVALID')
+        return Object.freeze({ type: 'opcua-namespace-index-response-v1', protocolVersion: 1, endpointId: query.endpointId, namespaceUri: query.namespaceUri, namespaceIndex })
+      } catch (error) {
+        const code = error instanceof Error && /^OPC_UA_NAMESPACE_[A-Z_]+$/u.test(error.message) ? error.message : 'OPC_UA_NAMESPACE_RESOLUTION_FAILED'
+        throw new RuntimeGatewayHttpError(409, code, 'Namespace URI could not be resolved from the live OPC UA Session.')
+      }
+    })
+  }
+
   async function publishStateRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
     const body = await readJsonBody(
       request,
@@ -1162,6 +1254,10 @@ export function createRuntimeGatewayEntrypointService(
 
   function writeRequestError(response: ServerResponse, error: unknown): void {
     if (response.destroyed || response.headersSent || response.writableEnded) return
+    if (error instanceof ConnectivityDiagnosticsRouteErrorV1) {
+      writeJson(response, error.statusCode, { code: error.code, message: error.message })
+      return
+    }
     if (error instanceof RuntimeGatewayHttpError) {
       writeJson(response, error.statusCode, {
         code: error.code,
@@ -1218,6 +1314,21 @@ export function createRuntimeGatewayEntrypointService(
 
     if (request.method === 'PUT' && request.url === '/runtime/project') {
       writeJson(response, 200, await applyProjectRequest(request))
+      return
+    }
+
+    if (request.method === 'DELETE' && request.url === '/runtime/project') {
+      writeJson(response, 200, await deactivateProjectRequest(request))
+      return
+    }
+
+    if (request.method === 'POST' && request.url === '/runtime/opcua/test-connection') {
+      writeJson(response, 200, await testConnectionRequest(request))
+      return
+    }
+
+    if (request.method === 'POST' && request.url === '/runtime/opcua/namespace-index') {
+      writeJson(response, 200, await namespaceIndexRequest(request))
       return
     }
 

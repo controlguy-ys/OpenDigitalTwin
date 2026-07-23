@@ -1352,4 +1352,70 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
       { endpointId: 'unmapped', phase: 'disabled', mappingCount: 0 },
     ])
   })
+
+  it('resolves only one URI from a live Endpoint Session', async () => {
+    const namespaces = ['http://opcfoundation.org/UA/', 'urn:virtual-plc']
+    const connection = fakeConnection(namespaces)
+    const adapter = createOpcUaClientAdapterV1(sharedRootStringProject(), { gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION, publish: () => undefined, createClient: () => connection.client as never })
+    await adapter.start()
+    await eventually(() => adapter.status().some(({ phase }) => phase === 'connected'))
+    const endpointId = adapter.status().find(({ phase }) => phase === 'connected')!.endpointId
+    await expect(adapter.resolveNamespaceIndex?.(endpointId, 'urn:virtual-plc')).resolves.toBe(1)
+    await expect(adapter.resolveNamespaceIndex?.(endpointId, 'urn:missing')).rejects.toThrow('OPC_UA_NAMESPACE_URI_MISSING')
+    await expect(adapter.resolveNamespaceIndex?.('missing', 'urn:virtual-plc')).rejects.toThrow('OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED')
+    namespaces.push('urn:virtual-plc')
+    await expect(adapter.resolveNamespaceIndex?.(endpointId, 'urn:virtual-plc')).rejects.toThrow('OPC_UA_NAMESPACE_URI_DUPLICATE')
+    await adapter.stop()
+    await expect(adapter.resolveNamespaceIndex?.(endpointId, 'urn:virtual-plc')).rejects.toThrow('OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED')
+  })
+
+  it('rejects NamespaceArray read failures and malformed arrays without writes or subscriptions', async () => {
+    const namespaces = ['http://opcfoundation.org/UA/', 'urn:virtual-plc']
+    const connection = fakeConnection(namespaces)
+    const adapter = createOpcUaClientAdapterV1(sharedRootStringProject(), { gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION, publish: () => undefined, createClient: () => connection.client as never })
+    await adapter.start(); await eventually(() => adapter.status().some(({ phase }) => phase === 'connected'))
+    const endpointId = adapter.status().find(({ phase }) => phase === 'connected')!.endpointId
+    connection.session.readNamespaceArray.mockRejectedValueOnce(new Error('read'))
+    await expect(adapter.resolveNamespaceIndex?.(endpointId, 'urn:virtual-plc')).rejects.toThrow('OPC_UA_NAMESPACE_READ_FAILED')
+    namespaces[1] = ''
+    await expect(adapter.resolveNamespaceIndex?.(endpointId, 'urn:virtual-plc')).rejects.toThrow('OPC_UA_NAMESPACE_ARRAY_INVALID')
+    expect(connection.session.write).not.toHaveBeenCalled(); expect(connection.subscriptions).toHaveLength(1)
+    await adapter.stop()
+  })
+
+  const invalidNamespaceArrays = [
+    Array.from({ length: 257 }, (_, index) => `urn:${index}`),
+    ['http://opcfoundation.org/UA/', 'x'.repeat(4097)],
+    Array.from({ length: 13 }, (_, index) => `urn:${index}:`.padEnd(4096, 'x')),
+    ['http://opcfoundation.org/UA/', 'urn:a', 'urn:a'],
+  ]
+  it.each(invalidNamespaceArrays.map((value) => [value] as const))('rejects an invalid NamespaceArray without mutations', async (invalidNamespaces) => {
+    const namespaces = ['http://opcfoundation.org/UA/', 'urn:virtual-plc']
+    const connection = fakeConnection(namespaces)
+    const adapter = createOpcUaClientAdapterV1(sharedRootStringProject(), { gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION, publish: () => undefined, createClient: () => connection.client as never })
+    await adapter.start(); await eventually(() => adapter.status().some(({ phase }) => phase === 'connected'))
+    const endpointId = adapter.status().find(({ phase }) => phase === 'connected')!.endpointId
+    namespaces.splice(0, namespaces.length, ...invalidNamespaces)
+    const writes = connection.session.write.mock.calls.length; const subscriptions = connection.subscriptions.length
+    await expect(adapter.resolveNamespaceIndex?.(endpointId, 'urn:virtual-plc')).rejects.toThrow('OPC_UA_NAMESPACE_ARRAY_INVALID')
+    expect(connection.session.write).toHaveBeenCalledTimes(writes); expect(connection.subscriptions).toHaveLength(subscriptions)
+    await adapter.stop()
+  })
+
+  it('fences a NamespaceArray read when its Endpoint disconnects during await', async () => {
+    let resolveRead!: (value: string[]) => void
+    const connection = fakeConnection()
+    const adapter = createOpcUaClientAdapterV1(sharedRootStringProject(), { gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION, publish: () => undefined, createClient: () => connection.client as never })
+    await adapter.start(); await eventually(() => adapter.status().some(({ phase }) => phase === 'connected'))
+    const endpointId = adapter.status().find(({ phase }) => phase === 'connected')!.endpointId
+    connection.session.readNamespaceArray.mockImplementationOnce(() => new Promise<string[]>((resolve) => { resolveRead = resolve }))
+    const writes = connection.session.write.mock.calls.length; const subscriptions = connection.subscriptions.length
+    const pending = adapter.resolveNamespaceIndex?.(endpointId, 'urn:virtual-plc')
+    await eventually(() => connection.session.readNamespaceArray.mock.calls.length >= 2)
+    await adapter.disconnectEndpoint?.(endpointId)
+    resolveRead(['http://opcfoundation.org/UA/', 'urn:virtual-plc'])
+    await expect(pending).rejects.toThrow('OPC_UA_NAMESPACE_SESSION_STALE')
+    expect(connection.session.write).toHaveBeenCalledTimes(writes); expect(connection.subscriptions).toHaveLength(subscriptions)
+    await adapter.stop()
+  })
 })

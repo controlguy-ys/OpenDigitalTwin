@@ -92,6 +92,7 @@ export interface OpcUaClientAdapterV1 {
   reconnectEndpoint?: (endpointId: string) => Promise<void>
   status(): readonly RuntimeGatewayOpcUaClientEndpointStatusV1[]
   write(request: OpcUaClientWriteRequestV1): Promise<OpcUaClientWriteResultV1>
+  resolveNamespaceIndex?: (endpointId: string, namespaceUri: string) => Promise<number>
 }
 
 interface EndpointRuntimeDiagnosticsV1 {
@@ -1027,18 +1028,12 @@ export function createOpcUaClientAdapterV1(
     }
   }
 
-  const writeService = createOpcUaClientWriteServiceV1(project, {
-    currentSession(endpointId) {
-      const runtime = runtimes.get(endpointId)
-      if (
-        runtime === undefined
-        || runtime.stopped
-        || !runtime.connected
-        || runtime.session === null
-      ) return null
-      return Object.freeze({ endpointId, generation: runtime.generation, session: runtime.session })
-    },
-  })
+  const currentSession = (endpointId: string) => {
+    const runtime = runtimes.get(endpointId)
+    if (runtime === undefined || runtime.stopped || !runtime.connected || runtime.session === null) return null
+    return Object.freeze({ endpointId, generation: runtime.generation, session: runtime.session })
+  }
+  const writeService = createOpcUaClientWriteServiceV1(project, { currentSession })
 
   function enqueue(transition: () => Promise<void>): Promise<void> {
     const requested = lifecycleTail.then(transition)
@@ -1115,5 +1110,29 @@ export function createOpcUaClientAdapterV1(
       lastError: runtime.lastError,
     }))),
     write: (request: OpcUaClientWriteRequestV1) => writeService.write(request),
+    async resolveNamespaceIndex(endpointId: string, namespaceUri: string): Promise<number> {
+      const first = currentSession(endpointId)
+      if (first === null) throw new Error('OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED')
+      let namespaces: readonly string[]
+      try { namespaces = await first.session.readNamespaceArray() } catch { throw new Error('OPC_UA_NAMESPACE_READ_FAILED') }
+      const current = currentSession(endpointId)
+      if (current === null || current.generation !== first.generation || current.session !== first.session) {
+        throw new Error('OPC_UA_NAMESPACE_SESSION_STALE')
+      }
+      let bytes = 0
+      const unique = new Set<string>()
+      if (namespaces.length > 256) throw new Error('OPC_UA_NAMESPACE_ARRAY_INVALID')
+      for (const value of namespaces) {
+        if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value) > 4096) throw new Error('OPC_UA_NAMESPACE_ARRAY_INVALID')
+        if (unique.has(value) && value !== namespaceUri) throw new Error('OPC_UA_NAMESPACE_ARRAY_INVALID')
+        unique.add(value)
+        bytes += Buffer.byteLength(value)
+        if (bytes > 48 * 1024) throw new Error('OPC_UA_NAMESPACE_ARRAY_INVALID')
+      }
+      const matches = namespaces.reduce<number[]>((indexes, value, index) => value === namespaceUri ? [...indexes, index] : indexes, [])
+      if (matches.length === 0) throw new Error('OPC_UA_NAMESPACE_URI_MISSING')
+      if (matches.length !== 1) throw new Error('OPC_UA_NAMESPACE_URI_DUPLICATE')
+      return matches[0]!
+    },
   })
 }
