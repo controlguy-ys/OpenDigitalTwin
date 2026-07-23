@@ -506,15 +506,8 @@ function createOwnedGraph(
   const graphContext = { robots, robotFrames, objects, signals }
   const logicalSignalsById = new Map(project.logicalSignals.map((signal) => [signal.id, signal]))
   let ownerActive = true
+  let graphDisposed = false
   let browserLease: RuntimePublisherLeaseV1 | null = null
-  let suspendedLease: RuntimePublisherLeaseV1 | null = null
-  const validBrowserLease = (lease: RuntimePublisherLeaseV1 | null): lease is RuntimePublisherLeaseV1 => (
-    lease !== null
-    && lease.projectId === project.projectId
-    && lease.configRevision === configRevision
-    && lease.publisherId === `${options.gatewayId}:browser-simulation`
-    && lease.expiresAt > nowMs()
-  )
   const commandOwner = createRuntimeGatewayCommandOwnerV5({
     project,
     configRevision,
@@ -585,36 +578,94 @@ function createOwnedGraph(
     onBrowserPublisherLease: (lease: RuntimePublisherLeaseV1 | null) => { browserLease = lease },
     onCommandBatch: (batch: import('../../../core/runtime-protocol/v1.js').CommandBatchV1) => commandOwner.execute(batch),
   })
+  const requirePublishedGraphActive = (): void => {
+    if (!ownerActive && !graphDisposed) throw failure('BROWSER_RUNTIME_GRAPH_INACTIVE')
+  }
+  const publishedJobExecutor: RobotJobExecutorV5 = Object.freeze({
+    startJob: (jobId: string, simulationMs: number) => {
+      requirePublishedGraphActive()
+      return jobExecutor.startJob(jobId, simulationMs)
+    },
+    advanceRobot: (robotId: string, simulationMs: number) => {
+      if (!ownerActive && !graphDisposed) return Promise.reject(failure('BROWSER_RUNTIME_GRAPH_INACTIVE'))
+      return jobExecutor.advanceRobot(robotId, simulationMs)
+    },
+    advanceAll: (simulationMs: number) => {
+      if (!ownerActive && !graphDisposed) return Promise.reject(failure('BROWSER_RUNTIME_GRAPH_INACTIVE'))
+      return jobExecutor.advanceAll(simulationMs)
+    },
+    cancelRobotJob: (robotId: string, reason: string) => {
+      requirePublishedGraphActive()
+      jobExecutor.cancelRobotJob(robotId, reason)
+    },
+    cancelJob: (robotId?: string, reason?: string) => {
+      requirePublishedGraphActive()
+      jobExecutor.cancelJob(robotId, reason)
+    },
+    readState: (robotId: string) => jobExecutor.readState(robotId),
+    waitForTerminal: (runId: string) => jobExecutor.waitForTerminal(runId),
+    reset: () => {
+      requirePublishedGraphActive()
+      jobExecutor.reset()
+    },
+    shutdown: (reason?: string) => {
+      requirePublishedGraphActive()
+      jobExecutor.shutdown(reason)
+    },
+  })
+  const publishedPlayback: RobotJobPlaybackControllerV5 = Object.freeze({
+    startJob: (jobId: string) => {
+      requirePublishedGraphActive()
+      return playback.startJob(jobId)
+    },
+    cancelRobotJob: (robotId: string, reason: string) => {
+      requirePublishedGraphActive()
+      playback.cancelRobotJob(robotId, reason)
+    },
+    ensureRunning: () => {
+      requirePublishedGraphActive()
+      playback.ensureRunning()
+    },
+    quiesce: () => {
+      if (!ownerActive && !graphDisposed) return Promise.reject(failure('BROWSER_RUNTIME_GRAPH_INACTIVE'))
+      return playback.quiesce()
+    },
+    resume: () => {
+      requirePublishedGraphActive()
+      playback.resume()
+    },
+    dispose: () => {
+      requirePublishedGraphActive()
+      playback.dispose()
+    },
+  })
   const graph: PublishedBrowserRuntimeGraphV5 = Object.freeze({
     robots, robotFrames, signals, objects, jobs, attachments,
-    signalWrites, jobExecutor, playback, streamTarget,
+    signalWrites, jobExecutor: publishedJobExecutor, playback: publishedPlayback, streamTarget,
   })
   return {
     project, configRevision, robots, robotFrames, objects, simulationObjectPoses, signals, jobs, attachments,
     commandClient, signalWrites, jobExecutor, playback, endpointRouter, commandOwner,
     suspendForTransition: () => {
-      if (ownerActive) suspendedLease = validBrowserLease(browserLease) ? browserLease : null
       ownerActive = false
       browserLease = null
       commandClient.clearLease()
       return playback.quiesce()
     },
     resumeAfterTransition: () => {
-      if (ownerActive) {
-        suspendedLease = null
-        return
-      }
-      browserLease = validBrowserLease(suspendedLease) ? suspendedLease : null
-      suspendedLease = null
+      if (ownerActive) return
+      browserLease = null
+      commandClient.clearLease()
       ownerActive = true
       playback.resume()
     },
     deactivateCommandOwner: () => {
       ownerActive = false
       browserLease = null
-      suspendedLease = null
     },
-    streamTarget, graph, disposed: false,
+    streamTarget, graph,
+    get disposed() { return graphDisposed },
+    set disposed(value: boolean) { graphDisposed = value },
   }
 }
 

@@ -230,13 +230,13 @@ function longRunningJobProject(): WorkcellProjectV5 {
   return project
 }
 
-function browserRobotCommand(configRevision: string, commandId: string) {
+function browserRobotCommand(configRevision: string, commandId: string, leaseGeneration = 1) {
   return {
     type: 'command-batch-v1' as const,
     protocolVersion: 1 as const,
     projectId: 'project-v5',
     configRevision,
-    leaseGeneration: 1,
+    leaseGeneration,
     commands: [{
       commandId,
       expiresAt: 10_000,
@@ -475,20 +475,27 @@ describe('BrowserProjectRuntimeV5', () => {
     await runtime.dispose()
   })
 
-  it('fences the prior graph until rollback resumes one playback and command owner, then finalization disposes it', async () => {
+  it('fences prior public job APIs and requires a fresh Browser lease after rollback', async () => {
     let receiptNow = 100
     const clock = controlledScheduler()
+    const sockets: FakeSocket[] = []
     const runtime = createBrowserProjectRuntimeV5(options({
       initialProject: longRunningJobProject(),
       scheduler: clock.scheduler,
       stream: {
         url: 'ws://runtime.test/runtime/ws',
-        createWebSocket: () => { throw new Error('Socket was not expected in this test.') },
+        createWebSocket: () => {
+          const socket = new FakeSocket()
+          sockets.push(socket)
+          return socket
+        },
         nowMs: () => receiptNow,
         reconnectDelayMs: 50,
       },
     }))
     const oldGraph = runtime.bundle.getState().runtimeGraph
+    runtime.startGatewayStream()
+    sockets[0]!.emit('open')
     oldGraph.streamTarget.onBrowserPublisherLease?.({
       projectId: 'project-v5', configRevision: CONFIG_A,
       publisherId: 'gateway-1:browser-simulation', generation: 1, expiresAt: 6_000,
@@ -506,9 +513,24 @@ describe('BrowserProjectRuntimeV5', () => {
     await runtime.apply(prepared)
     const transition = await runtime.commit(prepared)
 
+    expect(sockets[0]!.readyState).toBe(3)
+    expect(sockets).toHaveLength(2)
     await expect(oldGraph.streamTarget.onCommandBatch?.(browserRobotCommand(CONFIG_A, 'blocked'))).resolves.toMatchObject({
       executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
     })
+    expect(() => oldGraph.playback.startJob('job-1')).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.playback.cancelRobotJob('robot-1', 'stale holder')).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.playback.ensureRunning()).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    await expect(oldGraph.playback.quiesce()).rejects.toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.playback.resume()).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.playback.dispose()).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.jobExecutor.startJob('job-1', 1_000)).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    await expect(oldGraph.jobExecutor.advanceRobot('robot-1', 1_000)).rejects.toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    await expect(oldGraph.jobExecutor.advanceAll(1_000)).rejects.toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.jobExecutor.cancelRobotJob('robot-1', 'stale holder')).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.jobExecutor.cancelJob('robot-1', 'stale holder')).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.jobExecutor.reset()).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+    expect(() => oldGraph.jobExecutor.shutdown('stale holder')).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
     expect(clock.pending()).toBe(0)
     clock.advance(1_000)
     expect(oldGraph.robots.getState().readRobot('robot-1')?.jointValues).toEqual({ J1: 0 })
@@ -517,10 +539,21 @@ describe('BrowserProjectRuntimeV5', () => {
     await transition.rollback()
     expect(clock.pending()).toBe(1)
     expect(clock.requests()).toBe(requestsBeforeRollback + 1)
-    await expect(oldGraph.streamTarget.onCommandBatch?.(browserRobotCommand(CONFIG_A, 'resumed'))).resolves.toMatchObject({
+    expect(sockets[1]!.readyState).toBe(3)
+    expect(sockets).toHaveLength(3)
+    sockets[2]!.emit('open')
+    const notificationsBeforeFreshCommand = resumedRobotNotifications
+    await expect(oldGraph.streamTarget.onCommandBatch?.(browserRobotCommand(CONFIG_A, 'released-generation'))).resolves.toMatchObject({
+      executionState: 'FAILED', failureCode: 'COMMAND_LEASE_STALE',
+    })
+    oldGraph.streamTarget.onBrowserPublisherLease?.({
+      projectId: 'project-v5', configRevision: CONFIG_A,
+      publisherId: 'gateway-1:browser-simulation', generation: 2, expiresAt: 6_000,
+    })
+    await expect(oldGraph.streamTarget.onCommandBatch?.(browserRobotCommand(CONFIG_A, 'fresh-generation', 2))).resolves.toMatchObject({
       executionState: 'SUCCEEDED', failureCode: null,
     })
-    expect(resumedRobotNotifications).toBe(1)
+    expect(resumedRobotNotifications).toBe(notificationsBeforeFreshCommand + 1)
     clock.advance(1_000)
     await Promise.resolve()
     await Promise.resolve()
