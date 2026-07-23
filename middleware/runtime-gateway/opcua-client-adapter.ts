@@ -451,7 +451,7 @@ async function cleanupNativeHandles(handles: NativeCleanupHandlesV1): Promise<vo
   }
   let firstGroupFailure: unknown
   let hasGroupFailure = false
-  for (const group of [...handles.groups]) {
+  for (const group of handles.groups) {
     try {
       await group.terminate()
       handles.groups = handles.groups.filter((candidate) => candidate !== group)
