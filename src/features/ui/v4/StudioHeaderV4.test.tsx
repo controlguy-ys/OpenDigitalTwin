@@ -61,6 +61,28 @@ function GatewayHeaderHarnessV4({ commandStyleOpen = false, width = 1440 }: { re
 }
 
 describe('StudioHeaderV4', () => {
+  it('renders separate wide and narrow accessible Connectivity controls that share the Monitor callback', () => {
+    const onConnectionMonitorOpen = vi.fn()
+    const connectivity = {
+      gateway: { state: 'online' as const, label: 'Online', detail: 'Runtime Gateway responded.' },
+      opcUa: { state: 'off' as const, label: 'Off', detail: 'Project: Ready' },
+      status: null,
+      integrationDiagnostics: null,
+      transportError: null,
+      lastObservedAtMs: 1_000,
+    }
+    const layout = controller(1440)
+    const view = render(<StudioHeaderV4 status={status} connectivity={connectivity} onConnectionMonitorOpen={onConnectionMonitorOpen} menuModel={model} commandBindings={bindings()} quickActionIds={['project.save', 'job.start', 'job.cancel']} ribbonContext={{ selection: null, activeRobotId: null, activeJobId: null }} shellLayoutController={layout} {...gatewayDetailsProps} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Gateway: Online' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OPC UA: Off' }))
+    expect(onConnectionMonitorOpen).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('dialog', { name: 'Gateway details' })).toBeNull()
+    act(() => layout.setBounds(959, 900))
+    expect(screen.getByRole('button', { name: 'Gateway: Online' })).toHaveTextContent('Gateway')
+    expect(screen.getByRole('button', { name: 'OPC UA: Off' })).toHaveTextContent('OPC UA')
+    view.unmount()
+  })
+
   it('owns the controlled open section so a global menu preview temporarily replaces the target context', async () => {
     render(<StudioHeaderV4 status={status} menuModel={model} commandBindings={bindings()} quickActionIds={['project.save', 'job.start', 'job.cancel']} ribbonContext={{ selection: { kind: 'robot', robotId: 'robot-2' }, activeRobotId: 'robot-2', activeJobId: null }} shellLayoutController={controller()} {...gatewayDetailsProps} />)
     expect(screen.getByRole('toolbar', { name: 'Context commands' })).toHaveTextContent('Robot Home')

@@ -1,38 +1,44 @@
-import type { RuntimeGatewayStatusV1 } from '../../../core/runtime-protocol/gateway-status-v1.js'
+import type { RuntimeGatewayStatusV1 } from '../../core/runtime-protocol/gateway-status-v1.js'
+import type { RuntimeIntegrationDiagnosticsV1 } from '../../core/runtime-protocol/integration-diagnostics-v1.js'
 
-export const RUNTIME_GATEWAY_HEADER_POLL_MS_V4 = 10_000
-export const RUNTIME_GATEWAY_MONITOR_POLL_MS_V4 = 2_000
+export const RUNTIME_GATEWAY_HEADER_POLL_MS_V1 = 10_000
+export const RUNTIME_GATEWAY_MONITOR_POLL_MS_V1 = 2_000
 
-export type RuntimeGatewayStatusPollDemandV4 = 'stopped' | 'header' | 'monitor'
+export type RuntimeGatewayStatusPollDemandV1 = 'stopped' | 'header' | 'monitor'
 
-export interface RuntimeGatewayStatusPollerV4 {
-  setDemand(demand: RuntimeGatewayStatusPollDemandV4): void
+export interface RuntimeConnectivitySnapshotV1 {
+  readonly status: RuntimeGatewayStatusV1
+  readonly integrationDiagnostics: RuntimeIntegrationDiagnosticsV1
+}
+
+export interface RuntimeGatewayStatusPollerV1 {
+  setDemand(demand: RuntimeGatewayStatusPollDemandV1): void
   stop(): void
   status(): Readonly<{
-    demand: RuntimeGatewayStatusPollDemandV4
+    demand: RuntimeGatewayStatusPollDemandV1
     inFlight: boolean
     nextPollAtMs: number | null
   }>
 }
 
-export interface RuntimeGatewayStatusPollerOptionsV4 {
-  readonly readStatus: (signal?: AbortSignal) => Promise<RuntimeGatewayStatusV1>
-  readonly onStatus: (status: RuntimeGatewayStatusV1) => void
+export interface RuntimeGatewayStatusPollerOptionsV1 {
+  readonly readConnectivitySnapshot: (signal?: AbortSignal) => Promise<RuntimeConnectivitySnapshotV1>
+  readonly onSnapshot: (snapshot: RuntimeConnectivitySnapshotV1) => void
   readonly onError: (error: unknown) => void
   readonly nowMs?: () => number
 }
 
-function pollIntervalMsV4(demand: Exclude<RuntimeGatewayStatusPollDemandV4, 'stopped'>): number {
+function pollIntervalMsV1(demand: Exclude<RuntimeGatewayStatusPollDemandV1, 'stopped'>): number {
   return demand === 'monitor'
-    ? RUNTIME_GATEWAY_MONITOR_POLL_MS_V4
-    : RUNTIME_GATEWAY_HEADER_POLL_MS_V4
+    ? RUNTIME_GATEWAY_MONITOR_POLL_MS_V1
+    : RUNTIME_GATEWAY_HEADER_POLL_MS_V1
 }
 
-export function createRuntimeGatewayStatusPollerV4(
-  options: RuntimeGatewayStatusPollerOptionsV4,
-): RuntimeGatewayStatusPollerV4 {
+export function createRuntimeGatewayStatusPollerV1(
+  options: RuntimeGatewayStatusPollerOptionsV1,
+): RuntimeGatewayStatusPollerV1 {
   const nowMs = options.nowMs ?? Date.now
-  let demand: RuntimeGatewayStatusPollDemandV4 = 'stopped'
+  let demand: RuntimeGatewayStatusPollDemandV1 = 'stopped'
   let inFlight = false
   let nextPollAtMs: number | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -47,7 +53,7 @@ export function createRuntimeGatewayStatusPollerV4(
 
   const scheduleNextPoll = (): void => {
     if (demand === 'stopped' || inFlight || timer !== null) return
-    const intervalMs = pollIntervalMsV4(demand)
+    const intervalMs = pollIntervalMsV1(demand)
     nextPollAtMs = nowMs() + intervalMs
     timer = setTimeout(() => {
       timer = null
@@ -62,15 +68,15 @@ export function createRuntimeGatewayStatusPollerV4(
     const controller = new AbortController()
     activeRequest = controller
     inFlight = true
-    let read: Promise<RuntimeGatewayStatusV1>
+    let read: Promise<RuntimeConnectivitySnapshotV1>
     try {
-      read = options.readStatus(controller.signal)
+      read = options.readConnectivitySnapshot(controller.signal)
     } catch (error) {
       read = Promise.reject(error)
     }
     void read.then(
-      (status) => {
-        if (generation === requestGeneration && demand !== 'stopped') options.onStatus(status)
+      (snapshot) => {
+        if (generation === requestGeneration && demand !== 'stopped') options.onSnapshot(snapshot)
       },
       (error: unknown) => {
         if (generation === requestGeneration && demand !== 'stopped') options.onError(error)
@@ -94,7 +100,7 @@ export function createRuntimeGatewayStatusPollerV4(
     controller?.abort()
   }
 
-  const setDemand = (nextDemand: RuntimeGatewayStatusPollDemandV4): void => {
+  const setDemand = (nextDemand: RuntimeGatewayStatusPollDemandV1): void => {
     if (nextDemand === 'stopped') {
       stop()
       return

@@ -27,6 +27,20 @@ function runtime(project = makeMinimalWorkcellProjectV4()): Pick<RobotRuntimeReg
 }
 
 describe('composeAppHeaderStatusV4', () => {
+  it('preserves independently derived Gateway and OPC UA connectivity when supplied by the V5 presentation store', () => {
+    const connectivity = {
+      gateway: { state: 'online' as const, label: 'Online', detail: 'Runtime Gateway responded.' },
+      opcUa: { state: 'off' as const, label: 'Off', detail: 'Project: Ready' },
+      status: null,
+      integrationDiagnostics: null,
+      transportError: null,
+      lastObservedAtMs: 1_000,
+    }
+    const result = composeAppHeaderStatusV4({ projectState: projectState('ready'), jobRuntime: { byRobotId: {} }, robotRuntime: runtime(), activeRobotId: null, gateway, connectivity })
+    expect(result.connectivity).toEqual(connectivity)
+    expect(`${result.connectivity?.opcUa.label} ${result.connectivity?.gateway.label}`).not.toContain('Off 쨌 Ready')
+  })
+
   it('keeps aggregate running Job state distinct from the addressed active Robot Joint source', () => {
     const base = makeMinimalWorkcellProjectV4()
     const second = { ...base.robots[0]!, id: 'robot-2', name: 'Robot Two' }

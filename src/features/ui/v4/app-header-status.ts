@@ -3,6 +3,7 @@ import type { JobRuntimeStoreV4 } from '../../jobs/v4/job-runtime-store.js'
 import type { ProjectStoreStateV4 } from '../../project/v4/project-store-v4.js'
 import type { RobotRuntimeRegistryV4 } from '../../robot/v4/robot-runtime-registry.js'
 import type { RuntimeGatewayPresentationV4 } from '../../runtime-gateway/v4/runtime-gateway-publisher-v4.js'
+import type { ConnectivityPresentationStateV1 } from '../../connectivity/v5/connectivity-presentation-store.js'
 
 export type ProjectHeaderPhaseV4 =
   | 'idle'
@@ -33,6 +34,7 @@ export interface AppHeaderStatusV4 {
     readonly statusLabel: string
     readonly endpoint: string | null
   }
+  readonly connectivity?: ConnectivityPresentationStateV1
 }
 
 function sourceLabel(source: 'simulation' | 'manual' | `opcua:${string}`): string {
@@ -64,6 +66,7 @@ export function composeAppHeaderStatusV4(input: {
   readonly robotRuntime: Pick<RobotRuntimeRegistryV4, 'robots'>
   readonly activeRobotId: RobotIdV4 | null
   readonly gateway: RuntimeGatewayPresentationV4
+  readonly connectivity?: ConnectivityPresentationStateV1
 }): AppHeaderStatusV4 {
   const project = input.projectState.activeProject
   const activeRobot = input.activeRobotId === null
@@ -90,5 +93,6 @@ export function composeAppHeaderStatusV4(input: {
       statusLabel: gatewayStatusLabel(input.gateway),
       endpoint: input.gateway.endpointUrl,
     }),
+    ...(input.connectivity === undefined ? {} : { connectivity: input.connectivity }),
   })
 }

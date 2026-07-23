@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  createRuntimeGatewayStatusPollerV4,
-} from './runtime-gateway-status-poller-v4.js'
+  createRuntimeGatewayStatusPollerV1,
+  type RuntimeConnectivitySnapshotV1,
+} from './runtime-gateway-status-poller.js'
 import {
   validateRuntimeGatewayStatusV1,
   type RuntimeGatewayStatusV1,
-} from '../../../core/runtime-protocol/gateway-status-v1.js'
+} from '../../core/runtime-protocol/gateway-status-v1.js'
 
 function statusFixtureV1(): RuntimeGatewayStatusV1 {
   return validateRuntimeGatewayStatusV1({
@@ -33,25 +34,38 @@ function statusFixtureV1(): RuntimeGatewayStatusV1 {
   })
 }
 
-describe('Runtime Gateway status poller V4', () => {
+function snapshotFixtureV1(): RuntimeConnectivitySnapshotV1 {
+  return {
+    status: statusFixtureV1(),
+    integrationDiagnostics: {
+      type: 'runtime-integration-diagnostics-v1', protocolVersion: 1, observedAtMs: 1_000,
+      projectId: null, revisionId: null, configRevision: null,
+      serverModel: { standardNodeSets: 'disabled', roboticsModel: 'disabled', productModel: 'disabled', activeSessionCount: 0, maximumSessionCount: 16, lastError: null },
+      browserPublisher: { phase: 'absent', publisherId: null, generation: null, expiresAt: null },
+      lastCommandResult: null,
+    },
+  }
+}
+
+describe('Runtime Gateway status poller V1', () => {
   it('polls immediately, every ten seconds for Header, and every two seconds for Monitor', async () => {
     vi.useFakeTimers()
     try {
-      const readStatus = vi.fn().mockResolvedValue(statusFixtureV1())
-      const onStatus = vi.fn()
-      const poller = createRuntimeGatewayStatusPollerV4({ readStatus, onStatus, onError: vi.fn() })
+      const readConnectivitySnapshot = vi.fn().mockResolvedValue(snapshotFixtureV1())
+      const onSnapshot = vi.fn()
+      const poller = createRuntimeGatewayStatusPollerV1({ readConnectivitySnapshot, onSnapshot, onError: vi.fn() })
 
       poller.setDemand('header')
       await Promise.resolve()
-      expect(readStatus).toHaveBeenCalledTimes(1)
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(1)
       await vi.advanceTimersByTimeAsync(9_999)
-      expect(readStatus).toHaveBeenCalledTimes(1)
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(1)
       await vi.advanceTimersByTimeAsync(1)
-      expect(readStatus).toHaveBeenCalledTimes(2)
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(2)
 
       poller.setDemand('monitor')
       await vi.advanceTimersByTimeAsync(2_000)
-      expect(readStatus).toHaveBeenCalledTimes(3)
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(3)
       poller.stop()
     } finally {
       vi.useRealTimers()
@@ -61,16 +75,18 @@ describe('Runtime Gateway status poller V4', () => {
   it('allows only one read in flight and aborts it without reporting an error on stop', async () => {
     vi.useFakeTimers()
     try {
-      let resolve!: (value: RuntimeGatewayStatusV1) => void
-      const readStatus = vi.fn((_signal?: AbortSignal) => new Promise<RuntimeGatewayStatusV1>((done) => { resolve = done }))
+      let resolve!: (value: RuntimeConnectivitySnapshotV1) => void
+      let signal: AbortSignal | undefined
+      const readConnectivitySnapshot = vi.fn((nextSignal?: AbortSignal) => new Promise<RuntimeConnectivitySnapshotV1>((done) => { signal = nextSignal; resolve = done }))
       const onError = vi.fn()
-      const poller = createRuntimeGatewayStatusPollerV4({ readStatus, onStatus: vi.fn(), onError })
+      const poller = createRuntimeGatewayStatusPollerV1({ readConnectivitySnapshot, onSnapshot: vi.fn(), onError })
       poller.setDemand('monitor')
       await vi.runOnlyPendingTimersAsync()
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(readStatus).toHaveBeenCalledTimes(1)
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(1)
       poller.stop()
-      resolve(statusFixtureV1())
+      expect(signal?.aborted).toBe(true)
+      resolve(snapshotFixtureV1())
       await Promise.resolve()
       expect(onError).not.toHaveBeenCalled()
     } finally {
@@ -82,19 +98,19 @@ describe('Runtime Gateway status poller V4', () => {
     vi.useFakeTimers()
     try {
       const error = new Error('gateway unavailable')
-      const readStatus = vi.fn()
+      const readConnectivitySnapshot = vi.fn()
         .mockRejectedValueOnce(error)
-        .mockResolvedValue(statusFixtureV1())
+        .mockResolvedValue(snapshotFixtureV1())
       const onError = vi.fn()
-      const onStatus = vi.fn()
-      const poller = createRuntimeGatewayStatusPollerV4({ readStatus, onStatus, onError })
+      const onSnapshot = vi.fn()
+      const poller = createRuntimeGatewayStatusPollerV1({ readConnectivitySnapshot, onSnapshot, onError })
 
       poller.setDemand('monitor')
       await Promise.resolve()
       expect(onError).toHaveBeenCalledWith(error)
       await vi.advanceTimersByTimeAsync(2_000)
-      expect(readStatus).toHaveBeenCalledTimes(2)
-      expect(onStatus).toHaveBeenCalledWith(statusFixtureV1())
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(2)
+      expect(onSnapshot).toHaveBeenCalledWith(snapshotFixtureV1())
       poller.stop()
     } finally {
       vi.useRealTimers()
@@ -105,17 +121,17 @@ describe('Runtime Gateway status poller V4', () => {
     vi.useFakeTimers()
     try {
       const error = new Error('gateway unavailable')
-      const readStatus = vi.fn()
+      const readConnectivitySnapshot = vi.fn()
         .mockImplementationOnce(() => { throw error })
-        .mockResolvedValue(statusFixtureV1())
+        .mockResolvedValue(snapshotFixtureV1())
       const onError = vi.fn()
-      const poller = createRuntimeGatewayStatusPollerV4({ readStatus, onStatus: vi.fn(), onError })
+      const poller = createRuntimeGatewayStatusPollerV1({ readConnectivitySnapshot, onSnapshot: vi.fn(), onError })
 
       expect(() => poller.setDemand('header')).not.toThrow()
       await Promise.resolve()
       expect(onError).toHaveBeenCalledWith(error)
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(readStatus).toHaveBeenCalledTimes(2)
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(2)
       poller.stop()
     } finally {
       vi.useRealTimers()
@@ -125,9 +141,9 @@ describe('Runtime Gateway status poller V4', () => {
   it('exposes demand, in-flight state, and the scheduled poll time', async () => {
     vi.useFakeTimers()
     try {
-      const poller = createRuntimeGatewayStatusPollerV4({
-        readStatus: vi.fn().mockResolvedValue(statusFixtureV1()),
-        onStatus: vi.fn(),
+      const poller = createRuntimeGatewayStatusPollerV1({
+        readConnectivitySnapshot: vi.fn().mockResolvedValue(snapshotFixtureV1()),
+        onSnapshot: vi.fn(),
         onError: vi.fn(),
         nowMs: () => 500,
       })

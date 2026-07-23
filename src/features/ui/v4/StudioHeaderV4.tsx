@@ -7,12 +7,13 @@ import { useAppCommandV4 } from '../../commands/v4/use-app-command.js'
 import { AppMenuBarV4 } from './AppMenuBarV4.js'
 import type { AppMenuSectionModelV4 } from './app-menu-model.js'
 import type { AppHeaderStatusV4 } from './app-header-status.js'
+import type { ConnectivityPresentationStateV1 } from '../../connectivity/v5/connectivity-presentation-store.js'
 import { CompactAppMenuV4 } from './CompactAppMenuV4.js'
 import { RibbonLiteV4 } from './RibbonLiteV4.js'
 import type { RibbonContextV4 } from './ribbon-model-v4.js'
 import type { ShellLayoutControllerV4 } from './shell-layout-controller.js'
 
-export interface StudioHeaderPropsV4 {
+interface StudioHeaderBasePropsV4 {
   readonly status: AppHeaderStatusV4
   readonly menuModel: readonly AppMenuSectionModelV4[]
   readonly commandBindings: AppCommandBindingsV4
@@ -22,6 +23,11 @@ export interface StudioHeaderPropsV4 {
   readonly gatewayDetailsOpen: boolean
   readonly onGatewayDetailsOpenChange: (open: boolean) => void
 }
+
+export type StudioHeaderPropsV4 = StudioHeaderBasePropsV4 & (
+  | { readonly connectivity?: undefined; readonly onConnectionMonitorOpen?: undefined }
+  | { readonly connectivity: ConnectivityPresentationStateV1; readonly onConnectionMonitorOpen: () => void }
+)
 
 const QUICK_ACTION_ICONS_V4: Readonly<Record<StudioHeaderPropsV4['quickActionIds'][number], LucideIcon>> = Object.freeze({
   'project.save': Save,
@@ -114,6 +120,8 @@ export function StudioHeaderV4({
   shellLayoutController,
   gatewayDetailsOpen,
   onGatewayDetailsOpenChange,
+  connectivity,
+  onConnectionMonitorOpen,
 }: StudioHeaderPropsV4): ReactNode {
   const snapshot = useShellSnapshotV4(shellLayoutController)
   const [openSection, setOpenSection] = useState<AppCommandSectionV4 | null>(null)
@@ -128,19 +136,22 @@ export function StudioHeaderV4({
   const Menu = compact ? CompactAppMenuV4 : AppMenuBarV4
   const context: RibbonContextV4 = { ...ribbonContext, previewSection }
   const gatewayEndpoint = status.gateway.endpoint ?? 'Not configured'
+  const gatewayDetailsVisible = gatewayDetailsOpen && connectivity === undefined
+  const gatewayConnectivityLabel = `Gateway: ${connectivity?.gateway.label ?? ''}`
+  const opcUaConnectivityLabel = `OPC UA: ${connectivity?.opcUa.label ?? ''}`
 
   useLayoutEffect(() => {
-    if (gatewayDetailsOpen && !gatewayWasOpenRef.current) {
+    if (gatewayDetailsVisible && !gatewayWasOpenRef.current) {
       gatewayDetailsRef.current?.focus()
-    } else if (!gatewayDetailsOpen && gatewayWasOpenRef.current) {
+    } else if (!gatewayDetailsVisible && gatewayWasOpenRef.current) {
       const restoreTarget = narrow ? gatewayNarrowTriggerRef.current : gatewayStatusTriggerRef.current
       if (restoreTarget?.isConnected === true) restoreTarget.focus()
     }
-    gatewayWasOpenRef.current = gatewayDetailsOpen
-  }, [gatewayDetailsOpen, narrow])
+    gatewayWasOpenRef.current = gatewayDetailsVisible
+  }, [gatewayDetailsVisible, narrow])
 
   useEffect(() => {
-    if (!gatewayDetailsOpen) return
+    if (!gatewayDetailsVisible) return
     const dismiss = (event: PointerEvent): void => {
       if (gatewayStatusTriggerRef.current?.contains(event.target as Node) === true) return
       if (gatewayNarrowTriggerRef.current?.contains(event.target as Node) === true) return
@@ -158,7 +169,7 @@ export function StudioHeaderV4({
       document.removeEventListener('pointerdown', dismiss, true)
       document.removeEventListener('keydown', closeOnEscape)
     }
-  }, [gatewayDetailsOpen, onGatewayDetailsOpenChange])
+  }, [gatewayDetailsVisible, onGatewayDetailsOpenChange])
 
   return <header className="studio-header-v4" data-layout-mode={snapshot.mode}>
     <div className="studio-header-main-v4">
@@ -178,7 +189,7 @@ export function StudioHeaderV4({
       <div aria-label="Application status" className="studio-header-status-v4">
         <span>{labels.simulation}</span>
         <span>{labels.joint}</span>
-        <button
+        {connectivity === undefined ? <button
           aria-controls="gateway-details-v4"
           aria-expanded={gatewayDetailsOpen}
           aria-label={`Gateway details: ${labels.gateway}`}
@@ -188,9 +199,26 @@ export function StudioHeaderV4({
           ref={gatewayStatusTriggerRef}
           title={gatewayEndpoint}
           type="button"
-        >{labels.gateway}</button>
+        >{labels.gateway}</button> : <>
+          <button
+            aria-label={gatewayConnectivityLabel}
+            className="studio-header-gateway-disclosure-v4"
+            hidden={narrow}
+            onClick={() => onConnectionMonitorOpen?.()}
+            title={connectivity.gateway.detail}
+            type="button"
+          >{gatewayConnectivityLabel}</button>
+          <button
+            aria-label={opcUaConnectivityLabel}
+            className="studio-header-gateway-disclosure-v4"
+            hidden={narrow}
+            onClick={() => onConnectionMonitorOpen?.()}
+            title={connectivity.opcUa.detail}
+            type="button"
+          >{opcUaConnectivityLabel}</button>
+        </>}
       </div>
-      <button
+      {connectivity === undefined ? <button
         aria-controls="gateway-details-v4"
         aria-expanded={gatewayDetailsOpen}
         aria-label={`Gateway details: ${labels.gateway}`}
@@ -200,10 +228,27 @@ export function StudioHeaderV4({
         ref={gatewayNarrowTriggerRef}
         title={gatewayEndpoint}
         type="button"
-      >Gateway</button>
+      >Gateway</button> : <>
+        <button
+          aria-label={gatewayConnectivityLabel}
+          className="studio-header-gateway-disclosure-v4"
+          hidden={!narrow}
+          onClick={() => onConnectionMonitorOpen?.()}
+          title={connectivity.gateway.detail}
+          type="button"
+        >Gateway</button>
+        <button
+          aria-label={opcUaConnectivityLabel}
+          className="studio-header-gateway-disclosure-v4"
+          hidden={!narrow}
+          onClick={() => onConnectionMonitorOpen?.()}
+          title={connectivity.opcUa.detail}
+          type="button"
+        >OPC UA</button>
+      </>}
       <RibbonToggleV4 commandBindings={commandBindings} />
     </div>
-    {gatewayDetailsOpen ? <div
+    {gatewayDetailsVisible ? <div
       aria-label="Gateway details"
       className="studio-header-gateway-details-v4"
       id="gateway-details-v4"
