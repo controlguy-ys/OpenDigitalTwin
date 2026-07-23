@@ -65,3 +65,17 @@ tests, and `test:job-io` 49 files / 821 tests passed. `build:gateway` passed.
 failures. `npm run lint` retained its pre-existing `main.test.ts:544`
 `unicorn(no-useless-spread)` warning. The V4 App publisher cutover remains the
 explicit separate integration blocker; fresh SOL Ultra review remains required.
+
+## A3R3 repair completion
+
+- `9dba275` retains exact recovery-required authority when a partially started
+  candidate cannot be stopped; `6137ec7` fences stale Client-origin callbacks.
+- `b2d17f7` and `a99e829` add bounded terminal DELETE reconciliation, including
+  retry-conflict followed by confirmed inactivity.
+- `35f19b3` and `4d80822` give diagnostic Session-close and Client-disconnect
+  independent budgets and observe late connect/createSession resource results.
+
+Focused Gateway/client/diagnostic tests passed. `npm run test:job-io` passed 49
+files / 822 tests. `test:gateway` retains only the documented four V4 mechanics
+fixture failures. The V4 App publisher cutover remains separate; no compatibility
+path was added.
