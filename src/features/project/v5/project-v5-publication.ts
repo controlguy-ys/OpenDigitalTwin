@@ -219,6 +219,11 @@ function cleanupError(error: unknown): { readonly code: string; readonly message
 export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown, PreparedGateway = unknown>(
   options: ProjectV5PublicationCoordinatorOptions<PreparedRuntime, PreparedGateway>,
 ): ProjectPublicationCoordinatorV5 {
+  interface CleanupRetryGeneration {
+    readonly promise: Promise<void>
+    readonly resolve: () => void
+  }
+
   const repository = options.repository
   const runtime = options.runtime
   const gateway = options.gateway
@@ -230,7 +235,11 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   let tail = Promise.resolve()
   const cleanupTasks: PendingCleanupTaskV5[] = []
   let cleanupDrainPromise: Promise<void> | null = null
-  let cleanupRetryPromise: Promise<void> | null = null
+  let cleanupDrainOwner: CleanupRetryGeneration | null = null
+  let activeCleanupRetry: CleanupRetryGeneration | null = null
+  let queuedCleanupRetry: CleanupRetryGeneration | null = null
+  let cleanupRetryWorkerPromise: Promise<void> | null = null
+  let cleanupIssueEmissionOwner: CleanupRetryGeneration | null | undefined
   const listeners = new Set<() => void>()
 
   const enqueue = <Result>(operation: () => Promise<Result>): Promise<Result> => {
@@ -287,10 +296,14 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   const emitCleanupIssue = (task: PendingCleanupTaskV5): void => {
     const issue = cleanupStatus().pending.find((candidate) => candidate.kind === task.kind && candidate.revisionId === task.revisionId)
     if (issue === undefined) return
+    const previousEmissionOwner = cleanupIssueEmissionOwner
+    cleanupIssueEmissionOwner = cleanupDrainOwner
     try {
       options.onCleanupIssue?.(issue)
     } catch {
       // Observation cannot alter the active publication or retained task.
+    } finally {
+      cleanupIssueEmissionOwner = previousEmissionOwner
     }
   }
 
@@ -312,10 +325,11 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     cleanupTasks.push(task)
   }
 
-  const kickCleanupDrain = (): Promise<void> => {
+  const kickCleanupDrain = (owner: CleanupRetryGeneration | null = null): Promise<void> => {
     if (cleanupDrainPromise !== null) return cleanupDrainPromise
     if (cleanupTasks.length === 0) return Promise.resolve()
     let drain!: Promise<void>
+    cleanupDrainOwner = owner
     drain = (async () => {
       while (cleanupTasks.length > 0) {
         const task = cleanupTasks[0]!
@@ -331,24 +345,59 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
         }
       }
     })().finally(() => {
-      if (cleanupDrainPromise === drain) cleanupDrainPromise = null
+      if (cleanupDrainPromise === drain) {
+        cleanupDrainPromise = null
+        cleanupDrainOwner = null
+      }
     })
     cleanupDrainPromise = drain
     return drain
   }
 
-  const retryCleanup = (): Promise<void> => {
-    if (cleanupRetryPromise !== null) return cleanupRetryPromise
-    let retry!: Promise<void>
-    retry = (async () => {
-      const activeDrain = cleanupDrainPromise
-      if (activeDrain !== null) await activeDrain
-      if (cleanupTasks.length > 0) await kickCleanupDrain()
+  const createCleanupRetryGeneration = (): CleanupRetryGeneration => {
+    let resolve!: () => void
+    const promise = new Promise<void>((settle) => { resolve = settle })
+    return Object.freeze({ promise, resolve })
+  }
+
+  const startCleanupRetryWorker = (): void => {
+    if (cleanupRetryWorkerPromise !== null) return
+    let worker!: Promise<void>
+    worker = (async () => {
+      while (activeCleanupRetry !== null) {
+        const generation = activeCleanupRetry
+        const activeDrain = cleanupDrainPromise
+        if (activeDrain !== null) await activeDrain
+        if (cleanupTasks.length > 0) await kickCleanupDrain(generation)
+        generation.resolve()
+        if (activeCleanupRetry === generation) {
+          activeCleanupRetry = queuedCleanupRetry
+          queuedCleanupRetry = null
+        }
+      }
     })().finally(() => {
-      if (cleanupRetryPromise === retry) cleanupRetryPromise = null
+      if (cleanupRetryWorkerPromise === worker) {
+        cleanupRetryWorkerPromise = null
+        if (activeCleanupRetry !== null) startCleanupRetryWorker()
+      }
     })
-    cleanupRetryPromise = retry
-    return retry
+    cleanupRetryWorkerPromise = worker
+    void worker
+  }
+
+  const retryCleanup = (): Promise<void> => {
+    if (
+      cleanupIssueEmissionOwner !== undefined
+      && cleanupIssueEmissionOwner !== null
+      && activeCleanupRetry === cleanupIssueEmissionOwner
+    ) {
+      queuedCleanupRetry ??= createCleanupRetryGeneration()
+      return queuedCleanupRetry.promise
+    }
+    if (activeCleanupRetry !== null) return activeCleanupRetry.promise
+    activeCleanupRetry = createCleanupRetryGeneration()
+    startCleanupRetryWorker()
+    return activeCleanupRetry.promise
   }
 
   const loadDurablePublication = async (revisionId: string): Promise<PublishedProjectV5> => {

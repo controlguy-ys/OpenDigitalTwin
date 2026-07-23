@@ -146,7 +146,7 @@ function publicationHarness(
       _commitToken: string,
     ) => {
       events.push(`repository.commit:${preparedRevision.revisionId}`)
-      expect(expectedRevisionId).toBe(previous.revisionId)
+      expect(expectedRevisionId).toBe(durable?.revisionId ?? null)
       failure(failurePoint, 'repository-commit')
       publishing = published(preparedRevision.project, preparedRevision.configRevision)
       durable = publishing
@@ -558,6 +558,63 @@ describe('Project V5 publication coordinator', () => {
 
     expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(2)
     expect(harness.publication.readCleanupStatus().pending).toEqual([])
+    const afterSuccess = harness.publication.retryCleanup()
+    expect(harness.publication.retryCleanup()).toBe(afterSuccess)
+    let afterSuccessSettled = false
+    void afterSuccess.then(() => { afterSuccessSettled = true })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(afterSuccessSettled).toBe(true)
+  })
+
+  it('queues one following retry generation when the current retry fails inside its issue observer', async () => {
+    const retryGenerations: Promise<void>[] = []
+    let releaseThird!: () => void
+    const harness = publicationHarness(null, (retry) => {
+      const first = retry()
+      const concurrent = retry()
+      expect(concurrent).toBe(first)
+      if (retryGenerations.at(-1) !== first) retryGenerations.push(first)
+    })
+    const finalize = harness.runtimeTransition.finalize.getMockImplementation()!
+    harness.runtimeTransition.finalize
+      .mockRejectedValueOnce(new Error('first finalize failure'))
+      .mockRejectedValueOnce(new Error('second finalize failure'))
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => { releaseThird = resolve })
+        await finalize()
+      })
+
+    await harness.publication.replace({
+      candidate: harness.nextProject,
+      expectedRevisionId: harness.previous.revisionId,
+    })
+    await vi.waitFor(() => expect(retryGenerations).toHaveLength(2))
+    expect(retryGenerations[1]).not.toBe(retryGenerations[0])
+    await vi.waitFor(() => expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(3))
+    let firstSettled = false
+    let secondSettled = false
+    void retryGenerations[0]!.then(() => { firstSettled = true })
+    void retryGenerations[1]!.then(() => { secondSettled = true })
+    await Promise.resolve()
+    expect(firstSettled).toBe(true)
+    expect(secondSettled).toBe(false)
+
+    releaseThird()
+    await expect(Promise.all(retryGenerations)).resolves.toEqual([undefined, undefined])
+
+    expect(harness.runtimeTransition.finalize).toHaveBeenCalledTimes(3)
+    expect(harness.events.indexOf('gateway.cleanup:revision-a'))
+      .toBeGreaterThan(harness.events.indexOf('runtime.transition.finalize'))
+    expect(harness.events.indexOf('repository.gc'))
+      .toBeGreaterThan(harness.events.indexOf('gateway.cleanup:revision-a'))
+    expect(harness.publication.readCleanupStatus().pending).toEqual([])
+
+    const later = project('revision-c', 'Later')
+    await expect(harness.publication.replace({
+      candidate: later,
+      expectedRevisionId: harness.nextProject.revisionId,
+    })).resolves.toEqual(published(later, HASH_B))
   })
 
   it('marks recovery when a first-publication Gateway rollback readback is not canonical', async () => {
