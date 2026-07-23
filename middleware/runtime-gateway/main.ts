@@ -332,6 +332,46 @@ export function createRuntimeGatewayEntrypointService(
   let browserLeaseExpiryTimer: RuntimeGatewayTimerV1 | null = null
   let commandStagingSweepTimer: RuntimeGatewayTimerV1 | null = null
 
+  async function cleanupAuthoritativeRuntimeAdapters(
+    active: ActiveProjectRuntimeV1 | null,
+  ): Promise<unknown | null> {
+    let firstFailure: unknown = null
+    const stopPair = async (
+      clientAdapter: OpcUaClientAdapterV1 | null,
+      serverAdapter: OpcUaServerAdapterV1 | null,
+    ): Promise<boolean> => {
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() => clientAdapter?.stop()),
+        Promise.resolve().then(() => serverAdapter?.stop()),
+      ])
+      const rejected = results.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      )
+      if (rejected !== undefined && firstFailure === null) firstFailure = rejected.reason
+      return rejected === undefined
+    }
+
+    const activeClean = await stopPair(
+      active?.clientAdapter ?? null,
+      active?.serverAdapter ?? null,
+    )
+    for (const residual of residualRuntimeCleanup) {
+      if (
+        residual.clientAdapter === active?.clientAdapter
+        && residual.serverAdapter === active?.serverAdapter
+      ) {
+        if (activeClean) residualRuntimeCleanup.delete(residual)
+        continue
+      }
+      if (await stopPair(residual.clientAdapter, residual.serverAdapter)) {
+        residualRuntimeCleanup.delete(residual)
+      }
+    }
+    return activeClean && residualRuntimeCleanup.size === 0
+      ? null
+      : firstFailure ?? new Error('RUNTIME_RESIDUAL_CLEANUP_REQUIRED')
+  }
+
   function browserCommandKey(batch: CommandBatchV1): string {
     const command = batch.commands[0]!
     return JSON.stringify([batch.projectId, batch.configRevision, batch.leaseGeneration, command.commandId])
@@ -1000,7 +1040,12 @@ export function createRuntimeGatewayEntrypointService(
         && active.configRevision === body.configRevision
         && active.activationAttemptId === body.activationAttemptId
       if (active === null) {
-        if (unconditional) return
+        if (unconditional) {
+          const cleanupFailure = await cleanupAuthoritativeRuntimeAdapters(null)
+          if (cleanupFailure === null) return
+          projectAuthorityPhase = 'recovery-required'
+          throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Project deactivation cleanup did not complete authoritatively.')
+        }
         throw new RuntimeGatewayHttpError(409, 'PROJECT_DEACTIVATION_CONFLICT', 'Fenced deactivation does not match an active Project revision.')
       }
       if (!unconditional && !matches) {
@@ -1008,23 +1053,10 @@ export function createRuntimeGatewayEntrypointService(
       }
       if (active === null) return
       projectAuthorityPhase = 'deactivating'
-      const stopResults = await Promise.allSettled([
-        Promise.resolve().then(() => active.clientAdapter?.stop()),
-        Promise.resolve().then(() => active.serverAdapter?.stop()),
-      ])
-      if (stopResults.some((result) => result.status === 'rejected')) {
-        let recovered = false
-        try { recovered = await recoverPreviousRuntime(active, true) } catch { recovered = false }
-        const recoveredExactly = recovered
-          && activeRuntime?.project.projectId === active.project.projectId
-          && activeRuntime?.project.revisionId === active.project.revisionId
-          && activeRuntime?.configRevision === active.configRevision
-        if (!recoveredExactly) {
-          projectAuthorityPhase = 'recovery-required'
-          throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Project deactivation failed and the prior runtime could not be recovered.')
-        }
-        projectAuthorityPhase = 'active'
-        throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_FAILED', 'Project deactivation failed; the prior runtime was recovered.')
+      const cleanupFailure = await cleanupAuthoritativeRuntimeAdapters(active)
+      if (cleanupFailure !== null) {
+        projectAuthorityPhase = 'recovery-required'
+        throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Project deactivation cleanup did not complete authoritatively.')
       }
       const localCleanup = await Promise.allSettled([
         Promise.resolve().then(() => active.commandService?.close()),
@@ -1605,27 +1637,10 @@ export function createRuntimeGatewayEntrypointService(
           request.destroy()
         }
 
-        let adapterFailure: unknown = null
-        const stopPair = async (clientAdapter: OpcUaClientAdapterV1 | null, serverAdapter: OpcUaServerAdapterV1 | null): Promise<boolean> => {
-          const results = await Promise.allSettled([
-            Promise.resolve().then(() => clientAdapter?.stop()),
-            Promise.resolve().then(() => serverAdapter?.stop()),
-          ])
-          const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
-          if (rejected !== undefined && adapterFailure === null) adapterFailure = rejected.reason
-          return rejected === undefined
-        }
-        const activeClean = await stopPair(active?.clientAdapter ?? null, active?.serverAdapter ?? null)
-        for (const residual of residualRuntimeCleanup) {
-          if (residual.clientAdapter === active?.clientAdapter && residual.serverAdapter === active?.serverAdapter) {
-            if (activeClean) residualRuntimeCleanup.delete(residual)
-            continue
-          }
-          if (await stopPair(residual.clientAdapter, residual.serverAdapter)) residualRuntimeCleanup.delete(residual)
-        }
-        if (!activeClean || residualRuntimeCleanup.size > 0) {
+        const adapterFailure = await cleanupAuthoritativeRuntimeAdapters(active)
+        if (adapterFailure !== null) {
           projectAuthorityPhase = 'recovery-required'
-          throw adapterFailure ?? new Error('RUNTIME_RESIDUAL_CLEANUP_REQUIRED')
+          throw adapterFailure
         }
         activeRuntime = null
         projectAuthorityPhase = 'inactive'

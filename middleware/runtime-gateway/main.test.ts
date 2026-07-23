@@ -2771,6 +2771,77 @@ describe('runtime Gateway entrypoint', () => {
     } finally { await service.stop() }
   })
 
+  it.each(['exact', 'unconditional'] as const)('keeps recovered authority until %s DELETE cleans its active and residual runtimes', async (form) => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const prior = fakeClientAdapter()
+    const candidate = fakeClientAdapter()
+    candidate.start.mockRejectedValueOnce(new Error('candidate-start-failure'))
+    candidate.stop
+      .mockRejectedValueOnce(new Error('candidate-activation-cleanup-failure'))
+      .mockRejectedValueOnce(new Error('candidate-delete-cleanup-failure'))
+      .mockResolvedValue(undefined)
+    const priorProject = sampleProject('client', `revision-delete-residual-prior-${form}`)
+    const replacement = sampleProject('client', `revision-delete-residual-candidate-${form}`)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: (project) => (
+        project.revisionId === replacement.revisionId ? candidate.adapter : prior.adapter
+      ),
+    })
+
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', priorProject)).status).toBe(200)
+      expect((await requestJson(port, 'PUT', '/runtime/project', replacement)).status).toBe(503)
+      expect(gatewayStatus(service.status()).project).toMatchObject({
+        phase: 'recovery-required',
+        revisionId: priorProject.revisionId,
+        readinessCode: 'RECOVERY_REQUIRED',
+      })
+
+      const configRevision = await configRevisionForProjectV5(priorProject)
+      const body = form === 'unconditional'
+        ? { type: 'runtime-project-deactivate-v1', protocolVersion: 1, unconditional: true }
+        : {
+            type: 'runtime-project-deactivate-v1',
+            protocolVersion: 1,
+            projectId: priorProject.projectId,
+            revisionId: priorProject.revisionId,
+            configRevision,
+            activationAttemptId: `attempt-${priorProject.revisionId}`,
+          }
+      const request = () => fetch(`http://127.0.0.1:${port}/runtime/project`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      const failed = await request()
+      expect(failed.status).toBe(503)
+      expect(await failed.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED' })
+      expect(gatewayStatus(service.status()).project).toMatchObject({
+        phase: 'recovery-required',
+        revisionId: priorProject.revisionId,
+        readinessCode: 'RECOVERY_REQUIRED',
+      })
+
+      const succeeded = await request()
+      expect(succeeded.status).toBe(200)
+      expect(await succeeded.json()).toMatchObject({
+        project: {
+          phase: 'not-applied',
+          projectId: null,
+          revisionId: null,
+          readinessCode: 'NO_ACTIVE_REVISION',
+        },
+      })
+      expect(prior.stop).toHaveBeenCalledTimes(3)
+      expect(candidate.stop).toHaveBeenCalledTimes(3)
+    } finally {
+      await service.stop()
+    }
+  })
+
   it('isolates the bounded OPC UA test-connection diagnostic and rejects arbitrary control paths', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort(); const client = fakeClientAdapter(); const server = fakeServerAdapter()
@@ -2940,11 +3011,15 @@ describe('runtime Gateway entrypoint', () => {
       const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
       const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision, activationAttemptId: `attempt-${project.revisionId}` }) })
       expect(response.status).toBe(503); expect(server.stop).toHaveBeenCalledOnce()
-      expect((await service.status()).project.phase).toBe('ready')
+      expect((await service.status()).project).toMatchObject({
+        phase: 'recovery-required',
+        revisionId: project.revisionId,
+        readinessCode: 'RECOVERY_REQUIRED',
+      })
     } finally { ;(client.adapter as unknown as { stop: () => Promise<void> }).stop = async () => undefined; await service.stop() }
   })
 
-  it('recovers the exact prior runtime when Server stop fails after Client stop', async () => {
+  it('retains the exact prior authority when Server stop fails after Client stop', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
     const client = fakeClientAdapter(); const server = fakeServerAdapter(); const originalStop = server.adapter.stop
     ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = vi.fn(async () => { throw new Error('server stop') })
@@ -2952,7 +3027,7 @@ describe('runtime Gateway entrypoint', () => {
     try {
       const project = sampleProject('bridge'); await requestJson(port, 'PUT', '/runtime/project', project); const revision = await import('../../src/core/project-v5/index.js').then(({ configRevisionForProjectV5 }) => configRevisionForProjectV5(project))
       const response = await fetch(`http://127.0.0.1:${port}/runtime/project`, { method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: revision, activationAttemptId: `attempt-${project.revisionId}` }) })
-      expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_FAILED' }); expect(service.status().project).toMatchObject({ phase: 'ready', revisionId: project.revisionId })
+      expect(response.status).toBe(503); expect(await response.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED' }); expect(service.status().project).toMatchObject({ phase: 'recovery-required', revisionId: project.revisionId, readinessCode: 'RECOVERY_REQUIRED' })
     } finally { ;(server.adapter as unknown as { stop: () => Promise<void> }).stop = originalStop; await service.stop() }
   })
 
