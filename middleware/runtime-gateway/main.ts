@@ -760,8 +760,11 @@ export function createRuntimeGatewayEntrypointService(
     } catch (error) {
       candidateCommandService?.close()
       candidateCommandDedupe?.clear()
-      await candidateClientAdapter?.stop().catch(() => undefined)
-      await candidateServerAdapter?.stop().catch(() => undefined)
+      const candidateCleanup = await Promise.allSettled([
+        Promise.resolve().then(() => candidateClientAdapter?.stop()),
+        Promise.resolve().then(() => candidateServerAdapter?.stop()),
+      ])
+      const candidateCleanupFailed = candidateCleanup.some((result) => result.status === 'rejected')
       let recovered = false
       let recoveryError: unknown = null
       try {
@@ -781,13 +784,27 @@ export function createRuntimeGatewayEntrypointService(
         browserPublisherSocket = null
         browserLeasesBySocket.clear()
       }
-      if (!recovered) {
+      if (candidateCleanupFailed && previous === null) {
+        const diagnostics = candidateIntegrationDiagnostics ?? createRuntimeIntegrationDiagnosticsV1({
+          nowMs,
+          readContext: () => ({ projectId: project.projectId, revisionId: project.revisionId, configRevision }),
+          readServerModel: () => ({ standardNodeSets: 'disabled', roboticsModel: 'disabled', productModel: 'disabled', activeSessionCount: 0, lastError: null }),
+          lease: candidateBrowserLease,
+        })
+        activeRuntime = Object.freeze({
+          runtimeToken: candidateRuntimeToken, project, configRevision, activationAttemptId,
+          generation: candidateGeneration, commandDedupe: candidateCommandDedupe!, commandService: candidateCommandService,
+          serverAdapter: candidateServerAdapter, clientAdapter: candidateClientAdapter, browserLease: candidateBrowserLease,
+          integrationDiagnostics: diagnostics, commandStaging: candidateCommandStaging, browserCommandDispatch: candidateBrowserCommandDispatch,
+        })
+        projectAuthorityPhase = 'recovery-required'
+      } else if (!recovered) {
         // The prior adapters may have stopped only partially. Retain their
         // exact authority fence until an explicit recovery can prove cleanup.
         activeRuntime = previous
         projectAuthorityPhase = previous === null ? 'inactive' : 'recovery-required'
       } else {
-        projectAuthorityPhase = 'active'
+        projectAuthorityPhase = candidateCleanupFailed ? 'recovery-required' : 'active'
       }
 
       throw new RuntimeGatewayHttpError(

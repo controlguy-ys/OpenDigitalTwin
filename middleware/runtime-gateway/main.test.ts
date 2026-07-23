@@ -2752,6 +2752,19 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
+  it('retains a partially started first candidate as recovery-required when its stop cleanup fails', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
+    const candidate = fakeClientAdapter(); candidate.start.mockRejectedValueOnce(new Error('candidate-start-failure')); candidate.stop.mockRejectedValueOnce(new Error('candidate-stop-failure'))
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => candidate.adapter })
+    const project = sampleProject('client', 'revision-first-candidate-cleanup-fails')
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(503)
+      expect(gatewayStatus(service.status())).toMatchObject({ project: { phase: 'recovery-required', revisionId: project.revisionId, readinessCode: 'RECOVERY_REQUIRED' } })
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(503)
+    } finally { await service.stop() }
+  })
+
   it('isolates the bounded OPC UA test-connection diagnostic and rejects arbitrary control paths', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort(); const client = fakeClientAdapter(); const server = fakeServerAdapter()
