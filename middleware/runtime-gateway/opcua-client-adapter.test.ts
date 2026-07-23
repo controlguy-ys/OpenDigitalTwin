@@ -1292,6 +1292,81 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     expect(connection.client.disconnect).toHaveBeenCalledOnce()
   })
 
+  it('queues and retains a monitored group that resolves after recovery fences its generation', async () => {
+    const connection = fakeConnection()
+    const order: string[] = []
+    const lateGroup = Object.assign(new EventEmitter(), {
+      terminate: vi.fn()
+        .mockImplementationOnce(async () => {
+          order.push('group-terminate')
+          throw new Error('late monitored group terminate failed')
+        })
+        .mockImplementationOnce(async () => { order.push('group-terminate-retry') }),
+    })
+    let resolveMonitorItems!: (group: typeof lateGroup) => void
+    const subscription = Object.assign(new EventEmitter(), {
+      monitorItems: vi.fn(() => new Promise<typeof lateGroup>((resolve) => {
+        resolveMonitorItems = resolve
+      })),
+      terminate: vi.fn(async () => { order.push('subscription-terminate') }),
+    })
+    connection.session.createSubscription2 = vi.fn(async () => subscription)
+    connection.session.close = vi.fn(async () => { order.push('session-close') })
+    let resolveDisconnect!: () => void
+    connection.client.disconnect = vi.fn(() => new Promise<void>((resolve) => {
+      order.push('client-disconnect')
+      resolveDisconnect = () => {
+        order.push('client-disconnect-complete')
+        resolve()
+      }
+    }))
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => subscription.monitorItems.mock.calls.length === 1)
+
+    connection.client.emit('connection_lost')
+    await eventually(() => vi.mocked(connection.client.disconnect).mock.calls.length === 1)
+    resolveMonitorItems(lateGroup)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(lateGroup.terminate).not.toHaveBeenCalled()
+    expect(order).toEqual(['subscription-terminate', 'session-close', 'client-disconnect'])
+
+    resolveDisconnect()
+    await eventually(() => vi.mocked(lateGroup.terminate).mock.calls.length === 1)
+    await eventually(() => adapter.status()[0]?.phase === 'faulted')
+    expect(order).toEqual([
+      'subscription-terminate',
+      'session-close',
+      'client-disconnect',
+      'client-disconnect-complete',
+      'group-terminate',
+    ])
+    expect(adapter.status()[0]?.lastError).toMatchObject({
+      code: 'late monitored group terminate failed',
+      message: 'late monitored group terminate failed',
+    })
+
+    await expect(adapter.stop()).resolves.toBeUndefined()
+    expect(lateGroup.terminate).toHaveBeenCalledTimes(2)
+    expect(order).toEqual([
+      'subscription-terminate',
+      'session-close',
+      'client-disconnect',
+      'client-disconnect-complete',
+      'group-terminate',
+      'group-terminate-retry',
+    ])
+    expect(adapter.status()[0]?.phase).toBe('disabled')
+  })
+
   it('retains a Session created after the stop fence when its first close fails', async () => {
     const connection = fakeConnection()
     const order: string[] = []

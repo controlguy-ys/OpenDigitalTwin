@@ -1091,6 +1091,7 @@ export function createOpcUaClientAdapterV1(
     let session: ClientSession | null = null
     let subscription: ClientSubscription | null = null
     const groups: ClientMonitoredItemGroup[] = []
+    let lateGroupCleanupOwned = false
     const active = () => (
       !runtime.stopped
       && runtime.generation === generation
@@ -1132,7 +1133,14 @@ export function createOpcUaClientAdapterV1(
             TimestampsToReturn.Both,
           )
           if (!active()) {
-            await group.terminate().catch(() => undefined)
+            runtime.residualCleanup.add({
+              client: null,
+              session: null,
+              subscription: null,
+              groups: [group],
+            })
+            lateGroupCleanupOwned = true
+            await enqueueRuntimeCleanup(runtime)
             return
           }
           groups.push(group)
@@ -1163,10 +1171,11 @@ export function createOpcUaClientAdapterV1(
       runtime.nextRetryAtMs = null
       runtime.lastError = null
     } catch (error) {
+      if (lateGroupCleanupOwned) throw error
       if (active()) recover(runtime, error)
     } finally {
       runtime.connecting = false
-      if (!active()) {
+      if (!active() && !lateGroupCleanupOwned) {
         await closeDetachedConnection(runtime, candidate, session, subscription, groups)
       }
       if (
