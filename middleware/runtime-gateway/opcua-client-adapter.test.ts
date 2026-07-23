@@ -1413,6 +1413,48 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     expect(adapter.status()[0]?.phase).toBe('disabled')
   })
 
+  it('includes a late group registered in the final cleanup continuation window', async () => {
+    const project = cloneWorkcellProjectV5(readProject())
+    ;(project.opcUa.endpoints[0] as unknown as { reconnectDelayMs: number }).reconnectDelayMs = 60_000
+    const connection = fakeConnection()
+    const lateGroup = Object.assign(new EventEmitter(), {
+      terminate: vi.fn(async () => undefined),
+    })
+    let resolveMonitorItems!: (group: typeof lateGroup) => void
+    const subscription = Object.assign(new EventEmitter(), {
+      monitorItems: vi.fn(() => new Promise<typeof lateGroup>((resolve) => {
+        resolveMonitorItems = resolve
+      })),
+      terminate: vi.fn(async () => undefined),
+    })
+    connection.session.createSubscription2 = vi.fn(async () => subscription)
+    let resolveDisconnect!: () => void
+    connection.client.disconnect = vi.fn(() => new Promise<void>((resolve) => {
+      resolveDisconnect = resolve
+    }))
+    const adapter = createOpcUaClientAdapterV1(project, {
+      gatewayId: 'gateway-local',
+      originId: 'gateway-local:client',
+      configRevision: REVISION,
+      publish: () => undefined,
+      createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => subscription.monitorItems.mock.calls.length === 1)
+
+    connection.client.emit('connection_lost')
+    await eventually(() => vi.mocked(connection.client.disconnect).mock.calls.length === 1)
+    resolveDisconnect()
+    queueMicrotask(() => { resolveMonitorItems(lateGroup) })
+
+    await eventually(() => adapter.status()[0]?.phase === 'reconnecting')
+    expect(lateGroup.terminate).toHaveBeenCalledOnce()
+
+    await adapter.stop()
+    expect(lateGroup.terminate).toHaveBeenCalledOnce()
+    expect(adapter.status()[0]?.phase).toBe('disabled')
+  })
+
   it('rejects a stop whose awaited connect task creates a new cleanup failure epoch', async () => {
     const connection = fakeConnection()
     const lateGroup = Object.assign(new EventEmitter(), {

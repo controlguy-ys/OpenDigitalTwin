@@ -573,13 +573,6 @@ async function closeRuntimePass(runtime: EndpointRuntimeV1): Promise<void> {
   if (unresolved !== undefined) throw unresolved.error
 }
 
-async function drainRuntimeCleanup(runtime: EndpointRuntimeV1): Promise<void> {
-  do {
-    runtime.cleanupDirty = false
-    await closeRuntimePass(runtime)
-  } while (runtime.cleanupDirty && hasNativeHandles(runtime))
-}
-
 function enqueueRuntimeCleanup(runtime: EndpointRuntimeV1): Promise<void> {
   const requestedFailureEpoch = runtime.cleanupFailureEpoch
   runtime.cleanupPendingCount += 1
@@ -591,7 +584,10 @@ function enqueueRuntimeCleanup(runtime: EndpointRuntimeV1): Promise<void> {
       }
       runtime.cleanupActive = requested
       try {
-        await drainRuntimeCleanup(runtime)
+        do {
+          runtime.cleanupDirty = false
+          await closeRuntimePass(runtime)
+        } while (runtime.cleanupDirty && hasNativeHandles(runtime))
         if (!hasNativeHandles(runtime)) {
           runtime.cleanupFailed = false
           runtime.cleanupFailureReason = null
