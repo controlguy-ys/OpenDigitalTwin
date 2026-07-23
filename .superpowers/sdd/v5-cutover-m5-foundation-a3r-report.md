@@ -149,3 +149,29 @@ pre-existing `middleware/runtime-gateway/main.test.ts` useless-spread warning,
 now at line 570 after the added integration fixture. `git diff --check` passed.
 No V4 compatibility path was added. A fresh independent SOL Ultra A3 safety
 review remains an external acceptance gate.
+
+## A3R7 repair completion
+
+- `478a56f` applies a global cleanup-pending fence before `start()` mutates any
+  Endpoint or creates a new Client. Runtime-owned and detached records are
+  drained as one exact-handle set per Endpoint: deduplicated monitored groups,
+  then Subscriptions, Sessions, and Clients. Successful parent Subscription
+  termination remains authoritative proof for its child monitored items, and
+  only unresolved exact handles survive for retry.
+- The same commit makes multi-Endpoint `stop()` all-settled and deterministic:
+  every Endpoint cleanup finishes before the lifecycle queue releases, then the
+  first configured Endpoint failure is propagated. Immediate retries cannot
+  overlap a prior close/disconnect.
+- `3c57b88` proves the production Client start fence through Gateway replacement
+  recovery. A retained prior Session prevents new Client creation, and Gateway
+  status keeps the exact prior Project authority as recovery-required.
+
+Focused Client/Gateway A3 suites passed 2 files / 144 tests. `npm run
+test:job-io` passed 49 files / 823 tests. `npm run test:gateway` ran 29 files /
+450 tests with 446 passing; only the four documented V4 mechanics/publisher
+fixture failures remain. `npm run build:gateway` and `npm run build` passed
+with the existing Vite externalization and chunk-size warnings. `npm run lint`
+passed with only the pre-existing
+`middleware/runtime-gateway/main.test.ts:570` useless-spread warning. `git diff
+--check` passed. No V4 compatibility path was added. A fresh independent SOL
+Ultra A3 safety review remains an external acceptance gate.
