@@ -9,6 +9,13 @@ import type {
 
 export interface ProjectV5AtomicMutationPort {
   readPublished(): PublishedProjectV5 | null
+  isRecoveryRequired(): boolean
+  subscribe(listener: () => void): () => void
+  hydrate(): Promise<PublishedProjectV5 | null>
+  replace(request: {
+    readonly candidate: WorkcellProjectV5
+    readonly description: string
+  }): Promise<PublishedProjectV5>
   mutate(request: {
     readonly expectedRevisionId: string
     readonly description: string
@@ -19,7 +26,10 @@ export interface ProjectV5AtomicMutationPort {
 export interface ProjectV5MutationService extends ProjectV5AtomicMutationPort {}
 
 export interface ProjectV5MutationServiceOptions {
-  readonly publication: Pick<ProjectPublicationCoordinatorV5, 'replace' | 'readPublished' | 'isRecoveryRequired'>
+  readonly publication: Pick<
+    ProjectPublicationCoordinatorV5,
+    'replace' | 'readPublished' | 'isRecoveryRequired' | 'hydrate' | 'subscribe'
+  >
   readonly createRevisionId: () => string
   readonly nowIso: () => string
 }
@@ -41,6 +51,7 @@ function failMutation(code: string, message: string, cause?: unknown): never {
 }
 
 type ProjectV5AtomicMutationRequest = Parameters<ProjectV5AtomicMutationPort['mutate']>[0]
+type ProjectV5ReplacementRequest = Parameters<ProjectV5AtomicMutationPort['replace']>[0]
 
 function assertRequest(request: ProjectV5AtomicMutationRequest): void {
   if (typeof request.description !== 'string' || request.description.trim().length === 0) {
@@ -51,6 +62,17 @@ function assertRequest(request: ProjectV5AtomicMutationRequest): void {
   }
   if (typeof request.recipe !== 'function') {
     failMutation('PROJECT_MUTATION_RECIPE_INVALID', 'Project V5 mutation recipe must be a function.')
+  }
+}
+
+function assertReplacementRequest(request: ProjectV5ReplacementRequest): void {
+  if (typeof request.description !== 'string' || request.description.trim().length === 0) {
+    failMutation('PROJECT_MUTATION_DESCRIPTION_INVALID', 'Project V5 replacement description must be non-empty.')
+  }
+  try {
+    validateWorkcellProjectV5(request.candidate)
+  } catch (error) {
+    return failMutation('PROJECT_PUBLICATION_CANDIDATE_INVALID', 'Project V5 replacement candidate validation failed.', error)
   }
 }
 
@@ -82,6 +104,31 @@ export function createProjectV5MutationService(
   const service: ProjectV5MutationService = {
     readPublished() {
       return options.publication.readPublished()
+    },
+
+    isRecoveryRequired() {
+      return options.publication.isRecoveryRequired()
+    },
+
+    subscribe(listener) {
+      return options.publication.subscribe(listener)
+    },
+
+    hydrate() {
+      return enqueue(async () => options.publication.hydrate())
+    },
+
+    replace(request) {
+      return enqueue(async () => {
+        assertReplacementRequest(request)
+        if (options.publication.isRecoveryRequired()) {
+          return failMutation('PROJECT_RECOVERY_REQUIRED', 'Reload recovery is required before another Project V5 replacement.')
+        }
+        return options.publication.replace({
+          candidate: request.candidate,
+          expectedRevisionId: options.publication.readPublished()?.revisionId ?? null,
+        })
+      })
     },
 
     mutate(request) {

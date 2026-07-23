@@ -45,9 +45,11 @@ function harness() {
   })
   const publication = {
     replace,
+    hydrate: vi.fn(async () => current),
     readPublished: () => current,
     isRecoveryRequired: () => false,
-  } satisfies Pick<ProjectPublicationCoordinatorV5, 'replace' | 'readPublished' | 'isRecoveryRequired'>
+    subscribe: vi.fn(() => () => undefined),
+  } satisfies Pick<ProjectPublicationCoordinatorV5, 'replace' | 'hydrate' | 'readPublished' | 'isRecoveryRequired' | 'subscribe'>
   const createRevisionId = vi.fn(() => 'revision-b')
   const nowIso = vi.fn(() => NOW)
   const service = createProjectV5MutationService({ publication, createRevisionId, nowIso })
@@ -170,5 +172,43 @@ describe('Project V5 atomic mutation service', () => {
       recipe: (active) => ({ ...active, metadata: { ...active.metadata, name: '' } }),
     })).rejects.toThrow()
     expect(validationFailure.replace).not.toHaveBeenCalled()
+  })
+
+  it('serializes replacement and hydration with mutations and relays authoritative publication notifications', async () => {
+    const active = published(project('revision-a'), HASH_A)
+    const replacement = project('replacement-revision', 'Imported')
+    let current: PublishedProjectV5 | null = active
+    const listeners = new Set<() => void>()
+    const publication = {
+      replace: vi.fn(async (request: { readonly candidate: WorkcellProjectV5; readonly expectedRevisionId: string | null }) => {
+        expect(request.expectedRevisionId).toBe(current?.revisionId ?? null)
+        current = published(request.candidate, HASH_B)
+        for (const listener of listeners) listener()
+        return current
+      }),
+      hydrate: vi.fn(async () => current),
+      readPublished: () => current,
+      isRecoveryRequired: () => false,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    } satisfies Pick<ProjectPublicationCoordinatorV5, 'replace' | 'hydrate' | 'readPublished' | 'isRecoveryRequired' | 'subscribe'>
+    const service = createProjectV5MutationService({
+      publication,
+      createRevisionId: () => 'revision-b',
+      nowIso: () => NOW,
+    })
+    const listener = vi.fn()
+    const unsubscribe = service.subscribe(listener)
+
+    await expect(service.replace({ candidate: replacement, description: 'Import Project' })).resolves.toEqual(
+      expect.objectContaining({ project: replacement }),
+    )
+    await expect(service.hydrate()).resolves.toEqual(expect.objectContaining({ project: replacement }))
+    expect(publication.replace).toHaveBeenCalledTimes(1)
+    expect(publication.hydrate).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsubscribe()
   })
 })
