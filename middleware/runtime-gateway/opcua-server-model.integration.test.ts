@@ -430,8 +430,12 @@ async function startActivatedGateway(project: WorkcellProjectV5): Promise<Readon
     const gateway = createRuntimeGatewayEntrypointService(config, { pkiRootDir: testPkiRoot })
     try {
       await gateway.start()
+      const configRevision = await configRevisionForProjectV5(project)
       const activation = await fetch(`http://127.0.0.1:${httpPort}/runtime/project`, {
-        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(project),
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+          type: 'runtime-project-activation-v1', protocolVersion: 1, project,
+          configRevision, activationAttemptId: 'attempt-server-model', expectedAuthority: null,
+        }),
       })
       if (activation.status !== 200) throw await gatewayActivationError(activation)
       return Object.freeze({ gateway, httpPort })

@@ -23,6 +23,7 @@ import {
   createProjectPublicationCoordinatorV5,
   type ProjectV5BrowserRuntimePublicationPort,
   type ProjectV5GatewayPublicationPort,
+  type ProjectV5GatewayRollbackDispositionV1,
   type PublishedProjectV5,
 } from './project-v5-publication.js'
 
@@ -164,7 +165,7 @@ function publicationHarness(
     }),
     readRevision: async (_revisionId: string) => null,
     readActive: async () => durable?.project ?? null,
-    readPointer: async () => ({
+    readPointer: async (): Promise<StoredProjectPointerV5 | null> => ({
       key: 'active', state: 'stable', revisionId: previous.revisionId, commitToken: 'commit-a',
     }),
     garbageCollect: vi.fn(async () => { events.push('repository.gc') }),
@@ -227,7 +228,7 @@ function publicationHarness(
     }),
     rollback: vi.fn(async (candidate: GatewayCandidate) => {
       events.push(`gateway.rollback:${candidate.project.revisionId}`)
-      return 'candidate-deactivated' as const
+      return 'candidate-deactivated' as ProjectV5GatewayRollbackDispositionV1
     }),
     deactivate: vi.fn(async () => inactiveGatewayStatus()),
     cleanupPrevious: vi.fn(async (previousPublication: PublishedProjectV5) => {
@@ -353,7 +354,7 @@ function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options
       return gatewayStatus(value.project, value.configRevision)
     }),
     readStatus: vi.fn(async () => gatewayActive === null ? inactiveGatewayStatus() : gatewayStatus(gatewayActive.project, gatewayActive.configRevision)),
-    rollback: vi.fn(async () => { gatewayActive = null }),
+    rollback: vi.fn(async () => { gatewayActive = null; return 'candidate-deactivated' as ProjectV5GatewayRollbackDispositionV1 }),
     deactivate: vi.fn(async () => { gatewayActive = null; return inactiveGatewayStatus() }),
     cleanupPrevious: vi.fn(async (value: PublishedProjectV5) => { events.push(`gateway.cleanup:${value.revisionId}`) }),
   } satisfies ProjectV5GatewayPublicationPort<{ readonly candidate: WorkcellProjectV5; readonly configRevision: string }>
@@ -431,7 +432,7 @@ describe('Project V5 publication coordinator', () => {
   it('reconciles a commit that takes effect before rejecting by exact pointer and token', async () => {
     const harness = publicationHarness()
     harness.repository.commitPreparedRevision.mockImplementationOnce(async () => { throw new Error('TEST_COMMIT_RESPONSE_LOST') })
-    harness.repository.readPointer = async () => ({
+    harness.repository.readPointer = async (): Promise<StoredProjectPointerV5 | null> => ({
       key: 'active', state: 'publishing', revisionId: harness.nextProject.revisionId,
       commitToken: 'commit-b', previousRevisionId: harness.previous.revisionId, previousCommitToken: 'commit-a',
     })

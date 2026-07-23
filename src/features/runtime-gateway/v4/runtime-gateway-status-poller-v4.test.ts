@@ -22,6 +22,7 @@ function statusFixtureV1(): RuntimeGatewayStatusV1 {
     project: {
       phase: 'not-applied', projectId: null, revisionId: null,
       configRevision: null,
+      activationAttemptId: null, authorityPhase: 'inactive',
       readinessCode: 'NO_ACTIVE_REVISION',
     },
     opcUa: {

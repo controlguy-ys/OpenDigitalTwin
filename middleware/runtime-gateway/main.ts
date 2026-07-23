@@ -983,17 +983,24 @@ export function createRuntimeGatewayEntrypointService(
         projectAuthorityPhase = 'active'
         throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_FAILED', 'Project deactivation failed; the prior runtime was recovered.')
       }
-      active.commandService?.close()
-      active.commandDedupe.clear()
-      active.browserLease.invalidateRevision()
-      clearBrowserLeaseExpiryTimer()
-      clearCommandStagingSweepTimer()
-      settlePendingBrowserCommands(null, 'COMMAND_LEASE_STALE', 'Runtime Gateway Project was deactivated.')
-      browserPublisherSocket = null
-      browserLeasesBySocket.clear()
+      const localCleanup = await Promise.allSettled([
+        Promise.resolve().then(() => active.commandService?.close()),
+        Promise.resolve().then(() => active.commandDedupe.clear()),
+        Promise.resolve().then(() => active.browserLease.invalidateRevision()),
+        Promise.resolve().then(() => clearBrowserLeaseExpiryTimer()),
+        Promise.resolve().then(() => clearCommandStagingSweepTimer()),
+        Promise.resolve().then(() => settlePendingBrowserCommands(null, 'COMMAND_LEASE_STALE', 'Runtime Gateway Project was deactivated.')),
+        Promise.resolve().then(() => { browserPublisherSocket = null; browserLeasesBySocket.clear() }),
+        Promise.resolve().then(() => requireStateBatchHub().deactivateRevision()),
+      ])
+      if (localCleanup.some((result) => result.status === 'rejected')) {
+        projectAuthorityPhase = 'recovery-required'
+        throw new RuntimeGatewayHttpError(503, 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED', 'Project deactivation local cleanup did not complete authoritatively.')
+      }
+      // Clear authority only after the prepared local cleanup tail, including
+      // Hub deactivation, has completed without throwing.
       activeRuntime = null
       projectAuthorityPhase = 'inactive'
-      requireStateBatchHub().deactivateRevision()
     })
     return status()
   }
@@ -1007,21 +1014,32 @@ export function createRuntimeGatewayEntrypointService(
   async function namespaceIndexRequest(request: IncomingMessage): Promise<unknown> {
     const body = await readJsonBody(request, MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1, incompleteBodyRequests, () => shutdownRequested)
     const query = validateNamespaceIndexRequestV1(body)
-    return enqueueRuntimeTransition(async () => {
+    const captured = await enqueueRuntimeTransition(async () => {
       const active = activeRuntime
-      const configured = active?.project.opcUa.endpoints.some(({ endpointId }) => endpointId === query.endpointId) === true
+      if (active === null) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_MISMATCH', 'Endpoint is not configured by the active Project.')
+      const configured = active.project.opcUa.endpoints.some(({ endpointId }) => endpointId === query.endpointId)
       if (!configured) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_MISMATCH', 'Endpoint is not configured by the active Project.')
-      const resolveNamespaceIndex = active?.clientAdapter?.resolveNamespaceIndex
+      const resolveNamespaceIndex = active.clientAdapter?.resolveNamespaceIndex
       if (resolveNamespaceIndex === undefined) throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_ENDPOINT_DISCONNECTED', 'Endpoint has no live OPC UA Client Session.')
-      try {
-        const namespaceIndex = await resolveNamespaceIndex(query.endpointId, query.namespaceUri)
+      return Object.freeze({ runtimeToken: active.runtimeToken, generation: active.generation, adapter: active.clientAdapter, resolveNamespaceIndex })
+    })
+    try {
+      // NamespaceArray is network I/O. The transition queue protects the
+      // authority capture and post-read fence, not this bounded read itself.
+      const namespaceIndex = await captured.resolveNamespaceIndex(query.endpointId, query.namespaceUri)
+      return await enqueueRuntimeTransition(async () => {
+        const active = activeRuntime
+        if (active === null || active.runtimeToken !== captured.runtimeToken || active.generation !== captured.generation || active.clientAdapter !== captured.adapter) {
+          throw new RuntimeGatewayHttpError(409, 'OPC_UA_NAMESPACE_SESSION_STALE', 'Namespace URI could not be resolved from the live OPC UA Session.')
+        }
         if (!Number.isSafeInteger(namespaceIndex) || namespaceIndex < 0) throw new Error('OPC_UA_NAMESPACE_INDEX_INVALID')
         return Object.freeze({ type: 'opcua-namespace-index-response-v1', protocolVersion: 1, endpointId: query.endpointId, namespaceUri: query.namespaceUri, namespaceIndex })
-      } catch (error) {
-        const code = error instanceof Error && /^OPC_UA_NAMESPACE_[A-Z_]+$/u.test(error.message) ? error.message : 'OPC_UA_NAMESPACE_RESOLUTION_FAILED'
-        throw new RuntimeGatewayHttpError(409, code, 'Namespace URI could not be resolved from the live OPC UA Session.')
-      }
-    })
+      })
+    } catch (error) {
+      const code = error instanceof RuntimeGatewayHttpError ? error.code : error instanceof Error && /^OPC_UA_NAMESPACE_[A-Z_]+$/u.test(error.message) ? error.message : 'OPC_UA_NAMESPACE_RESOLUTION_FAILED'
+      if (error instanceof RuntimeGatewayHttpError) throw error
+      throw new RuntimeGatewayHttpError(409, code, 'Namespace URI could not be resolved from the live OPC UA Session.')
+    }
   }
 
   async function publishStateRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
@@ -1296,22 +1314,28 @@ export function createRuntimeGatewayEntrypointService(
 
   function writeRequestError(response: ServerResponse, error: unknown): void {
     if (response.destroyed || response.headersSent || response.writableEnded) return
+    const writeGatewayError = (
+      statusCode: number,
+      code: string,
+      message: string,
+      details: Readonly<Record<string, unknown>> = {},
+    ): void => {
+      const envelope: Record<string, string | null> = { code: code.slice(0, 128), message: message.slice(0, 512) }
+      for (const key of ['recoveredProjectId', 'recoveredRevisionId', 'recoveryError'] as const) {
+        const value = details[key]
+        if (value === null || typeof value === 'string') envelope[key] = value === null ? null : value.slice(0, 512)
+      }
+      writeJson(response, statusCode, envelope)
+    }
     if (error instanceof ConnectivityDiagnosticsRouteErrorV1) {
-      writeJson(response, error.statusCode, { code: error.code, message: error.message })
+      writeGatewayError(error.statusCode, error.code, error.message)
       return
     }
     if (error instanceof RuntimeGatewayHttpError) {
-      writeJson(response, error.statusCode, {
-        code: error.code,
-        message: error.message,
-        ...error.details,
-      })
+      writeGatewayError(error.statusCode, error.code, error.message, error.details)
       return
     }
-    writeJson(response, 500, {
-      code: 'RUNTIME_GATEWAY_INTERNAL_ERROR',
-      message: conciseError(error),
-    })
+    writeGatewayError(500, 'RUNTIME_GATEWAY_INTERNAL_ERROR', conciseError(error))
   }
 
   async function handleRequest(

@@ -21,11 +21,13 @@ const errors = new WeakSet<object>()
 export class RuntimeGatewayConnectivityClientV1Error extends Error {
   readonly code: string
   readonly statusCode: number | null
-  constructor(code: string, message: string, statusCode: number | null = null, cause?: unknown) {
+  readonly details: Readonly<Record<string, string | null>> | null
+  constructor(code: string, message: string, statusCode: number | null = null, cause?: unknown, details: Readonly<Record<string, string | null>> | null = null) {
     super(message)
     this.name = 'RuntimeGatewayConnectivityClientV1Error'
     this.code = code
     this.statusCode = statusCode
+    this.details = details
     if (cause !== undefined) this.cause = cause
     errors.add(this)
   }
@@ -90,7 +92,7 @@ async function boundedJson(response: Response): Promise<unknown> {
   const reader = response.body?.getReader()
   if (reader === undefined) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_INVALID', 'Runtime Gateway returned no response body.', response.status)
   const chunks: Uint8Array[] = []; let bytes = 0
-  while (true) { const next = await reader.read(); if (next.done) break; bytes += next.value.byteLength; if (bytes > RESPONSE_LIMIT_BYTES) { await reader.cancel(); throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_TOO_LARGE', 'Runtime Gateway response exceeds 64 KiB.', response.status) }; chunks.push(next.value) }
+  while (true) { const next = await reader.read(); if (next.done) break; bytes += next.value.byteLength; if (bytes > RESPONSE_LIMIT_BYTES) { void Promise.resolve(reader.cancel()).catch(() => undefined); throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_TOO_LARGE', 'Runtime Gateway response exceeds 64 KiB.', response.status) }; chunks.push(next.value) }
   const merged = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.byteLength }
   const text = new TextDecoder().decode(merged)
   try { return JSON.parse(text) as unknown } catch {
@@ -98,12 +100,18 @@ async function boundedJson(response: Response): Promise<unknown> {
   }
 }
 
-function exactError(value: unknown): { readonly code: string; readonly message: string } | null {
+function exactError(value: unknown): { readonly code: string; readonly message: string; readonly details: Readonly<Record<string, string | null>> | null } | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
-  return Object.keys(record).length === 2 && typeof record.code === 'string' && typeof record.message === 'string'
-    ? { code: record.code, message: record.message }
-    : null
+  const allowed = new Set(['code', 'message', 'recoveredProjectId', 'recoveredRevisionId', 'recoveryError'])
+  if (typeof record.code !== 'string' || typeof record.message !== 'string' || Object.keys(record).some((key) => !allowed.has(key))) return null
+  const details: Record<string, string | null> = {}
+  for (const key of ['recoveredProjectId', 'recoveredRevisionId', 'recoveryError']) {
+    if (!(key in record)) continue
+    if (record[key] !== null && typeof record[key] !== 'string') return null
+    details[key] = record[key] as string | null
+  }
+  return { code: record.code, message: record.message, details: Object.keys(details).length === 0 ? null : Object.freeze(details) }
 }
 
 function authorityFromStatus(status: RuntimeGatewayStatusV1): RuntimeProjectAuthorityV1 | null {
@@ -153,7 +161,7 @@ export function createRuntimeGatewayConnectivityClientV1(
       const body = await Promise.race([boundedJson(response), abortPromise])
       if (!response.ok) {
         const error = exactError(body)
-        throw new RuntimeGatewayConnectivityClientV1Error(error?.code ?? `RUNTIME_GATEWAY_HTTP_${response.status}`, error?.message ?? 'Runtime Gateway request failed.', response.status)
+        throw new RuntimeGatewayConnectivityClientV1Error(error?.code ?? `RUNTIME_GATEWAY_HTTP_${response.status}`, error?.message ?? 'Runtime Gateway request failed.', response.status, undefined, error?.details ?? null)
       }
       return body
     } catch (error) {
@@ -171,7 +179,7 @@ export function createRuntimeGatewayConnectivityClientV1(
     }
   }
   const readStatus = async (): Promise<RuntimeGatewayStatusV1> => {
-    try { return validateRuntimeGatewayStatusV1(await request('/status', { method: 'GET', cache: 'no-store', headers: { Accept: 'application/json' } })) }
+    try { return validateRuntimeGatewayStatusV1(await request('/status', { method: 'GET', headers: { Accept: 'application/json' } })) }
     catch (error) {
       if (isRuntimeGatewayConnectivityClientV1Error(error)) throw error
       throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_INVALID', 'Runtime Gateway returned an invalid status response.', null, error)

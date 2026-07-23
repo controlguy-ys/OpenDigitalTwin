@@ -486,7 +486,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           compensationErrors.push(compensationError)
         }
       }
-      if (gatewayPrepared) await compensate(() => gateway.rollback(preparedGateway as PreparedGateway))
+      if (gatewayPrepared) await compensate(async () => { await gateway.rollback(preparedGateway as PreparedGateway) })
       if (gatewayActivationAttempted) await compensate(async () => {
         assertGatewayInactiveStatus(await gateway.readStatus())
       })
@@ -513,7 +513,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
         errors.push(error)
       }
     }
-    await compensate(() => gateway.rollback(activation.preparedGateway))
+    await compensate(async () => { await gateway.rollback(activation.preparedGateway) })
     await compensate(async () => { assertGatewayInactiveStatus(await gateway.readStatus()) })
     await compensate(() => activation.runtimeTransition.rollback())
     return errors

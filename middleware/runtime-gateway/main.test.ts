@@ -2761,6 +2761,18 @@ describe('runtime Gateway entrypoint', () => {
     } finally { await service.stop() }
   })
 
+  it('rejects injected diagnostic fields and unsupported diagnostic codes without echoing them', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain(); const port = await findAvailablePort()
+    const diagnostic = vi.fn(async () => ({ type: 'opcua-test-connection-result-v1', protocolVersion: 1, outcome: 'failed', code: 'INJECTED_CODE', message: 'secret', injected: true }) as never)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { testOpcUaConnection: diagnostic }); await service.start()
+    try {
+      const endpoint = { endpointId: 'x', name: 'x', endpointUrl: 'opc.tcp://localhost:4840', enabled: true, publishingIntervalMs: 50, reconnectDelayMs: 0 }
+      const response = await requestJson(port, 'POST', '/runtime/opcua/test-connection', { type: 'opcua-test-connection-request-v1', protocolVersion: 1, endpoint })
+      expect(response.status).toBe(503)
+      expect(await response.json()).toEqual({ code: 'CONNECTIVITY_RESPONSE_INVALID', message: 'Connectivity diagnostic returned an invalid result.' })
+    } finally { await service.stop() }
+  })
+
   it.each([
     { endpointUrl: 'invalid' }, { publishingIntervalMs: 49 }, { publishingIntervalMs: 1.5 }, { reconnectDelayMs: -1 }, { reconnectDelayMs: 1.5 }, { endpointId: 'x'.repeat(129) }, { name: 'x'.repeat(129) }, { endpointUrl: `opc.tcp://${'x'.repeat(2048)}` },
   ])('rejects invalid diagnostic endpoint contract before delegation', async (override) => {

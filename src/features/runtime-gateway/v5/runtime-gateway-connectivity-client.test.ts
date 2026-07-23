@@ -15,7 +15,7 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
   it('publishes an exact prepared Project and validates the returned status', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64)
     const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify(status(project.projectId, project.revisionId, hash)), { status: 200 }))
-    const client = createRuntimeGatewayConnectivityClientV1({ fetch }); const prepared = await client.prepare(project, hash)
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch }); const prepared = await client.prepare(project, hash, undefined as never)
     await expect(client.activate(prepared)).resolves.toMatchObject({ project: { configRevision: hash } })
     expect(fetch).toHaveBeenCalledWith('/runtime/project', expect.objectContaining({ method: 'PUT' }))
     expect(JSON.parse(String(fetch.mock.calls[0]![1].body))).toMatchObject({ type: 'runtime-project-activation-v1', project, configRevision: hash, activationAttemptId: 'attempt-0001', expectedAuthority: null })
@@ -23,7 +23,7 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
   it('rejects a ready status for a different Project or hash', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64)
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response(JSON.stringify(status(project.projectId, project.revisionId, 'b'.repeat(64))), { status: 200 }) })
-    await expect(client.activate(await client.prepare(project, hash))).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_STATUS_MISMATCH' })
+    await expect(client.activate(await client.prepare(project, hash, undefined as never))).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_STATUS_MISMATCH' })
   })
   it('hydrates only an inactive Gateway or the exact durable active authority', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64)
@@ -45,7 +45,7 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
   it('fences rollback after an activation response is invalid', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64); const calls: RequestInit[] = []
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async (_url, init) => { calls.push(init); return new Response(JSON.stringify(calls.length === 1 ? {} : status(null, null, null)), { status: 200 }) } })
-    const prepared = await client.prepare(project, hash)
+    const prepared = await client.prepare(project, hash, undefined as never)
     await expect(client.activate(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_STATUS_INVALID' })
     await expect(client.rollback(prepared)).resolves.toBe('candidate-deactivated')
     expect(JSON.parse(String(calls[1]!.body))).toMatchObject({ type: 'runtime-project-deactivate-v1', protocolVersion: 1, projectId: project.projectId, revisionId: project.revisionId, configRevision: hash, activationAttemptId: 'attempt-0001' })
@@ -53,7 +53,7 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
   it('consumes a never-attempted prepared candidate without a request', async () => {
     const fetch = vi.fn()
     const client = createRuntimeGatewayConnectivityClientV1({ fetch, createActivationAttemptId: () => 'attempt-0001' })
-    const prepared = await client.prepare(validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()), 'a'.repeat(64))
+    const prepared = await client.prepare(validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()), 'a'.repeat(64), undefined as never)
     await client.rollback(prepared)
     expect(fetch).not.toHaveBeenCalled()
     await expect(client.rollback(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_CANDIDATE_CONSUMED' })
@@ -61,13 +61,13 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
   it('treats rollback conflict as satisfied when status proves candidate absent', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64); let call = 0
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => { call += 1; if (call === 1) throw new Error('lost'); if (call === 2) return new Response(JSON.stringify({ code: 'PROJECT_DEACTIVATION_CONFLICT', message: 'conflict' }), { status: 409 }); return new Response(JSON.stringify(status('previous', 'previous', 'b'.repeat(64))), { status: 200 }) } })
-    const prepared = await client.prepare(project, hash); await expect(client.activate(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_UNAVAILABLE' })
+    const prepared = await client.prepare(project, hash, undefined as never); await expect(client.activate(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_UNAVAILABLE' })
     await expect(client.rollback(prepared)).resolves.toBe('other-authority'); await expect(client.rollback(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_CANDIDATE_CONSUMED' })
   })
   it('does not consume rollback conflict when status still matches candidate', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5()); const hash = 'a'.repeat(64); let call = 0
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => { call += 1; if (call === 1) throw new Error('lost'); if (call === 2) return new Response(JSON.stringify({ code: 'PROJECT_DEACTIVATION_CONFLICT', message: 'conflict' }), { status: 409 }); return new Response(JSON.stringify(status(project.projectId, project.revisionId, hash)), { status: 200 }) } })
-    const prepared = await client.prepare(project, hash); await client.activate(prepared).catch(() => undefined)
+    const prepared = await client.prepare(project, hash, undefined as never); await client.activate(prepared).catch(() => undefined)
     await expect(client.rollback(prepared)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_STATUS_MISMATCH' })
   })
   it('accepts a versioned connection diagnostic result', async () => {
@@ -128,6 +128,13 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     await expect(client.readStatus()).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_RESPONSE_TOO_LARGE' })
     expect(cancel).toHaveBeenCalledOnce()
   })
+  it('returns the overflow error without waiting for a non-settling reader cancellation', async () => {
+    const cancel = vi.fn(() => new Promise<void>(() => undefined))
+    const reader = { read: vi.fn().mockResolvedValue({ done: false, value: new Uint8Array(64 * 1024 + 1) }), cancel }
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => ({ ok: true, status: 200, headers: new Headers(), body: { getReader: () => reader } } as unknown as Response) })
+    await expect(client.readStatus()).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_RESPONSE_TOO_LARGE' })
+    expect(cancel).toHaveBeenCalledOnce()
+  })
   it('normalizes invalid JSON responses', async () => {
     const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode('{')); controller.close() } })
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => ({ ok: true, status: 200, headers: new Headers(), body: stream } as unknown as Response) })
@@ -171,14 +178,14 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5())
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: vi.fn() })
 
-    await expect(client.prepare(project, 'b'.repeat(64))).resolves.toMatchObject({ configRevision: 'b'.repeat(64) })
+    await expect(client.prepare(project, 'b'.repeat(64), undefined as never)).resolves.toMatchObject({ configRevision: 'b'.repeat(64) })
   })
 
   it('fences an older prepared handle after a newer preparation', async () => {
     const project = validateWorkcellProjectV5(makeMinimalWorkcellProjectV5())
     const client = createRuntimeGatewayConnectivityClientV1({ fetch: vi.fn() })
-    const older = await client.prepare(project, 'a'.repeat(64))
-    await client.prepare(project, 'b'.repeat(64))
+    const older = await client.prepare(project, 'a'.repeat(64), undefined as never)
+    await client.prepare(project, 'b'.repeat(64), undefined as never)
     await expect(client.activate(older)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_CANDIDATE_STALE' })
   })
 })

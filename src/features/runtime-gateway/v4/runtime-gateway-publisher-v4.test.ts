@@ -28,7 +28,7 @@ function status(
     },
     project: {
       phase: 'ready', projectId: 'project-test-v4', revisionId,
-      configRevision: 'a'.repeat(64), readinessCode: 'READY',
+      configRevision: 'a'.repeat(64), activationAttemptId: 'attempt-v4-status', authorityPhase: 'active', readinessCode: 'READY',
     },
     opcUa: {
       mode,
@@ -183,7 +183,7 @@ describe('RuntimeGatewayPublisherV4', () => {
       },
       project: {
         phase: 'not-applied', projectId: null, revisionId: null,
-        configRevision: null, readinessCode: 'NO_ACTIVE_REVISION',
+        configRevision: null, activationAttemptId: null, authorityPhase: 'inactive', readinessCode: 'NO_ACTIVE_REVISION',
       },
       opcUa: {
         mode: 'off',
