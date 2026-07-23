@@ -175,3 +175,34 @@ passed with only the pre-existing
 `middleware/runtime-gateway/main.test.ts:570` useless-spread warning. `git diff
 --check` passed. No V4 compatibility path was added. A fresh independent SOL
 Ultra A3 safety review remains an external acceptance gate.
+
+## A3R8 repair completion
+
+- `b55b112` gives every production Client Endpoint one serialized cleanup
+  queue shared by recovery, stop, reconnect preparation, detached/late
+  cleanup, and connect-finally cleanup. Each enqueue waits for the preceding
+  request to settle, dynamically re-reads exact residual ownership, and
+  returns its own cleanup failure without poisoning the queue tail.
+- The same commit fences public start, reconnect, scheduled reconnect, and
+  internal connect whenever cleanup is queued, in flight, failed, or still
+  owns native handles, regardless of the stopped flag. Background recovery
+  failure therefore remains visibly faulted and cannot create a replacement
+  Client until an authoritative cleanup succeeds.
+- The new RED reproductions showed that failed background Session cleanup had
+  previously allowed `start()` and that rejected-connect recovery could
+  overlap connect-finally cleanup. GREEN coverage proves one exact-handle
+  cleanup owner at a time, later queued work sees residuals added during the
+  earlier drain, and the failing caller receives its own rejection.
+- `2fa6dc3` keeps the serialized cleanup fixture type-safe for the browser
+  production build.
+
+Focused Client tests passed 56 tests; the combined Client and Gateway main
+suite passed 2 files / 146 tests. `npm run test:job-io` passed 49 files / 823
+tests. `npm run test:gateway` ran 29 files / 452 tests with 448 passing; only
+the four documented V4 mechanics/publisher fixture failures remain. `npm run
+build:gateway` and `npm run build` passed with the existing Vite
+externalization and chunk-size warnings. `npm run lint` passed with only the
+pre-existing `middleware/runtime-gateway/main.test.ts:570` useless-spread
+warning. `git diff --check` passed. No V4 compatibility path was added. A
+fresh independent SOL Ultra A3 safety review remains an external acceptance
+gate.
