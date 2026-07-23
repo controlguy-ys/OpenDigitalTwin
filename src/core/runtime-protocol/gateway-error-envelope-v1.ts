@@ -45,7 +45,7 @@ export function canonicalizeRuntimeGatewayErrorEnvelopeV1(
     if (value === null) envelope[key] = null
     else if (typeof value === 'string') envelope[key] = boundedUtf8(value, RUNTIME_GATEWAY_ERROR_MESSAGE_MAX_BYTES_V1)
   }
-  return Object.freeze(envelope) as RuntimeGatewayErrorEnvelopeV1
+  return Object.freeze(envelope) as unknown as RuntimeGatewayErrorEnvelopeV1
 }
 
 export function validateRuntimeGatewayErrorEnvelopeV1(value: unknown): RuntimeGatewayErrorEnvelopeV1 {
@@ -61,5 +61,5 @@ export function validateRuntimeGatewayErrorEnvelopeV1(value: unknown): RuntimeGa
     if (source[key] !== null && !validText(source[key], RUNTIME_GATEWAY_ERROR_MESSAGE_MAX_BYTES_V1)) throw new Error('RUNTIME_GATEWAY_ERROR_ENVELOPE_INVALID')
     envelope[key] = source[key] as string | null
   }
-  return Object.freeze(envelope) as RuntimeGatewayErrorEnvelopeV1
+  return Object.freeze(envelope) as unknown as RuntimeGatewayErrorEnvelopeV1
 }
