@@ -26,6 +26,9 @@ export interface RoboticsPowerTrainProjectionV1 {
 export interface RoboticsMotionDeviceProjectionV1 {
   readonly id: string
   readonly browseName: string
+  readonly manufacturer: string
+  readonly model: string
+  readonly productCode: string
   readonly serialNumber: string
   readonly category: RobotIdentificationV1['motionDeviceCategory']
   readonly controllerId: string
@@ -57,6 +60,26 @@ type JointEngineeringRangeV1 = Readonly<{
   high: number
 }>
 
+const OPC_UA_ROBOTICS_PROJECTION_VALUE_INVALID = 'OPC_UA_ROBOTICS_PROJECTION_VALUE_INVALID'
+
+class RoboticsProjectionValueError extends Error {
+  readonly code = OPC_UA_ROBOTICS_PROJECTION_VALUE_INVALID
+
+  constructor(name: string) {
+    super(`${OPC_UA_ROBOTICS_PROJECTION_VALUE_INVALID}: ${name} must be finite.`)
+    this.name = 'RoboticsProjectionValueError'
+  }
+}
+
+function finiteValue(value: number, name: string): number {
+  if (!Number.isFinite(value)) throw new RoboticsProjectionValueError(name)
+  return value
+}
+
+function millimetres(value: number, name: string): number {
+  return finiteValue(finiteValue(value, name) * 1_000, `${name} after millimetre conversion`)
+}
+
 function isPrismatic(jointType: RobotJointDefinitionV5['type']): boolean {
   return jointType === 'prismatic'
 }
@@ -66,8 +89,8 @@ export function projectJointActualForOpcUaV1(
   actualPosition: number,
 ): JointEngineeringValueV1 {
   return Object.freeze(isPrismatic(jointType)
-    ? { value: actualPosition * 1_000, unit: 'millimetre' as const }
-    : { value: actualPosition, unit: 'degree' as const })
+    ? { value: millimetres(actualPosition, 'Joint actual position'), unit: 'millimetre' as const }
+    : { value: finiteValue(actualPosition, 'Joint actual position'), unit: 'degree' as const })
 }
 
 export function projectJointRangeForOpcUaV1(
@@ -76,8 +99,14 @@ export function projectJointRangeForOpcUaV1(
   maximum: number,
 ): JointEngineeringRangeV1 {
   return Object.freeze(isPrismatic(jointType)
-    ? { low: minimum * 1_000, high: maximum * 1_000 }
-    : { low: minimum, high: maximum })
+    ? {
+        low: millimetres(minimum, 'Joint minimum'),
+        high: millimetres(maximum, 'Joint maximum'),
+      }
+    : {
+        low: finiteValue(minimum, 'Joint minimum'),
+        high: finiteValue(maximum, 'Joint maximum'),
+      })
 }
 
 function projectAxis(
@@ -114,6 +143,9 @@ function projectMotionDevice(
   return Object.freeze({
     id: robot.id,
     browseName: robot.name,
+    manufacturer: definition.identification.manufacturer,
+    model: definition.identification.model,
+    productCode: definition.identification.productCode,
     serialNumber: robot.serialNumber,
     category: definition.identification.motionDeviceCategory,
     controllerId: robot.controllerId,
