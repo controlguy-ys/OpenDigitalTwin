@@ -663,8 +663,11 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
         if (pointer === null) {
           let deactivation: ProjectV5RuntimeCommitTransitionV5 | undefined
           try {
+            // A null durable pointer owns no Gateway authority.  Treat an
+            // active/deactivating/recovery-required Gateway as a concurrent
+            // publisher or recovery race; never issue an unconditional delete.
+            assertGatewayInactiveStatus(await gateway.readStatus())
             deactivation = await runtime.deactivate()
-            assertGatewayInactiveStatus(await gateway.deactivate())
             assertGatewayInactiveStatus(await gateway.readStatus())
             await requireExactPointer(null)
           } catch (error) {

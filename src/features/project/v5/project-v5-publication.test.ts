@@ -921,16 +921,17 @@ describe('Project V5 publication coordinator', () => {
     expect(subject.publication.isRecoveryRequired()).toBe(true)
   })
 
-  it('clears and verifies stale Browser and Gateway authority before hydrating a healthy empty pointer', async () => {
+  it('refuses empty hydration when another coordinator still owns Gateway authority', async () => {
     const subject = hydrationHarness(null, { staleActiveWhenEmpty: true })
 
-    await expect(subject.publication.hydrate()).resolves.toBeNull()
+    await expect(subject.publication.hydrate()).rejects.toMatchObject({ code: 'PROJECT_GATEWAY_ROLLBACK_MISMATCH' })
 
-    expect(subject.runtime.deactivate).toHaveBeenCalledOnce()
-    expect(subject.gateway.deactivate).toHaveBeenCalledOnce()
+    expect(subject.runtime.deactivate).not.toHaveBeenCalled()
+    expect(subject.gateway.deactivate).not.toHaveBeenCalled()
     expect(subject.gateway.readStatus).toHaveBeenCalled()
-    expect(subject.runtimeActive()).toBeNull()
-    expect(subject.gatewayActive()).toBeNull()
+    expect(subject.runtimeActive()).toEqual(subject.target)
+    expect(subject.gatewayActive()).toEqual(subject.target)
+    expect(subject.publication.isRecoveryRequired()).toBe(true)
   })
 
   it('preserves a first interrupted publishing pointer and enters recovery when its target cannot restore', async () => {
