@@ -66,6 +66,7 @@ const COMMAND_BATCH_DELIVERY_TIMEOUT_MS = 10_000
 const COMMAND_BATCH_QUIESCENCE_TIMEOUT_MS = 750
 const COMMAND_BATCH_POLL_INTERVAL_MS = 25
 const GATEWAY_PORT_ACTIVATION_ATTEMPTS = 4
+const GATEWAY_ACTIVATION_ERROR_BODY_MAX_LENGTH = 4_096
 
 let testPkiRoot = ''
 let clientPkiSequence = 0
@@ -397,6 +398,21 @@ function isAddressInUse(error: unknown): boolean {
     || (typeof candidate.message === 'string' && /EADDRINUSE/u.test(candidate.message))
 }
 
+async function gatewayActivationError(response: Response): Promise<Error> {
+  let responseText = ''
+  try {
+    responseText = await response.text()
+  } catch (error) {
+    responseText = `Unable to read Gateway activation response: ${error instanceof Error ? error.message : String(error)}`
+  }
+  const boundedResponseText = responseText.length <= GATEWAY_ACTIVATION_ERROR_BODY_MAX_LENGTH
+    ? responseText
+    : `${responseText.slice(0, GATEWAY_ACTIVATION_ERROR_BODY_MAX_LENGTH)}…[truncated]`
+  return new Error(
+    `Gateway project activation failed with HTTP ${response.status}${boundedResponseText.length === 0 ? '' : `: ${boundedResponseText}`}`,
+  )
+}
+
 async function startActivatedGateway(project: WorkcellProjectV5): Promise<Readonly<{
   gateway: ReturnType<typeof createRuntimeGatewayEntrypointService>
   httpPort: number
@@ -417,7 +433,7 @@ async function startActivatedGateway(project: WorkcellProjectV5): Promise<Readon
       const activation = await fetch(`http://127.0.0.1:${httpPort}/runtime/project`, {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(project),
       })
-      if (activation.status !== 200) throw new Error(`Gateway project activation failed with HTTP ${activation.status}`)
+      if (activation.status !== 200) throw await gatewayActivationError(activation)
       return Object.freeze({ gateway, httpPort })
     } catch (error) {
       try {
@@ -442,6 +458,17 @@ async function waitForResult(session: ClientSession, nodeId: string, expected: u
 }
 
 describe('OPC UA server model real-client integration', () => {
+  it('recognizes EADDRINUSE preserved from a Gateway activation response body', async () => {
+    const addressInUse = await gatewayActivationError(new Response(
+      JSON.stringify({ error: 'OPC_UA_SERVER_START_FAILED: listen EADDRINUSE 127.0.0.1:4841' }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    ))
+    const unavailable = await gatewayActivationError(new Response('Gateway project validation failed', { status: 503 }))
+
+    expect(isAddressInUse(addressInUse)).toBe(true)
+    expect(isAddressInUse(unavailable)).toBe(false)
+  })
+
   it.each([2, 7, 16])('loads official NodeSets and exposes the standard %i-Axis model through a real Client', async (jointCount) => {
     const project = projectWithJointCount(jointCount)
     const capturedOpenWebModel: { model: OpcUaOpenWebModelV1 | null } = { model: null }
