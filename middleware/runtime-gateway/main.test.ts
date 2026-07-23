@@ -5,6 +5,7 @@ import {
   connect,
   type Server as NetServer,
 } from 'node:net'
+import { EventEmitter } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import WebSocket from 'ws'
 
@@ -25,7 +26,10 @@ import type {
   OpcUaClientAdapterOptionsV1,
   OpcUaClientAdapterV1,
 } from './opcua-client-adapter.js'
-import { createOpcUaClientAdapterPublicationHarnessV1 } from './opcua-client-adapter.js'
+import {
+  createOpcUaClientAdapterPublicationHarnessV1,
+  createOpcUaClientAdapterV1,
+} from './opcua-client-adapter.js'
 import { compileOpcUaClientReadPlanV1 } from './opcua-client-read-plan.js'
 import {
   MAX_RUNTIME_BATCH_BYTES_V1,
@@ -312,6 +316,28 @@ function fakeClientAdapter(): {
     disconnectEndpoint,
     reconnectEndpoint,
   }
+}
+
+function productionClientConnection() {
+  const group = Object.assign(new EventEmitter(), {
+    terminate: vi.fn(async () => undefined),
+  })
+  const subscription = Object.assign(new EventEmitter(), {
+    terminate: vi.fn(async () => undefined),
+    monitorItems: vi.fn(async () => group),
+  })
+  const session = {
+    readNamespaceArray: vi.fn(async () => ['http://opcfoundation.org/UA/', 'urn:sample:plc']),
+    createSubscription2: vi.fn(async () => subscription),
+    close: vi.fn(async () => undefined),
+    write: vi.fn(),
+  }
+  const client = Object.assign(new EventEmitter(), {
+    connect: vi.fn(async () => undefined),
+    createSession: vi.fn(async () => session),
+    disconnect: vi.fn(async () => undefined),
+  })
+  return { client, session, subscription, group }
 }
 
 function gatewayStatus(value: unknown) {
@@ -2837,6 +2863,68 @@ describe('runtime Gateway entrypoint', () => {
       })
       expect(prior.stop).toHaveBeenCalledTimes(3)
       expect(candidate.stop).toHaveBeenCalledTimes(3)
+    } finally {
+      await service.stop()
+    }
+  })
+
+  it('retains Gateway recovery authority until a production Client Session cleanup retry succeeds', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const connection = productionClientConnection()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: (project, options) => createOpcUaClientAdapterV1(project, {
+        ...options,
+        createClient: () => connection.client as never,
+      }),
+    })
+    const project = sampleProject('client', 'revision-production-client-cleanup-retry')
+
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      await expect.poll(() => gatewayStatus(service.status()).opcUa.clientEndpoints[0]?.phase)
+        .toBe('connected')
+      connection.session.close.mockRejectedValueOnce(new Error('production Session close failed'))
+      const configRevision = await configRevisionForProjectV5(project)
+      const request = () => fetch(`http://127.0.0.1:${port}/runtime/project`, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'runtime-project-deactivate-v1',
+          protocolVersion: 1,
+          projectId: project.projectId,
+          revisionId: project.revisionId,
+          configRevision,
+          activationAttemptId: `attempt-${project.revisionId}`,
+        }),
+      })
+
+      const failed = await request()
+      expect(failed.status).toBe(503)
+      expect(await failed.json()).toMatchObject({ code: 'PROJECT_DEACTIVATION_RECOVERY_REQUIRED' })
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: {
+          phase: 'recovery-required',
+          revisionId: project.revisionId,
+          readinessCode: 'RECOVERY_REQUIRED',
+        },
+        opcUa: {
+          clientEndpoints: [{
+            phase: 'faulted',
+            sessionActive: true,
+            subscriptionActive: false,
+          }],
+        },
+      })
+
+      const succeeded = await request()
+      expect(succeeded.status).toBe(200)
+      expect(await succeeded.json()).toMatchObject({
+        project: { phase: 'not-applied', revisionId: null, readinessCode: 'NO_ACTIVE_REVISION' },
+      })
+      expect(connection.session.close).toHaveBeenCalledTimes(2)
+      expect(connection.client.disconnect).toHaveBeenCalledOnce()
     } finally {
       await service.stop()
     }
