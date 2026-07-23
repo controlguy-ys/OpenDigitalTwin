@@ -1,9 +1,17 @@
 import {
   MAX_RUNTIME_BATCH_BYTES_V1,
+  validateCommandBatchV1,
+  validateCommandResultV1,
+  validateBrowserPublisherLeaseAcquireV1,
+  validateBrowserPublisherLeaseReleaseV1,
+  validateBrowserPublisherLeaseRenewV1,
+  validateRuntimePublisherLeaseV1,
   validateRuntimeStreamMessageV1,
   type EndpointCatchupBoundaryV1,
   type EndpointLifecycleV1,
   type EndpointReplayBoundaryV1,
+  type CommandBatchV1,
+  type RuntimePublisherLeaseV1,
   type RuntimeStreamMessageV1,
   type StateBatchV1,
 } from '../../../core/runtime-protocol/v1.js'
@@ -16,6 +24,7 @@ export interface BrowserLocationV5 {
 export interface BrowserWebSocketV5 {
   readonly readyState: number
   close(): void
+  send?(data: string): void
   addEventListener(
     type: 'open' | 'message' | 'close' | 'error',
     listener: (event: unknown) => void,
@@ -48,6 +57,8 @@ export interface RuntimeGatewayStreamContextV5 {
 }
 
 export interface RuntimeGatewayStreamTargetV5 extends RuntimeGatewayStreamContextV5 {
+  /** Optional raw Simulation publisher identity for the Gateway-owned Browser lease. */
+  readonly browserPublisherId?: string
   readonly stateConsumers: readonly RuntimeGatewayStateConsumerV5[]
   readonly lifecycleConsumers: readonly RuntimeGatewayLifecycleConsumerV5[]
   readonly onEndpointCatchupStart: (
@@ -56,6 +67,8 @@ export interface RuntimeGatewayStreamTargetV5 extends RuntimeGatewayStreamContex
   ) => EndpointCatchupGuardV5
   readonly onSessionStart?: (receivedTimestampMs: number) => void
   readonly onSessionDisconnect?: (receivedTimestampMs: number) => void
+  /** Product commands are routed to one revision-fenced V5 Simulation owner. */
+  readonly onCommandBatch?: (batch: CommandBatchV1) => Promise<import('../../../core/runtime-protocol/v1.js').CommandResultV1>
 }
 
 export interface RuntimeGatewayStateStreamOptionsV5 {
@@ -89,6 +102,8 @@ interface SocketCandidateV5 {
   failed: boolean
   disconnectReported: boolean
   openedTarget: RuntimeGatewayStreamTargetV5 | null
+  browserLease: RuntimePublisherLeaseV1 | null
+  browserLeaseRenewalTimer: ReturnType<typeof setInterval> | null
 }
 
 interface EndpointRecordV5 {
@@ -256,6 +271,70 @@ export function createRuntimeGatewayStateStreamV5(
     lastReceiptMs = 0
   }
 
+  const clearBrowserLeaseV5 = (target: SocketCandidateV5, release: boolean): void => {
+    if (target.browserLeaseRenewalTimer !== null) {
+      clearInterval(target.browserLeaseRenewalTimer)
+      target.browserLeaseRenewalTimer = null
+    }
+    const lease = target.browserLease
+    target.browserLease = null
+    const openedTarget = target.openedTarget
+    if (
+      !release
+      || lease === null
+      || openedTarget?.browserPublisherId === undefined
+      || target.native.readyState !== 1
+    ) return
+    try {
+      target.native.send?.(JSON.stringify(validateBrowserPublisherLeaseReleaseV1({
+        type: 'browser-publisher-lease-release-v1', protocolVersion: 1,
+        projectId: openedTarget.projectId, configRevision: openedTarget.configRevision,
+        publisherId: openedTarget.browserPublisherId, generation: lease.generation,
+      })))
+    } catch {
+      // A best-effort release cannot block stream disposal.
+    }
+  }
+
+  const acquireBrowserLeaseV5 = (target: SocketCandidateV5): void => {
+    const openedTarget = target.openedTarget
+    if (openedTarget?.browserPublisherId === undefined) return
+    target.native.send?.(JSON.stringify(validateBrowserPublisherLeaseAcquireV1({
+      type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1,
+      projectId: openedTarget.projectId, configRevision: openedTarget.configRevision,
+      publisherId: openedTarget.browserPublisherId,
+    })))
+  }
+
+  const acceptBrowserLeaseV5 = (target: SocketCandidateV5, raw: unknown): boolean => {
+    const openedTarget = target.openedTarget
+    if (openedTarget?.browserPublisherId === undefined) return false
+    let lease: RuntimePublisherLeaseV1
+    try { lease = validateRuntimePublisherLeaseV1(raw) } catch { return false }
+    if (
+      lease.projectId !== openedTarget.projectId
+      || lease.configRevision !== openedTarget.configRevision
+      || lease.publisherId !== openedTarget.browserPublisherId
+    ) throw new TypeError('Runtime Gateway Browser lease context is invalid.')
+    clearBrowserLeaseV5(target, false)
+    target.browserLease = lease
+    target.browserLeaseRenewalTimer = setInterval(() => {
+      if (candidate !== target || target.failed || !target.accepting || target.native.readyState !== 1) return
+      const current = target.browserLease
+      if (current === null) return
+      try {
+        target.native.send?.(JSON.stringify(validateBrowserPublisherLeaseRenewV1({
+          type: 'browser-publisher-lease-renew-v1', protocolVersion: 1,
+          projectId: current.projectId, configRevision: current.configRevision,
+          publisherId: current.publisherId, generation: current.generation,
+        })))
+      } catch {
+        rejectCandidateV5(target, lastReceiptMs)
+      }
+    }, 2_000)
+    return true
+  }
+
   const detachCandidateV5 = (target: SocketCandidateV5): void => {
     const listeners = target.listeners
     if (listeners === null) return
@@ -319,6 +398,7 @@ export function createRuntimeGatewayStateStreamV5(
     if (target.failed) return
     target.failed = true
     target.accepting = false
+    clearBrowserLeaseV5(target, false)
     detachCandidateV5(target)
     const rejectedBoundary = takeActiveBoundaryV5()
     endpointRecords.clear()
@@ -723,6 +803,25 @@ export function createRuntimeGatewayStateStreamV5(
     const atMs = sampleOrRejectV5(target)
     if (atMs === null || target.failed) return
     try {
+      const text = physicalTextV5(event)
+      if (text === null) throw new TypeError('Runtime Gateway accepts only string WebSocket frames.')
+      const raw = JSON.parse(text) as unknown
+      if (acceptBrowserLeaseV5(target, raw)) return
+      if (raw !== null && typeof raw === 'object' && !Array.isArray(raw) && (raw as { type?: unknown }).type === 'command-batch-v1') {
+        const command = validateCommandBatchV1(raw)
+        const openedTarget = target.openedTarget
+        if (
+          openedTarget === null
+          || command.projectId !== openedTarget.projectId
+          || command.configRevision !== openedTarget.configRevision
+          || openedTarget.onCommandBatch === undefined
+        ) throw new TypeError('Runtime Gateway Browser command context is invalid.')
+        void openedTarget.onCommandBatch(command).then((result) => {
+          if (candidate !== target || target.failed || target.native.readyState !== 1) return
+          target.native.send?.(JSON.stringify(validateCommandResultV1(result)))
+        }, () => { rejectCandidateV5(target, atMs) })
+        return
+      }
       const admitted = admitPhysicalFrameV5(target, event, atMs)
       const active = boundary
       if (active !== null && (active.status === 'starting' || active.status === 'draining')) {
@@ -763,6 +862,8 @@ export function createRuntimeGatewayStateStreamV5(
       failed: false,
       disconnectReported: false,
       openedTarget: null,
+      browserLease: null,
+      browserLeaseRenewalTimer: null,
     }
     const listeners: SocketListenersV5 = {
       open: () => {
@@ -778,6 +879,7 @@ export function createRuntimeGatewayStateStreamV5(
           next.established = true
           openedTarget.onSessionStart?.(atMs)
           next.accepting = true
+          acquireBrowserLeaseV5(next)
           refreshInFlight = false
         } catch {
           rejectCandidateV5(next, atMs)
@@ -810,6 +912,7 @@ export function createRuntimeGatewayStateStreamV5(
     if (activeCandidate !== null) {
       activeCandidate.failed = true
       activeCandidate.accepting = false
+      clearBrowserLeaseV5(activeCandidate, true)
       detachCandidateV5(activeCandidate)
       abortActiveBoundaryV5()
       endpointRecords.clear()

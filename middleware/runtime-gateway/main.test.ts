@@ -19,6 +19,7 @@ import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../src/
 import type { RuntimeGatewayDeploymentConfigV1 } from './deployment-config.js'
 import type { OpcUaServerAdapterV1 } from './opcua-server-adapter.js'
 import { OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 } from './opcua-robotics-model.js'
+import { OPENWEB_MODEL_NAMESPACE_URI_V1 } from './opcua-openweb-model.js'
 import type {
   OpcUaClientAdapterOptionsV1,
   OpcUaClientAdapterV1,
@@ -246,10 +247,12 @@ function fakeServerAdapter(
 
   })
   const publishRobotJointState = vi.fn(async () => undefined)
+  const publishActualSnapshot = vi.fn(async () => undefined)
   const adapter: OpcUaServerAdapterV1 = {
     start,
     stop,
     publishRobotJointState,
+    publishActualSnapshot,
     status: () => ({
       mode: 'server',
       started,
@@ -257,6 +260,9 @@ function fakeServerAdapter(
       namespaceUri: OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1,
       namespaceIndex: started ? 2 : null,
       nodeIds: {},
+      productNamespaceUri: OPENWEB_MODEL_NAMESPACE_URI_V1,
+      productNamespaceIndex: started ? 3 : null,
+      productRootNodeId: started ? 'ns=3;s=OpenWebDigitalTwin' : null,
     }),
   }
   return { adapter, start, stop, publishRobotJointState }
@@ -516,6 +522,22 @@ afterEach(() => {
 })
 
 describe('runtime Gateway entrypoint', () => {
+  it('serves a closed non-mutating integration diagnostics snapshot', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port))
+    await service.start()
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/runtime/integration-diagnostics`)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual(expect.objectContaining({
+        type: 'runtime-integration-diagnostics-v1', projectId: null,
+        serverModel: expect.objectContaining({ standardNodeSets: 'disabled', activeSessionCount: 0, maximumSessionCount: 16 }),
+      }))
+    } finally {
+      await service.stop()
+    }
+  })
   it('preserves the Client stop error when Hub reset fails and retries a fresh Hub on usable restart', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()
@@ -2083,16 +2105,20 @@ describe('runtime Gateway entrypoint', () => {
           projectId: project.projectId,
           revisionId: project.revisionId,
         }),
-        {
+        expect.objectContaining({
           advertisedHost: '127.0.0.1',
           advertisedPort: 24840,
           host: '127.0.0.1',
           port: 14840,
           pkiRootDir: 'C:\\runtime-gateway-test-pki',
           configRevision,
-        },
+          onProductCommandWrite: expect.any(Function),
+        }),
       )
-      expect(createOpcUaServerAdapter.mock.calls[0]![1]!.configRevision).not.toBe(project.revisionId)
+      const adapterOptions = (createOpcUaServerAdapter as unknown as {
+        readonly mock: { readonly calls: ReadonlyArray<readonly [unknown, { readonly configRevision: string }]> }
+      }).mock.calls[0]![1]
+      expect(adapterOptions.configRevision).not.toBe(project.revisionId)
       expect(fake.start).toHaveBeenCalledTimes(1)
 
       const publish = await requestJson(port, 'POST', '/runtime/state', {

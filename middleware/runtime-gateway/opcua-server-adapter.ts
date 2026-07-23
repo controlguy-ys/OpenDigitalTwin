@@ -25,6 +25,9 @@ import {
   type OpcUaOpenWebModelV1,
   type ServerActualSnapshotV1,
 } from './opcua-openweb-model.js'
+import type { ProductCommandTargetV1 } from './opcua-command-staging.js'
+import type { RuntimeIntegrationDiagnosticsV1 } from '../../src/core/runtime-protocol/integration-diagnostics-v1.js'
+import type { CommandResultV1 } from '../../src/core/runtime-protocol/v1.js'
 
 export interface OpcUaServerAdapterOptionsV1 {
   readonly host: string
@@ -33,6 +36,7 @@ export interface OpcUaServerAdapterOptionsV1 {
   readonly port: number
   readonly pkiRootDir: string
   readonly configRevision: string
+  readonly onProductCommandWrite?: (write: Readonly<{ sessionId: string; target: ProductCommandTargetV1; field: string; value: unknown }>) => void
 }
 
 export interface OpcUaServerAdapterStatusV1 {
@@ -56,6 +60,8 @@ export interface OpcUaServerAdapterV1 {
     values: Readonly<Record<string, number>>,
   ): Promise<void>
   publishActualSnapshot(snapshot: ServerActualSnapshotV1): Promise<void>
+  publishProductResult?(result: CommandResultV1): Promise<void>
+  publishIntegrationDiagnostics?(snapshot: RuntimeIntegrationDiagnosticsV1): Promise<void>
 }
 
 function freezeNodeIds(
@@ -224,6 +230,7 @@ export function createOpcUaServerAdapterV1(
         project,
         configRevision,
       })
+      if (options.onProductCommandWrite !== undefined) nextOpenWebModel.bindCommandWrites(options.onProductCommandWrite)
 
       await candidate.start()
       server = candidate
@@ -326,11 +333,42 @@ export function createOpcUaServerAdapterV1(
     })
   }
 
+  function publishProductResult(result: CommandResultV1): Promise<void> {
+    return enqueue(async () => {
+      if (mode === 'off') throw new Error('OPC_UA_SERVER_MODE_OFF')
+      if (openWebModel === null) throw new Error('OPC_UA_OPENWEB_MODEL_UNAVAILABLE')
+      openWebModel.publishResult(result)
+    })
+  }
+
+  function publishIntegrationDiagnostics(snapshot: RuntimeIntegrationDiagnosticsV1): Promise<void> {
+    return enqueue(async () => {
+      if (mode === 'off') throw new Error('OPC_UA_SERVER_MODE_OFF')
+      if (openWebModel === null) throw new Error('OPC_UA_OPENWEB_MODEL_UNAVAILABLE')
+      openWebModel.updateDiagnostics({
+        leaseGeneration: snapshot.browserPublisher.generation,
+        leaseExpiresAtMs: snapshot.browserPublisher.expiresAt,
+        lastCommand: snapshot.lastCommandResult,
+        gateway: {
+          mode,
+          standardNodeSets: snapshot.serverModel.standardNodeSets,
+          roboticsModel: snapshot.serverModel.roboticsModel,
+          productModel: snapshot.serverModel.productModel,
+          endpointUrl: currentStatus.endpointUrl,
+          lastError: snapshot.serverModel.lastError,
+        },
+        endpoints: {},
+      })
+    })
+  }
+
   return Object.freeze({
     start,
     stop,
     status: () => currentStatus,
     publishRobotJointState,
     publishActualSnapshot,
+    publishProductResult,
+    publishIntegrationDiagnostics,
   })
 }

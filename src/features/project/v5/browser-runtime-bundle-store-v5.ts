@@ -347,21 +347,25 @@ function canonicalStreamTarget(
     projectId: readField(target, 'projectId', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     configRevision: readField(target, 'configRevision', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     gatewayId: readField(target, 'gatewayId', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
+    browserPublisherId: readField(target, 'browserPublisherId', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     stateConsumers: readField(target, 'stateConsumers', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     lifecycleConsumers: readField(target, 'lifecycleConsumers', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     onEndpointCatchupStart: readField(target, 'onEndpointCatchupStart', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     onSessionStart: readField(target, 'onSessionStart', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
     onSessionDisconnect: readField(target, 'onSessionDisconnect', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
+    onCommandBatch: readField(target, 'onCommandBatch', 'RUNTIME_GRAPH_STREAM_TARGET_INVALID'),
   }
   if (
     typeof snapshot.projectId !== 'string'
     || typeof snapshot.configRevision !== 'string'
     || typeof snapshot.gatewayId !== 'string'
+    || (snapshot.browserPublisherId !== undefined && (typeof snapshot.browserPublisherId !== 'string' || snapshot.browserPublisherId.length === 0))
     || !Array.isArray(snapshot.stateConsumers)
     || !Array.isArray(snapshot.lifecycleConsumers)
     || typeof snapshot.onEndpointCatchupStart !== 'function'
     || (snapshot.onSessionStart !== undefined && typeof snapshot.onSessionStart !== 'function')
     || (snapshot.onSessionDisconnect !== undefined && typeof snapshot.onSessionDisconnect !== 'function')
+    || (snapshot.onCommandBatch !== undefined && typeof snapshot.onCommandBatch !== 'function')
   ) {
     fail('RUNTIME_GRAPH_STREAM_TARGET_INVALID', 'Runtime stream target is incomplete.')
   }
@@ -393,6 +397,7 @@ function canonicalStreamTarget(
   const catchupCallback = snapshot.onEndpointCatchupStart as RuntimeGatewayStreamTargetV5['onEndpointCatchupStart']
   const sessionStartCallback = snapshot.onSessionStart as RuntimeGatewayStreamTargetV5['onSessionStart']
   const sessionDisconnectCallback = snapshot.onSessionDisconnect as RuntimeGatewayStreamTargetV5['onSessionDisconnect']
+  const commandBatchCallback = snapshot.onCommandBatch as RuntimeGatewayStreamTargetV5['onCommandBatch']
   const onEndpointCatchupStart: RuntimeGatewayStreamTargetV5['onEndpointCatchupStart'] = (
     endpointId,
     receivedTimestampMs,
@@ -403,15 +408,20 @@ function canonicalStreamTarget(
   const onSessionDisconnect: RuntimeGatewayStreamTargetV5['onSessionDisconnect'] = sessionDisconnectCallback === undefined
     ? undefined
     : (receivedTimestampMs) => { Reflect.apply(sessionDisconnectCallback, target, [receivedTimestampMs]) }
+  const onCommandBatch: RuntimeGatewayStreamTargetV5['onCommandBatch'] = commandBatchCallback === undefined
+    ? undefined
+    : (batch) => Reflect.apply(commandBatchCallback, target, [batch]) as ReturnType<NonNullable<RuntimeGatewayStreamTargetV5['onCommandBatch']>>
   return Object.freeze({
     projectId: snapshot.projectId,
     configRevision: snapshot.configRevision,
     gatewayId: snapshot.gatewayId,
+    ...(snapshot.browserPublisherId === undefined ? {} : { browserPublisherId: snapshot.browserPublisherId }),
     stateConsumers,
     lifecycleConsumers,
     onEndpointCatchupStart,
     ...(onSessionStart === undefined ? {} : { onSessionStart }),
     ...(onSessionDisconnect === undefined ? {} : { onSessionDisconnect }),
+    ...(onCommandBatch === undefined ? {} : { onCommandBatch }),
   })
 }
 

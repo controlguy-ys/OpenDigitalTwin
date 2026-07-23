@@ -35,6 +35,7 @@ class FakeSocket implements BrowserWebSocketV5 {
   readyState = 0
   closeHook: (() => void) | null = null
   readonly close = vi.fn(() => { this.readyState = 3; this.closeHook?.() })
+  readonly send = vi.fn()
   private readonly listeners = new Map<string, Set<(event: unknown) => void>>()
 
   addEventListener(type: 'open' | 'message' | 'close' | 'error', listener: (event: unknown) => void): void {
@@ -151,6 +152,44 @@ beforeEach(() => { validateStreamMessageSpy.mockClear() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('V5 Runtime Gateway transport lifecycle', () => {
+  it('acquires, renews, and intentionally releases the Browser publisher lease', () => {
+    vi.useFakeTimers()
+    const rig = streamWith({
+      readActiveTarget: () => target({ browserPublisherId: 'gateway:browser-simulation' }),
+    })
+    const socket = startOpen(rig)
+    expect(JSON.parse(socket.send.mock.calls[0]![0] as string)).toEqual({
+      type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1,
+      projectId: 'project', configRevision: REVISION_A, publisherId: 'gateway:browser-simulation',
+    })
+    socket.frame({
+      projectId: 'project', configRevision: REVISION_A, publisherId: 'gateway:browser-simulation',
+      generation: 1, expiresAt: 6_000,
+    })
+    vi.advanceTimersByTime(2_000)
+    expect(JSON.parse(socket.send.mock.calls[1]![0] as string)).toEqual({
+      type: 'browser-publisher-lease-renew-v1', protocolVersion: 1,
+      projectId: 'project', configRevision: REVISION_A, publisherId: 'gateway:browser-simulation', generation: 1,
+    })
+    rig.stream.stop()
+    expect(JSON.parse(socket.send.mock.calls[2]![0] as string)).toEqual({
+      type: 'browser-publisher-lease-release-v1', protocolVersion: 1,
+      projectId: 'project', configRevision: REVISION_A, publisherId: 'gateway:browser-simulation', generation: 1,
+    })
+  })
+
+  it('routes a revision-aligned product batch only to the active V5 command owner', async () => {
+    const onCommandBatch = vi.fn(async (batch: import('../../../core/runtime-protocol/v1.js').CommandBatchV1) => ({
+      type: 'command-result-v1' as const, protocolVersion: 1 as const, projectId: batch.projectId, configRevision: batch.configRevision,
+      leaseGeneration: batch.leaseGeneration, targetId: batch.commands[0]!.targetId, commandId: batch.commands[0]!.commandId,
+      acknowledgement: 'ACCEPTED' as const, executionState: 'SUCCEEDED' as const, failureCode: null, message: 'Done.', attachedObjectId: null, completedAt: 1_000,
+    }))
+    const socket = startOpen(streamWith({ readActiveTarget: () => target({ onCommandBatch }) }))
+    socket.frame({ type: 'command-batch-v1', protocolVersion: 1, projectId: 'project', configRevision: REVISION_A, leaseGeneration: 1, commands: [{ commandId: 'command-1', expiresAt: 2_000, targetId: 'robot-1', value: { kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 1 } } }] })
+    await Promise.resolve()
+    expect(onCommandBatch).toHaveBeenCalledOnce()
+    expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('command-result-v1'))
+  })
   it('selects same-origin ws and wss URLs and rejects unsupported locations', () => {
     expect(runtimeGatewayWebSocketUrlV5({ protocol: 'http:', host: '127.0.0.1:5173' })).toBe('ws://127.0.0.1:5173/runtime/ws')
     expect(runtimeGatewayWebSocketUrlV5({ protocol: 'https:', host: 'cell.local' })).toBe('wss://cell.local/runtime/ws')

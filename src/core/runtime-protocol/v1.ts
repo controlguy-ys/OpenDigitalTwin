@@ -106,6 +106,33 @@ export interface RuntimePublisherLeaseV1 {
   readonly expiresAt: number
 }
 
+/** Browser-to-Gateway ownership messages for the single raw Simulation publisher. */
+interface BrowserPublisherLeaseBaseV1 {
+  readonly protocolVersion: 1
+  readonly projectId: string
+  readonly configRevision: string
+  readonly publisherId: string
+}
+
+export interface BrowserPublisherLeaseAcquireV1 extends BrowserPublisherLeaseBaseV1 {
+  readonly type: 'browser-publisher-lease-acquire-v1'
+}
+
+export interface BrowserPublisherLeaseRenewV1 extends BrowserPublisherLeaseBaseV1 {
+  readonly type: 'browser-publisher-lease-renew-v1'
+  readonly generation: number
+}
+
+export interface BrowserPublisherLeaseReleaseV1 extends BrowserPublisherLeaseBaseV1 {
+  readonly type: 'browser-publisher-lease-release-v1'
+  readonly generation: number
+}
+
+export type BrowserPublisherLeaseMessageV1 =
+  | BrowserPublisherLeaseAcquireV1
+  | BrowserPublisherLeaseRenewV1
+  | BrowserPublisherLeaseReleaseV1
+
 export interface CommandRequestV1 {
   readonly type: 'command-request-v1'
   readonly protocolVersion: 1
@@ -240,6 +267,7 @@ export type RuntimeProtocolV1Message =
   | CommandRequestV1
   | CommandBatchV1
   | CommandResultV1
+  | BrowserPublisherLeaseMessageV1
   | RevisionStageRequestV1
   | RevisionStageResultV1
   | RevisionActivateRequestV1
@@ -976,6 +1004,38 @@ export function validateRuntimePublisherLeaseV1(value: unknown): RuntimePublishe
   })
 }
 
+function validateBrowserPublisherLeaseMessageV1(
+  value: unknown,
+  type: BrowserPublisherLeaseMessageV1['type'],
+): BrowserPublisherLeaseMessageV1 {
+  const hasGeneration = type !== 'browser-publisher-lease-acquire-v1'
+  const record = expectClosedRecord(value, '$', [
+    'type', 'protocolVersion', 'projectId', 'configRevision', 'publisherId',
+    ...(hasGeneration ? ['generation'] : []),
+  ])
+  const base = {
+    type: expectLiteral(record.type, '$.type', type),
+    protocolVersion: expectLiteral(record.protocolVersion, '$.protocolVersion', 1),
+    projectId: validateId(record.projectId, '$.projectId'),
+    configRevision: validateConfigRevision(record.configRevision, '$.configRevision'),
+    publisherId: validateId(record.publisherId, '$.publisherId'),
+  }
+  if (!hasGeneration) return deepFreeze(base as BrowserPublisherLeaseAcquireV1)
+  return deepFreeze({ ...base, generation: expectSafeInteger(record.generation, '$.generation', 1) } as BrowserPublisherLeaseRenewV1 | BrowserPublisherLeaseReleaseV1)
+}
+
+export function validateBrowserPublisherLeaseAcquireV1(value: unknown): BrowserPublisherLeaseAcquireV1 {
+  return validateBrowserPublisherLeaseMessageV1(value, 'browser-publisher-lease-acquire-v1') as BrowserPublisherLeaseAcquireV1
+}
+
+export function validateBrowserPublisherLeaseRenewV1(value: unknown): BrowserPublisherLeaseRenewV1 {
+  return validateBrowserPublisherLeaseMessageV1(value, 'browser-publisher-lease-renew-v1') as BrowserPublisherLeaseRenewV1
+}
+
+export function validateBrowserPublisherLeaseReleaseV1(value: unknown): BrowserPublisherLeaseReleaseV1 {
+  return validateBrowserPublisherLeaseMessageV1(value, 'browser-publisher-lease-release-v1') as BrowserPublisherLeaseReleaseV1
+}
+
 export function validateCommandRequestV1(value: unknown): CommandRequestV1 {
   const record = expectClosedRecord(
     value,
@@ -1331,6 +1391,12 @@ export function validateRuntimeProtocolV1Message(value: unknown): RuntimeProtoco
       return validateCommandBatchV1(record)
     case 'command-result-v1':
       return validateCommandResultV1(record)
+    case 'browser-publisher-lease-acquire-v1':
+      return validateBrowserPublisherLeaseAcquireV1(record)
+    case 'browser-publisher-lease-renew-v1':
+      return validateBrowserPublisherLeaseRenewV1(record)
+    case 'browser-publisher-lease-release-v1':
+      return validateBrowserPublisherLeaseReleaseV1(record)
     case 'revision-stage-v1':
       return validateRevisionStageRequestV1(record)
     case 'revision-stage-result-v1':

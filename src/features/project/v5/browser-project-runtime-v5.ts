@@ -1,5 +1,6 @@
 import {
   composeRigidTransformV5,
+  validateLogicalSignalValueV1,
   validateWorkcellProjectV5,
   type RigidTransformV5,
   type WorkcellProjectV5,
@@ -53,6 +54,10 @@ import {
   type RuntimeGatewayStateStreamOptionsV5,
   type RuntimeGatewayStreamTargetV5,
 } from '../../runtime-gateway/v5/runtime-gateway-state-stream.js'
+import {
+  createRuntimeGatewayCommandOwnerV5,
+  type RuntimeGatewayCommandOwnerV5,
+} from '../../runtime-gateway/v5/runtime-gateway-command-owner.js'
 import {
   createAttachmentPoseRuntimeV1,
   type AttachmentPoseRuntimeV1,
@@ -154,6 +159,7 @@ interface OwnedBrowserRuntimeGraphV5 {
   readonly robots: StoreApi<RobotJointRuntimeStoreV5>
   readonly robotFrames: RobotFrameStatusRuntimeStoreV5
   readonly objects: ObjectRuntimeStateV5
+  readonly simulationObjectPoses: Map<string, RigidTransformV5>
   readonly signals: StoreApi<LogicalSignalRuntimeStoreV1>
   readonly jobs: StoreApi<JobRuntimeStoreV5>
   readonly attachments: StoreApi<AttachmentRuntimeStoreV1>
@@ -162,6 +168,8 @@ interface OwnedBrowserRuntimeGraphV5 {
   readonly jobExecutor: RobotJobExecutorV5 & RobotJobExecutorLifecycleV5
   readonly playback: RobotJobPlaybackControllerV5
   readonly endpointRouter: EndpointLifecycleRouterV5
+  readonly commandOwner: RuntimeGatewayCommandOwnerV5
+  readonly deactivateCommandOwner: () => void
   readonly streamTarget: RuntimeGatewayStreamTargetV5
   readonly graph: PublishedBrowserRuntimeGraphV5
   disposed: boolean
@@ -262,6 +270,7 @@ function createWorldResolver(
   objects: ObjectRuntimeStateV5,
   attachmentProjection: AttachmentPoseRuntimeV1,
   renderClock: () => number,
+  readSimulationObjectPose: (objectId: string) => RigidTransformV5 | null,
 ): WorldResolverV5 {
   const sceneById = new Map(project.scene.frames.map((frame) => [frame.id, frame]))
   const entityById = new Map(project.spatialEntities.map((entity) => [entity.id, entity]))
@@ -311,6 +320,8 @@ function createWorldResolver(
     const resolveObject = (objectId: string): RigidTransformV5 | null => within(`entity:${objectId}`, () => {
       const entity = entityById.get(objectId)
       if (entity === undefined) return null
+      const simulated = readSimulationObjectPose(objectId)
+      if (simulated !== null) return simulated
       const projected = attachmentProjection.readObjectWorldPose(
         objectId,
         (robotId, nextFrameId) => resolveRobot(robotId, nextFrameId),
@@ -427,6 +438,7 @@ function createOwnedGraph(
     commandClient,
   })
   const attachmentProjection = createAttachmentPoseRuntimeV1(attachments)
+  const simulationObjectPoses = new Map<string, RigidTransformV5>()
   const resolver = createWorldResolver(
     project,
     robots,
@@ -434,6 +446,7 @@ function createOwnedGraph(
     objects,
     attachmentProjection,
     createMonotonicRenderClock(nowMs),
+    (objectId) => simulationObjectPoses.get(objectId) ?? null,
   )
   const attachmentPort = createBrowserAttachmentInstructionPortV1({
     readProject: () => project,
@@ -468,10 +481,46 @@ function createOwnedGraph(
     .filter((endpoint) => endpoint.enabled)
     .map((endpoint) => endpoint.endpointId))
   const graphContext = { robots, robotFrames, objects, signals }
+  const logicalSignalsById = new Map(project.logicalSignals.map((signal) => [signal.id, signal]))
+  let ownerActive = true
+  const commandOwner = createRuntimeGatewayCommandOwnerV5({
+    project,
+    configRevision,
+    nowMs,
+    isActive: () => ownerActive,
+    simulation: {
+      writeJointValues: (robotId, values) => robots.getState().writeJointValues(robotId, values, 'simulation'),
+      commitObjectPose: (objectId, pose) => { simulationObjectPoses.set(objectId, pose) },
+      writeLogicalSignal: (signalId, value) => {
+        const definition = logicalSignalsById.get(signalId)
+        const previous = signals.getState().read(signalId)
+        if (definition === undefined || previous === null) throw new Error('COMMAND_TARGET_INVALID')
+        const atMs = nowMs()
+        const next = Object.freeze({
+          ...previous,
+          value: validateLogicalSignalValueV1(definition.dataType, value, '$.command.value'),
+          quality: 'GOOD' as const,
+          statusCode: 'Good',
+          owner: 'simulation' as const,
+          sourceTimestampMs: atMs,
+          publishedTimestampMs: atMs,
+          receivedTimestampMs: Math.max(previous.receivedTimestampMs, atMs),
+        })
+        signals.setState({ bySignalId: Object.freeze({ ...signals.getState().bySignalId, [signalId]: next }) })
+      },
+      startJob: (jobId) => { jobExecutor.startJob(jobId, nowMs()) },
+      cancelJob: (jobId) => {
+        const job = project.jobs.find((candidate) => candidate.id === jobId)
+        if (job === undefined) throw new Error('COMMAND_TARGET_INVALID')
+        jobExecutor.cancelRobotJob(job.robotId, 'Cancelled by Browser product command.')
+      },
+    },
+  })
   const streamTarget: RuntimeGatewayStreamTargetV5 = Object.freeze({
     projectId: project.projectId,
     configRevision,
     gatewayId: options.gatewayId,
+    browserPublisherId: `${options.gatewayId}:browser-simulation`,
     stateConsumers: Object.freeze([robots.getState(), robotFrames, objects, signals.getState()]),
     lifecycleConsumers: Object.freeze([(event: Parameters<EndpointLifecycleRouterV5['ingest']>[0], receivedTimestampMs: number) => endpointRouter.ingest(event, receivedTimestampMs)]),
     onEndpointCatchupStart: (endpointId: string, receivedTimestampMs: number) => (
@@ -500,12 +549,17 @@ function createOwnedGraph(
         runNoThrow(onDiagnostic, () => signals.getState().markEndpointDisconnected(endpointId, receivedTimestampMs))
       }
     },
+    onCommandBatch: (batch: import('../../../core/runtime-protocol/v1.js').CommandBatchV1) => commandOwner.execute(batch),
   })
   const graph: PublishedBrowserRuntimeGraphV5 = Object.freeze({
     robots, robotFrames, signals, objects, jobs, attachments,
     signalWrites, jobExecutor, playback, streamTarget,
   })
-  return { project, configRevision, robots, robotFrames, objects, signals, jobs, attachments, commandClient, signalWrites, jobExecutor, playback, endpointRouter, streamTarget, graph, disposed: false }
+  return {
+    project, configRevision, robots, robotFrames, objects, simulationObjectPoses, signals, jobs, attachments,
+    commandClient, signalWrites, jobExecutor, playback, endpointRouter, commandOwner,
+    deactivateCommandOwner: () => { ownerActive = false }, streamTarget, graph, disposed: false,
+  }
 }
 
 function disposeOwnedGraph(
@@ -514,6 +568,8 @@ function disposeOwnedGraph(
 ): void {
   if (graph.disposed) return
   graph.disposed = true
+  graph.deactivateCommandOwner()
+  graph.simulationObjectPoses.clear()
   runNoThrow(onDiagnostic, () => graph.playback.dispose())
   runNoThrow(onDiagnostic, () => graph.jobExecutor.requestShutdown('Browser runtime graph disposed.', onDiagnostic))
   runNoThrow(onDiagnostic, () => graph.commandClient.clearLease())

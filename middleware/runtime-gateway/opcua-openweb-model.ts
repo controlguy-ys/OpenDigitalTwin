@@ -13,6 +13,7 @@ import {
   validateCommandResultV1,
   type CommandResultV1,
 } from '../../src/core/runtime-protocol/v1.js'
+import type { ProductCommandTargetV1 } from './opcua-command-staging.js'
 
 export const OPENWEB_MODEL_NAMESPACE_URI_V1 =
   'urn:open-web-digital-twin:model:v1' as const
@@ -145,6 +146,7 @@ export interface ProductCommandFieldHandlesV1 {
 export interface OpcUaOpenWebModelV1 {
   readonly rootNodeId: string
   readonly commandFields: ProductCommandFieldHandlesV1
+  readonly commandTargets: Readonly<Record<string, ProductCommandTargetV1>>
   rootChildren(): readonly ['Actual', 'Command', 'Result', 'Diagnostics']
   actualChildren(): readonly ['SceneObjects', 'LogicalSignals', 'Jobs', 'Attachments']
   commandChildren(): readonly ['RobotJointTargets', 'SceneObjects', 'LogicalSignals', 'Jobs']
@@ -156,6 +158,7 @@ export interface OpcUaOpenWebModelV1 {
   readResult(requestId: string): CommandResultV1 | null
   updateDiagnostics(snapshot: OpenWebDiagnosticsSnapshotV1): void
   readDiagnostics(): OpenWebDiagnosticsReadV1
+  bindCommandWrites(listener: (write: Readonly<{ sessionId: string; target: ProductCommandTargetV1; field: string; value: unknown }>) => void): void
   dispose(): void
 }
 
@@ -552,7 +555,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
       )])
     }
     robotCommandFields.push([robot.id, Object.freeze({
-      ...commandBase(entry, path, `robot-joint-target:${robot.id}`),
+      ...commandBase(entry, path, robot.id),
       payload: frozenRecord(payload),
     })])
   }
@@ -562,7 +565,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     const path = `${rootPath}/Command/SceneObjects/${entity.id}`
     const entry = object(commandSceneObjects, entity.id, path)
     objectCommandFields.push([entity.id, Object.freeze({
-      ...commandBase(entry, path, `scene-object:${entity.id}`),
+      ...commandBase(entry, path, entity.id),
       // RPY is deliberately an exchange-only staged command representation.
       payload: Object.freeze({
         X: variable(entry, 'X', `${path}/X`, DataType.Double, entity.localPose.positionM[0], true),
@@ -580,7 +583,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     const path = `${rootPath}/Command/LogicalSignals/${signal.id}`
     const entry = object(commandLogicalSignals, signal.id, path)
     signalCommandFields.push([signal.id, Object.freeze({
-      ...commandBase(entry, path, `logical-signal:${signal.id}`),
+      ...commandBase(entry, path, signal.id),
       payload: Object.freeze({
         Value: variable(entry, 'Value', `${path}/Value`, logicalSignalDataType(signal.dataType), signal.initialValue, true),
       }),
@@ -592,7 +595,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     const path = `${rootPath}/Command/Jobs/${job.id}`
     const entry = object(commandJobs, job.id, path)
     jobCommandFields.push([job.id, Object.freeze({
-      ...commandBase(entry, path, `job:${job.id}`),
+      ...commandBase(entry, path, job.id),
       payload: Object.freeze({
         Operation: variable(entry, 'Operation', `${path}/Operation`, DataType.String, 'start', true),
       }),
@@ -605,6 +608,16 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     logicalSignals: frozenRecord(signalCommandFields),
     jobs: frozenRecord(jobCommandFields),
   })
+  const commandTargetEntries: Array<readonly [string, ProductCommandTargetV1]> = [
+    ...project.robots.map((robot): readonly [string, ProductCommandTargetV1] => {
+      const definition = project.robotDefinitions.find(({ id }) => id === robot.definitionId)!
+      return [robot.id, Object.freeze({ targetId: robot.id, projectId: project.projectId, revisionId: project.revisionId, configRevision, payload: Object.freeze({ kind: 'robot-joint-target' as const, robotId: robot.id, jointIds: Object.freeze(definition.joints.map(({ id }) => id)) }) })] as const
+    }),
+    ...project.spatialEntities.map((entity): readonly [string, ProductCommandTargetV1] => [entity.id, Object.freeze({ targetId: entity.id, projectId: project.projectId, revisionId: project.revisionId, configRevision, payload: Object.freeze({ kind: 'scene-object-pose' as const, objectId: entity.id }) })]),
+    ...project.logicalSignals.map((signal): readonly [string, ProductCommandTargetV1] => [signal.id, Object.freeze({ targetId: signal.id, projectId: project.projectId, revisionId: project.revisionId, configRevision, payload: Object.freeze({ kind: 'logical-signal' as const, signalId: signal.id }) })]),
+    ...project.jobs.map((job): readonly [string, ProductCommandTargetV1] => [job.id, Object.freeze({ targetId: job.id, projectId: project.projectId, revisionId: project.revisionId, configRevision, payload: Object.freeze({ kind: 'job' as const, jobId: job.id }) })]),
+  ]
+  const commandTargets: Readonly<Record<string, ProductCommandTargetV1>> = frozenRecord(commandTargetEntries)
 
   const revisionId = variable(diagnostics, 'RevisionId', `${rootPath}/Diagnostics/RevisionId`, DataType.String, project.revisionId)
   const configRevisionNode = variable(diagnostics, 'ConfigRevision', `${rootPath}/Diagnostics/ConfigRevision`, DataType.String, configRevision)
@@ -655,6 +668,41 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     endpoints: {},
   }, project.revisionId, configRevision)
   let disposed = false
+  let commandWriteListener: OpcUaOpenWebModelV1['bindCommandWrites'] extends (listener: infer Listener) => void ? Listener | null : never = null
+
+  function sessionIdFromWriteContext(context: unknown): string {
+    const session = context !== null && typeof context === 'object'
+      ? (context as { readonly session?: { getSessionId?: () => { toString(): string } } }).session
+      : undefined
+    const id = session?.getSessionId?.().toString()
+    return id === undefined ? 'opcua:anonymous-session' : `opcua:${id}`
+  }
+
+  function installCommandWriter(variable: UAVariable, target: ProductCommandTargetV1, field: string): void {
+    const original = variable.writeValue.bind(variable) as (...args: unknown[]) => unknown
+    ;(variable as unknown as { writeValue: (...args: unknown[]) => unknown }).writeValue = (...args: unknown[]): unknown => {
+      const dataValue = args[1] as { readonly value?: { readonly value?: unknown } } | undefined
+      const listener = commandWriteListener
+      if (listener !== null) {
+        try { listener({ sessionId: sessionIdFromWriteContext(args[0]), target, field, value: dataValue?.value?.value }) } catch { /* OPC UA value persistence remains independent of product dispatch. */ }
+      }
+      return original(...args)
+    }
+  }
+
+  for (const target of Object.values(commandTargets)) {
+    const fields = target.payload.kind === 'robot-joint-target'
+      ? commandFields.robotJointTargets[target.targetId]!
+      : target.payload.kind === 'scene-object-pose'
+        ? commandFields.sceneObjects[target.targetId]!
+        : target.payload.kind === 'logical-signal'
+          ? commandFields.logicalSignals[target.targetId]!
+          : commandFields.jobs[target.targetId]!
+    installCommandWriter(fields.requestId, target, 'RequestId')
+    installCommandWriter(fields.expiresAt, target, 'ExpiresAt')
+    installCommandWriter(fields.execute, target, 'Execute')
+    for (const [field, variable] of Object.entries(fields.payload)) installCommandWriter(variable, target, field)
+  }
 
   function assertActive(): void {
     if (disposed) throw new Error('OPC_UA_OPENWEB_MODEL_DISPOSED')
@@ -953,6 +1001,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
   return Object.freeze({
     rootNodeId: projectRoot.nodeId.toString(),
     commandFields,
+    commandTargets,
     rootChildren: () => ROOT_CHILDREN,
     actualChildren: () => ACTUAL_CHILDREN,
     commandChildren: () => COMMAND_CHILDREN,
@@ -964,6 +1013,10 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     readResult,
     updateDiagnostics,
     readDiagnostics,
+    bindCommandWrites(listener: (write: Readonly<{ sessionId: string; target: ProductCommandTargetV1; field: string; value: unknown }>) => void) {
+      if (typeof listener !== 'function') throw new Error('OPC_UA_OPENWEB_COMMAND_LISTENER_INVALID')
+      commandWriteListener = listener
+    },
     dispose,
   })
 }

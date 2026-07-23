@@ -8,7 +8,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { WebSocketServer } from 'ws'
+import { WebSocket, WebSocketServer } from 'ws'
 
 import {
   MAX_OPC_UA_VALUES_PER_CALL_V5,
@@ -21,8 +21,13 @@ import {
   MAX_RUNTIME_BATCH_BYTES_V1,
   validateCommandRequestV1,
   validateCommandResultV1,
+  validateBrowserPublisherLeaseAcquireV1,
+  validateBrowserPublisherLeaseReleaseV1,
+  validateBrowserPublisherLeaseRenewV1,
   type CommandRequestV1,
   type CommandResultV1,
+  type CommandBatchV1,
+  type RuntimePublisherLeaseV1,
 } from '../../src/core/runtime-protocol/v1.js'
 import {
   RuntimeGatewayDeploymentConfigError,
@@ -58,8 +63,14 @@ import {
   validateRuntimeGatewayStatusV1,
   type RuntimeGatewayStatusV1,
 } from '../../src/core/runtime-protocol/gateway-status-v1.js'
+import type { RuntimeIntegrationDiagnosticsV1 } from '../../src/core/runtime-protocol/integration-diagnostics-v1.js'
+import { createBrowserPublisherLeaseManagerV1, type BrowserPublisherLeaseManagerV1 } from './browser-publisher-lease.js'
+import { createRuntimeIntegrationDiagnosticsV1, type RuntimeIntegrationDiagnosticsBuilderV1 } from './integration-diagnostics.js'
+import { createBrowserCommandDispatchV1, type BrowserCommandDispatchV1 } from './browser-command-dispatch.js'
+import { createProductCommandStagingV1, type ProductCommandStagingV1 } from './opcua-command-staging.js'
 
 export const MAX_RUNTIME_PROJECT_BODY_BYTES_V1 = 1024 * 1024
+export const MAX_RUNTIME_INTEGRATION_DIAGNOSTICS_BYTES_V1 = 64 * 1024
 
 export interface RuntimeGatewayEntrypointServiceV1 {
   start(): Promise<void>
@@ -93,6 +104,10 @@ interface ActiveProjectRuntimeV1 {
   readonly commandService: RuntimeCommandServiceV1 | null
   readonly serverAdapter: OpcUaServerAdapterV1 | null
   readonly clientAdapter: OpcUaClientAdapterV1 | null
+  readonly browserLease: BrowserPublisherLeaseManagerV1
+  readonly integrationDiagnostics: RuntimeIntegrationDiagnosticsBuilderV1
+  readonly commandStaging: ProductCommandStagingV1
+  readonly browserCommandDispatch: BrowserCommandDispatchV1
 }
 
 interface StagedRobotJointStateV1 {
@@ -272,6 +287,57 @@ export function createRuntimeGatewayEntrypointService(
   let runtimeTail: Promise<void> = Promise.resolve()
   let committedCommandGeneration = initialCommittedCommandGeneration
   let shutdownRequested = false
+  const idleBrowserLease = createBrowserPublisherLeaseManagerV1({ nowMs })
+  let browserPublisherSocket: WebSocket | null = null
+  const browserLeasesBySocket = new Map<WebSocket, RuntimePublisherLeaseV1>()
+  const pendingBrowserCommands = new Map<string, Readonly<{
+    generation: number
+    resolve: (result: CommandResultV1) => void
+    reject: (reason: unknown) => void
+  }>>()
+
+  function browserCommandKey(batch: CommandBatchV1): string {
+    const command = batch.commands[0]!
+    return JSON.stringify([batch.projectId, batch.configRevision, batch.leaseGeneration, command.commandId])
+  }
+
+  function rejectPendingBrowserCommands(reason: unknown): void {
+    for (const pending of pendingBrowserCommands.values()) pending.reject(reason)
+    pendingBrowserCommands.clear()
+  }
+
+  function publishProductResult(active: ActiveProjectRuntimeV1, result: CommandResultV1): void {
+    active.integrationDiagnostics.publishCommand(result)
+    void active.serverAdapter?.publishProductResult?.(result).catch(() => undefined)
+    const snapshot = active.integrationDiagnostics.snapshot()
+    void active.serverAdapter?.publishIntegrationDiagnostics?.(snapshot).catch(() => undefined)
+  }
+
+  function sendBrowserCommand(batch: CommandBatchV1): Promise<CommandResultV1> {
+    const active = activeRuntime
+    const socket = browserPublisherSocket
+    if (active === null || socket === null || socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('BROWSER_PUBLISHER_UNAVAILABLE'))
+    }
+    const lease = active.browserLease.current()
+    if (lease === null || lease.generation !== batch.leaseGeneration || browserLeasesBySocket.get(socket)?.generation !== lease.generation) {
+      return Promise.reject(new Error('BROWSER_PUBLISHER_UNAVAILABLE'))
+    }
+    const key = browserCommandKey(batch)
+    return new Promise<CommandResultV1>((resolveCommand, rejectCommand) => {
+      pendingBrowserCommands.set(key, Object.freeze({ generation: batch.leaseGeneration, resolve: resolveCommand, reject: rejectCommand }))
+      try {
+        socket.send(JSON.stringify(batch), (error) => {
+          if (error === undefined) return
+          pendingBrowserCommands.delete(key)
+          rejectCommand(error)
+        })
+      } catch (error) {
+        pendingBrowserCommands.delete(key)
+        rejectCommand(error)
+      }
+    })
+  }
 
   function requireStateBatchHub(): StateBatchHubV1 {
     if (stateBatchHub === null) throw new Error('STATE_BATCH_HUB_UNAVAILABLE')
@@ -326,6 +392,23 @@ export function createRuntimeGatewayEntrypointService(
     })
   }
 
+  function integrationDiagnostics(): RuntimeIntegrationDiagnosticsV1 {
+    const active = activeRuntime
+    const snapshot = active?.integrationDiagnostics.snapshot() ?? createRuntimeIntegrationDiagnosticsV1({
+      nowMs,
+      readContext: () => ({ projectId: null, revisionId: null, configRevision: null }),
+      readServerModel: () => ({
+        standardNodeSets: 'disabled', roboticsModel: 'disabled', productModel: 'disabled',
+        activeSessionCount: 0, lastError: null,
+      }),
+      lease: idleBrowserLease,
+    }).snapshot()
+    if (Buffer.byteLength(JSON.stringify(snapshot)) > MAX_RUNTIME_INTEGRATION_DIAGNOSTICS_BYTES_V1) {
+      throw new RuntimeGatewayHttpError(503, 'RUNTIME_INTEGRATION_DIAGNOSTICS_TOO_LARGE', 'Integration diagnostics exceeds its 64 KiB response cap.')
+    }
+    return snapshot
+  }
+
   function enqueueRuntimeTransition<T>(
     transition: () => Promise<T>,
   ): Promise<T> {
@@ -367,6 +450,22 @@ export function createRuntimeGatewayEntrypointService(
     let candidateClientAdapter: OpcUaClientAdapterV1 | null = null
     let candidateCommandDedupe: RuntimeCommandDedupeRegistryV1 | null = null
     let candidateCommandService: RuntimeCommandServiceV1 | null = null
+    const candidateBrowserLease = createBrowserPublisherLeaseManagerV1({ nowMs })
+    const candidateCommandStaging = createProductCommandStagingV1()
+    candidateCommandDedupe = createRuntimeCommandDedupeRegistryV1()
+    const candidateBrowserCommandDispatch = createBrowserCommandDispatchV1({
+      lease: candidateBrowserLease,
+      dedupe: candidateCommandDedupe,
+      send: sendBrowserCommand,
+      publishResult: (result) => {
+        const active = activeRuntime
+        if (active !== null && active.configRevision === result.configRevision && active.project.projectId === result.projectId) {
+          publishProductResult(active, result)
+        }
+      },
+      nowMs,
+    })
+    let candidateIntegrationDiagnostics: RuntimeIntegrationDiagnosticsBuilderV1 | null = null
     const stagedClientTimeline: RuntimeTimelineStagingV1 = createRuntimeTimelineStagingV1()
     let clientBatchPublisherLive = false
     let previousAdaptersStopped = false
@@ -380,6 +479,10 @@ export function createRuntimeGatewayEntrypointService(
           port: config.opcUaPort,
           pkiRootDir,
           configRevision,
+          onProductCommandWrite: (write) => {
+            const snapshot = candidateCommandStaging.write(write.sessionId, write.target, write.field, write.value, nowMs())
+            if (snapshot !== null) void candidateBrowserCommandDispatch.execute(snapshot)
+          },
         })
       }
       if (project.opcUa.mode === 'client' || project.opcUa.mode === 'bridge') {
@@ -413,7 +516,17 @@ export function createRuntimeGatewayEntrypointService(
         }
       }
       await candidateClientAdapter?.start()
-      candidateCommandDedupe = createRuntimeCommandDedupeRegistryV1()
+      candidateIntegrationDiagnostics = createRuntimeIntegrationDiagnosticsV1({
+        nowMs,
+        readContext: () => ({ projectId: project.projectId, revisionId: project.revisionId, configRevision }),
+        readServerModel: () => {
+          const started = candidateServerAdapter?.status().started === true
+          return started
+            ? { standardNodeSets: 'loaded' as const, roboticsModel: 'ready' as const, productModel: 'ready' as const, activeSessionCount: 0, lastError: null }
+            : { standardNodeSets: 'disabled' as const, roboticsModel: 'disabled' as const, productModel: 'disabled' as const, activeSessionCount: 0, lastError: null }
+        },
+        lease: candidateBrowserLease,
+      })
       if (candidateClientAdapter !== null) {
         candidateCommandService = createRuntimeCommandServiceV1({
           project,
@@ -433,6 +546,10 @@ export function createRuntimeGatewayEntrypointService(
         commandService: candidateCommandService,
         serverAdapter: candidateServerAdapter,
         clientAdapter: candidateClientAdapter,
+        browserLease: candidateBrowserLease,
+        integrationDiagnostics: candidateIntegrationDiagnostics,
+        commandStaging: candidateCommandStaging,
+        browserCommandDispatch: candidateBrowserCommandDispatch,
       })
 
       // Resolve the Hub and run the one explicit test-only injection while
@@ -462,8 +579,13 @@ export function createRuntimeGatewayEntrypointService(
       preparedActivation.installPrepared()
       clientBatchPublisherLive = true
       preparedActivation.flushPrepared()
+      void candidateServerAdapter?.publishIntegrationDiagnostics?.(
+        candidateIntegrationDiagnostics.snapshot(),
+      ).catch(() => undefined)
       try { previous?.commandService?.close() } catch { /* post-commit cleanup is isolated */ }
       try { previous?.commandDedupe.clear() } catch { /* post-commit cleanup is isolated */ }
+      try { previous?.browserLease.invalidateRevision() } catch { /* revision fencing cleanup is isolated */ }
+      rejectPendingBrowserCommands(new Error('COMMAND_LEASE_STALE'))
     } catch (error) {
       candidateCommandService?.close()
       candidateCommandDedupe?.clear()
@@ -481,6 +603,8 @@ export function createRuntimeGatewayEntrypointService(
         ])
         previous?.commandService?.close()
         previous?.commandDedupe.clear()
+        previous?.browserLease.invalidateRevision()
+        rejectPendingBrowserCommands(new Error('COMMAND_LEASE_STALE'))
       }
       if (!recovered) {
         activeRuntime = null
@@ -741,6 +865,86 @@ export function createRuntimeGatewayEntrypointService(
     return result!
   }
 
+  function handleBrowserSocketMessage(socket: WebSocket, data: WebSocket.RawData): void {
+    let value: unknown
+    try { value = JSON.parse(data.toString()) as unknown } catch { return }
+    const active = activeRuntime
+    if (active === null) return
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      const type = (value as { readonly type?: unknown }).type
+      try {
+        if (type === 'browser-publisher-lease-acquire-v1') {
+          const request = validateBrowserPublisherLeaseAcquireV1(value)
+          if (request.projectId !== active.project.projectId || request.configRevision !== active.configRevision) return
+          const displacedSocket = browserPublisherSocket
+          const lease = active.browserLease.acquire(request)
+          if (displacedSocket !== null && displacedSocket !== socket) {
+            browserLeasesBySocket.delete(displacedSocket)
+            rejectPendingBrowserCommands(new Error('COMMAND_LEASE_STALE'))
+          }
+          browserPublisherSocket = socket
+          browserLeasesBySocket.set(socket, lease)
+          socket.send(JSON.stringify(lease))
+          void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
+          return
+        }
+        if (type === 'browser-publisher-lease-renew-v1') {
+          const request = validateBrowserPublisherLeaseRenewV1(value)
+          const existing = browserLeasesBySocket.get(socket)
+          if (
+            existing === undefined
+            || browserPublisherSocket !== socket
+            || existing.generation !== request.generation
+            || existing.projectId !== request.projectId
+            || existing.configRevision !== request.configRevision
+            || existing.publisherId !== request.publisherId
+          ) return
+          const lease = active.browserLease.renew(existing)
+          browserLeasesBySocket.set(socket, lease)
+          socket.send(JSON.stringify(lease))
+          void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
+          return
+        }
+        if (type === 'browser-publisher-lease-release-v1') {
+          const request = validateBrowserPublisherLeaseReleaseV1(value)
+          const existing = browserLeasesBySocket.get(socket)
+          if (
+            existing === undefined
+            || existing.generation !== request.generation
+            || existing.projectId !== request.projectId
+            || existing.configRevision !== request.configRevision
+            || existing.publisherId !== request.publisherId
+          ) return
+          active.browserLease.release(existing)
+          browserLeasesBySocket.delete(socket)
+          if (browserPublisherSocket === socket) browserPublisherSocket = null
+          void active.serverAdapter?.publishIntegrationDiagnostics?.(active.integrationDiagnostics.snapshot()).catch(() => undefined)
+          return
+        }
+        if (type === 'command-result-v1') {
+          const result = validateCommandResultV1(value)
+          const lease = active.browserLease.current()
+          if (
+            browserPublisherSocket !== socket
+            || lease === null
+            || lease.generation !== result.leaseGeneration
+            || browserLeasesBySocket.get(socket)?.generation !== lease.generation
+            || result.projectId !== active.project.projectId
+            || result.configRevision !== active.configRevision
+            || result.executionState === 'RUNNING'
+          ) return
+          const key = JSON.stringify([result.projectId, result.configRevision, result.leaseGeneration, result.commandId])
+          const pending = pendingBrowserCommands.get(key)
+          if (pending === undefined || pending.generation !== result.leaseGeneration) return
+          pendingBrowserCommands.delete(key)
+          pending.resolve(result)
+        }
+      } catch {
+        // Malformed Browser control messages cannot mutate Gateway state.
+      }
+    }
+  }
+
   function clientEndpointActionPath(
     url: string | undefined,
   ): { readonly endpointId: string; readonly action: 'disconnect' | 'reconnect' } | null {
@@ -858,6 +1062,11 @@ export function createRuntimeGatewayEntrypointService(
       return
     }
 
+    if (request.method === 'GET' && request.url === '/runtime/integration-diagnostics') {
+      writeJson(response, 200, integrationDiagnostics())
+      return
+    }
+
     if (request.method === 'GET' && request.url === '/runtime/command-lease') {
       writeJson(response, 200, await commandLeaseRequest())
       return
@@ -905,6 +1114,14 @@ export function createRuntimeGatewayEntrypointService(
       if (request.url === '/runtime/ws') {
         candidateWebSocketServer.handleUpgrade(request, socket, head, (webSocket) => {
           requireStateBatchHub().attach(webSocket)
+          webSocket.on('message', (data) => { handleBrowserSocketMessage(webSocket, data) })
+          webSocket.on('close', () => {
+            const lease = browserLeasesBySocket.get(webSocket)
+            const active = activeRuntime
+            if (lease !== undefined && active !== null) active.browserLease.release(lease)
+            browserLeasesBySocket.delete(webSocket)
+            if (browserPublisherSocket === webSocket) browserPublisherSocket = null
+          })
         })
         return
       }
@@ -988,6 +1205,10 @@ export function createRuntimeGatewayEntrypointService(
         activeRuntime = null
         active?.commandService?.close()
         active?.commandDedupe.clear()
+        active?.browserLease.invalidateRevision()
+        rejectPendingBrowserCommands(new Error('COMMAND_LEASE_STALE'))
+        browserPublisherSocket = null
+        browserLeasesBySocket.clear()
         for (const request of incompleteBodyRequests) {
           incompleteBodyRequests.delete(request)
           request.destroy()

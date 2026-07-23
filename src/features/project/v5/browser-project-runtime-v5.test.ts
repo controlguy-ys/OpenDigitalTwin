@@ -241,6 +241,43 @@ function options(
 }
 
 describe('BrowserProjectRuntimeV5', () => {
+  it('registers one revision-fenced V5 command owner on the Browser stream target', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options())
+    const target = runtime.bundle.getState().runtimeGraph.streamTarget
+    await expect(target.onCommandBatch?.({
+      type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
+      leaseGeneration: 1, commands: [{ commandId: 'external-joint', expiresAt: 200, targetId: 'robot-1', value: { kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 12 } } }],
+    })).resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED' })
+    expect(runtime.bundle.getState().runtimeGraph.robots.getState().readRobot('robot-1')?.jointValues).toEqual({ J1: 12 })
+    await expect(target.onCommandBatch?.({
+      type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
+      leaseGeneration: 1, commands: [{ commandId: 'external-signal', expiresAt: 200, targetId: 'PartPresent', value: { kind: 'logical-signal', signalId: 'PartPresent', value: true } }],
+    })).resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED' })
+    expect(runtime.bundle.getState().runtimeGraph.signals.getState().read('PartPresent'))
+      .toMatchObject({ value: true, owner: 'simulation', quality: 'GOOD' })
+    expect(target.browserPublisherId).toBe('gateway-1:browser-simulation')
+    await runtime.dispose()
+    await expect(target.onCommandBatch?.({
+      type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
+      leaseGeneration: 1, commands: [{ commandId: 'after-dispose', expiresAt: 200, targetId: 'robot-1', value: { kind: 'robot-joint-target', robotId: 'robot-1', jointValues: { J1: 1 } } }],
+    })).resolves.toMatchObject({ acknowledgement: 'REJECTED', failureCode: 'COMMAND_LEASE_STALE' })
+  })
+
+  it('commits a product Object pose through the V5 Browser Simulation owner', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options({ initialProject: attachmentProject() }))
+    try {
+      await expect(runtime.bundle.getState().runtimeGraph.streamTarget.onCommandBatch?.({
+        type: 'command-batch-v1', protocolVersion: 1, projectId: 'project-v5', configRevision: CONFIG_A,
+        leaseGeneration: 1, commands: [{
+          commandId: 'external-pose', expiresAt: 200, targetId: 'part',
+          value: { kind: 'scene-object-pose', objectId: 'part', pose: { x: 1, y: 2, z: 3, roll: 0, pitch: 0, yaw: Math.PI } },
+        }],
+      })).resolves.toMatchObject({ acknowledgement: 'ACCEPTED', executionState: 'SUCCEEDED' })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   it('publishes only a revision-aligned graph through its bundle', async () => {
     const runtime = createBrowserProjectRuntimeV5(options())
     const before = runtime.bundle.getState()

@@ -27,6 +27,7 @@ import {
   validateRuntimeProtocolV1Message,
   validateRuntimePublisherLeaseV1,
   validateRuntimeStreamMessageV1,
+  validateBrowserPublisherLeaseAcquireV1,
   validateStateBatchV1,
 } from './v1'
 import type {
@@ -1187,5 +1188,16 @@ describe('Runtime Protocol V1 Revision RPC and generic dispatch', () => {
       'RUNTIME_PROTOCOL_INVALID',
       '$.type',
     )
+  })
+
+  it('validates a Browser publisher acquisition without accepting extra fields', () => {
+    expect(validateBrowserPublisherLeaseAcquireV1({
+      type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1,
+      projectId: 'project-v5', configRevision: CONFIG_REVISION, publisherId: 'browser-a',
+    })).toMatchObject({ publisherId: 'browser-a' })
+    expectProtocolError(() => validateBrowserPublisherLeaseAcquireV1({
+      type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1,
+      projectId: 'project-v5', configRevision: CONFIG_REVISION, publisherId: 'browser-a', extra: true,
+    }), 'RUNTIME_PROTOCOL_INVALID', '$')
   })
 })
