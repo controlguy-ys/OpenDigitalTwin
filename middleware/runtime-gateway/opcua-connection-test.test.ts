@@ -91,6 +91,34 @@ describe('testOpcUaConnectionV1', () => {
     resolveConnect(); await vi.runAllTimersAsync(); expect(disconnect).toHaveBeenCalledTimes(2); vi.useRealTimers()
   })
 
+  it('retains late Client ownership when connect settles during normal cleanup', async () => {
+    vi.useFakeTimers()
+    let resolveConnect!: () => void
+    let resolveNormalDisconnect!: () => void
+    const disconnect = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveNormalDisconnect = resolve }))
+      .mockResolvedValue(undefined)
+    const pending = testOpcUaConnectionV1(endpoint, {
+      timeoutMs: 10,
+      createClient: () => ({
+        connect: () => new Promise<void>((resolve) => { resolveConnect = resolve }),
+        createSession: vi.fn(),
+        disconnect,
+      }),
+    })
+
+    await vi.advanceTimersByTimeAsync(10)
+    expect(disconnect).toHaveBeenCalledOnce()
+    resolveConnect()
+    await Promise.resolve()
+    resolveNormalDisconnect()
+    await pending
+    await vi.runAllTimersAsync()
+
+    expect(disconnect).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
   it('closes a Session that arrives after timeout before disconnecting again', async () => {
     vi.useFakeTimers(); let resolveSession!: (session: { close: () => Promise<void>; readNamespaceArray: () => Promise<readonly string[]> }) => void
     const order: string[] = []; const close = vi.fn(async () => { order.push('close') }); const disconnect = vi.fn(async () => { order.push('disconnect') })
@@ -98,5 +126,39 @@ describe('testOpcUaConnectionV1', () => {
     await vi.advanceTimersByTimeAsync(10); await pending; order.length = 0
     resolveSession({ close, readNamespaceArray: async () => ['urn:a'] }); await vi.runAllTimersAsync()
     expect(order).toEqual(['close', 'disconnect']); vi.useRealTimers()
+  })
+
+  it('retains late Session ownership when createSession settles during normal cleanup', async () => {
+    vi.useFakeTimers()
+    let resolveSession!: (session: { close: () => Promise<void>; readNamespaceArray: () => Promise<readonly string[]> }) => void
+    let resolveNormalDisconnect!: () => void
+    const order: string[] = []
+    const close = vi.fn(async () => { order.push('late-close') })
+    const disconnect = vi.fn()
+      .mockImplementationOnce(() => {
+        order.push('normal-disconnect')
+        return new Promise<void>((resolve) => { resolveNormalDisconnect = resolve })
+      })
+      .mockImplementationOnce(async () => { order.push('late-disconnect') })
+    const pending = testOpcUaConnectionV1(endpoint, {
+      timeoutMs: 10,
+      createClient: () => ({
+        connect: async () => undefined,
+        createSession: () => new Promise((resolve) => { resolveSession = resolve }),
+        disconnect,
+      }),
+    })
+
+    await vi.advanceTimersByTimeAsync(10)
+    expect(order).toEqual(['normal-disconnect'])
+    resolveSession({ close, readNamespaceArray: async () => ['urn:a'] })
+    await Promise.resolve()
+    resolveNormalDisconnect()
+    await pending
+    await vi.runAllTimersAsync()
+
+    expect(order).toEqual(['normal-disconnect', 'late-close', 'late-disconnect'])
+    expect(close).toHaveBeenCalledOnce()
+    vi.useRealTimers()
   })
 })

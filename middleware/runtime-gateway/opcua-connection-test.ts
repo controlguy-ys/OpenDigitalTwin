@@ -69,16 +69,23 @@ export async function testOpcUaConnectionV1(
   let failure: { readonly code: string; readonly message: string } | null = null
   let timedOut = false
   let timeout: ReturnType<typeof setTimeout> | null = null
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => { timedOut = true; reject(new Error('OPC UA diagnostic timed out.')) }, timeoutMs)
-  })
-  let namespaces: readonly string[] | null = null
-  let phase: 'connect' | 'session' | 'read' = 'connect'
-  const withinDeadline = async <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, deadline])
   let connectOperation: Promise<void> | null = null
   let createSessionOperation: Promise<OpcUaConnectionTestSessionV1> | null = null
   let connectSettled = false
   let createSessionSettled = false
+  let connectNeedsLateCleanup = false
+  let createSessionNeedsLateCleanup = false
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true
+      connectNeedsLateCleanup = connectOperation !== null && !connectSettled
+      createSessionNeedsLateCleanup = createSessionOperation !== null && !createSessionSettled
+      reject(new Error('OPC UA diagnostic timed out.'))
+    }, timeoutMs)
+  })
+  let namespaces: readonly string[] | null = null
+  let phase: 'connect' | 'session' | 'read' = 'connect'
+  const withinDeadline = async <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, deadline])
   try {
     connectOperation = client.connect(endpoint.endpointUrl)
     void connectOperation.then(() => { connectSettled = true }, () => { connectSettled = true })
@@ -116,9 +123,10 @@ export async function testOpcUaConnectionV1(
     const cleanupFailed = await cleanup(session)
     if (timedOut) {
       // Timed-out node-opcua work can still produce resources. Observe both
-      // promises and apply the same bounded, ordered cleanup to late results.
-      if (!connectSettled) void connectOperation?.then(() => cleanup(null), () => undefined).catch(() => undefined)
-      if (!createSessionSettled) void createSessionOperation?.then((lateSession) => cleanup(lateSession), () => undefined).catch(() => undefined)
+      // promises captured as pending at the timeout boundary. Settlement
+      // during normal cleanup cannot transfer or cancel that ownership.
+      if (connectNeedsLateCleanup) void connectOperation?.then(() => cleanup(null), () => undefined).catch(() => undefined)
+      if (createSessionNeedsLateCleanup) void createSessionOperation?.then((lateSession) => cleanup(lateSession), () => undefined).catch(() => undefined)
     }
     if (cleanupFailed) failure = { code: 'OPC_UA_CONNECTION_CLEANUP_FAILED', message: cleanupTimedOut ? 'OPC UA diagnostic cleanup timed out.' : 'OPC UA diagnostic cleanup failed.' }
   }
