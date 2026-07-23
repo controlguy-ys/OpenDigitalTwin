@@ -36,11 +36,12 @@ export function createBrowserProjectFileCommandPortV5(
       input.accept = '.json,application/json'
       input.hidden = true
       input.type = 'file'
-      document.body.append(input)
       let settled = false
+      let changeAttached = false
+      let cancelAttached = false
       const cleanup = () => {
-        input.removeEventListener('change', onChange)
-        input.removeEventListener('cancel', onCancel)
+        if (changeAttached) input.removeEventListener('change', onChange)
+        if (cancelAttached) input.removeEventListener('cancel', onCancel)
         input.remove()
       }
       const settle = (value: File | null) => {
@@ -57,9 +58,12 @@ export function createBrowserProjectFileCommandPortV5(
       }
       const onChange = () => settle(input.files?.item(0) ?? null)
       const onCancel = () => settle(null)
-      input.addEventListener('change', onChange)
-      input.addEventListener('cancel', onCancel)
       try {
+        document.body.append(input)
+        changeAttached = true
+        input.addEventListener('change', onChange)
+        cancelAttached = true
+        input.addEventListener('cancel', onCancel)
         input.click()
       } catch (error) {
         fail(error)
@@ -76,8 +80,11 @@ export function createBrowserProjectFileCommandPortV5(
         document.body.append(anchor)
         anchor.click()
       } finally {
-        anchor?.remove()
-        url.revokeObjectURL(objectUrl)
+        try {
+          anchor?.remove()
+        } finally {
+          url.revokeObjectURL(objectUrl)
+        }
       }
     },
   })

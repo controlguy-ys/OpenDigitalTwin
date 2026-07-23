@@ -15,7 +15,10 @@ import type {
   ProjectRevisionRecordV5,
   ProjectRepositoryV5,
 } from './project-v5-repository.js'
+import { ProjectRepositoryV5Error } from './project-v5-repository.js'
 import type { StoredProjectPointerV5 } from './project-v5-db.js'
+import { ProjectDatabaseV5 } from './project-v5-db.js'
+import { createProjectRepositoryV5 } from './project-v5-repository.js'
 import {
   createProjectPublicationCoordinatorV5,
   type ProjectV5BrowserRuntimePublicationPort,
@@ -190,6 +193,7 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
       events.push(`runtime.rollback:${candidate.revisionId}`)
       runtimeActive = previous
     }),
+    deactivate: vi.fn(async () => ({ rollback: async () => undefined, finalize: async () => undefined })),
   }
   const runtimePort = runtime satisfies ProjectV5BrowserRuntimePublicationPort<RuntimeCandidate>
 
@@ -218,6 +222,7 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
     rollback: vi.fn(async (candidate: GatewayCandidate) => {
       events.push(`gateway.rollback:${candidate.project.revisionId}`)
     }),
+    deactivate: vi.fn(async () => inactiveGatewayStatus()),
     cleanupPrevious: vi.fn(async (previousPublication: PublishedProjectV5) => {
       events.push(`gateway.cleanup:${previousPublication.revisionId}`)
     }),
@@ -255,12 +260,18 @@ function publicationHarness(failurePoint: FailurePoint | null = null) {
   }
 }
 
-function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options: { readonly failTargetActivation?: boolean } = {}) {
+function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options: {
+  readonly failTargetActivation?: boolean
+  readonly staleActiveWhenEmpty?: boolean
+  readonly movePointerOnTargetCommit?: StoredProjectPointerV5
+  readonly movePointerOnPreviousCommit?: StoredProjectPointerV5
+} = {}) {
   const previous = published(project('hydration-previous', 'Previous'), HASH_A)
   const target = published(project('hydration-target', 'Target'), HASH_B)
   let pointer = initialPointer
-  let runtimeActive: PublishedProjectV5 | null = null
-  let gatewayActive: PublishedProjectV5 | null = null
+  let runtimeActive: PublishedProjectV5 | null = options.staleActiveWhenEmpty ? target : null
+  let gatewayActive: PublishedProjectV5 | null = options.staleActiveWhenEmpty ? target : null
+  const events: string[] = []
   const record = (value: PublishedProjectV5): ProjectRevisionRecordV5 => ({
     revisionId: value.revisionId,
     configRevision: value.configRevision,
@@ -290,20 +301,34 @@ function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options
     }),
     readActive: vi.fn(async () => null),
     readPointer: vi.fn(async () => pointer),
-    garbageCollect: vi.fn(async () => undefined),
+    garbageCollect: vi.fn(async () => { events.push('repository.gc') }),
   } satisfies ProjectRepositoryV5
   const transition = {
-    rollback: vi.fn(async () => { runtimeActive = null }),
-    finalize: vi.fn(async () => undefined),
+    rollback: vi.fn(async () => { events.push('runtime.rollback'); runtimeActive = null }),
+    finalize: vi.fn(async () => { events.push('runtime.finalize') }),
   }
   const runtime = {
     prepare: vi.fn(async (candidate: WorkcellProjectV5, configRevision: string) => ({ candidate, configRevision })),
     apply: vi.fn(async () => undefined),
     commit: vi.fn(async (prepared: { readonly candidate: WorkcellProjectV5; readonly configRevision: string }) => {
       runtimeActive = published(prepared.candidate, prepared.configRevision)
+      if (options.movePointerOnTargetCommit !== undefined && prepared.candidate.revisionId === target.revisionId) {
+        pointer = options.movePointerOnTargetCommit
+      }
+      if (options.movePointerOnPreviousCommit !== undefined && prepared.candidate.revisionId === previous.revisionId) {
+        pointer = options.movePointerOnPreviousCommit
+      }
       return transition
     }),
     rollback: vi.fn(async () => { runtimeActive = null }),
+    deactivate: vi.fn(async () => {
+      const old = runtimeActive
+      runtimeActive = null
+      return {
+        rollback: async () => { runtimeActive = old },
+        finalize: async () => { events.push('runtime.deactivate.finalize') },
+      }
+    }),
   } satisfies ProjectV5BrowserRuntimePublicationPort<{ readonly candidate: WorkcellProjectV5; readonly configRevision: string }>
   const gateway = {
     prepare: vi.fn(async (candidate: WorkcellProjectV5, configRevision: string) => ({ candidate, configRevision })),
@@ -318,7 +343,8 @@ function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options
     }),
     readStatus: vi.fn(async () => gatewayActive === null ? inactiveGatewayStatus() : gatewayStatus(gatewayActive.project, gatewayActive.configRevision)),
     rollback: vi.fn(async () => { gatewayActive = null }),
-    cleanupPrevious: vi.fn(async () => undefined),
+    deactivate: vi.fn(async () => { gatewayActive = null; return inactiveGatewayStatus() }),
+    cleanupPrevious: vi.fn(async (value: PublishedProjectV5) => { events.push(`gateway.cleanup:${value.revisionId}`) }),
   } satisfies ProjectV5GatewayPublicationPort<{ readonly candidate: WorkcellProjectV5; readonly configRevision: string }>
   const publication = createProjectPublicationCoordinatorV5({
     repository,
@@ -326,7 +352,7 @@ function hydrationHarness(initialPointer: StoredProjectPointerV5 | null, options
     gateway,
     configRevisionForProjectV5: vi.fn(async () => { throw new Error('hydrate must use persisted config revision') }),
   })
-  return { previous, target, repository, runtime, gateway, publication, pointer: () => pointer, runtimeActive: () => runtimeActive, gatewayActive: () => gatewayActive }
+  return { previous, target, repository, runtime, gateway, publication, pointer: () => pointer, setPointer: (value: StoredProjectPointerV5 | null) => { pointer = value }, runtimeActive: () => runtimeActive, gatewayActive: () => gatewayActive, events }
 }
 
 describe('Project V5 publication coordinator', () => {
@@ -467,10 +493,16 @@ describe('Project V5 publication coordinator', () => {
     expect(harness.publication.readCleanupStatus()).toMatchObject({
       pending: [
         { kind: 'gateway-previous', revisionId: 'revision-a', attemptCount: 1 },
-        { kind: 'repository-garbage-collection', revisionId: 'revision-b', attemptCount: 1 },
+        { kind: 'repository-garbage-collection', revisionId: 'revision-b', attemptCount: 0 },
       ],
     })
     await Promise.all([harness.publication.retryCleanup(), harness.publication.retryCleanup()])
+    await vi.waitFor(() => expect(harness.repository.garbageCollect).toHaveBeenCalledOnce())
+    expect(harness.publication.readCleanupStatus().pending[0]).toMatchObject({
+      kind: 'repository-garbage-collection', attemptCount: 1,
+    })
+    await harness.publication.retryCleanup()
+    await vi.waitFor(() => expect(harness.publication.readCleanupStatus()).toEqual({ pending: [] }))
     expect(harness.gateway.cleanupPrevious).toHaveBeenCalledTimes(2)
     expect(harness.repository.garbageCollect).toHaveBeenCalledTimes(2)
     expect(harness.cleanupDiagnostics).toHaveBeenCalledTimes(2)
@@ -520,6 +552,7 @@ describe('Project V5 publication coordinator', () => {
         return transition
       }),
       rollback: vi.fn(async () => { throw new Error('Runtime must not be reconstructed during compensation.') }),
+      deactivate: vi.fn(async () => ({ rollback: async () => undefined, finalize: async () => undefined })),
     } satisfies ProjectV5BrowserRuntimePublicationPort<{ readonly revisionId: string }>
     const gateway = {
       prepare: vi.fn(async () => Object.freeze({ revisionId: nextProject.revisionId })),
@@ -530,6 +563,7 @@ describe('Project V5 publication coordinator', () => {
       reactivate: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
       readStatus: vi.fn(async () => gatewayStatus(nextProject, HASH_B)),
       rollback: vi.fn(async () => { gatewayActive = null }),
+      deactivate: vi.fn(async () => inactiveGatewayStatus()),
       cleanupPrevious: vi.fn(async () => undefined),
     } satisfies ProjectV5GatewayPublicationPort<{ readonly revisionId: string }>
     const publication = createProjectPublicationCoordinatorV5({
@@ -599,6 +633,7 @@ describe('Project V5 publication coordinator', () => {
       reactivate: vi.fn(async () => { throw new Error('There is no previous Gateway publication.') }),
       readStatus: vi.fn(async () => inactiveGatewayStatus()),
       rollback: vi.fn(async () => { gatewayActive = null }),
+      deactivate: vi.fn(async () => inactiveGatewayStatus()),
       cleanupPrevious: vi.fn(async () => undefined),
     } satisfies ProjectV5GatewayPublicationPort<{ readonly revisionId: string }>
     const publication = createProjectPublicationCoordinatorV5({
@@ -689,5 +724,173 @@ describe('Project V5 publication coordinator', () => {
     expect(subject.runtime.prepare).not.toHaveBeenCalled()
     expect(subject.gateway.prepare).not.toHaveBeenCalled()
     expect(subject.publication.isRecoveryRequired()).toBe(true)
+  })
+
+  it('clears and verifies stale Browser and Gateway authority before hydrating a healthy empty pointer', async () => {
+    const subject = hydrationHarness(null, { staleActiveWhenEmpty: true })
+
+    await expect(subject.publication.hydrate()).resolves.toBeNull()
+
+    expect(subject.runtime.deactivate).toHaveBeenCalledOnce()
+    expect(subject.gateway.deactivate).toHaveBeenCalledOnce()
+    expect(subject.gateway.readStatus).toHaveBeenCalled()
+    expect(subject.runtimeActive()).toBeNull()
+    expect(subject.gatewayActive()).toBeNull()
+  })
+
+  it('preserves a first interrupted publishing pointer and enters recovery when its target cannot restore', async () => {
+    const interrupted = {
+      key: 'active', state: 'publishing', revisionId: 'hydration-target',
+      previousRevisionId: null, previousCommitToken: null, commitToken: 'publishing-first',
+    } as const
+    const subject = hydrationHarness(interrupted, { failTargetActivation: true })
+
+    await expect(subject.publication.hydrate()).rejects.toThrow('target activation failed')
+
+    expect(subject.repository.compensatePublication).not.toHaveBeenCalled()
+    expect(subject.pointer()).toEqual(interrupted)
+    expect(subject.publication.isRecoveryRequired()).toBe(true)
+  })
+
+  it('preserves a first interrupted publishing pointer when its durable target is missing', async () => {
+    const interrupted = {
+      key: 'active', state: 'publishing', revisionId: 'missing-first-target',
+      previousRevisionId: null, previousCommitToken: null, commitToken: 'publishing-first',
+    } as const
+    const subject = hydrationHarness(interrupted)
+
+    await expect(subject.publication.hydrate()).rejects.toMatchObject({ code: 'PROJECT_HYDRATION_REVISION_MISSING' })
+
+    expect(subject.repository.compensatePublication).not.toHaveBeenCalled()
+    expect(subject.pointer()).toEqual(interrupted)
+    expect(subject.publication.isRecoveryRequired()).toBe(true)
+  })
+
+  it('rolls back a stable hydration when the exact durable pointer tuple moves during activation', async () => {
+    const moved = { key: 'active', state: 'stable', revisionId: 'other-revision', commitToken: 'other-token' } as const
+    const subject = hydrationHarness(
+      { key: 'active', state: 'stable', revisionId: 'hydration-target', commitToken: 'stable-target' },
+      { movePointerOnTargetCommit: moved },
+    )
+
+    await expect(subject.publication.hydrate()).rejects.toMatchObject({ code: 'PROJECT_ACTIVE_REVISION_CHANGED' })
+
+    expect(subject.events).toContain('runtime.rollback')
+    expect(subject.publication.readPublished()).toBeNull()
+  })
+
+  it('does not finalize an interrupted pointer that moves during target restoration', async () => {
+    const moved = { key: 'active', state: 'stable', revisionId: 'other-revision', commitToken: 'other-token' } as const
+    const subject = hydrationHarness({
+      key: 'active', state: 'publishing', revisionId: 'hydration-target',
+      previousRevisionId: 'hydration-previous', previousCommitToken: 'stable-previous', commitToken: 'publishing-target',
+    }, { movePointerOnTargetCommit: moved })
+
+    await expect(subject.publication.hydrate()).rejects.toMatchObject({ code: 'PROJECT_ACTIVE_REVISION_CHANGED' })
+
+    expect(subject.repository.finalizePublication).not.toHaveBeenCalled()
+    expect(subject.events).toContain('runtime.rollback')
+    expect(subject.publication.isRecoveryRequired()).toBe(false)
+  })
+
+  it('rolls back compensated previous restoration when its exact stable tuple moves', async () => {
+    const moved = { key: 'active', state: 'stable', revisionId: 'other-revision', commitToken: 'other-token' } as const
+    const subject = hydrationHarness({
+      key: 'active', state: 'publishing', revisionId: 'hydration-target',
+      previousRevisionId: 'hydration-previous', previousCommitToken: 'stable-previous', commitToken: 'publishing-target',
+    }, { failTargetActivation: true, movePointerOnPreviousCommit: moved })
+
+    await expect(subject.publication.hydrate()).rejects.toMatchObject({ code: 'PROJECT_ACTIVE_REVISION_CHANGED' })
+
+    expect(subject.events).toContain('runtime.rollback')
+    expect(subject.publication.isRecoveryRequired()).toBe(false)
+    expect(subject.publication.readPublished()).toBeNull()
+  })
+
+  it('latches malformed durable pointer reads as recovery and notifies a snapshot of listeners once', async () => {
+    const subject = hydrationHarness(null)
+    subject.repository.readPointer.mockRejectedValueOnce(new ProjectRepositoryV5Error(
+      'PROJECT_POINTER_INVALID', 'Stored pointer is malformed.',
+    ))
+    const later = vi.fn()
+    const first = vi.fn()
+    let unsubscribe: () => void = () => undefined
+    unsubscribe = subject.publication.subscribe(() => {
+      first()
+      unsubscribe()
+      subject.publication.subscribe(later)
+    })
+
+    await expect(subject.publication.hydrate()).rejects.toMatchObject({ code: 'PROJECT_POINTER_INVALID' })
+
+    expect(subject.publication.isRecoveryRequired()).toBe(true)
+    expect(subject.publication.readRecoveryError()).toMatchObject({ cause: expect.objectContaining({ code: 'PROJECT_POINTER_INVALID' }) })
+    expect(first).toHaveBeenCalledOnce()
+    expect(later).not.toHaveBeenCalled()
+  })
+
+  it('latches a truly malformed IndexedDB pointer row as recovery before runtime or Gateway work', async () => {
+    const database = new ProjectDatabaseV5(`publication-malformed-${crypto.randomUUID()}`)
+    const repository = createProjectRepositoryV5({ database })
+    const runtime = {
+      prepare: vi.fn(), apply: vi.fn(), commit: vi.fn(), rollback: vi.fn(),
+      deactivate: vi.fn(async () => ({ rollback: async () => undefined, finalize: async () => undefined })),
+    } satisfies ProjectV5BrowserRuntimePublicationPort
+    const gateway = {
+      prepare: vi.fn(), activate: vi.fn(), reactivate: vi.fn(), readStatus: vi.fn(), rollback: vi.fn(),
+      deactivate: vi.fn(async () => inactiveGatewayStatus()), cleanupPrevious: vi.fn(),
+    } satisfies ProjectV5GatewayPublicationPort
+    const publication = createProjectPublicationCoordinatorV5({ repository, runtime, gateway })
+    const observed = vi.fn()
+    publication.subscribe(observed)
+    try {
+      await database.projectPointers.put({
+        key: 'active', state: 'stable', revisionId: 42, commitToken: 'malformed',
+      } as never)
+
+      await expect(publication.hydrate()).rejects.toMatchObject({ code: 'PROJECT_POINTER_INVALID' })
+
+      expect(publication.isRecoveryRequired()).toBe(true)
+      expect(observed).toHaveBeenCalledOnce()
+      expect(runtime.deactivate).not.toHaveBeenCalled()
+      expect(gateway.deactivate).not.toHaveBeenCalled()
+    } finally {
+      database.close()
+      await database.delete()
+    }
+  })
+
+  it('finalizes publishing hydration cleanup in prerequisite order using the previous durable publication', async () => {
+    const subject = hydrationHarness({
+      key: 'active', state: 'publishing', revisionId: 'hydration-target',
+      previousRevisionId: 'hydration-previous', previousCommitToken: 'stable-previous', commitToken: 'publishing-target',
+    })
+
+    await subject.publication.hydrate()
+    await vi.waitFor(() => expect(subject.repository.garbageCollect).toHaveBeenCalledOnce())
+
+    expect(subject.events).toEqual([
+      'runtime.finalize',
+      'gateway.cleanup:hydration-previous',
+      'repository.gc',
+    ])
+  })
+
+  it('publishes and notifies before a never-settling cleanup, then rejects overlap fast', async () => {
+    const subject = publicationHarness()
+    let release!: () => void
+    subject.runtimeTransition.finalize.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve }))
+    const observed = vi.fn()
+    subject.publication.subscribe(observed)
+
+    const replacing = subject.publication.replace({ candidate: subject.nextProject, expectedRevisionId: subject.previous.revisionId })
+    await expect(replacing).resolves.toEqual(published(subject.nextProject, HASH_B))
+    expect(observed).toHaveBeenCalledOnce()
+    expect(subject.publication.readCleanupStatus().pending[0]).toMatchObject({ kind: 'runtime-transition-finalize' })
+    await expect(subject.publication.replace({ candidate: subject.nextProject, expectedRevisionId: subject.nextProject.revisionId }))
+      .rejects.toMatchObject({ code: 'PROJECT_CLEANUP_REQUIRED' })
+    await expect(subject.publication.retryCleanup()).resolves.toBeUndefined()
+    expect(subject.runtimeTransition.finalize).toHaveBeenCalledOnce()
+    release()
   })
 })

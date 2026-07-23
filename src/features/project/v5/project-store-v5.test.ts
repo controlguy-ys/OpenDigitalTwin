@@ -13,10 +13,12 @@ function published(project: WorkcellProjectV5): PublishedProjectV5 {
 function harness() {
   const active = makeMinimalWorkcellProjectV5()
   let current: PublishedProjectV5 | null = published(active)
+  let recoveryError: Error | null = null
   const listeners = new Set<() => void>()
   const mutations = {
     readPublished: () => current,
-    isRecoveryRequired: () => false,
+    isRecoveryRequired: () => recoveryError !== null,
+    readRecoveryError: () => recoveryError,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
     hydrate: vi.fn(async () => current),
     replace: vi.fn(async ({ candidate }: { readonly candidate: WorkcellProjectV5; readonly description: string }) => {
@@ -34,7 +36,11 @@ function harness() {
     encodeProject,
     decodeProject,
   })
-  return { active, mutations, encodeProject, decodeProject, store, publish: (next: WorkcellProjectV5) => { current = published(next); for (const listener of listeners) listener() } }
+  return {
+    active, mutations, encodeProject, decodeProject, store,
+    publish: (next: WorkcellProjectV5) => { current = published(next); for (const listener of listeners) listener() },
+    recover: (error: Error) => { recoveryError = error; for (const listener of listeners) listener() },
+  }
 }
 
 describe('Project V5 store', () => {
@@ -75,5 +81,16 @@ describe('Project V5 store', () => {
 
     subject.publish({ ...subject.active, revisionId: 'notified-revision' })
     expect(subject.store.getState()).toMatchObject({ status: 'ready', activeProject: expect.objectContaining({ revisionId: 'notified-revision' }) })
+  })
+
+  it('projects external recovery notifications with their error and retains the exact active object', () => {
+    const subject = harness()
+    const before = subject.store.getState().activeProject
+    const error = new Error('durable pointer corrupt')
+
+    subject.recover(error)
+
+    expect(subject.store.getState()).toMatchObject({ status: 'recovery-required', error: error.message })
+    expect(subject.store.getState().activeProject).toBe(before)
   })
 })

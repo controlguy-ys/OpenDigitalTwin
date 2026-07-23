@@ -10,6 +10,7 @@ import type {
 export interface ProjectV5AtomicMutationPort {
   readPublished(): PublishedProjectV5 | null
   isRecoveryRequired(): boolean
+  readRecoveryError(): Error | null
   subscribe(listener: () => void): () => void
   hydrate(): Promise<PublishedProjectV5 | null>
   replace(request: {
@@ -28,7 +29,7 @@ export interface ProjectV5MutationService extends ProjectV5AtomicMutationPort {}
 export interface ProjectV5MutationServiceOptions {
   readonly publication: Pick<
     ProjectPublicationCoordinatorV5,
-    'replace' | 'readPublished' | 'isRecoveryRequired' | 'hydrate' | 'subscribe'
+    'replace' | 'readPublished' | 'isRecoveryRequired' | 'readRecoveryError' | 'hydrate' | 'subscribe'
   >
   readonly createRevisionId: () => string
   readonly nowIso: () => string
@@ -108,6 +109,10 @@ export function createProjectV5MutationService(
 
     isRecoveryRequired() {
       return options.publication.isRecoveryRequired()
+    },
+
+    readRecoveryError() {
+      return options.publication.readRecoveryError()
     },
 
     subscribe(listener) {

@@ -64,10 +64,11 @@ export function createProjectStoreV5(dependencies: ProjectStoreDependenciesV5): 
   let store!: ProjectStoreV5
 
   const finishReady = (): void => {
+    const recovery = dependencies.mutations.readRecoveryError()
     store.setState({
       activeProject: publishedProject(),
       status: dependencies.mutations.isRecoveryRequired() ? 'recovery-required' : 'ready',
-      error: null,
+      error: recovery === null ? null : errorMessage(recovery),
     })
   }
   const applyFailure = (error: unknown): void => {

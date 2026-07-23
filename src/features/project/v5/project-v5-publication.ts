@@ -30,6 +30,7 @@ export interface ProjectV5BrowserRuntimePublicationPort<PreparedRuntime = unknow
   apply(prepared: PreparedRuntime): Promise<void>
   commit(prepared: PreparedRuntime): Promise<ProjectV5RuntimeCommitTransitionV5>
   rollback(prepared: PreparedRuntime): Promise<void>
+  deactivate(): Promise<ProjectV5RuntimeCommitTransitionV5>
 }
 
 export interface ProjectV5GatewayPublicationPort<PreparedGateway = unknown> {
@@ -38,6 +39,7 @@ export interface ProjectV5GatewayPublicationPort<PreparedGateway = unknown> {
   reactivate(previous: PublishedProjectV5): Promise<RuntimeGatewayStatusV1>
   readStatus(): Promise<RuntimeGatewayStatusV1>
   rollback(prepared: PreparedGateway): Promise<void>
+  deactivate(): Promise<RuntimeGatewayStatusV1>
   cleanupPrevious(previous: PublishedProjectV5): Promise<void>
 }
 
@@ -52,6 +54,7 @@ export interface ProjectPublicationCoordinatorV5 {
   subscribe(listener: () => void): () => void
   readPublished(): PublishedProjectV5 | null
   isRecoveryRequired(): boolean
+  readRecoveryError(): Error | null
   readCleanupStatus(): ProjectV5CleanupStatus
   retryCleanup(): Promise<void>
 }
@@ -65,7 +68,7 @@ export interface ProjectV5CleanupIssue {
   readonly kind: ProjectV5CleanupKind
   readonly revisionId: string
   readonly attemptCount: number
-  readonly lastError: { readonly code: string; readonly message: string }
+  readonly lastError: { readonly code: string; readonly message: string } | null
 }
 
 export interface ProjectV5CleanupStatus {
@@ -223,8 +226,10 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   const calculateConfigRevision = options.configRevisionForProjectV5 ?? calculateConfigRevisionForProjectV5
   let published = validateInitialPublished(options.initialPublished)
   let recoveryRequired = false
+  let recoveryError: ProjectPublicationV5Error | null = null
   let tail = Promise.resolve()
-  const cleanupTasks = new Map<ProjectV5CleanupKind, PendingCleanupTaskV5>()
+  const cleanupTasks: PendingCleanupTaskV5[] = []
+  let cleanupDrainPromise: Promise<void> | null = null
   const listeners = new Set<() => void>()
 
   const enqueue = <Result>(operation: () => Promise<Result>): Promise<Result> => {
@@ -237,7 +242,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     if (recoveryRequired) {
       failPublication('PROJECT_RECOVERY_REQUIRED', 'Reload recovery is required before another Project V5 publication.')
     }
-    if (cleanupTasks.size > 0) {
+    if (cleanupTasks.length > 0) {
       failPublication('PROJECT_CLEANUP_REQUIRED', 'Resolve retained Project V5 cleanup tasks before another publication.')
     }
   }
@@ -250,6 +255,8 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
       'Project V5 publication compensation did not restore prior authority.',
       errors.length === 1 ? errors[0] : new AggregateError(errors, 'Project V5 compensation failed.'),
     )
+    recoveryError = error
+    notifyPublished()
     try {
       options.onRecoveryRequired?.(error)
     } catch {
@@ -258,7 +265,7 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   }
 
   const notifyPublished = (): void => {
-    for (const listener of listeners) {
+    for (const listener of Array.from(listeners)) {
       try {
         listener()
       } catch {
@@ -268,16 +275,16 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
   }
 
   const cleanupStatus = (): ProjectV5CleanupStatus => Object.freeze({
-    pending: Object.freeze(Array.from(cleanupTasks.values(), (task) => Object.freeze({
+    pending: Object.freeze(Array.from(cleanupTasks, (task) => Object.freeze({
       kind: task.kind,
       revisionId: task.revisionId,
       attemptCount: task.attemptCount,
-      lastError: task.lastError!,
+      lastError: task.lastError,
     }))),
   })
 
   const emitCleanupIssue = (task: PendingCleanupTaskV5): void => {
-    const issue = cleanupStatus().pending.find((candidate) => candidate.kind === task.kind)
+    const issue = cleanupStatus().pending.find((candidate) => candidate.kind === task.kind && candidate.revisionId === task.revisionId)
     if (issue === undefined) return
     try {
       options.onCleanupIssue?.(issue)
@@ -286,23 +293,12 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     }
   }
 
-  const runCleanupTask = async (task: PendingCleanupTaskV5): Promise<void> => {
-    task.attemptCount += 1
-    try {
-      await task.operation()
-      cleanupTasks.delete(task.kind)
-    } catch (error) {
-      task.lastError = cleanupError(error)
-      emitCleanupIssue(task)
-    }
-  }
-
-  const retainCleanupTask = async (
+  const retainCleanupTask = (
     kind: ProjectV5CleanupKind,
     revisionId: string,
     operation: () => Promise<void>,
-  ): Promise<void> => {
-    if (cleanupTasks.has(kind)) {
+  ): void => {
+    if (cleanupTasks.some((task) => task.kind === kind)) {
       failPublication('PROJECT_CLEANUP_TASK_DUPLICATE', `Project V5 cleanup task ${kind} is already retained.`)
     }
     const task: PendingCleanupTaskV5 = {
@@ -312,8 +308,26 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
       attemptCount: 0,
       lastError: null,
     }
-    cleanupTasks.set(kind, task)
-    await runCleanupTask(task)
+    cleanupTasks.push(task)
+  }
+
+  const kickCleanupDrain = (): void => {
+    if (cleanupDrainPromise !== null || cleanupTasks.length === 0) return
+    cleanupDrainPromise = (async () => {
+      while (cleanupTasks.length > 0) {
+        const task = cleanupTasks[0]!
+        task.attemptCount += 1
+        task.lastError = null
+        try {
+          await task.operation()
+          if (cleanupTasks[0] === task) cleanupTasks.shift()
+        } catch (error) {
+          task.lastError = cleanupError(error)
+          emitCleanupIssue(task)
+          return
+        }
+      }
+    })().finally(() => { cleanupDrainPromise = null })
   }
 
   const loadDurablePublication = async (revisionId: string): Promise<PublishedProjectV5> => {
@@ -325,6 +339,31 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
       return failPublication('PROJECT_HYDRATION_REVISION_MISMATCH', `Durable Project V5 revision ${revisionId} has mismatched identity.`)
     }
     return publicPublished(record.project, record.revisionId, record.configRevision)
+  }
+
+  const samePointer = (left: StoredProjectPointerV5 | null, right: StoredProjectPointerV5 | null): boolean => {
+    if (left === null || right === null) return left === right
+    if (left.state !== right.state || left.revisionId !== right.revisionId || left.commitToken !== right.commitToken) return false
+    if (left.state === 'stable' || right.state === 'stable') return left.state === right.state
+    return left.previousRevisionId === right.previousRevisionId && left.previousCommitToken === right.previousCommitToken
+  }
+
+  const readHydrationPointer = async (): Promise<StoredProjectPointerV5 | null> => {
+    try {
+      return await repository.readPointer()
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : null
+      if (code === 'PROJECT_POINTER_INVALID' || code === 'PROJECT_REVISION_CORRUPT' || code === 'PROJECT_CONFIG_REVISION_MISMATCH') {
+        enterRecovery([error])
+      }
+      throw error
+    }
+  }
+
+  const requireExactPointer = async (expected: StoredProjectPointerV5 | null): Promise<void> => {
+    if (!samePointer(await readHydrationPointer(), expected)) {
+      failPublication('PROJECT_ACTIVE_REVISION_CHANGED', 'The exact durable Project V5 pointer changed during hydration.')
+    }
   }
 
   const restoreRuntimeAndGateway = async (next: PublishedProjectV5): Promise<{
@@ -476,12 +515,13 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
           throw error
         }
 
-        await retainCleanupTask('runtime-transition-finalize', next.revisionId, () => runtimeTransition!.finalize())
-        if (previous !== null) {
-          await retainCleanupTask('gateway-previous', previous.revisionId, () => gateway.cleanupPrevious(previous))
-        }
-        await retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())
         notifyPublished()
+        retainCleanupTask('runtime-transition-finalize', next.revisionId, () => runtimeTransition!.finalize())
+        if (previous !== null) {
+          retainCleanupTask('gateway-previous', previous.revisionId, () => gateway.cleanupPrevious(previous))
+        }
+        retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())
+        kickCleanupDrain()
         return publicPublished(next.project, next.revisionId, next.configRevision)
       })
     },
@@ -489,40 +529,73 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
     hydrate() {
       return enqueue(async () => {
         if (published !== null) return publicPublished(published.project, published.revisionId, published.configRevision)
-        if (recoveryRequired) {
-          return failPublication('PROJECT_RECOVERY_REQUIRED', 'Reload recovery is required before Project V5 hydration.')
-        }
-        const pointer = await repository.readPointer()
-        if (pointer === null) return null
-
-        const compensateInterruptedPublication = async (
-          interrupted: Extract<StoredProjectPointerV5, { readonly state: 'publishing' }>,
-          originalError: unknown,
-        ): Promise<PublishedProjectV5 | null> => {
+        requireEditable()
+        const pointer = await readHydrationPointer()
+        if (pointer === null) {
+          let deactivation: ProjectV5RuntimeCommitTransitionV5 | undefined
           try {
+            deactivation = await runtime.deactivate()
+            assertGatewayInactiveStatus(await gateway.deactivate())
+            assertGatewayInactiveStatus(await gateway.readStatus())
+            await requireExactPointer(null)
+          } catch (error) {
+            const rollbackErrors: unknown[] = []
+            if (deactivation !== undefined) {
+              try { await deactivation.rollback() } catch (rollbackError) { rollbackErrors.push(rollbackError) }
+            }
+            enterRecovery([error, ...rollbackErrors])
+            throw error
+          }
+          notifyPublished()
+          retainCleanupTask('runtime-transition-finalize', 'empty', () => deactivation!.finalize())
+          kickCleanupDrain()
+          return null
+        }
+
+        let previous: PublishedProjectV5 | null = null
+        if (pointer.state === 'publishing' && pointer.previousRevisionId !== null) {
+          try {
+            previous = await loadDurablePublication(pointer.previousRevisionId)
+          } catch (error) {
+            enterRecovery([error])
+            throw error
+          }
+        }
+
+        const rollbackActivation = async (
+          activation: Awaited<ReturnType<typeof restoreRuntimeAndGateway>>,
+          originalError: unknown,
+          forceRecovery = false,
+        ): Promise<never> => {
+          const rollbackErrors = await rollbackHydratedRuntimeAndGateway(activation)
+          if (forceRecovery || rollbackErrors.length > 0) enterRecovery([originalError, ...rollbackErrors])
+          throw originalError
+        }
+
+        const restoreCompensatedPrevious = async (
+          interrupted: Extract<StoredProjectPointerV5, { readonly state: 'publishing' }>,
+          prior: PublishedProjectV5,
+          originalError: unknown,
+        ): Promise<PublishedProjectV5> => {
+          try {
+            await requireExactPointer(interrupted)
             await repository.compensatePublication(interrupted.commitToken)
-            const restoredPointer = await repository.readPointer()
-            if (interrupted.previousRevisionId === null) {
-              if (restoredPointer !== null) {
-                return failPublication('PROJECT_HYDRATION_COMPENSATION_MISMATCH', 'Interrupted Project V5 publication did not compensate to an empty durable pointer.')
-              }
-              return null
+            const stablePrevious: StoredProjectPointerV5 = {
+              key: 'active', state: 'stable', revisionId: interrupted.previousRevisionId!, commitToken: interrupted.previousCommitToken!,
             }
-            if (
-              restoredPointer === null
-              || restoredPointer.state !== 'stable'
-              || restoredPointer.revisionId !== interrupted.previousRevisionId
-              || restoredPointer.commitToken !== interrupted.previousCommitToken
-            ) {
-              return failPublication('PROJECT_HYDRATION_COMPENSATION_MISMATCH', 'Interrupted Project V5 publication did not restore its previous durable pointer.')
+            await requireExactPointer(stablePrevious)
+            const activation = await restoreRuntimeAndGateway(prior)
+            try {
+              await requireExactPointer(stablePrevious)
+            } catch (error) {
+              return rollbackActivation(activation, error)
             }
-            const previous = await loadDurablePublication(restoredPointer.revisionId)
-            const activation = await restoreRuntimeAndGateway(previous)
-            published = previous
-            await retainCleanupTask('runtime-transition-finalize', previous.revisionId, () => activation.runtimeTransition.finalize())
-            await retainCleanupTask('repository-garbage-collection', previous.revisionId, () => repository.garbageCollect())
+            published = prior
             notifyPublished()
-            return publicPublished(previous.project, previous.revisionId, previous.configRevision)
+            retainCleanupTask('runtime-transition-finalize', prior.revisionId, () => activation.runtimeTransition.finalize())
+            retainCleanupTask('repository-garbage-collection', prior.revisionId, () => repository.garbageCollect())
+            kickCleanupDrain()
+            return publicPublished(prior.project, prior.revisionId, prior.configRevision)
           } catch (compensationError) {
             enterRecovery([originalError, compensationError])
             throw originalError
@@ -533,39 +606,50 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
         try {
           next = await loadDurablePublication(pointer.revisionId)
         } catch (error) {
-          if (pointer.state === 'publishing') return compensateInterruptedPublication(pointer, error)
+          if (pointer.state === 'publishing' && previous !== null) {
+            return restoreCompensatedPrevious(pointer, previous, error)
+          }
           enterRecovery([error])
           throw error
         }
 
-        let activation: Awaited<ReturnType<typeof restoreRuntimeAndGateway>> | undefined
+        let activation: Awaited<ReturnType<typeof restoreRuntimeAndGateway>>
         try {
           activation = await restoreRuntimeAndGateway(next)
-          if (pointer.state === 'publishing') {
-            await repository.finalizePublication(pointer.commitToken)
-            const finalized = await repository.readPointer()
-            if (
-              finalized === null
-              || finalized.state !== 'stable'
-              || finalized.revisionId !== next.revisionId
-              || finalized.commitToken !== pointer.commitToken
-            ) {
-              return failPublication('PROJECT_HYDRATION_FINALIZATION_MISMATCH', 'Interrupted Project V5 publication did not finalize to its restored target.')
-            }
-          }
         } catch (error) {
-          if (activation !== undefined) {
-            const rollbackErrors = await rollbackHydratedRuntimeAndGateway(activation)
-            if (rollbackErrors.length > 0) enterRecovery(rollbackErrors)
+          if (pointer.state === 'publishing' && previous !== null) {
+            return restoreCompensatedPrevious(pointer, previous, error)
           }
-          if (pointer.state === 'publishing') return compensateInterruptedPublication(pointer, error)
+          if (pointer.state === 'publishing') enterRecovery([error])
           throw error
         }
 
+        try {
+          await requireExactPointer(pointer)
+        } catch (error) {
+          return rollbackActivation(activation, error)
+        }
+
+        if (pointer.state === 'publishing') {
+          try {
+            await repository.finalizePublication(pointer.commitToken)
+            const stableTarget: StoredProjectPointerV5 = {
+              key: 'active', state: 'stable', revisionId: pointer.revisionId, commitToken: pointer.commitToken,
+            }
+            await requireExactPointer(stableTarget)
+          } catch (error) {
+            await rollbackActivation(activation, error, true)
+          }
+        }
+
         published = next
-        await retainCleanupTask('runtime-transition-finalize', next.revisionId, () => activation!.runtimeTransition.finalize())
-        await retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())
         notifyPublished()
+        retainCleanupTask('runtime-transition-finalize', next.revisionId, () => activation.runtimeTransition.finalize())
+        if (previous !== null) {
+          retainCleanupTask('gateway-previous', previous.revisionId, () => gateway.cleanupPrevious(previous!))
+        }
+        retainCleanupTask('repository-garbage-collection', next.revisionId, () => repository.garbageCollect())
+        kickCleanupDrain()
         return publicPublished(next.project, next.revisionId, next.configRevision)
       })
     },
@@ -586,14 +670,17 @@ export function createProjectPublicationCoordinatorV5<PreparedRuntime = unknown,
       return recoveryRequired
     },
 
+    readRecoveryError() {
+      return recoveryError
+    },
+
     readCleanupStatus() {
       return cleanupStatus()
     },
 
     retryCleanup() {
-      return enqueue(async () => {
-        for (const task of Array.from(cleanupTasks.values())) await runCleanupTask(task)
-      })
+      kickCleanupDrain()
+      return Promise.resolve()
     },
   }
   return Object.freeze(coordinator)

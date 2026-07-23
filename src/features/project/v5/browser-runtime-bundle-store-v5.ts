@@ -56,7 +56,7 @@ interface BrowserRuntimeBundleInstallTokenV5 {
 
 interface BrowserRuntimeBundlePublisherCellV5 extends BrowserRuntimeBundleCellV5 {
   prepareInstall(
-    next: BrowserRuntimeBundleStateV5,
+    next: BrowserRuntimeBundleStateV5 | null,
     expectedBaseBundle: BrowserRuntimeBundleStateV5 | null,
     expectedEpoch: number,
   ): BrowserRuntimeBundleInstallTokenV5
@@ -70,7 +70,7 @@ interface InstallRecordV5 {
   readonly owner: InstallOwnerV5
   readonly base: BrowserRuntimeBundleStateV5 | null
   readonly expectedEpoch: number
-  readonly next: BrowserRuntimeBundleStateV5
+  readonly next: BrowserRuntimeBundleStateV5 | null
   readonly listeners: readonly BundleListenerV5[]
   phase: InstallPhaseV5
 }
@@ -606,7 +606,7 @@ export function createBrowserRuntimeBundleCellV5(
   }
 
   const prepareInstall = (
-    nextInput: BrowserRuntimeBundleStateV5,
+    nextInput: BrowserRuntimeBundleStateV5 | null,
     expectedBaseBundle: BrowserRuntimeBundleStateV5 | null,
     expectedEpochInput: number,
   ): BrowserRuntimeBundleInstallTokenV5 => {
@@ -621,10 +621,10 @@ export function createBrowserRuntimeBundleCellV5(
     if ((base === null && expectedEpoch !== 0) || (base !== null && base.runtimeEpoch !== expectedEpoch)) {
       fail('RUNTIME_BASE_EPOCH_STALE', 'Expected Runtime Epoch is not active.')
     }
-    if (expectedEpoch === Number.MAX_SAFE_INTEGER) {
+    if (nextInput !== null && expectedEpoch === Number.MAX_SAFE_INTEGER) {
       fail('RUNTIME_EPOCH_EXHAUSTED', 'Runtime Epoch cannot be incremented safely.')
     }
-    const next = canonicalBundleState(nextInput, expectedEpoch + 1)
+    const next = nextInput === null ? null : canonicalBundleState(nextInput, expectedEpoch + 1)
     if (
       state !== base
       || (state === null ? expectedEpoch !== 0 : state.runtimeEpoch !== expectedEpoch)
@@ -673,7 +673,10 @@ export function createBrowserRuntimeBundleCellV5(
         if (record.phase !== 'installed' && record.phase !== 'flushed') {
           fail('INSTALL_TOKEN_RESTORE_INVALID', 'Install token cannot restore its base Bundle.')
         }
-        if (state !== record.next || state.runtimeEpoch !== record.expectedEpoch + 1) {
+        if (
+          state !== record.next
+          || (state !== null && state.runtimeEpoch !== record.expectedEpoch + 1)
+        ) {
           record.phase = 'rejected'
           fail('INSTALL_TOKEN_STALE', 'Install token candidate Bundle is no longer active.')
         }

@@ -142,6 +142,7 @@ export interface BrowserProjectResourcesV5 {
   apply(prepared: PreparedBrowserRuntimeCandidateV5): Promise<void>
   commit(prepared: PreparedBrowserRuntimeCandidateV5): Promise<CommittedBrowserRuntimeTransitionV5>
   rollback(prepared: PreparedBrowserRuntimeCandidateV5): Promise<void>
+  deactivate(): Promise<CommittedBrowserRuntimeTransitionV5>
   startGatewayStream(): void
   stopGatewayStream(): void
   dispose(): Promise<void>
@@ -156,7 +157,7 @@ interface BundleInstallTokenV5 {
 
 interface BundlePublisherV5 extends BrowserRuntimeBundleCellV5 {
   prepareInstall(
-    next: BrowserRuntimeBundleStateV5,
+    next: BrowserRuntimeBundleStateV5 | null,
     expectedBaseBundle: BrowserRuntimeBundleStateV5 | null,
     expectedEpoch: number,
   ): BundleInstallTokenV5
@@ -209,6 +210,14 @@ interface CommittedTransitionRecordV5 {
   readonly candidate: CandidateRecordV5
   readonly install: BundleInstallTokenV5
   readonly previousOwned: OwnedBrowserRuntimeGraphV5 | null
+  state: CommittedTransitionStateV5
+  rollbackPromise: Promise<void> | null
+  finalizePromise: Promise<void> | null
+}
+
+interface DeactivationTransitionRecordV5 {
+  readonly install: BundleInstallTokenV5
+  readonly previousOwned: OwnedBrowserRuntimeGraphV5
   state: CommittedTransitionStateV5
   rollbackPromise: Promise<void> | null
   finalizePromise: Promise<void> | null
@@ -757,13 +766,14 @@ export function createBrowserProjectRuntimeV5(
   let ownerState: OwnerStateV5 = 'active'
   let disposePromise: Promise<void> | null = null
   let activeTransition: CommittedTransitionRecordV5 | null = null
+  let activeDeactivation: DeactivationTransitionRecordV5 | null = null
   let streamRequested = false
 
   const assertActive = (): void => {
     if (ownerState !== 'active') throw failure('BROWSER_RUNTIME_DISPOSED')
   }
   const assertNoActiveTransition = (): void => {
-    if (activeTransition !== null) throw failure('BROWSER_RUNTIME_TRANSITION_PENDING')
+    if (activeTransition !== null || activeDeactivation !== null) throw failure('BROWSER_RUNTIME_TRANSITION_PENDING')
   }
   const requireCandidate = (prepared: PreparedBrowserRuntimeCandidateV5): CandidateRecordV5 => {
     if (prepared === null || (typeof prepared !== 'object' && typeof prepared !== 'function')) {
@@ -821,6 +831,40 @@ export function createBrowserProjectRuntimeV5(
       if (transition.previousOwned !== null) disposeOwnedGraph(transition.previousOwned, onDiagnostic)
       transition.candidate.state = 'consumed'
       activeTransition = null
+      transition.state = 'finalized'
+    })
+    transition.finalizePromise = finalize
+    return finalize
+  }
+  const rollbackDeactivation = (transition: DeactivationTransitionRecordV5): Promise<void> => {
+    if (transition.rollbackPromise !== null) return transition.rollbackPromise
+    if (transition.state !== 'committed') return Promise.reject(failure('BROWSER_RUNTIME_TRANSITION_CONSUMED'))
+    transition.state = 'rolling-back'
+    const rollback = Promise.resolve().then(() => {
+      if (ownerState !== 'active' || activeDeactivation !== transition || activeOwnedGraph !== null) {
+        throw failure('BROWSER_RUNTIME_TRANSITION_STALE')
+      }
+      transition.install.restorePure()
+      activeOwnedGraph = transition.previousOwned
+      transition.previousOwned.resumeAfterTransition()
+      if (streamRequested) stream.start()
+      activeDeactivation = null
+      transition.state = 'rolled-back'
+      runNoThrow(onDiagnostic, () => transition.install.flushRollbackNotifications())
+    })
+    transition.rollbackPromise = rollback
+    return rollback
+  }
+  const finalizeDeactivation = (transition: DeactivationTransitionRecordV5): Promise<void> => {
+    if (transition.finalizePromise !== null) return transition.finalizePromise
+    if (transition.state !== 'committed') return Promise.reject(failure('BROWSER_RUNTIME_TRANSITION_CONSUMED'))
+    transition.state = 'finalizing'
+    const finalize = Promise.resolve().then(() => {
+      if (ownerState !== 'active' || activeDeactivation !== transition || activeOwnedGraph !== null) {
+        throw failure('BROWSER_RUNTIME_TRANSITION_STALE')
+      }
+      disposeOwnedGraph(transition.previousOwned, onDiagnostic)
+      activeDeactivation = null
       transition.state = 'finalized'
     })
     transition.finalizePromise = finalize
@@ -1009,6 +1053,44 @@ export function createBrowserProjectRuntimeV5(
         return Promise.reject(error)
       }
     },
+    async deactivate() {
+      assertActive()
+      assertNoActiveTransition()
+      const previousOwned = activeOwnedGraph
+      const currentBundle = bundle.readActiveState()
+      if (previousOwned === null || currentBundle === null) {
+        if (previousOwned !== null || currentBundle !== null) throw failure('BROWSER_RUNTIME_AUTHORITY_MISMATCH')
+        return Object.freeze({ rollback: async () => undefined, finalize: async () => undefined })
+      }
+      let suspended = false
+      try {
+        const quiesced = previousOwned.suspendForTransition()
+        suspended = true
+        if (streamRequested) stream.stop()
+        await quiesced
+        if (ownerState !== 'active' || activeOwnedGraph !== previousOwned || bundle.readActiveState() !== currentBundle) {
+          throw failure('BROWSER_RUNTIME_TRANSITION_STALE')
+        }
+        const install = bundle.prepareInstall(null, currentBundle, currentBundle.runtimeEpoch)
+        const transition: DeactivationTransitionRecordV5 = {
+          install, previousOwned, state: 'committed', rollbackPromise: null, finalizePromise: null,
+        }
+        install.installPure()
+        activeOwnedGraph = null
+        activeDeactivation = transition
+        runNoThrow(onDiagnostic, () => install.flushIsolatedNotifications())
+        return Object.freeze({
+          rollback: () => rollbackDeactivation(transition),
+          finalize: () => finalizeDeactivation(transition),
+        })
+      } catch (error) {
+        if (suspended && ownerState === 'active' && activeOwnedGraph === previousOwned) {
+          previousOwned.resumeAfterTransition()
+          if (streamRequested) stream.start()
+        }
+        throw error
+      }
+    },
     startGatewayStream() {
       assertActive()
       if (activeOwnedGraph === null) throw failure('BROWSER_RUNTIME_EMPTY')
@@ -1035,6 +1117,11 @@ export function createBrowserProjectRuntimeV5(
         transition.state = 'disposed'
         transition.candidate.state = 'consumed'
       }
+      const deactivation = activeDeactivation
+      if (deactivation !== null) {
+        activeDeactivation = null
+        deactivation.state = 'disposed'
+      }
       for (const record of snapshot) {
         if (record.state === 'applying') runNoThrow(onDiagnostic, () => record.controller.abort())
       }
@@ -1046,6 +1133,7 @@ export function createBrowserProjectRuntimeV5(
           if (transition !== null && transition.previousOwned !== null) {
             disposeOwnedGraph(transition.previousOwned, onDiagnostic)
           }
+          if (deactivation !== null) disposeOwnedGraph(deactivation.previousOwned, onDiagnostic)
           if (activeOwnedGraph !== null) disposeOwnedGraph(activeOwnedGraph, onDiagnostic)
         } finally {
           ownerState = 'disposed'

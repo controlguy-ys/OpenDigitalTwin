@@ -39,4 +39,21 @@ describe('initial Project V5 bootstrap', () => {
 
     expect(newProject).toHaveBeenCalledOnce()
   })
+
+  it('lets an active reentrant late joiner create after the first caller decides to skip', async () => {
+    const hydrate = vi.fn(async () => undefined)
+    const newProject = vi.fn(async () => undefined)
+    const bootstrap = createInitialProjectBootstrapV5({ getState: () => ({ activeProject: null, status: 'idle' as const, hydrate, newProject }) })
+    let late: Promise<void> | null = null
+
+    const first = bootstrap.run(() => {
+      late = bootstrap.run(() => true)
+      return false
+    })
+    await first
+    await late
+
+    expect(hydrate).toHaveBeenCalledOnce()
+    expect(newProject).toHaveBeenCalledOnce()
+  })
 })

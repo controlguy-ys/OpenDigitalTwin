@@ -11,27 +11,31 @@ export interface InitialProjectBootstrapV5 {
 }
 
 export function createInitialProjectBootstrapV5(store: InitialProjectStoreV5): InitialProjectBootstrapV5 {
-  let runPromise: Promise<void> | null = null
-  let joinedActivityChecks: Array<() => boolean> | null = null
+  interface BootstrapRun {
+    readonly hydration: Promise<void>
+    participants: number
+    newProject: Promise<void> | null
+  }
+  let activeRun: BootstrapRun | null = null
   return {
-    run(isActive) {
-      if (runPromise !== null) {
-        joinedActivityChecks!.push(isActive)
-        return runPromise
+    async run(isActive) {
+      let run = activeRun
+      if (run === null) {
+        run = { hydration: store.getState().hydrate(), participants: 0, newProject: null }
+        activeRun = run
       }
-      const activityChecks = [isActive]
-      joinedActivityChecks = activityChecks
-      runPromise = (async () => {
-        await store.getState().hydrate()
-        if (!activityChecks.some((check) => check())) return
+      run.participants += 1
+      try {
+        await run.hydration
+        if (!isActive()) return
         const state = store.getState()
         if (state.activeProject !== null || (state.status !== 'idle' && state.status !== 'ready')) return
-        await state.newProject()
-      })().finally(() => {
-        runPromise = null
-        joinedActivityChecks = null
-      })
-      return runPromise
+        run.newProject ??= state.newProject()
+        await run.newProject
+      } finally {
+        run.participants -= 1
+        if (run.participants === 0 && activeRun === run) activeRun = null
+      }
     },
   }
 }

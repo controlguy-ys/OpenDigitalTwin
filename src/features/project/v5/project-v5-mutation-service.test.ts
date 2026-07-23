@@ -48,8 +48,9 @@ function harness() {
     hydrate: vi.fn(async () => current),
     readPublished: () => current,
     isRecoveryRequired: () => false,
+    readRecoveryError: () => null,
     subscribe: vi.fn(() => () => undefined),
-  } satisfies Pick<ProjectPublicationCoordinatorV5, 'replace' | 'hydrate' | 'readPublished' | 'isRecoveryRequired' | 'subscribe'>
+  } satisfies Pick<ProjectPublicationCoordinatorV5, 'replace' | 'hydrate' | 'readPublished' | 'isRecoveryRequired' | 'readRecoveryError' | 'subscribe'>
   const createRevisionId = vi.fn(() => 'revision-b')
   const nowIso = vi.fn(() => NOW)
   const service = createProjectV5MutationService({ publication, createRevisionId, nowIso })
@@ -189,11 +190,12 @@ describe('Project V5 atomic mutation service', () => {
       hydrate: vi.fn(async () => current),
       readPublished: () => current,
       isRecoveryRequired: () => false,
+      readRecoveryError: () => null,
       subscribe: (listener: () => void) => {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },
-    } satisfies Pick<ProjectPublicationCoordinatorV5, 'replace' | 'hydrate' | 'readPublished' | 'isRecoveryRequired' | 'subscribe'>
+    } satisfies Pick<ProjectPublicationCoordinatorV5, 'replace' | 'hydrate' | 'readPublished' | 'isRecoveryRequired' | 'readRecoveryError' | 'subscribe'>
     const service = createProjectV5MutationService({
       publication,
       createRevisionId: () => 'revision-b',
@@ -210,5 +212,43 @@ describe('Project V5 atomic mutation service', () => {
     expect(publication.hydrate).toHaveBeenCalledTimes(1)
     expect(listener).toHaveBeenCalledTimes(1)
     unsubscribe()
+  })
+
+  it('runs hydrate, replace, and stale mutate in exact FIFO order and relays recovery error authority', async () => {
+    const active = published(project('revision-a'), HASH_A)
+    const replacement = project('replacement-revision', 'Imported')
+    let current: PublishedProjectV5 | null = active
+    let releaseHydrate!: () => void
+    const hydrateGate = new Promise<void>((resolve) => { releaseHydrate = resolve })
+    const events: string[] = []
+    const recovery = new Error('reload required')
+    const publication = {
+      hydrate: vi.fn(async () => { events.push('hydrate:start'); await hydrateGate; events.push('hydrate:end'); return current }),
+      replace: vi.fn(async ({ candidate }: { readonly candidate: WorkcellProjectV5 }) => {
+        events.push('replace')
+        current = published(candidate, HASH_B)
+        return current
+      }),
+      readPublished: () => current,
+      isRecoveryRequired: () => false,
+      readRecoveryError: () => recovery,
+      subscribe: vi.fn(() => () => undefined),
+    }
+    const service = createProjectV5MutationService({ publication, createRevisionId: () => 'unused', nowIso: () => NOW })
+    const recipe = vi.fn((value: WorkcellProjectV5) => value)
+
+    const hydrating = service.hydrate()
+    const replacing = service.replace({ candidate: replacement, description: 'Import' })
+    const mutating = service.mutate({ expectedRevisionId: active.revisionId, description: 'Stale', recipe })
+    await Promise.resolve()
+    expect(events).toEqual(['hydrate:start'])
+    releaseHydrate()
+
+    await expect(hydrating).resolves.toEqual(active)
+    await expect(replacing).resolves.toEqual(published(replacement, HASH_B))
+    await expect(mutating).rejects.toMatchObject({ code: 'PROJECT_ACTIVE_REVISION_CHANGED' })
+    expect(events).toEqual(['hydrate:start', 'hydrate:end', 'replace'])
+    expect(recipe).not.toHaveBeenCalled()
+    expect(service.readRecoveryError()).toBe(recovery)
   })
 })

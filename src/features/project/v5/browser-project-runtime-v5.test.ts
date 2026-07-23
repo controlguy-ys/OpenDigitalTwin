@@ -434,7 +434,7 @@ describe('BrowserProjectRuntimeV5', () => {
     const prepared = await runtime.prepare(next, CONFIG_B)
     expect(Object.keys(prepared).sort()).toEqual(['configRevision', 'projectRevisionId'])
     expect(Object.keys(runtime).sort()).toEqual([
-      'apply', 'bundle', 'commit', 'dispose', 'prepare', 'readActiveBundle', 'rollback',
+      'apply', 'bundle', 'commit', 'deactivate', 'dispose', 'prepare', 'readActiveBundle', 'rollback',
       'startGatewayStream', 'stopGatewayStream',
     ])
 
@@ -517,6 +517,31 @@ describe('BrowserProjectRuntimeV5', () => {
 
     expect(runtime.readActiveBundle()).toBeNull()
     expect(() => runtime.bundle.getState()).toThrow('RUNTIME_BUNDLE_EMPTY')
+    await runtime.dispose()
+  })
+
+  it('deactivates an active graph transactionally and can publish New after finalization', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options())
+    const base = runtime.readActiveBundle()!
+    const transition = await runtime.deactivate()
+
+    expect(runtime.readActiveBundle()).toBeNull()
+    expect(() => base.runtimeGraph.playback.startJob('job-1')).toThrow('BROWSER_RUNTIME_GRAPH_INACTIVE')
+
+    await transition.rollback()
+    expect(runtime.readActiveBundle()).toBe(base)
+    expect(() => base.runtimeGraph.playback.startJob('job-1')).not.toThrow()
+
+    await (await runtime.deactivate()).finalize()
+    expect(runtime.readActiveBundle()).toBeNull()
+    expect(() => base.runtimeGraph.playback.startJob('job-1')).toThrow()
+
+    const next = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(next as { revisionId: string }).revisionId = 'revision-after-empty'
+    const prepared = await runtime.prepare(next, CONFIG_B)
+    await runtime.apply(prepared)
+    await (await runtime.commit(prepared)).finalize()
+    expect(runtime.readActiveBundle()).toMatchObject({ projectRevisionId: 'revision-after-empty' })
     await runtime.dispose()
   })
 
