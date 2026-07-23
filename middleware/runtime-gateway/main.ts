@@ -379,6 +379,7 @@ export function createRuntimeGatewayEntrypointService(
           advertisedPort: config.opcUaAdvertisedPort,
           port: config.opcUaPort,
           pkiRootDir,
+          configRevision,
         })
       }
       if (project.opcUa.mode === 'client' || project.opcUa.mode === 'bridge') {

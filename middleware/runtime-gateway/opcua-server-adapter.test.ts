@@ -23,12 +23,16 @@ import {
   type OpcUaServerAdapterV1,
 } from './opcua-server-adapter.js'
 import * as serverAdapterModule from './opcua-server-adapter.js'
-import { OPENWEB_MODEL_NAMESPACE_URI_V1 } from './opcua-openweb-model.js'
+import {
+  OPENWEB_MODEL_NAMESPACE_URI_V1,
+  type ServerActualSnapshotV1,
+} from './opcua-openweb-model.js'
 
 const CRB_ROBOT_ID = 'robot-1'
 const OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 =
   'urn:open-web-digital-twin:instances:v1'
 const TEST_PKI_ROOT = join(tmpdir(), `robot-sim-opcua-adapter-${process.pid}`)
+const CONFIG_REVISION = 'b'.repeat(64)
 
 function sampleProject(mode: 'off' | 'server' | 'bridge'): WorkcellProjectV5 {
   const source = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
@@ -60,6 +64,36 @@ function sampleOpenWebProject(): WorkcellProjectV5 {
     movingFrames: [],
   })
   return validateWorkcellProjectV5(source)
+}
+
+function openWebSnapshot(project: WorkcellProjectV5): ServerActualSnapshotV1 {
+  return {
+    projectId: project.projectId,
+    revisionId: project.revisionId,
+    configRevision: CONFIG_REVISION,
+    robots: { [CRB_ROBOT_ID]: { J1: 21.5 } },
+    sceneObjects: {
+      box: {
+        pose: { positionM: [0.4, 0.5, 0.6], quaternion: [0, 0, 0, 1] },
+        status: 3,
+        color: '#123456',
+        quality: 'GOOD',
+        sourceTimestampMs: 1_000,
+        publishedTimestampMs: 1_050,
+      },
+    },
+    logicalSignals: {
+      PartPresent: {
+        value: true,
+        quality: 'GOOD',
+        statusCode: 'Good',
+        sourceTimestampMs: 1_000,
+        publishedTimestampMs: 1_050,
+      },
+    },
+    jobs: { 'job-1': { state: 'running', stepIndex: 2, failureCode: null } },
+    attachments: { box: { state: 'attached', parentFrameId: 'robot-1:Tool' } },
+  }
 }
 
 function projectWithReservedJointId() {
@@ -134,6 +168,7 @@ describe('OPC UA server adapter V1', () => {
       advertisedPort: 0,
       port: 0,
       pkiRootDir: TEST_PKI_ROOT,
+      configRevision: CONFIG_REVISION,
     })
     adapters.push(adapter)
 
@@ -163,6 +198,7 @@ describe('OPC UA server adapter V1', () => {
       advertisedPort: 0,
       port: 0,
       pkiRootDir: TEST_PKI_ROOT,
+      configRevision: CONFIG_REVISION,
     })
     adapters.push(adapter)
 
@@ -183,6 +219,7 @@ describe('OPC UA server adapter V1', () => {
       advertisedPort: 0,
       port: 0,
       pkiRootDir: TEST_PKI_ROOT,
+      configRevision: CONFIG_REVISION,
     })
     adapters.push(adapter)
 
@@ -254,6 +291,7 @@ describe('OPC UA server adapter V1', () => {
       advertisedPort: 0,
       port: 0,
       pkiRootDir: TEST_PKI_ROOT,
+      configRevision: CONFIG_REVISION,
     })
     adapters.push(adapter)
     await adapter.start()
@@ -263,44 +301,74 @@ describe('OPC UA server adapter V1', () => {
     expect(status.productNamespaceIndex).toBeGreaterThan(1)
     expect(status.productRootNodeId).toMatch(/^ns=\d+;s=OpenWebDigitalTwin\/Projects\/project-opcua-server$/u)
 
-    await adapter.publishActualSnapshot({
-      projectId: project.projectId,
-      revisionId: project.revisionId,
-      configRevision: project.revisionId,
-      robots: { [CRB_ROBOT_ID]: { J1: 21.5 } },
-      sceneObjects: {
-        box: {
-          pose: { positionM: [0.4, 0.5, 0.6], quaternion: [0, 0, 0, 1] },
-          status: 3,
-          color: '#123456',
-          quality: 'GOOD',
-          sourceTimestampMs: 1_000,
-          publishedTimestampMs: 1_050,
-        },
-      },
-      logicalSignals: {
-        PartPresent: {
-          value: true,
-          quality: 'GOOD',
-          statusCode: 'Good',
-          sourceTimestampMs: 1_000,
-          publishedTimestampMs: 1_050,
-        },
-      },
-      jobs: { 'job-1': { state: 'running', stepIndex: 2, failureCode: null } },
-      attachments: { box: { state: 'attached', parentFrameId: 'robot-1:Tool' } },
-    })
+    await adapter.publishActualSnapshot(openWebSnapshot(project))
 
     const { client, session } = await openAnonymousSession(status.endpointUrl!)
     try {
       const objectX = `ns=${status.namespaceIndex};s=OpenWebDigitalTwin/Projects/${project.projectId}/Actual/SceneObjects/box/Pose/X`
       const robotJ1 = status.nodeIds[CRB_ROBOT_ID]!.J1!
+      const configRevision = `ns=${status.namespaceIndex};s=OpenWebDigitalTwin/Projects/${project.projectId}/Diagnostics/ConfigRevision`
       const values = await session.read([
         { nodeId: objectX, attributeId: AttributeIds.Value },
         { nodeId: robotJ1, attributeId: AttributeIds.Value },
+        { nodeId: configRevision, attributeId: AttributeIds.Value },
       ])
-      expect(values.map(({ statusCode }) => statusCode.isGood())).toEqual([true, true])
-      expect(values.map(({ value }) => value.value)).toEqual([0.4, 21.5])
+      expect(values.map(({ statusCode }) => statusCode.isGood())).toEqual([true, true, true])
+      expect(values.map(({ value }) => value.value)).toEqual([0.4, 21.5, CONFIG_REVISION])
+    } finally {
+      await session.close()
+      await client.disconnect()
+    }
+  }, 30_000)
+
+  it('retains all Product Actual values and Robotics telemetry when a fractional Object status rejects a snapshot', async () => {
+    const project = sampleOpenWebProject()
+    const adapter = createOpcUaServerAdapterV1(project, {
+      host: '127.0.0.1',
+      advertisedHost: '127.0.0.1',
+      advertisedPort: 0,
+      port: 0,
+      pkiRootDir: TEST_PKI_ROOT,
+      configRevision: CONFIG_REVISION,
+    })
+    adapters.push(adapter)
+    await adapter.start()
+    const initial = openWebSnapshot(project)
+    await adapter.publishActualSnapshot(initial)
+    const rejected: ServerActualSnapshotV1 = {
+      ...initial,
+      robots: { [CRB_ROBOT_ID]: { J1: 99 } },
+      sceneObjects: {
+        box: {
+          ...initial.sceneObjects.box!,
+          pose: { positionM: [9, 9, 9], quaternion: [0, 0, 0, 1] },
+          status: 3.5,
+          color: '#ffffff',
+        },
+      },
+      logicalSignals: {
+        PartPresent: { ...initial.logicalSignals.PartPresent!, value: false },
+      },
+      jobs: { 'job-1': { state: 'failed', stepIndex: 99, failureCode: 'FAILED' } },
+      attachments: { box: { state: 'detached', parentFrameId: null } },
+    }
+
+    await expect(adapter.publishActualSnapshot(rejected))
+      .rejects.toThrow('OPC_UA_OPENWEB_OBJECT_STATUS_INVALID')
+
+    const status = adapter.status()
+    const path = `ns=${status.namespaceIndex};s=OpenWebDigitalTwin/Projects/${project.projectId}`
+    const { client, session } = await openAnonymousSession(status.endpointUrl!)
+    try {
+      const values = await session.read([
+        { nodeId: `${path}/Actual/SceneObjects/box/Pose/X`, attributeId: AttributeIds.Value },
+        { nodeId: `${path}/Actual/SceneObjects/box/Status`, attributeId: AttributeIds.Value },
+        { nodeId: `${path}/Actual/LogicalSignals/PartPresent/Value`, attributeId: AttributeIds.Value },
+        { nodeId: `${path}/Actual/Jobs/job-1/StepIndex`, attributeId: AttributeIds.Value },
+        { nodeId: `${path}/Actual/Attachments/box/State`, attributeId: AttributeIds.Value },
+        { nodeId: status.nodeIds[CRB_ROBOT_ID]!.J1!, attributeId: AttributeIds.Value },
+      ])
+      expect(values.map(({ value }) => value.value)).toEqual([0.4, 3, true, 2, 'attached', 21.5])
     } finally {
       await session.close()
       await client.disconnect()
@@ -314,6 +382,7 @@ describe('OPC UA server adapter V1', () => {
       advertisedPort: 0,
       port: 0,
       pkiRootDir: TEST_PKI_ROOT,
+      configRevision: CONFIG_REVISION,
     })
     adapters.push(adapter)
     await adapter.start()
@@ -334,6 +403,7 @@ describe('OPC UA server adapter V1', () => {
       advertisedPort: 0,
       port: 0,
       pkiRootDir: TEST_PKI_ROOT,
+      configRevision: CONFIG_REVISION,
     })
     adapters.push(adapter)
 

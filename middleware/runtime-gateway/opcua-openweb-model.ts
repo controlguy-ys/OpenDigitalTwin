@@ -20,6 +20,8 @@ export const OPENWEB_MODEL_NAMESPACE_URI_V1 =
 export const OPENWEB_INSTANCES_NAMESPACE_URI_V1 =
   'urn:open-web-digital-twin:instances:v1' as const
 
+export const MAX_OPENWEB_RESULT_RECORDS_V1 = 4_096
+
 export type OpenWebQualityV1 = 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE'
 
 export interface ObjectActualV1 {
@@ -139,6 +141,7 @@ export interface OpcUaOpenWebModelV1 {
   actualChildren(): readonly ['SceneObjects', 'LogicalSignals', 'Jobs', 'Attachments']
   commandChildren(): readonly ['RobotJointTargets', 'SceneObjects', 'LogicalSignals', 'Jobs']
   productNodeIds(): readonly ProductNodeIdV1[]
+  retainedResultLimit(): number
   publishSnapshot(snapshot: ServerActualSnapshotV1): void
   readActualObjectPose(objectId: string): RigidTransformV5 | null
   publishResult(result: CommandResultV1): void
@@ -187,6 +190,7 @@ type AttachmentActualNodesV1 = Readonly<{
 }>
 
 type ResultNodesV1 = Readonly<{
+  readonly entry: UAObject
   readonly acknowledgement: UAVariable
   readonly executionState: UAVariable
   readonly failureCode: UAVariable
@@ -221,6 +225,7 @@ const ACTUAL_CHILDREN = Object.freeze(['SceneObjects', 'LogicalSignals', 'Jobs',
 const COMMAND_CHILDREN = Object.freeze([
   'RobotJointTargets', 'SceneObjects', 'LogicalSignals', 'Jobs',
 ] as const)
+const OPENWEB_QUALITIES = Object.freeze(['GOOD', 'UNCERTAIN', 'BAD', 'STALE'] as const)
 
 function nodeIdForPath(namespace: Namespace, path: string): string {
   return `ns=${namespace.index};s=${path}`
@@ -282,6 +287,34 @@ function requireInteger(value: number, name: string): number {
   return value
 }
 
+function requireInt32(value: number, name: string): number {
+  const integer = requireInteger(value, name)
+  if (integer < -2_147_483_648 || integer > 2_147_483_647) {
+    throw new Error(`OPC_UA_OPENWEB_${name}_INVALID`)
+  }
+  return integer
+}
+
+function requireUInt32(value: number, name: string): number {
+  const integer = requireInteger(value, name)
+  if (integer < 0 || integer > 4_294_967_295) {
+    throw new Error(`OPC_UA_OPENWEB_${name}_INVALID`)
+  }
+  return integer
+}
+
+function requireText(value: unknown, name: string): string {
+  if (typeof value !== 'string') throw new Error(`OPC_UA_OPENWEB_${name}_INVALID`)
+  return value
+}
+
+function requireQuality(value: unknown): OpenWebQualityV1 {
+  if (!OPENWEB_QUALITIES.includes(value as OpenWebQualityV1)) {
+    throw new Error('OPC_UA_OPENWEB_QUALITY_INVALID')
+  }
+  return value as OpenWebQualityV1
+}
+
 function dateAt(value: number | null): Date {
   return new Date(value ?? 0)
 }
@@ -300,22 +333,40 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
   instancesNamespace: Namespace
   project: WorkcellProjectV5
   configRevision: string
+  maxRetainedResults?: number
 }>): OpcUaOpenWebModelV1 {
-  const { addressSpace, instancesNamespace, project, configRevision } = options
-  if (options.modelNamespace.index === instancesNamespace.index) {
-    throw new Error('OPC_UA_OPENWEB_NAMESPACES_NOT_DISTINCT')
+  const { addressSpace, modelNamespace, instancesNamespace, project, configRevision } = options
+  if (modelNamespace.namespaceUri !== OPENWEB_MODEL_NAMESPACE_URI_V1) {
+    throw new Error('OPC_UA_OPENWEB_MODEL_NAMESPACE_INVALID')
+  }
+  if (instancesNamespace.namespaceUri !== OPENWEB_INSTANCES_NAMESPACE_URI_V1) {
+    throw new Error('OPC_UA_OPENWEB_INSTANCES_NAMESPACE_INVALID')
   }
   if (configRevision.trim().length === 0) {
     throw new Error('OPC_UA_OPENWEB_CONFIG_REVISION_INVALID')
+  }
+  const maxRetainedResults = options.maxRetainedResults ?? MAX_OPENWEB_RESULT_RECORDS_V1
+  if (
+    !Number.isSafeInteger(maxRetainedResults)
+    || maxRetainedResults < 1
+    || maxRetainedResults > MAX_OPENWEB_RESULT_RECORDS_V1
+  ) {
+    throw new Error('OPC_UA_OPENWEB_RESULT_LIMIT_INVALID')
   }
 
   const productNodeIds: ProductNodeIdV1[] = []
   const rootPath = `OpenWebDigitalTwin/Projects/${project.projectId}`
 
   function track<T extends UAObject | UAVariable>(node: T): T {
+    const namespaceUri = node.nodeId.namespace === modelNamespace.index
+      ? modelNamespace.namespaceUri
+      : node.nodeId.namespace === instancesNamespace.index
+        ? instancesNamespace.namespaceUri
+        : null
+    if (namespaceUri === null) throw new Error('OPC_UA_OPENWEB_PRODUCT_NODE_NAMESPACE_INVALID')
     productNodeIds.push(Object.freeze({
       nodeId: node.nodeId.toString(),
-      namespaceUri: OPENWEB_INSTANCES_NAMESPACE_URI_V1,
+      namespaceUri: namespaceUri as ProductNodeIdV1['namespaceUri'],
     }))
     return node
   }
@@ -384,6 +435,12 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
   const actualJobsById = new Map<string, JobActualNodesV1>()
   const actualAttachmentsByObjectId = new Map<string, AttachmentActualNodesV1>()
   const posesByObjectId = new Map<string, RigidTransformV5>()
+  const signalDefinitionsById = new Map(project.logicalSignals.map((signal) => [signal.id, signal]))
+  const robotJointIdsByRobotId = new Map(project.robots.map((robot) => {
+    const definition = project.robotDefinitions.find(({ id }) => id === robot.definitionId)
+    if (definition === undefined) throw new Error(`OPC_UA_OPENWEB_ROBOT_DEFINITION_NOT_FOUND: ${robot.id}`)
+    return [robot.id, new Set(definition.joints.map(({ id }) => id))] as const
+  }))
 
   for (const entity of project.spatialEntities) {
     const path = `${rootPath}/Actual/SceneObjects/${entity.id}`
@@ -597,62 +654,150 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     }
   }
 
-  function publishSnapshot(snapshot: ServerActualSnapshotV1): void {
-    assertActive()
+  function prepareSignalValue(
+    signal: WorkcellProjectV5['logicalSignals'][number],
+    value: LogicalSignalActualV1['value'],
+  ): LogicalSignalActualV1['value'] {
+    if (signal.dataType === 'Boolean' && typeof value === 'boolean') return value
+    if (signal.dataType === 'String' && typeof value === 'string') return value
+    if (signal.dataType === 'Int32' && typeof value === 'number') {
+      return requireInt32(value, 'LOGICAL_SIGNAL_VALUE')
+    }
+    if (signal.dataType === 'UInt32' && typeof value === 'number') {
+      return requireUInt32(value, 'LOGICAL_SIGNAL_VALUE')
+    }
+    if (signal.dataType === 'Double' && typeof value === 'number') {
+      return requireFinite(value, 'LOGICAL_SIGNAL_VALUE')
+    }
+    throw new Error('OPC_UA_OPENWEB_LOGICAL_SIGNAL_VALUE_INVALID')
+  }
+
+  function prepareSnapshot(snapshot: ServerActualSnapshotV1): ServerActualSnapshotV1 {
     requireSnapshotIdentity(snapshot)
+    requireKnown(snapshot.robots, robotJointIdsByRobotId, 'ROBOT')
     requireKnown(snapshot.sceneObjects, actualObjects, 'SCENE_OBJECT')
     requireKnown(snapshot.logicalSignals, actualSignals, 'LOGICAL_SIGNAL')
     requireKnown(snapshot.jobs, actualJobsById, 'JOB')
     requireKnown(snapshot.attachments, actualAttachmentsByObjectId, 'ATTACHMENT')
 
-    for (const [objectId, actualValue] of Object.entries(snapshot.sceneObjects)) {
-      const nodes = actualObjects.get(objectId)!
+    const robots = frozenRecord(Object.entries(snapshot.robots).map(([robotId, values]) => {
+      const joints = robotJointIdsByRobotId.get(robotId)!
+      const preparedValues: Array<readonly [string, number]> = []
+      for (const [jointId, value] of Object.entries(values)) {
+        if (!joints.has(jointId)) throw new Error(`OPC_UA_OPENWEB_JOINT_NOT_FOUND: ${robotId}/${jointId}`)
+        preparedValues.push([jointId, requireFinite(value, 'JOINT_VALUE')])
+      }
+      return [robotId, frozenRecord(preparedValues)] as const
+    }))
+
+    const sceneObjects = frozenRecord(Object.entries(snapshot.sceneObjects).map(([objectId, actualValue]) => {
       const pose = copyPose(actualValue.pose)
-      const sourceTimestampMs = requireInteger(actualValue.sourceTimestampMs, 'SOURCE_TIMESTAMP')
-      const publishedTimestampMs = requireInteger(actualValue.publishedTimestampMs, 'PUBLISHED_TIMESTAMP')
-      const positionX = requireFinite(pose.positionM[0], 'POSE')
-      const positionY = requireFinite(pose.positionM[1], 'POSE')
-      const positionZ = requireFinite(pose.positionM[2], 'POSE')
-      const quaternionX = requireFinite(pose.quaternion[0], 'POSE')
-      const quaternionY = requireFinite(pose.quaternion[1], 'POSE')
-      const quaternionZ = requireFinite(pose.quaternion[2], 'POSE')
-      const quaternionW = requireFinite(pose.quaternion[3], 'POSE')
-      // Commit the complete quaternion-backed pose before writing its individual leaves.
+      const preparedPose: RigidTransformV5 = Object.freeze({
+        positionM: [
+          requireFinite(pose.positionM[0], 'POSE'),
+          requireFinite(pose.positionM[1], 'POSE'),
+          requireFinite(pose.positionM[2], 'POSE'),
+        ] as RigidTransformV5['positionM'],
+        quaternion: [
+          requireFinite(pose.quaternion[0], 'POSE'),
+          requireFinite(pose.quaternion[1], 'POSE'),
+          requireFinite(pose.quaternion[2], 'POSE'),
+          requireFinite(pose.quaternion[3], 'POSE'),
+        ] as RigidTransformV5['quaternion'],
+      })
+      return [objectId, Object.freeze({
+        pose: preparedPose,
+        status: requireInt32(actualValue.status, 'OBJECT_STATUS'),
+        color: requireText(actualValue.color, 'OBJECT_COLOR'),
+        quality: requireQuality(actualValue.quality),
+        sourceTimestampMs: requireInteger(actualValue.sourceTimestampMs, 'SOURCE_TIMESTAMP'),
+        publishedTimestampMs: requireInteger(actualValue.publishedTimestampMs, 'PUBLISHED_TIMESTAMP'),
+      })] as const
+    }))
+
+    const logicalSignals = frozenRecord(Object.entries(snapshot.logicalSignals).map(([signalId, actualValue]) => {
+      const signal = signalDefinitionsById.get(signalId)!
+      return [signalId, Object.freeze({
+        value: prepareSignalValue(signal, actualValue.value),
+        quality: requireQuality(actualValue.quality),
+        statusCode: requireText(actualValue.statusCode, 'LOGICAL_SIGNAL_STATUS_CODE'),
+        sourceTimestampMs: requireInteger(actualValue.sourceTimestampMs, 'SOURCE_TIMESTAMP'),
+        publishedTimestampMs: requireInteger(actualValue.publishedTimestampMs, 'PUBLISHED_TIMESTAMP'),
+      })] as const
+    }))
+
+    const jobs = frozenRecord(Object.entries(snapshot.jobs).map(([jobId, actualValue]) => [jobId, Object.freeze({
+      state: requireText(actualValue.state, 'JOB_STATE'),
+      stepIndex: requireInt32(actualValue.stepIndex, 'JOB_STEP_INDEX'),
+      failureCode: actualValue.failureCode === null
+        ? null
+        : requireText(actualValue.failureCode, 'JOB_FAILURE_CODE'),
+    })] as const))
+
+    const attachments = frozenRecord(Object.entries(snapshot.attachments).map(([objectId, actualValue]) => {
+      if (actualValue.state !== 'attached' && actualValue.state !== 'detached') {
+        throw new Error('OPC_UA_OPENWEB_ATTACHMENT_STATE_INVALID')
+      }
+      return [objectId, Object.freeze({
+        state: actualValue.state,
+        parentFrameId: actualValue.parentFrameId === null
+          ? null
+          : requireText(actualValue.parentFrameId, 'ATTACHMENT_PARENT_FRAME'),
+      })] as const
+    }))
+
+    return Object.freeze({
+      projectId: snapshot.projectId,
+      revisionId: snapshot.revisionId,
+      configRevision: snapshot.configRevision,
+      robots,
+      sceneObjects,
+      logicalSignals,
+      jobs,
+      attachments,
+    })
+  }
+
+  function publishSnapshot(snapshot: ServerActualSnapshotV1): void {
+    assertActive()
+    const prepared = prepareSnapshot(snapshot)
+
+    for (const [objectId, actualValue] of Object.entries(prepared.sceneObjects)) {
+      const nodes = actualObjects.get(objectId)!
+      const pose = actualValue.pose
       posesByObjectId.set(objectId, pose)
-      setValue(nodes.pose.x, DataType.Double, positionX, sourceTimestampMs)
-      setValue(nodes.pose.y, DataType.Double, positionY, sourceTimestampMs)
-      setValue(nodes.pose.z, DataType.Double, positionZ, sourceTimestampMs)
-      setValue(nodes.pose.quaternionX, DataType.Double, quaternionX, sourceTimestampMs)
-      setValue(nodes.pose.quaternionY, DataType.Double, quaternionY, sourceTimestampMs)
-      setValue(nodes.pose.quaternionZ, DataType.Double, quaternionZ, sourceTimestampMs)
-      setValue(nodes.pose.quaternionW, DataType.Double, quaternionW, sourceTimestampMs)
-      setValue(nodes.status, DataType.Int32, requireInteger(actualValue.status, 'OBJECT_STATUS'), sourceTimestampMs)
-      setValue(nodes.color, DataType.String, actualValue.color, sourceTimestampMs)
-      setValue(nodes.quality, DataType.String, actualValue.quality, sourceTimestampMs)
-      setValue(nodes.sourceTimestamp, DataType.DateTime, new Date(sourceTimestampMs), sourceTimestampMs)
-      setValue(nodes.publishedTimestamp, DataType.DateTime, new Date(publishedTimestampMs), publishedTimestampMs)
+      setValue(nodes.pose.x, DataType.Double, pose.positionM[0], actualValue.sourceTimestampMs)
+      setValue(nodes.pose.y, DataType.Double, pose.positionM[1], actualValue.sourceTimestampMs)
+      setValue(nodes.pose.z, DataType.Double, pose.positionM[2], actualValue.sourceTimestampMs)
+      setValue(nodes.pose.quaternionX, DataType.Double, pose.quaternion[0], actualValue.sourceTimestampMs)
+      setValue(nodes.pose.quaternionY, DataType.Double, pose.quaternion[1], actualValue.sourceTimestampMs)
+      setValue(nodes.pose.quaternionZ, DataType.Double, pose.quaternion[2], actualValue.sourceTimestampMs)
+      setValue(nodes.pose.quaternionW, DataType.Double, pose.quaternion[3], actualValue.sourceTimestampMs)
+      setValue(nodes.status, DataType.Int32, actualValue.status, actualValue.sourceTimestampMs)
+      setValue(nodes.color, DataType.String, actualValue.color, actualValue.sourceTimestampMs)
+      setValue(nodes.quality, DataType.String, actualValue.quality, actualValue.sourceTimestampMs)
+      setValue(nodes.sourceTimestamp, DataType.DateTime, new Date(actualValue.sourceTimestampMs), actualValue.sourceTimestampMs)
+      setValue(nodes.publishedTimestamp, DataType.DateTime, new Date(actualValue.publishedTimestampMs), actualValue.publishedTimestampMs)
     }
 
-    for (const [signalId, actualValue] of Object.entries(snapshot.logicalSignals)) {
+    for (const [signalId, actualValue] of Object.entries(prepared.logicalSignals)) {
       const nodes = actualSignals.get(signalId)!
-      const sourceTimestampMs = requireInteger(actualValue.sourceTimestampMs, 'SOURCE_TIMESTAMP')
-      const publishedTimestampMs = requireInteger(actualValue.publishedTimestampMs, 'PUBLISHED_TIMESTAMP')
-      const dataType = nodes.value.readValue().value.dataType
-      setValue(nodes.value, dataType, actualValue.value, sourceTimestampMs)
-      setValue(nodes.quality, DataType.String, actualValue.quality, sourceTimestampMs)
-      setValue(nodes.statusCode, DataType.String, actualValue.statusCode, sourceTimestampMs)
-      setValue(nodes.sourceTimestamp, DataType.DateTime, new Date(sourceTimestampMs), sourceTimestampMs)
-      setValue(nodes.publishedTimestamp, DataType.DateTime, new Date(publishedTimestampMs), publishedTimestampMs)
+      const dataType = logicalSignalDataType(signalDefinitionsById.get(signalId)!.dataType)
+      setValue(nodes.value, dataType, actualValue.value, actualValue.sourceTimestampMs)
+      setValue(nodes.quality, DataType.String, actualValue.quality, actualValue.sourceTimestampMs)
+      setValue(nodes.statusCode, DataType.String, actualValue.statusCode, actualValue.sourceTimestampMs)
+      setValue(nodes.sourceTimestamp, DataType.DateTime, new Date(actualValue.sourceTimestampMs), actualValue.sourceTimestampMs)
+      setValue(nodes.publishedTimestamp, DataType.DateTime, new Date(actualValue.publishedTimestampMs), actualValue.publishedTimestampMs)
     }
 
-    for (const [jobId, actualValue] of Object.entries(snapshot.jobs)) {
+    for (const [jobId, actualValue] of Object.entries(prepared.jobs)) {
       const nodes = actualJobsById.get(jobId)!
       setValue(nodes.state, DataType.String, actualValue.state)
-      setValue(nodes.stepIndex, DataType.Int32, requireInteger(actualValue.stepIndex, 'JOB_STEP_INDEX'))
+      setValue(nodes.stepIndex, DataType.Int32, actualValue.stepIndex)
       setValue(nodes.failureCode, DataType.String, actualValue.failureCode ?? '')
     }
 
-    for (const [objectId, actualValue] of Object.entries(snapshot.attachments)) {
+    for (const [objectId, actualValue] of Object.entries(prepared.attachments)) {
       const nodes = actualAttachmentsByObjectId.get(objectId)!
       setValue(nodes.state, DataType.String, actualValue.state)
       setValue(nodes.parentFrameId, DataType.String, actualValue.parentFrameId ?? '')
@@ -668,6 +813,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     const path = `${rootPath}/Result/${requestId}`
     const entry = object(result, requestId, path)
     return Object.freeze({
+      entry,
       acknowledgement: variable(entry, 'Acknowledgement', `${path}/Acknowledgement`, DataType.String, 'IDLE'),
       executionState: variable(entry, 'ExecutionState', `${path}/ExecutionState`, DataType.String, 'IDLE'),
       failureCode: variable(entry, 'FailureCode', `${path}/FailureCode`, DataType.String, ''),
@@ -684,13 +830,34 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     setValue(nodes.completionTime, DataType.DateTime, dateAt(value.completedAt))
   }
 
+  function evictOldestTerminalResult(): boolean {
+    for (const [requestId, stored] of resultsByRequestId) {
+      if (stored.executionState !== 'SUCCEEDED' && stored.executionState !== 'FAILED') continue
+
+      const nodes = resultNodesByRequestId.get(requestId)
+      if (nodes === undefined) throw new Error('OPC_UA_OPENWEB_RESULT_NODE_MISSING')
+
+      resultsByRequestId.delete(requestId)
+      resultNodesByRequestId.delete(requestId)
+      instancesNamespace.deleteNode(nodes.entry)
+      return true
+    }
+    return false
+  }
+
   function publishResult(resultValue: CommandResultV1): void {
     assertActive()
     const normalized = copyResult(validateCommandResultV1(resultValue))
     if (normalized.projectId !== project.projectId) throw new Error('OPC_UA_OPENWEB_RESULT_PROJECT_MISMATCH')
     if (normalized.configRevision !== configRevision) throw new Error('OPC_UA_OPENWEB_RESULT_CONFIG_REVISION_MISMATCH')
-    const nodes = resultNodesByRequestId.get(normalized.commandId) ?? createResultNodes(normalized.commandId)
-    resultNodesByRequestId.set(normalized.commandId, nodes)
+    let nodes = resultNodesByRequestId.get(normalized.commandId)
+    if (nodes === undefined) {
+      if (resultsByRequestId.size >= maxRetainedResults && !evictOldestTerminalResult()) {
+        throw new Error('OPC_UA_OPENWEB_RESULT_CAPACITY_EXHAUSTED')
+      }
+      nodes = createResultNodes(normalized.commandId)
+      resultNodesByRequestId.set(normalized.commandId, nodes)
+    }
     resultsByRequestId.set(normalized.commandId, normalized)
     writeResult(nodes, normalized)
   }
@@ -765,6 +932,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     actualChildren: () => ACTUAL_CHILDREN,
     commandChildren: () => COMMAND_CHILDREN,
     productNodeIds: () => Object.freeze([...productNodeIds]),
+    retainedResultLimit: () => maxRetainedResults,
     publishSnapshot,
     readActualObjectPose,
     publishResult,

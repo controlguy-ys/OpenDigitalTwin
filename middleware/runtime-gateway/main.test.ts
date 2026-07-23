@@ -2064,6 +2064,7 @@ describe('runtime Gateway entrypoint', () => {
       },
     )
     const project = sampleProject('server')
+    const configRevision = await configRevisionForProjectV5(project)
 
     await service.start()
     try {
@@ -2088,8 +2089,10 @@ describe('runtime Gateway entrypoint', () => {
           host: '127.0.0.1',
           port: 14840,
           pkiRootDir: 'C:\\runtime-gateway-test-pki',
+          configRevision,
         },
       )
+      expect(createOpcUaServerAdapter.mock.calls[0]![1]!.configRevision).not.toBe(project.revisionId)
       expect(fake.start).toHaveBeenCalledTimes(1)
 
       const publish = await requestJson(port, 'POST', '/runtime/state', {

@@ -31,7 +31,7 @@ export interface OpcUaServerAdapterOptionsV1 {
   readonly advertisedPort: number
   readonly port: number
   readonly pkiRootDir: string
-  readonly configRevision?: string
+  readonly configRevision: string
 }
 
 export interface OpcUaServerAdapterStatusV1 {
@@ -143,7 +143,7 @@ export function createOpcUaServerAdapterV1(
   const project = validateWorkcellProjectV5(projectInput)
   const serverEnabled = project.opcUa.mode === 'server' || project.opcUa.mode === 'bridge'
   const mode: OpcUaServerAdapterStatusV1['mode'] = serverEnabled ? 'server' : 'off'
-  const configRevision = options.configRevision ?? project.revisionId
+  const configRevision = options.configRevision
   let server: OPCUAServer | null = null
   let roboticsModel: OpcUaRoboticsModelV1 | null = null
   let openWebModel: OpcUaOpenWebModelV1 | null = null

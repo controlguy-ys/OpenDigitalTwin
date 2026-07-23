@@ -103,21 +103,25 @@ function diagnostics(): OpenWebDiagnosticsSnapshotV1 {
   }
 }
 
-function commandResult(): CommandResultV1 {
+function commandResult(
+  commandId = 'request-1',
+  overrides: Partial<CommandResultV1> = {},
+): CommandResultV1 {
   return {
-      type: 'command-result-v1',
-      protocolVersion: 1,
-      projectId: 'project-openweb',
-      configRevision: CONFIG_REVISION,
-      leaseGeneration: 4,
-      targetId: 'box',
-      commandId: 'request-1',
-      acknowledgement: 'ACCEPTED',
-      executionState: 'SUCCEEDED',
-      failureCode: null,
-      message: 'Object command completed.',
-      attachedObjectId: null,
-      completedAt: 1_500,
+    type: 'command-result-v1',
+    protocolVersion: 1,
+    projectId: 'project-openweb',
+    configRevision: CONFIG_REVISION,
+    leaseGeneration: 4,
+    targetId: 'box',
+    commandId,
+    acknowledgement: 'ACCEPTED',
+    executionState: 'SUCCEEDED',
+    failureCode: null,
+    message: 'Object command completed.',
+    attachedObjectId: null,
+    completedAt: 1_500,
+    ...overrides,
   }
 }
 
@@ -128,7 +132,7 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
     await Promise.all(servers.splice(0).map((server) => server.shutdown(0)))
   })
 
-  async function startModel() {
+  async function startModel(options: Readonly<{ maxRetainedResults?: number }> = {}) {
     const server = new OPCUAServer({ port: 0 })
     servers.push(server)
     await server.initialize()
@@ -138,6 +142,7 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
     const instancesNamespace = addressSpace.registerNamespace(OPENWEB_INSTANCES_NAMESPACE_URI_V1)
     return {
       addressSpace,
+      modelNamespace,
       instancesNamespace,
       model: instantiateOpcUaOpenWebModelV1({
         addressSpace,
@@ -145,6 +150,7 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
         instancesNamespace,
         project: project(),
         configRevision: CONFIG_REVISION,
+        ...options,
       }),
     }
   }
@@ -160,12 +166,55 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
   })
 
   it('does not create a product NodeId in an OPC Foundation namespace', async () => {
-    const { model } = await startModel()
+    const { addressSpace, model } = await startModel()
 
     expect(model.productNodeIds().every(({ namespaceUri }) => (
       namespaceUri === OPENWEB_MODEL_NAMESPACE_URI_V1
       || namespaceUri === OPENWEB_INSTANCES_NAMESPACE_URI_V1
     ))).toBe(true)
+    expect(model.productNodeIds().every(({ nodeId, namespaceUri }) => {
+      const node = addressSpace.findNode(nodeId)
+      const actualNamespaceUri = node === null
+        ? null
+        : addressSpace.getNamespaceArray()[node.nodeId.namespace]?.namespaceUri
+      return namespaceUri === actualNamespaceUri
+    })).toBe(true)
+  })
+
+  it('rejects namespace zero as a supplied product model namespace', async () => {
+    const server = new OPCUAServer({ port: 0 })
+    servers.push(server)
+    await server.initialize()
+    const addressSpace = server.engine.addressSpace
+    if (addressSpace === null) throw new Error('OPC_UA_ADDRESS_SPACE_UNAVAILABLE')
+    const instancesNamespace = addressSpace.registerNamespace(OPENWEB_INSTANCES_NAMESPACE_URI_V1)
+    const namespaceZero = addressSpace.getNamespaceArray()[0]!
+
+    expect(() => instantiateOpcUaOpenWebModelV1({
+      addressSpace,
+      modelNamespace: namespaceZero,
+      instancesNamespace,
+      project: project(),
+      configRevision: CONFIG_REVISION,
+    })).toThrow('OPC_UA_OPENWEB_MODEL_NAMESPACE_INVALID')
+  })
+
+  it('rejects a wrong supplied product instance namespace', async () => {
+    const server = new OPCUAServer({ port: 0 })
+    servers.push(server)
+    await server.initialize()
+    const addressSpace = server.engine.addressSpace
+    if (addressSpace === null) throw new Error('OPC_UA_ADDRESS_SPACE_UNAVAILABLE')
+    const modelNamespace = addressSpace.registerNamespace(OPENWEB_MODEL_NAMESPACE_URI_V1)
+    const wrongInstancesNamespace = addressSpace.registerNamespace('urn:open-web-digital-twin:wrong')
+
+    expect(() => instantiateOpcUaOpenWebModelV1({
+      addressSpace,
+      modelNamespace,
+      instancesNamespace: wrongInstancesNamespace,
+      project: project(),
+      configRevision: CONFIG_REVISION,
+    })).toThrow('OPC_UA_OPENWEB_INSTANCES_NAMESPACE_INVALID')
   })
 
   it('publishes Object Actual pose as one coherent snapshot', async () => {
@@ -210,9 +259,51 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
     model.updateDiagnostics(diagnostics())
 
     expect(model.readResult('request-1')).toEqual(commandResult())
+    expect(model.readResult('request-1')!.configRevision).toBe(CONFIG_REVISION)
     expect(model.readDiagnostics()).toMatchObject(diagnostics())
     expect(model.readDiagnostics().revisionId).toBe('revision-openweb')
     expect(model.readDiagnostics().configRevision).toBe(CONFIG_REVISION)
+  })
+
+  it('retains a bounded deterministic set of terminal Result records without evicting RUNNING records', async () => {
+    const { addressSpace, instancesNamespace, model } = await startModel({ maxRetainedResults: 2 })
+    const first = commandResult('request-terminal-old')
+    const running = commandResult('request-running', {
+      executionState: 'RUNNING',
+      completedAt: null,
+    })
+    const newest = commandResult('request-terminal-new')
+    const firstNodeId = `ns=${instancesNamespace.index};s=OpenWebDigitalTwin/Projects/project-openweb/Result/request-terminal-old`
+
+    model.publishResult(first)
+    model.publishResult(running)
+    model.publishResult(newest)
+
+    expect(model.retainedResultLimit()).toBe(2)
+    expect(model.readResult('request-terminal-old')).toBeNull()
+    expect(model.readResult('request-running')).toEqual(running)
+    expect(model.readResult('request-terminal-new')).toEqual(newest)
+    expect(addressSpace.findNode(firstNodeId)).toBeNull()
+  })
+
+  it('rejects result retention limits outside the Task 5 model boundary', async () => {
+    await expect(startModel({ maxRetainedResults: 0 }))
+      .rejects.toThrow('OPC_UA_OPENWEB_RESULT_LIMIT_INVALID')
+    await expect(startModel({ maxRetainedResults: 4_097 }))
+      .rejects.toThrow('OPC_UA_OPENWEB_RESULT_LIMIT_INVALID')
+  })
+
+  it('rejects a new Result when its bounded record set contains only RUNNING records', async () => {
+    const { model } = await startModel({ maxRetainedResults: 1 })
+    const running = commandResult('request-running', {
+      executionState: 'RUNNING',
+      completedAt: null,
+    })
+    model.publishResult(running)
+
+    expect(() => model.publishResult(commandResult('request-over-capacity')))
+      .toThrow('OPC_UA_OPENWEB_RESULT_CAPACITY_EXHAUSTED')
+    expect(model.readResult('request-running')).toEqual(running)
   })
 
   it('cleans up idempotently and rejects publication after disposal', async () => {
