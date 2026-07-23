@@ -50,14 +50,16 @@ describe('testOpcUaConnectionV1', () => {
     await expect(testOpcUaConnectionV1(endpoint, { createClient: () => client })).resolves.toMatchObject({ outcome: 'failed', code })
   })
 
-  it.each(['close', 'disconnect'] as const)('attempts both cleanup calls when %s hangs until the total deadline', async (hanging) => {
+  it('waits for the Session-close cleanup budget before disconnecting the Client', async () => {
     vi.useFakeTimers()
-    const close = vi.fn(() => hanging === 'close' ? new Promise<void>(() => undefined) : Promise.resolve())
-    const disconnect = vi.fn(() => hanging === 'disconnect' ? new Promise<void>(() => undefined) : Promise.resolve())
-    const pending = testOpcUaConnectionV1(endpoint, { timeoutMs: 10, createClient: () => ({ connect: async () => undefined, createSession: async () => ({ close, readNamespaceArray: async () => ['urn:a'] }), disconnect }) })
+    const close = vi.fn(() => new Promise<void>(() => undefined))
+    const disconnect = vi.fn(async () => undefined)
+    const pending = testOpcUaConnectionV1(endpoint, { timeoutMs: 10, cleanupTimeoutMs: 20, createClient: () => ({ connect: async () => undefined, createSession: async () => ({ close, readNamespaceArray: async () => ['urn:a'] }), disconnect }) })
     await vi.advanceTimersByTimeAsync(10)
-    await expect(pending).resolves.toMatchObject({ outcome: 'failed', code: 'OPC_UA_CONNECTION_TIMEOUT' })
-    expect(close).toHaveBeenCalledOnce(); expect(disconnect).toHaveBeenCalledOnce()
+    expect(close).toHaveBeenCalledOnce(); expect(disconnect).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(20)
+    await expect(pending).resolves.toMatchObject({ outcome: 'failed', code: 'OPC_UA_CONNECTION_CLEANUP_FAILED' })
+    expect(disconnect).toHaveBeenCalledOnce()
     vi.useRealTimers()
   })
 
