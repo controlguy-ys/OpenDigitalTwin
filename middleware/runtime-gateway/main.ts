@@ -305,6 +305,7 @@ export function createRuntimeGatewayEntrypointService(
   const browserLeasesBySocket = new Map<WebSocket, RuntimePublisherLeaseV1>()
   const pendingBrowserCommands = new Map<string, Readonly<{
     runtimeToken: symbol
+    socket: WebSocket
     generation: number
     batch: CommandBatchV1
     resolve: (result: CommandResultV1) => void
@@ -415,7 +416,7 @@ export function createRuntimeGatewayEntrypointService(
         pendingBrowserCommands.delete(key)
         pending.resolve(failedBrowserBatch(batch, 'COMMAND_EXPIRED', 'Browser command expired before settlement.'))
       }, Math.max(0, batch.commands[0]!.expiresAt - nowMs()))
-      pendingBrowserCommands.set(key, Object.freeze({ runtimeToken: active.runtimeToken, generation: batch.leaseGeneration, batch, resolve: resolveCommand, timeout }))
+      pendingBrowserCommands.set(key, Object.freeze({ runtimeToken: active.runtimeToken, socket, generation: batch.leaseGeneration, batch, resolve: resolveCommand, timeout }))
       try {
         socket.send(JSON.stringify(batch), (error) => {
           if (error == null) return
@@ -1052,23 +1053,35 @@ export function createRuntimeGatewayEntrypointService(
           return
         }
         if (type === 'command-result-v1') {
-          const result = validateCommandResultV1(value)
           const lease = active.browserLease.current()
-          if (
-            browserPublisherSocket !== socket
-            || lease === null
-            || lease.generation !== result.leaseGeneration
-            || browserLeasesBySocket.get(socket)?.generation !== lease.generation
-            || result.projectId !== active.project.projectId
-            || result.configRevision !== active.configRevision
-            || result.executionState === 'RUNNING'
-          ) return
-          const key = JSON.stringify([result.projectId, result.configRevision, result.leaseGeneration, result.commandId])
-          const pending = pendingBrowserCommands.get(key)
-          if (pending === undefined || pending.generation !== result.leaseGeneration) return
-          pendingBrowserCommands.delete(key)
+          if (browserPublisherSocket !== socket || lease === null || browserLeasesBySocket.get(socket)?.generation !== lease.generation) return
+          let result: CommandResultV1 | null = null
+          try { result = validateCommandResultV1(value) } catch { /* Normalized below when this socket has one pending command. */ }
+          const key = result === null ? null : JSON.stringify([result.projectId, result.configRevision, result.leaseGeneration, result.commandId])
+          const pendingEntry = key === null
+            ? [...pendingBrowserCommands.entries()].find(([, candidate]) => candidate.socket === socket)
+            : (() => {
+                const exact = pendingBrowserCommands.get(key)
+                return exact === undefined
+                  ? [...pendingBrowserCommands.entries()].find(([, candidate]) => candidate.socket === socket)
+                  : [key, exact] as const
+              })()
+          if (pendingEntry === undefined) return
+          const [pendingKey, pending] = pendingEntry
+          const command = pending.batch.commands[0]!
+          const valid = result !== null
+            && result.projectId === pending.batch.projectId
+            && result.configRevision === pending.batch.configRevision
+            && result.leaseGeneration === pending.batch.leaseGeneration
+            && result.commandId === command.commandId
+            && result.targetId === command.targetId
+            && result.acknowledgement === 'ACCEPTED'
+            && (result.executionState === 'SUCCEEDED' || result.executionState === 'FAILED')
+          pendingBrowserCommands.delete(pendingKey)
           cancelTimeout(pending.timeout)
-          pending.resolve(result)
+          pending.resolve(valid && result !== null
+            ? result
+            : failedBrowserBatch(pending.batch, 'BROWSER_RESULT_INVALID', 'Browser command result did not match the admitted command.'))
         }
       } catch {
         // Malformed Browser control messages cannot mutate Gateway state.

@@ -711,6 +711,60 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
+  it.each([
+    ['rejected', (base: Record<string, unknown>) => ({ ...base, acknowledgement: 'REJECTED', executionState: 'FAILED', failureCode: 'BROWSER_COMMAND_FAILED' }), 'BROWSER_RESULT_INVALID'],
+    ['idle', (base: Record<string, unknown>) => ({ ...base, executionState: 'IDLE' }), 'BROWSER_RESULT_INVALID'],
+    ['running', (base: Record<string, unknown>) => ({ ...base, executionState: 'RUNNING', completedAt: null }), 'BROWSER_RESULT_INVALID'],
+    ['wrong-target', (base: Record<string, unknown>) => ({ ...base, targetId: 'wrong-target' }), 'BROWSER_RESULT_INVALID'],
+    ['success', (base: Record<string, unknown>) => ({ ...base, executionState: 'SUCCEEDED', failureCode: null }), null],
+  ])('normalizes the Browser %s terminal result to the admitted command identity', async (_label, response, expectedFailureCode) => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const fake = fakeServerAdapter()
+    const productResults = vi.fn(async () => undefined)
+    let onProductCommandWrite: OpcUaServerAdapterOptionsV1['onProductCommandWrite']
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaServerAdapter: (_project, options) => {
+        onProductCommandWrite = options.onProductCommandWrite
+        return { ...fake.adapter, publishProductResult: productResults }
+      },
+    })
+    const project = sampleProject('server')
+    const revision = await configRevisionForProjectV5(project)
+    const target: ProductCommandTargetV1 = {
+      targetId: 'robot-1', projectId: project.projectId, revisionId: project.revisionId, configRevision: revision,
+      payload: { kind: 'robot-joint-target', robotId: 'robot-1', jointIds: ['J1'] },
+    }
+    let socket: WebSocket | null = null
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', project)).status).toBe(200)
+      socket = await openWebSocket(port)
+      const leaseMessage = nextWebSocketMessage(socket)
+      socket.send(JSON.stringify({ type: 'browser-publisher-lease-acquire-v1', protocolVersion: 1, projectId: project.projectId, configRevision: revision, publisherId: 'browser-a' }))
+      const lease = JSON.parse(await leaseMessage) as { generation: number }
+      const commandId = `terminal-${_label}`
+      const expiresAt = Date.now() + 5_000
+      const batchMessage = nextWebSocketMessage(socket)
+      const write = onProductCommandWrite!
+      write({ sessionId: `opcua:${commandId}`, target, field: 'RequestId', value: commandId })
+      write({ sessionId: `opcua:${commandId}`, target, field: 'ExpiresAt', value: expiresAt })
+      write({ sessionId: `opcua:${commandId}`, target, field: 'J1', value: 12 })
+      write({ sessionId: `opcua:${commandId}`, target, field: 'Execute', value: true })
+      expect(JSON.parse(await batchMessage)).toMatchObject({ type: 'command-batch-v1', commands: [{ commandId }] })
+      socket.send(JSON.stringify(response({
+        type: 'command-result-v1', protocolVersion: 1, projectId: project.projectId, configRevision: revision,
+        leaseGeneration: lease.generation, targetId: target.targetId, commandId, acknowledgement: 'ACCEPTED', executionState: 'FAILED', failureCode: 'BROWSER_COMMAND_FAILED', message: 'Browser terminal.', attachedObjectId: null, completedAt: Date.now(),
+      })))
+      await vi.waitFor(() => expect(productResults).toHaveBeenLastCalledWith(expect.objectContaining({
+        commandId, targetId: target.targetId, acknowledgement: 'ACCEPTED', executionState: expectedFailureCode === null ? 'SUCCEEDED' : 'FAILED', failureCode: expectedFailureCode,
+      })))
+    } finally {
+      socket?.close()
+      await service.stop()
+    }
+  })
+
   it('settles admitted product commands on Browser socket close, lease replacement, and revision replacement', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort()

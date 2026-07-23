@@ -79,11 +79,8 @@ function payload(value: unknown): ProductCommandPayloadV1 | null {
 export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
   project: WorkcellProjectV5
   configRevision: string
-  leaseGeneration?: number
-  /** Legacy generation-only fence for callers that do not hold a lease record. */
-  readLeaseGeneration?: () => number | null
   /** Reads the complete Gateway-issued Browser lease for time and identity fencing. */
-  readLease?: () => RuntimePublisherLeaseV1 | null
+  readLease: () => RuntimePublisherLeaseV1 | null
   nowMs: () => number
   simulation: RuntimeGatewaySimulationCommandPortV5
   isActive?: () => boolean
@@ -96,17 +93,13 @@ export function createRuntimeGatewayCommandOwnerV5(options: Readonly<{
   const jobs = new Set(project.jobs.map(({ id }) => id))
   const now = (): number => options.nowMs()
   const active = (): boolean => options.isActive?.() ?? true
-  const acceptedLease = (): number | null => options.readLeaseGeneration?.() ?? options.leaseGeneration ?? null
   const leaseMatches = (batch: CommandBatchV1): boolean => {
-    const lease = options.readLease?.()
-    if (lease !== undefined) {
-      return lease !== null
-        && lease.projectId === project.projectId
-        && lease.configRevision === options.configRevision
-        && lease.generation === batch.leaseGeneration
-        && lease.expiresAt > now()
-    }
-    return acceptedLease() === batch.leaseGeneration
+    const lease = options.readLease()
+    return lease !== null
+      && lease.projectId === project.projectId
+      && lease.configRevision === options.configRevision
+      && lease.generation === batch.leaseGeneration
+      && lease.expiresAt > now()
   }
 
   return Object.freeze({
