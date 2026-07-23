@@ -206,3 +206,47 @@ pre-existing `middleware/runtime-gateway/main.test.ts:570` useless-spread
 warning. `git diff --check` passed. No V4 compatibility path was added. A
 fresh independent SOL Ultra A3 safety review remains an external acceptance
 gate.
+
+## A3R9 and A3R10 repair completion
+
+- `3fd3db8` replaces the direct, rejection-suppressing termination of a
+  monitored group that resolves after its generation fence. The exact group is
+  first retained as Endpoint residual ownership and then enters the same
+  serialized cleanup authority as every other native handle.
+- `d4e8b01` gives cleanup requests a monotonic failure epoch and an
+  active-drain dirty bit. A drain loops to a fixed point only after a
+  successful pass; a rejection becomes sticky, and requests already queued in
+  the same recovery/stop epoch cannot retry it. A stop that began before an
+  awaited connect cleanup created a failure rejects in that epoch, while a
+  later explicit stop can retry. Successful exact handles are retained as
+  retirement proof so late rejected operations cannot re-own cleaned parents.
+- `6d6fb2f` closes the final-continuation microtask window by keeping the dirty
+  fixed-point decision and active-owner release in one queue-owner
+  continuation.
+- `09a3cf8` prevents late/background cleanup registration from retrying an
+  already-sticky failure. The late exact handle remains residual, but only a
+  later explicit stop/disconnect cleanup request may opt into the retry.
+
+The deterministic REDs proved: direct late-group termination outside the
+queue; same-call recovery and stop retries after the first rejection; a stop
+resolving after its awaited connect task created a new failure; cleaned
+Subscription, Session, and Client handles being re-owned after a late
+`monitorItems()` rejection; an end-of-drain microtask residual being retained
+but never attempted; and late settlement automatically retrying an earlier
+sticky Subscription failure. Each exact ordering is now GREEN, including one
+parent cleanup / zero group cleanup while faulted followed by an explicit stop
+reaching two / one and disabled.
+
+Focused Client and Gateway-main tests passed 2 files / 152 tests. `npm run
+test:job-io` passed 49 files / 823 tests. `npm run test:gateway` ran 29 files /
+458 tests with 454 passing; only the four documented V4
+mechanics/publisher fixture failures remain. A one-off default-certificate
+generation timeout in the native Server test passed its exact targeted rerun
+and the repeated full Gateway run. `npm run build:gateway` and `npm run build`
+passed with the existing Vite externalization and chunk-size warnings. `npm
+run lint` passed with only the pre-existing
+`middleware/runtime-gateway/main.test.ts:570` useless-spread warning. `git
+diff --check` passed. No V4 compatibility path was added.
+
+A fresh independent GPT-5.6 SOL Ultra review of final head `09a3cf8` returned
+zero Critical, zero Important, and zero Minor in-scope findings.
