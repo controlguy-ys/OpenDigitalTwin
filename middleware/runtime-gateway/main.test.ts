@@ -2930,6 +2930,60 @@ describe('runtime Gateway entrypoint', () => {
     }
   })
 
+  it('keeps exact Gateway recovery authority when production Client restart is fenced by pending cleanup', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const priorConnection = productionClientConnection()
+    const candidateConnection = productionClientConnection()
+    const priorProject = sampleProject('client', 'revision-production-client-prior')
+    const replacement = sampleProject('client', 'revision-production-client-replacement')
+    const priorCreateClient = vi.fn(() => priorConnection.client as never)
+    const candidateCreateClient = vi.fn(() => candidateConnection.client as never)
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), {
+      createOpcUaClientAdapter: (project, options) => createOpcUaClientAdapterV1(project, {
+        ...options,
+        createClient: project.revisionId === priorProject.revisionId
+          ? priorCreateClient
+          : candidateCreateClient,
+      }),
+    })
+
+    await service.start()
+    try {
+      expect((await requestJson(port, 'PUT', '/runtime/project', priorProject)).status).toBe(200)
+      await expect.poll(() => gatewayStatus(service.status()).opcUa.clientEndpoints[0]?.phase)
+        .toBe('connected')
+      priorConnection.session.close
+        .mockRejectedValueOnce(new Error('prior Session close failed'))
+        .mockRejectedValueOnce(new Error('prior Session cleanup retry failed'))
+
+      const failed = await requestJson(port, 'PUT', '/runtime/project', replacement)
+      expect(failed.status).toBe(503)
+      expect(await failed.json()).toMatchObject({
+        code: 'PROJECT_ACTIVATION_FAILED',
+        recoveredRevisionId: null,
+        recoveryError: 'OPC_UA_ENDPOINT_CLEANUP_REQUIRED',
+      })
+      expect(gatewayStatus(service.status())).toMatchObject({
+        project: {
+          phase: 'recovery-required',
+          revisionId: priorProject.revisionId,
+          readinessCode: 'RECOVERY_REQUIRED',
+        },
+        opcUa: {
+          clientEndpoints: [{
+            phase: 'faulted',
+            sessionActive: true,
+          }],
+        },
+      })
+      expect(priorCreateClient).toHaveBeenCalledOnce()
+      expect(candidateCreateClient).not.toHaveBeenCalled()
+    } finally {
+      await service.stop()
+    }
+  })
+
   it('isolates the bounded OPC UA test-connection diagnostic and rejects arbitrary control paths', async () => {
     const { createRuntimeGatewayEntrypointService } = await importMain()
     const port = await findAvailablePort(); const client = fakeClientAdapter(); const server = fakeServerAdapter()
