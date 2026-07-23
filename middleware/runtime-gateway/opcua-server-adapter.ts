@@ -20,6 +20,7 @@ import {
 import { projectRoboticsSystemV1 } from './opcua-robotics-projection.js'
 import {
   OPENWEB_MODEL_NAMESPACE_URI_V1,
+  assertCanonicalConfigRevisionV1,
   instantiateOpcUaOpenWebModelV1,
   type OpcUaOpenWebModelV1,
   type ServerActualSnapshotV1,
@@ -144,6 +145,7 @@ export function createOpcUaServerAdapterV1(
   const serverEnabled = project.opcUa.mode === 'server' || project.opcUa.mode === 'bridge'
   const mode: OpcUaServerAdapterStatusV1['mode'] = serverEnabled ? 'server' : 'off'
   const configRevision = options.configRevision
+  assertCanonicalConfigRevisionV1(configRevision)
   let server: OPCUAServer | null = null
   let roboticsModel: OpcUaRoboticsModelV1 | null = null
   let openWebModel: OpcUaOpenWebModelV1 | null = null

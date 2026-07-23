@@ -22,6 +22,14 @@ export const OPENWEB_INSTANCES_NAMESPACE_URI_V1 =
 
 export const MAX_OPENWEB_RESULT_RECORDS_V1 = 4_096
 
+const CANONICAL_CONFIG_REVISION_V1 = /^[0-9a-f]{64}$/u
+
+export function assertCanonicalConfigRevisionV1(configRevision: string): void {
+  if (!CANONICAL_CONFIG_REVISION_V1.test(configRevision)) {
+    throw new Error('OPC_UA_CONFIG_REVISION_INVALID')
+  }
+}
+
 export type OpenWebQualityV1 = 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE'
 
 export interface ObjectActualV1 {
@@ -342,9 +350,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
   if (instancesNamespace.namespaceUri !== OPENWEB_INSTANCES_NAMESPACE_URI_V1) {
     throw new Error('OPC_UA_OPENWEB_INSTANCES_NAMESPACE_INVALID')
   }
-  if (configRevision.trim().length === 0) {
-    throw new Error('OPC_UA_OPENWEB_CONFIG_REVISION_INVALID')
-  }
+  assertCanonicalConfigRevisionV1(configRevision)
   const maxRetainedResults = options.maxRetainedResults ?? MAX_OPENWEB_RESULT_RECORDS_V1
   if (
     !Number.isSafeInteger(maxRetainedResults)
@@ -354,7 +360,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     throw new Error('OPC_UA_OPENWEB_RESULT_LIMIT_INVALID')
   }
 
-  const productNodeIds: ProductNodeIdV1[] = []
+  const productNodeIdsByNodeId = new Map<string, ProductNodeIdV1>()
   const rootPath = `OpenWebDigitalTwin/Projects/${project.projectId}`
 
   function track<T extends UAObject | UAVariable>(node: T): T {
@@ -364,11 +370,23 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
         ? instancesNamespace.namespaceUri
         : null
     if (namespaceUri === null) throw new Error('OPC_UA_OPENWEB_PRODUCT_NODE_NAMESPACE_INVALID')
-    productNodeIds.push(Object.freeze({
-      nodeId: node.nodeId.toString(),
+    const nodeId = node.nodeId.toString()
+    productNodeIdsByNodeId.set(nodeId, Object.freeze({
+      nodeId,
       namespaceUri: namespaceUri as ProductNodeIdV1['namespaceUri'],
     }))
     return node
+  }
+
+  function untrack(node: UAObject | UAVariable): void {
+    productNodeIdsByNodeId.delete(node.nodeId.toString())
+  }
+
+  function liveProductNodeIds(): readonly ProductNodeIdV1[] {
+    for (const nodeId of productNodeIdsByNodeId.keys()) {
+      if (addressSpace.findNode(nodeId) === null) productNodeIdsByNodeId.delete(nodeId)
+    }
+    return Object.freeze([...productNodeIdsByNodeId.values()])
   }
 
   function object(
@@ -839,6 +857,12 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
 
       resultsByRequestId.delete(requestId)
       resultNodesByRequestId.delete(requestId)
+      untrack(nodes.acknowledgement)
+      untrack(nodes.executionState)
+      untrack(nodes.failureCode)
+      untrack(nodes.message)
+      untrack(nodes.completionTime)
+      untrack(nodes.entry)
       instancesNamespace.deleteNode(nodes.entry)
       return true
     }
@@ -923,6 +947,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     resultsByRequestId.clear()
     endpointNodesById.clear()
     instancesNamespace.deleteNode(openWeb)
+    productNodeIdsByNodeId.clear()
   }
 
   return Object.freeze({
@@ -931,7 +956,7 @@ export function instantiateOpcUaOpenWebModelV1(options: Readonly<{
     rootChildren: () => ROOT_CHILDREN,
     actualChildren: () => ACTUAL_CHILDREN,
     commandChildren: () => COMMAND_CHILDREN,
-    productNodeIds: () => Object.freeze([...productNodeIds]),
+    productNodeIds: liveProductNodeIds,
     retainedResultLimit: () => maxRetainedResults,
     publishSnapshot,
     readActualObjectPose,

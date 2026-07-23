@@ -191,6 +191,19 @@ describe('OPC UA server adapter V1', () => {
     await adapter.stop()
   })
 
+  it('rejects a Project revision used as noncanonical configRevision at construction', () => {
+    const project = sampleProject('server')
+
+    expect(() => createOpcUaServerAdapterV1(project, {
+      host: '127.0.0.1',
+      advertisedHost: '127.0.0.1',
+      advertisedPort: 0,
+      port: 0,
+      pkiRootDir: TEST_PKI_ROOT,
+      configRevision: project.revisionId,
+    })).toThrow('OPC_UA_CONFIG_REVISION_INVALID')
+  })
+
   it('starts the Server role for a validated Bridge Project', async () => {
     const adapter = createOpcUaServerAdapterV1(sampleProject('bridge'), {
       host: '127.0.0.1',

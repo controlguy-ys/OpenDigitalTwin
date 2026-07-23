@@ -132,7 +132,10 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
     await Promise.all(servers.splice(0).map((server) => server.shutdown(0)))
   })
 
-  async function startModel(options: Readonly<{ maxRetainedResults?: number }> = {}) {
+  async function startModel(options: Readonly<{
+    configRevision?: string
+    maxRetainedResults?: number
+  }> = {}) {
     const server = new OPCUAServer({ port: 0 })
     servers.push(server)
     await server.initialize()
@@ -140,6 +143,7 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
     if (addressSpace === null) throw new Error('OPC_UA_ADDRESS_SPACE_UNAVAILABLE')
     const modelNamespace = addressSpace.registerNamespace(OPENWEB_MODEL_NAMESPACE_URI_V1)
     const instancesNamespace = addressSpace.registerNamespace(OPENWEB_INSTANCES_NAMESPACE_URI_V1)
+    const { configRevision = CONFIG_REVISION, ...modelOptions } = options
     return {
       addressSpace,
       modelNamespace,
@@ -149,8 +153,8 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
         modelNamespace,
         instancesNamespace,
         project: project(),
-        configRevision: CONFIG_REVISION,
-        ...options,
+        configRevision,
+        ...modelOptions,
       }),
     }
   }
@@ -215,6 +219,16 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
       project: project(),
       configRevision: CONFIG_REVISION,
     })).toThrow('OPC_UA_OPENWEB_INSTANCES_NAMESPACE_INVALID')
+  })
+
+  it.each([
+    ['project revision', 'revision-openweb'],
+    ['uppercase hash', 'A'.repeat(64)],
+    ['short hash', 'a'.repeat(63)],
+    ['non-hex hash', 'g'.repeat(64)],
+  ])('rejects a noncanonical configRevision in public model construction: %s', async (_label, configRevision) => {
+    await expect(startModel({ configRevision }))
+      .rejects.toThrow('OPC_UA_CONFIG_REVISION_INVALID')
   })
 
   it('publishes Object Actual pose as one coherent snapshot', async () => {
@@ -284,6 +298,23 @@ describe('OpenWebDigitalTwin OPC UA product model V1', () => {
     expect(model.readResult('request-running')).toEqual(running)
     expect(model.readResult('request-terminal-new')).toEqual(newest)
     expect(addressSpace.findNode(firstNodeId)).toBeNull()
+  })
+
+  it('keeps Product NodeId ownership live and bounded through repeated Result eviction', async () => {
+    const { addressSpace, model } = await startModel({ maxRetainedResults: 1 })
+    const staticNodeCount = model.productNodeIds().length
+
+    for (let sequence = 0; sequence < 5; sequence += 1) {
+      model.publishResult(commandResult(`request-eviction-${sequence}`))
+      const nodeIds = model.productNodeIds()
+
+      expect(nodeIds).toHaveLength(staticNodeCount + 6)
+      expect(nodeIds.every(({ nodeId, namespaceUri }) => {
+        const node = addressSpace.findNode(nodeId)
+        return node !== null
+          && addressSpace.getNamespaceArray()[node.nodeId.namespace]?.namespaceUri === namespaceUri
+      })).toBe(true)
+    }
   })
 
   it('rejects result retention limits outside the Task 5 model boundary', async () => {
