@@ -28,11 +28,38 @@ export function createProcessSpawner({
       child.once('exit', (code) => resolveExit(code ?? 1))
     })
 
-    return { kill: () => child.kill(), exited }
+    return { pid: child.pid, kill: () => child.kill(), exited }
   }
 }
 
 const defaultSpawn = createProcessSpawner()
+
+export function createWindowsTreeKiller({ spawnChild: spawn = spawnChild } = {}) {
+  return (pid) => {
+    let taskkill
+    try {
+      taskkill = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+        shell: false,
+        stdio: 'ignore',
+      })
+    } catch (error) {
+      return Promise.reject(error)
+    }
+
+    return new Promise((resolveKill, rejectKill) => {
+      taskkill.once('error', rejectKill)
+      taskkill.once('exit', (code) => {
+        if (code === 0 || code === 128) {
+          resolveKill()
+          return
+        }
+        rejectKill(new Error(`WINDOWS_TREE_KILL_FAILED: ${pid} (exit code ${code ?? 'unknown'})`))
+      })
+    })
+  }
+}
+
+const defaultWindowsTreeKiller = createWindowsTreeKiller()
 
 const defaultProbe = async (url) => {
   const response = await fetch(url, { signal: AbortSignal.timeout(PROBE_INTERVAL_MS) })
@@ -67,6 +94,8 @@ export function createDevStack({
   spawn: spawnProcess = defaultSpawn,
   probe = defaultProbe,
   onSignal = defaultOnSignal,
+  platform = process.platform,
+  killTree = defaultWindowsTreeKiller,
 } = {}) {
   const children = []
   let stopPromise
@@ -74,14 +103,26 @@ export function createDevStack({
   const stop = () => {
     if (stopPromise) return stopPromise
     stopPromise = (async () => {
+      const cleanupFailures = []
       for (const child of [...children].reverse()) {
         try {
-          child.kill()
-        } catch {
-          // A child which already exited needs no further cleanup.
+          if (platform === 'win32' && Number.isInteger(child.pid) && child.pid > 0) {
+            await killTree(child.pid)
+          } else {
+            child.kill()
+          }
+        } catch (error) {
+          cleanupFailures.push(error)
         }
       }
-      await Promise.allSettled(children.map((child) => child.exited))
+      const exits = await Promise.allSettled(children.map((child) => child.exited))
+      for (const exit of exits) {
+        if (exit.status === 'rejected') cleanupFailures.push(exit.reason)
+      }
+      if (cleanupFailures.length === 1) throw cleanupFailures[0]
+      if (cleanupFailures.length > 1) {
+        throw new AggregateError(cleanupFailures, 'DEV_STACK_STOP_FAILED')
+      }
     })()
     return stopPromise
   }

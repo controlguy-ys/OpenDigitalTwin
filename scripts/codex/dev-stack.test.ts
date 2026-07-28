@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDevStack, createProcessSpawner } from './dev-stack.mjs'
+import { createDevStack, createProcessSpawner, createWindowsTreeKiller } from './dev-stack.mjs'
 
 describe('dev:stack', () => {
   it('builds Gateway, starts Gateway and Vite, then waits for both probes', async () => {
@@ -109,5 +109,59 @@ describe('dev:stack', () => {
       ['/d', '/s', '/c', 'npm.cmd', 'run', 'build:gateway'],
       { shell: false, stdio: 'inherit' },
     )
+  })
+
+  it('uses taskkill to terminate only an owned Windows process tree', async () => {
+    const taskkill = { once: vi.fn((event, handler) => {
+      if (event === 'exit') handler(0)
+    }) }
+    const spawnChild = vi.fn(() => taskkill)
+    const killTree = createWindowsTreeKiller({ spawnChild })
+
+    await killTree(4242)
+
+    expect(spawnChild).toHaveBeenCalledWith(
+      'taskkill.exe',
+      ['/PID', '4242', '/T', '/F'],
+      { shell: false, stdio: 'ignore' },
+    )
+  })
+
+  it('waits for each owned Windows tree kill before exit settlement', async () => {
+    const killed: number[] = []
+    let resolveViteKill: () => void
+    let resolveGatewayKill: () => void
+    const viteKill = new Promise<void>((resolve) => { resolveViteKill = resolve })
+    const gatewayKill = new Promise<void>((resolve) => { resolveGatewayKill = resolve })
+    const killTree = vi.fn((pid: number) => {
+      killed.push(pid)
+      return pid === 102 ? viteKill : gatewayKill
+    })
+    const spawn = vi.fn()
+      .mockReturnValueOnce({ kill: vi.fn(), exited: Promise.resolve(0) })
+      .mockReturnValueOnce({ pid: 101, kill: vi.fn(), exited: Promise.resolve(0) })
+      .mockReturnValueOnce({ pid: 102, kill: vi.fn(), exited: Promise.resolve(0) })
+    const stack = createDevStack({
+      spawn,
+      probe: vi.fn(async () => true),
+      onSignal: vi.fn(),
+      platform: 'win32',
+      killTree,
+    })
+
+    await stack.start()
+    let stopped = false
+    const stopping = stack.stop().then(() => { stopped = true })
+
+    expect(killed).toEqual([102])
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    resolveViteKill()
+    await Promise.resolve()
+    expect(killed).toEqual([102, 101])
+    expect(stopped).toBe(false)
+    resolveGatewayKill()
+    await stopping
+    expect(stopped).toBe(true)
   })
 })
