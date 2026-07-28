@@ -259,6 +259,9 @@ They verify V5-only boot/import, the eight-Endpoint limit, canonical
 export/import/reload, Object and Robot bindings, Job start, Settings, Monitor,
 Binding, and Docker surfaces.
 
+For deterministic local startup, repository Skills, scoped verification, and
+structured verification reports, see the [Codex developer workflows](docs/developer/codex-workflows.md).
+
 ## Architecture
 
 ```text
