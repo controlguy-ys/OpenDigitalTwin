@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
+// @ts-expect-error The production supervisor is intentionally plain ESM without a declaration file.
 import { createDevStack, createProcessSpawner, createWindowsTreeKiller } from './dev-stack.mjs'
 
 describe('dev:stack', () => {
   it('builds Gateway, starts Gateway and Vite, then waits for both probes', async () => {
-    const spawn = vi.fn(() => ({ kill: vi.fn(), exited: Promise.resolve(0) }))
+    const spawn = vi.fn((_command: string, _args: string[]) => ({
+      kill: vi.fn(),
+      exited: Promise.resolve(0),
+    }))
     const probe = vi.fn(async (url: string) => (
       url.endsWith('/healthz') || url === 'http://127.0.0.1:5173/'
     ))
@@ -28,7 +32,7 @@ describe('dev:stack', () => {
 
   it('stops an already-started child when the second process fails', async () => {
     const killed: string[] = []
-    let resolveGatewayExit: (code: number) => void
+    let resolveGatewayExit!: (code: number) => void
     const gatewayExited = new Promise<number>((resolve) => {
       resolveGatewayExit = resolve
     })
@@ -64,8 +68,8 @@ describe('dev:stack', () => {
 
   it('waits for every child to exit after stopping them in reverse order', async () => {
     const killed: string[] = []
-    let resolveGatewayExit: (code: number) => void
-    let resolveViteExit: (code: number) => void
+    let resolveGatewayExit!: (code: number) => void
+    let resolveViteExit!: (code: number) => void
     const gatewayExited = new Promise<number>((resolve) => {
       resolveGatewayExit = resolve
     })
@@ -129,8 +133,8 @@ describe('dev:stack', () => {
 
   it('waits for each owned Windows tree kill before exit settlement', async () => {
     const killed: number[] = []
-    let resolveViteKill: () => void
-    let resolveGatewayKill: () => void
+    let resolveViteKill!: () => void
+    let resolveGatewayKill!: () => void
     const viteKill = new Promise<void>((resolve) => { resolveViteKill = resolve })
     const gatewayKill = new Promise<void>((resolve) => { resolveGatewayKill = resolve })
     const killTree = vi.fn((pid: number) => {
@@ -166,7 +170,7 @@ describe('dev:stack', () => {
   })
 
   it('registers and removes signal cleanup across an interrupted startup window', async () => {
-    let resolveBuildExit: (code: number) => void
+    let resolveBuildExit!: (code: number) => void
     const buildExited = new Promise<number>((resolve) => { resolveBuildExit = resolve })
     const build = {
       kill: vi.fn(() => resolveBuildExit(1)),
@@ -184,10 +188,10 @@ describe('dev:stack', () => {
 
     const starting = stack.start()
 
-    expect(onSignal.mock.invocationCallOrder[0]).toBeLessThan(spawn.mock.invocationCallOrder[0])
+    expect(onSignal.mock.invocationCallOrder[0]!).toBeLessThan(spawn.mock.invocationCallOrder[0]!)
     expect(onSignal).toHaveBeenCalledWith('SIGINT', expect.any(Function))
     expect(onSignal).toHaveBeenCalledWith('SIGTERM', expect.any(Function))
-    await handlers.SIGINT()
+    await handlers.SIGINT!()
     await expect(starting).rejects.toThrow('DEV_STACK_STOPPED')
     expect(build.kill).toHaveBeenCalledOnce()
     expect(removeSigint).toHaveBeenCalledOnce()
@@ -230,9 +234,11 @@ describe('dev:stack', () => {
 
     const starting = stack.start()
     let startupFailure: Error | undefined
-    void starting.catch((error) => { startupFailure = error })
+    void starting.catch((error: unknown) => {
+      startupFailure = error instanceof Error ? error : new Error(String(error))
+    })
     await vi.waitFor(() => expect(probe).toHaveBeenCalledWith('http://127.0.0.1:8081/healthz'))
-    await handlers.SIGTERM()
+    await handlers.SIGTERM!()
 
     await vi.waitFor(() => expect(startupFailure?.message).toBe('DEV_STACK_STOPPED'))
     expect(killed).toEqual(['vite', 'gateway'])
