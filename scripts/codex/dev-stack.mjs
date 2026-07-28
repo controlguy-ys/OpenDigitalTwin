@@ -9,10 +9,6 @@ const PROBE_TIMEOUT_MS = 30_000
 const WEB_URL = 'http://127.0.0.1:5173'
 const WEB_HEALTH_URL = `${WEB_URL}/`
 
-const delay = (milliseconds) => new Promise((resolveDelay) => {
-  setTimeout(resolveDelay, milliseconds)
-})
-
 export function createProcessSpawner({
   spawnChild: spawn = spawnChild,
   platform = process.platform,
@@ -85,19 +81,59 @@ function attachCleanupFailure(startupFailure, cleanupFailure) {
   return new Error(String(startupFailure), { cause: cleanupFailure })
 }
 
-async function waitForProbe(url, probe) {
+function createStopRace(stopSignal, stopped) {
+  if (stopSignal.aborted) {
+    return { promise: Promise.resolve(stopped), dispose: () => undefined }
+  }
+  let listener
+  const promise = new Promise((resolveStop) => {
+    listener = () => resolveStop(stopped)
+    stopSignal.addEventListener('abort', listener, { once: true })
+  })
+  return {
+    promise,
+    dispose: () => stopSignal.removeEventListener('abort', listener),
+  }
+}
+
+async function waitForProbe(url, probe, stopSignal) {
   const deadline = Date.now() + PROBE_TIMEOUT_MS
   const timedOut = Symbol('probe timeout')
+  const stopped = Symbol('stack stopped')
 
   while (Date.now() <= deadline) {
     const remaining = deadline - Date.now()
+    let timeoutId
+    const timeout = new Promise((resolveTimeout) => {
+      timeoutId = setTimeout(resolveTimeout, Math.min(PROBE_INTERVAL_MS, remaining), timedOut)
+    })
+    const cancellation = createStopRace(stopSignal, stopped)
     const result = await Promise.race([
-      Promise.resolve(probe(url)).catch(() => false),
-      delay(Math.min(PROBE_INTERVAL_MS, remaining)).then(() => timedOut),
-    ])
+      Promise.resolve().then(() => probe(url)).then(Boolean, () => false),
+      timeout,
+      cancellation.promise,
+    ]).finally(() => {
+      clearTimeout(timeoutId)
+      cancellation.dispose()
+    })
+    if (result === stopped) throw new Error('DEV_STACK_STOPPED')
     if (result === true) return
     if (Date.now() >= deadline) break
-    if (result !== timedOut) await delay(Math.min(PROBE_INTERVAL_MS, deadline - Date.now()))
+    if (result !== timedOut) {
+      let cooldownId
+      const cooldown = new Promise((resolveCooldown) => {
+        cooldownId = setTimeout(resolveCooldown, Math.min(PROBE_INTERVAL_MS, deadline - Date.now()), timedOut)
+      })
+      const cooldownCancellation = createStopRace(stopSignal, stopped)
+      const cooldownResult = await Promise.race([
+        cooldown,
+        cooldownCancellation.promise,
+      ]).finally(() => {
+        clearTimeout(cooldownId)
+        cooldownCancellation.dispose()
+      })
+      if (cooldownResult === stopped) throw new Error('DEV_STACK_STOPPED')
+    }
   }
 
   throw new Error(`SERVICE_PROBE_TIMEOUT: ${url}`)
@@ -114,6 +150,7 @@ export function createDevStack({
   const signalDisposers = []
   let stopPromise
   let signalsRegistered = false
+  const stopController = new AbortController()
 
   const disposeSignalHandlers = () => {
     if (!signalsRegistered) return
@@ -137,6 +174,7 @@ export function createDevStack({
 
   const stop = () => {
     if (stopPromise) return stopPromise
+    stopController.abort()
     stopPromise = (async () => {
       try {
         const cleanupFailures = []
@@ -179,8 +217,8 @@ export function createDevStack({
         if (buildExitCode !== 0) throw new Error('GATEWAY_BUILD_FAILED')
         children.push(spawnProcess('node', ['dist-gateway/middleware/runtime-gateway/main.js']))
         children.push(spawnProcess('npm', ['run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173']))
-        await waitForProbe(GATEWAY_HEALTH_URL, probe)
-        await waitForProbe(WEB_HEALTH_URL, probe)
+        await waitForProbe(GATEWAY_HEALTH_URL, probe, stopController.signal)
+        await waitForProbe(WEB_HEALTH_URL, probe, stopController.signal)
       } catch (error) {
         try {
           await stop()

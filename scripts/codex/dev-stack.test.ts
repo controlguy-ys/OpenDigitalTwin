@@ -213,4 +213,28 @@ describe('dev:stack', () => {
       cause: cleanupFailure,
     })
   })
+
+  it('interrupts an active probe promptly when a startup signal stops the stack', async () => {
+    const killed: string[] = []
+    const handlers: Record<string, () => Promise<void>> = {}
+    const onSignal = vi.fn((signal, handler) => {
+      handlers[signal] = handler
+      return vi.fn()
+    })
+    const spawn = vi.fn()
+      .mockReturnValueOnce({ kill: vi.fn(), exited: Promise.resolve(0) })
+      .mockReturnValueOnce({ kill: vi.fn(() => killed.push('gateway')), exited: Promise.resolve(0) })
+      .mockReturnValueOnce({ kill: vi.fn(() => killed.push('vite')), exited: Promise.resolve(0) })
+    const probe = vi.fn(() => new Promise<boolean>(() => undefined))
+    const stack = createDevStack({ spawn, probe, onSignal })
+
+    const starting = stack.start()
+    let startupFailure: Error | undefined
+    void starting.catch((error) => { startupFailure = error })
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledWith('http://127.0.0.1:8081/healthz'))
+    await handlers.SIGTERM()
+
+    await vi.waitFor(() => expect(startupFailure?.message).toBe('DEV_STACK_STOPPED'))
+    expect(killed).toEqual(['vite', 'gateway'])
+  })
 })
