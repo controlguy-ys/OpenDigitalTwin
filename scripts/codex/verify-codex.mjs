@@ -31,9 +31,9 @@ const PROFILES = Object.freeze({
 
 const SCOPES = Object.freeze(Object.keys(PROFILES))
 
-export function parseVerifyArguments(argv) {
-  let scope
-  let json = false
+export function parseVerifyArguments(argv, environment = process.env) {
+  let scope = environment.npm_config_scope
+  let json = environment.npm_config_json === 'true'
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]

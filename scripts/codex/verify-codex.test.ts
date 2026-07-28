@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { runVerification } from './verify-codex.mjs'
+import { parseVerifyArguments, runVerification } from './verify-codex.mjs'
 
 describe('verify:codex', () => {
   it('runs the closed project-v5 profile in order and returns valid JSON data', async () => {
@@ -8,13 +8,20 @@ describe('verify:codex', () => {
       { scope: 'project-v5', json: true },
       { run },
     )
-    expect(run.mock.calls.map(([command]) => command)).toEqual([
+    expect(run.mock.calls.map(([command, args]) => [command, args])).toEqual([
       ['node', ['scripts/codex/validate-guidance.mjs']],
       ['npm', ['run', 'test:run', '--', 'src/core/project-v5', 'src/features/project/v5']],
       ['npm', ['run', 'lint']],
       ['npm', ['run', 'build']],
     ])
     expect(report.status).toBe('passed')
+  })
+
+  it('uses npm config fallback when npm consumes the planned scope and json arguments', () => {
+    expect(parseVerifyArguments([], {
+      npm_config_scope: 'guidance',
+      npm_config_json: 'true',
+    })).toEqual({ scope: 'guidance', json: true })
   })
 
   it('stops after the first required failure and reports the failing command', async () => {
