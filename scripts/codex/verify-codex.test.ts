@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  createProcessLauncher,
-  parseVerifyArguments,
-  runVerification,
-} from './verify-codex.mjs'
+// @ts-expect-error The production verification runner is intentionally plain ESM without a declaration file.
+import { createProcessLauncher, parseVerifyArguments, runVerification } from './verify-codex.mjs'
 
 describe('verify:codex', () => {
   it('runs the closed project-v5 profile in order and returns valid JSON data', async () => {
-    const run = vi.fn(async () => ({ exitCode: 0, durationMs: 5 }))
+    const run = vi.fn(async (_command: string, _args: string[]) => ({
+      exitCode: 0,
+      durationMs: 5,
+    }))
     const report = await runVerification(
       { scope: 'project-v5', json: true },
       { run },
