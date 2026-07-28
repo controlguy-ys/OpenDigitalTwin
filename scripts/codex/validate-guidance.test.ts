@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+// @ts-expect-error The production validator is intentionally plain ESM without a declaration file.
 import { validateGuidanceSnapshot, validateSkillSnapshot } from './validate-guidance.mjs'
 
 const skill = (name: string, description: string, body = '1. Inspect the workflow.\n') => [
