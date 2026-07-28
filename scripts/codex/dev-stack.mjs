@@ -67,9 +67,22 @@ const defaultProbe = async (url) => {
 }
 
 const defaultOnSignal = (signal, handler) => {
-  process.once(signal, () => {
+  const listener = () => {
     void handler()
-  })
+  }
+  process.once(signal, listener)
+  return () => process.removeListener(signal, listener)
+}
+
+function attachCleanupFailure(startupFailure, cleanupFailure) {
+  if (startupFailure instanceof Error) {
+    Object.defineProperty(startupFailure, 'cause', {
+      configurable: true,
+      value: cleanupFailure,
+    })
+    return startupFailure
+  }
+  return new Error(String(startupFailure), { cause: cleanupFailure })
 }
 
 async function waitForProbe(url, probe) {
@@ -98,30 +111,56 @@ export function createDevStack({
   killTree = defaultWindowsTreeKiller,
 } = {}) {
   const children = []
+  const signalDisposers = []
   let stopPromise
+  let signalsRegistered = false
+
+  const disposeSignalHandlers = () => {
+    if (!signalsRegistered) return
+    signalsRegistered = false
+    for (const dispose of signalDisposers.splice(0)) dispose()
+  }
+
+  const registerSignalHandlers = () => {
+    if (signalsRegistered) return
+    signalsRegistered = true
+    try {
+      for (const signal of ['SIGINT', 'SIGTERM']) {
+        const dispose = onSignal(signal, stop)
+        if (typeof dispose === 'function') signalDisposers.push(dispose)
+      }
+    } catch (error) {
+      disposeSignalHandlers()
+      throw error
+    }
+  }
 
   const stop = () => {
     if (stopPromise) return stopPromise
     stopPromise = (async () => {
-      const cleanupFailures = []
-      for (const child of [...children].reverse()) {
-        try {
-          if (platform === 'win32' && Number.isInteger(child.pid) && child.pid > 0) {
-            await killTree(child.pid)
-          } else {
-            child.kill()
+      try {
+        const cleanupFailures = []
+        for (const child of [...children].reverse()) {
+          try {
+            if (platform === 'win32' && Number.isInteger(child.pid) && child.pid > 0) {
+              await killTree(child.pid)
+            } else {
+              child.kill()
+            }
+          } catch (error) {
+            cleanupFailures.push(error)
           }
-        } catch (error) {
-          cleanupFailures.push(error)
         }
-      }
-      const exits = await Promise.allSettled(children.map((child) => child.exited))
-      for (const exit of exits) {
-        if (exit.status === 'rejected') cleanupFailures.push(exit.reason)
-      }
-      if (cleanupFailures.length === 1) throw cleanupFailures[0]
-      if (cleanupFailures.length > 1) {
-        throw new AggregateError(cleanupFailures, 'DEV_STACK_STOP_FAILED')
+        const exits = await Promise.allSettled(children.map((child) => child.exited))
+        for (const exit of exits) {
+          if (exit.status === 'rejected') cleanupFailures.push(exit.reason)
+        }
+        if (cleanupFailures.length === 1) throw cleanupFailures[0]
+        if (cleanupFailures.length > 1) {
+          throw new AggregateError(cleanupFailures, 'DEV_STACK_STOP_FAILED')
+        }
+      } finally {
+        disposeSignalHandlers()
       }
     })()
     return stopPromise
@@ -129,22 +168,28 @@ export function createDevStack({
 
   return Object.freeze({
     async start() {
-      const build = spawnProcess('npm', ['run', 'build:gateway'])
-      const buildExitCode = await build.exited
-      if (buildExitCode !== 0) throw new Error('GATEWAY_BUILD_FAILED')
+      registerSignalHandlers()
 
       try {
+        const build = spawnProcess('npm', ['run', 'build:gateway'])
+        children.push(build)
+        const buildExitCode = await build.exited
+        children.splice(children.indexOf(build), 1)
+        if (stopPromise) throw new Error('DEV_STACK_STOPPED')
+        if (buildExitCode !== 0) throw new Error('GATEWAY_BUILD_FAILED')
         children.push(spawnProcess('node', ['dist-gateway/middleware/runtime-gateway/main.js']))
         children.push(spawnProcess('npm', ['run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173']))
         await waitForProbe(GATEWAY_HEALTH_URL, probe)
         await waitForProbe(WEB_HEALTH_URL, probe)
       } catch (error) {
-        await stop()
+        try {
+          await stop()
+        } catch (cleanupFailure) {
+          throw attachCleanupFailure(error, cleanupFailure)
+        }
         throw error
       }
 
-      onSignal('SIGINT', stop)
-      onSignal('SIGTERM', stop)
       return Object.freeze({ webUrl: WEB_URL, gatewayUrl: GATEWAY_URL })
     },
     stop,

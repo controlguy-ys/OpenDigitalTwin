@@ -164,4 +164,53 @@ describe('dev:stack', () => {
     await stopping
     expect(stopped).toBe(true)
   })
+
+  it('registers and removes signal cleanup across an interrupted startup window', async () => {
+    let resolveBuildExit: (code: number) => void
+    const buildExited = new Promise<number>((resolve) => { resolveBuildExit = resolve })
+    const build = {
+      kill: vi.fn(() => resolveBuildExit(1)),
+      exited: buildExited,
+    }
+    const spawn = vi.fn(() => build)
+    const handlers: Record<string, () => Promise<void>> = {}
+    const removeSigint = vi.fn()
+    const removeSigterm = vi.fn()
+    const onSignal = vi.fn((signal, handler) => {
+      handlers[signal] = handler
+      return signal === 'SIGINT' ? removeSigint : removeSigterm
+    })
+    const stack = createDevStack({ spawn, probe: vi.fn(), onSignal })
+
+    const starting = stack.start()
+
+    expect(onSignal.mock.invocationCallOrder[0]).toBeLessThan(spawn.mock.invocationCallOrder[0])
+    expect(onSignal).toHaveBeenCalledWith('SIGINT', expect.any(Function))
+    expect(onSignal).toHaveBeenCalledWith('SIGTERM', expect.any(Function))
+    await handlers.SIGINT()
+    await expect(starting).rejects.toThrow('DEV_STACK_STOPPED')
+    expect(build.kill).toHaveBeenCalledOnce()
+    expect(removeSigint).toHaveBeenCalledOnce()
+    expect(removeSigterm).toHaveBeenCalledOnce()
+  })
+
+  it('preserves a startup failure when Windows cleanup also fails', async () => {
+    const cleanupFailure = new Error('TASKKILL_DENIED')
+    const spawn = vi.fn()
+      .mockReturnValueOnce({ kill: vi.fn(), exited: Promise.resolve(0) })
+      .mockReturnValueOnce({ pid: 101, kill: vi.fn(), exited: Promise.resolve(0) })
+      .mockImplementationOnce(() => { throw new Error('VITE_START_FAILED') })
+    const stack = createDevStack({
+      spawn,
+      probe: vi.fn(),
+      onSignal: vi.fn(),
+      platform: 'win32',
+      killTree: vi.fn(async () => { throw cleanupFailure }),
+    })
+
+    await expect(stack.start()).rejects.toMatchObject({
+      message: 'VITE_START_FAILED',
+      cause: cleanupFailure,
+    })
+  })
 })
