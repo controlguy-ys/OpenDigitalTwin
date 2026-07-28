@@ -54,18 +54,26 @@ export function parseVerifyArguments(argv, environment = process.env) {
   return Object.freeze({ scope, json })
 }
 
-function commandForPlatform(command, platform = process.platform) {
-  return platform === 'win32' && command === 'npm' ? 'npm.cmd' : command
+export function createProcessLauncher({
+  spawnChild = spawn,
+  platform = process.platform,
+  commandShell = process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe',
+} = {}) {
+  return (command, args) => {
+    const options = { shell: false, stdio: ['ignore', 'pipe', 'pipe'] }
+    return platform === 'win32' && command === 'npm'
+      ? spawnChild(commandShell, ['/d', '/s', '/c', 'npm.cmd', ...args], options)
+      : spawnChild(command, args, options)
+  }
 }
+
+const launchProcess = createProcessLauncher()
 
 function runCommand(command, args) {
   const startedAt = performance.now()
   let child
   try {
-    child = spawn(commandForPlatform(command), args, {
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    child = launchProcess(command, args)
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
     return Promise.resolve({ exitCode: 1, durationMs: Math.round(performance.now() - startedAt) })

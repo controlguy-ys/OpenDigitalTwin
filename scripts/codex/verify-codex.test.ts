@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { parseVerifyArguments, runVerification } from './verify-codex.mjs'
+import {
+  createProcessLauncher,
+  parseVerifyArguments,
+  runVerification,
+} from './verify-codex.mjs'
 
 describe('verify:codex', () => {
   it('runs the closed project-v5 profile in order and returns valid JSON data', async () => {
@@ -22,6 +26,23 @@ describe('verify:codex', () => {
       npm_config_scope: 'guidance',
       npm_config_json: 'true',
     })).toEqual({ scope: 'guidance', json: true })
+  })
+
+  it('uses ComSpec without shell mode for npm checks on Windows', () => {
+    const spawnChild = vi.fn(() => ({}))
+    const launch = createProcessLauncher({
+      spawnChild,
+      platform: 'win32',
+      commandShell: 'C:\\Windows\\System32\\cmd.exe',
+    })
+
+    launch('npm', ['run', 'lint'])
+
+    expect(spawnChild).toHaveBeenCalledWith(
+      'C:\\Windows\\System32\\cmd.exe',
+      ['/d', '/s', '/c', 'npm.cmd', 'run', 'lint'],
+      { shell: false, stdio: ['ignore', 'pipe', 'pipe'] },
+    )
   })
 
   it('stops after the first required failure and reports the failing command', async () => {
