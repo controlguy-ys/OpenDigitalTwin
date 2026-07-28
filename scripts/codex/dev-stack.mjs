@@ -6,8 +6,15 @@ const GATEWAY_HEALTH_URL = 'http://127.0.0.1:8081/healthz'
 const GATEWAY_URL = 'http://127.0.0.1:8081'
 const PROBE_INTERVAL_MS = 250
 const PROBE_TIMEOUT_MS = 30_000
+const POSIX_FORCE_TIMEOUT_MS = 1_000
+const POSIX_GRACEFUL_TIMEOUT_MS = 2_000
+const POSIX_POLL_INTERVAL_MS = 50
 const WEB_URL = 'http://127.0.0.1:5173'
 const WEB_HEALTH_URL = `${WEB_URL}/`
+
+const defaultDelay = (milliseconds) => new Promise((resolveDelay) => {
+  setTimeout(resolveDelay, milliseconds)
+})
 
 export function createProcessSpawner({
   spawnChild: spawn = spawnChild,
@@ -15,7 +22,9 @@ export function createProcessSpawner({
   commandShell = process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe',
 } = {}) {
   return (command, args) => {
-    const options = { shell: false, stdio: 'inherit' }
+    const options = platform === 'win32'
+      ? { shell: false, stdio: 'inherit' }
+      : { detached: true, shell: false, stdio: 'inherit' }
     const child = platform === 'win32' && command === 'npm'
       ? spawn(commandShell, ['/d', '/s', '/c', 'npm.cmd', ...args], options)
       : spawn(command, args, options)
@@ -29,6 +38,52 @@ export function createProcessSpawner({
 }
 
 const defaultSpawn = createProcessSpawner()
+
+function isNoSuchProcess(error) {
+  return error && typeof error === 'object' && error.code === 'ESRCH'
+}
+
+export function createPosixGroupKiller({
+  signalProcessGroup = process.kill,
+  delay = defaultDelay,
+  gracefulTimeoutMs = POSIX_GRACEFUL_TIMEOUT_MS,
+  forceTimeoutMs = POSIX_FORCE_TIMEOUT_MS,
+  pollIntervalMs = POSIX_POLL_INTERVAL_MS,
+} = {}) {
+  return async (pid) => {
+    if (!Number.isInteger(pid) || pid <= 0) {
+      throw new Error(`INVALID_POSIX_PROCESS_GROUP_PID: ${pid}`)
+    }
+    const groupPid = -pid
+    const sendSignal = (signal) => {
+      try {
+        signalProcessGroup(groupPid, signal)
+        return true
+      } catch (error) {
+        if (isNoSuchProcess(error)) return false
+        throw error
+      }
+    }
+    const waitForGroupGone = async (timeoutMs) => {
+      let elapsedMs = 0
+      while (elapsedMs < timeoutMs) {
+        if (!sendSignal(0)) return true
+        const waitMs = Math.min(pollIntervalMs, timeoutMs - elapsedMs)
+        await delay(waitMs)
+        elapsedMs += waitMs
+      }
+      return !sendSignal(0)
+    }
+
+    if (!sendSignal('SIGTERM')) return
+    if (await waitForGroupGone(gracefulTimeoutMs)) return
+    if (!sendSignal('SIGKILL')) return
+    if (await waitForGroupGone(forceTimeoutMs)) return
+    throw new Error(`POSIX_PROCESS_GROUP_STILL_ALIVE: ${pid}`)
+  }
+}
+
+const defaultPosixGroupKiller = createPosixGroupKiller()
 
 export function createWindowsTreeKiller({ spawnChild: spawn = spawnChild } = {}) {
   return (pid) => {
@@ -145,6 +200,7 @@ export function createDevStack({
   onSignal = defaultOnSignal,
   platform = process.platform,
   killTree = defaultWindowsTreeKiller,
+  killGroup = defaultPosixGroupKiller,
 } = {}) {
   const children = []
   const signalDisposers = []
@@ -182,6 +238,8 @@ export function createDevStack({
           try {
             if (platform === 'win32' && Number.isInteger(child.pid) && child.pid > 0) {
               await killTree(child.pid)
+            } else if (platform !== 'win32' && Number.isInteger(child.pid) && child.pid > 0) {
+              await killGroup(child.pid)
             } else {
               child.kill()
             }

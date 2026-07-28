@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 // @ts-expect-error The production supervisor is intentionally plain ESM without a declaration file.
-import { createDevStack, createProcessSpawner, createWindowsTreeKiller } from './dev-stack.mjs'
+import { createDevStack, createPosixGroupKiller, createProcessSpawner, createWindowsTreeKiller } from './dev-stack.mjs'
 
 describe('dev:stack', () => {
   it('builds Gateway, starts Gateway and Vite, then waits for both probes', async () => {
@@ -113,6 +113,79 @@ describe('dev:stack', () => {
       ['/d', '/s', '/c', 'npm.cmd', 'run', 'build:gateway'],
       { shell: false, stdio: 'inherit' },
     )
+  })
+
+  it('starts POSIX children in an owned process group without shell mode', () => {
+    const child = { pid: 4242, once: vi.fn() }
+    const spawnChild = vi.fn(() => child)
+    const spawn = createProcessSpawner({ spawnChild, platform: 'linux' })
+
+    spawn('npm', ['run', 'dev'])
+
+    expect(spawnChild).toHaveBeenCalledWith(
+      'npm',
+      ['run', 'dev'],
+      { detached: true, shell: false, stdio: 'inherit' },
+    )
+  })
+
+  it('targets the owned POSIX group and accepts graceful disappearance', async () => {
+    const gone = Object.assign(new Error('gone'), { code: 'ESRCH' })
+    let checks = 0
+    const signalProcessGroup = vi.fn((_pid: number, signal: NodeJS.Signals | 0) => {
+      if (signal === 0 && ++checks > 1) throw gone
+    })
+    const delay = vi.fn(async () => undefined)
+    const killGroup = createPosixGroupKiller({
+      signalProcessGroup,
+      delay,
+      gracefulTimeoutMs: 10,
+      forceTimeoutMs: 10,
+      pollIntervalMs: 10,
+    })
+
+    await killGroup(4242)
+
+    expect(signalProcessGroup.mock.calls).toEqual([
+      [-4242, 'SIGTERM'],
+      [-4242, 0],
+      [-4242, 0],
+    ])
+    expect(delay).toHaveBeenCalledOnce()
+  })
+
+  it('uses a bounded SIGKILL fallback when a POSIX group ignores SIGTERM', async () => {
+    const gone = Object.assign(new Error('gone'), { code: 'ESRCH' })
+    let forceSent = false
+    const signalProcessGroup = vi.fn((_pid: number, signal: NodeJS.Signals | 0) => {
+      if (signal === 'SIGKILL') forceSent = true
+      if (signal === 0 && forceSent) throw gone
+    })
+    const delay = vi.fn(async () => undefined)
+    const killGroup = createPosixGroupKiller({
+      signalProcessGroup,
+      delay,
+      gracefulTimeoutMs: 10,
+      forceTimeoutMs: 10,
+      pollIntervalMs: 10,
+    })
+
+    await killGroup(4343)
+
+    expect(signalProcessGroup).toHaveBeenCalledWith(-4343, 'SIGTERM')
+    expect(signalProcessGroup).toHaveBeenCalledWith(-4343, 'SIGKILL')
+    expect(delay).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats an already-gone POSIX group as a successful stop', async () => {
+    const gone = Object.assign(new Error('gone'), { code: 'ESRCH' })
+    const signalProcessGroup = vi.fn(() => { throw gone })
+    const delay = vi.fn(async () => undefined)
+    const killGroup = createPosixGroupKiller({ signalProcessGroup, delay })
+
+    await expect(killGroup(4444)).resolves.toBeUndefined()
+    expect(signalProcessGroup).toHaveBeenCalledWith(-4444, 'SIGTERM')
+    expect(delay).not.toHaveBeenCalled()
   })
 
   it('uses taskkill to terminate only an owned Windows process tree', async () => {
