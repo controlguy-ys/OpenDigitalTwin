@@ -13,22 +13,26 @@ const delay = (milliseconds) => new Promise((resolveDelay) => {
   setTimeout(resolveDelay, milliseconds)
 })
 
-const commandForPlatform = (command) => (
-  process.platform === 'win32' && command === 'npm' ? 'npm.cmd' : command
-)
+export function createProcessSpawner({
+  spawnChild: spawn = spawnChild,
+  platform = process.platform,
+  commandShell = process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe',
+} = {}) {
+  return (command, args) => {
+    const options = { shell: false, stdio: 'inherit' }
+    const child = platform === 'win32' && command === 'npm'
+      ? spawn(commandShell, ['/d', '/s', '/c', 'npm.cmd', ...args], options)
+      : spawn(command, args, options)
+    const exited = new Promise((resolveExit, rejectExit) => {
+      child.once('error', rejectExit)
+      child.once('exit', (code) => resolveExit(code ?? 1))
+    })
 
-const defaultSpawn = (command, args) => {
-  const child = spawnChild(commandForPlatform(command), args, {
-    shell: false,
-    stdio: 'inherit',
-  })
-  const exited = new Promise((resolveExit, rejectExit) => {
-    child.once('error', rejectExit)
-    child.once('exit', (code) => resolveExit(code ?? 1))
-  })
-
-  return { kill: () => child.kill(), exited }
+    return { kill: () => child.kill(), exited }
+  }
 }
+
+const defaultSpawn = createProcessSpawner()
 
 const defaultProbe = async (url) => {
   const response = await fetch(url, { signal: AbortSignal.timeout(PROBE_INTERVAL_MS) })
@@ -65,18 +69,21 @@ export function createDevStack({
   onSignal = defaultOnSignal,
 } = {}) {
   const children = []
-  let stopping = false
+  let stopPromise
 
-  const stop = async () => {
-    if (stopping) return
-    stopping = true
-    for (const child of [...children].reverse()) {
-      try {
-        child.kill()
-      } catch {
-        // A child which already exited needs no further cleanup.
+  const stop = () => {
+    if (stopPromise) return stopPromise
+    stopPromise = (async () => {
+      for (const child of [...children].reverse()) {
+        try {
+          child.kill()
+        } catch {
+          // A child which already exited needs no further cleanup.
+        }
       }
-    }
+      await Promise.allSettled(children.map((child) => child.exited))
+    })()
+    return stopPromise
   }
 
   return Object.freeze({

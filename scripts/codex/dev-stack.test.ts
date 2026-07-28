@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDevStack } from './dev-stack.mjs'
+import { createDevStack, createProcessSpawner } from './dev-stack.mjs'
 
 describe('dev:stack', () => {
   it('builds Gateway, starts Gateway and Vite, then waits for both probes', async () => {
@@ -28,9 +28,19 @@ describe('dev:stack', () => {
 
   it('stops an already-started child when the second process fails', async () => {
     const killed: string[] = []
+    let resolveGatewayExit: (code: number) => void
+    const gatewayExited = new Promise<number>((resolve) => {
+      resolveGatewayExit = resolve
+    })
     const spawn = vi.fn()
       .mockReturnValueOnce({ kill: vi.fn(), exited: Promise.resolve(0) })
-      .mockReturnValueOnce({ kill: vi.fn(() => killed.push('gateway')), exited: new Promise(() => undefined) })
+      .mockReturnValueOnce({
+        kill: vi.fn(() => {
+          killed.push('gateway')
+          resolveGatewayExit(0)
+        }),
+        exited: gatewayExited,
+      })
       .mockImplementationOnce(() => { throw new Error('VITE_START_FAILED') })
     const stack = createDevStack({ spawn, probe: vi.fn(), onSignal: vi.fn() })
 
@@ -50,5 +60,54 @@ describe('dev:stack', () => {
     await Promise.all([stack.stop(), stack.stop()])
 
     expect(killed).toEqual(['vite', 'gateway'])
+  })
+
+  it('waits for every child to exit after stopping them in reverse order', async () => {
+    const killed: string[] = []
+    let resolveGatewayExit: (code: number) => void
+    let resolveViteExit: (code: number) => void
+    const gatewayExited = new Promise<number>((resolve) => {
+      resolveGatewayExit = resolve
+    })
+    const viteExited = new Promise<number>((resolve) => {
+      resolveViteExit = resolve
+    })
+    const spawn = vi.fn()
+      .mockReturnValueOnce({ kill: vi.fn(), exited: Promise.resolve(0) })
+      .mockReturnValueOnce({ kill: vi.fn(() => killed.push('gateway')), exited: gatewayExited })
+      .mockReturnValueOnce({ kill: vi.fn(() => killed.push('vite')), exited: viteExited })
+    const stack = createDevStack({ spawn, probe: vi.fn(async () => true), onSignal: vi.fn() })
+
+    await stack.start()
+    let stopped = false
+    const stopping = stack.stop().then(() => { stopped = true })
+
+    expect(killed).toEqual(['vite', 'gateway'])
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    resolveViteExit(0)
+    await Promise.resolve()
+    expect(stopped).toBe(false)
+    resolveGatewayExit(0)
+    await stopping
+    expect(stopped).toBe(true)
+  })
+
+  it('uses cmd.exe without shell mode for npm commands on Windows', () => {
+    const child = { once: vi.fn() }
+    const spawnChild = vi.fn(() => child)
+    const spawn = createProcessSpawner({
+      spawnChild,
+      platform: 'win32',
+      commandShell: 'cmd.exe',
+    })
+
+    spawn('npm', ['run', 'build:gateway'])
+
+    expect(spawnChild).toHaveBeenCalledWith(
+      'cmd.exe',
+      ['/d', '/s', '/c', 'npm.cmd', 'run', 'build:gateway'],
+      { shell: false, stdio: 'inherit' },
+    )
   })
 })
