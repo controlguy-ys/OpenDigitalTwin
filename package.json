@@ -11,6 +11,7 @@
   "packageManager": "npm@11.4.2",
   "scripts": {
     "dev": "vite",
+    "dev:stack": "node scripts/codex/dev-stack.mjs",
     "demo:opcua-server": "tsx scripts/demo-opcua-server/main.ts",
     "build": "tsc -b && vite build",
     "build:sites": "npm run build && node scripts/sites/prepare-build.mjs",
