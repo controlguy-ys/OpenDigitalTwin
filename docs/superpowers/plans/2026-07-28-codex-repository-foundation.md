@@ -155,7 +155,7 @@ The root file must contain these concrete sections:
 - Install: `npm install`
 - Targeted tests: `npm run test:run -- <paths>`
 - Full verification: `npm run verify`
-- Codex verification: `npm run verify:codex -- --scope <scope> --json`
+- Codex verification: `npm run --silent verify:codex -- --scope <scope> --json`
 
 ## Safety
 - Never perform an external OPC UA write or physical PLC/Robot action unless the current user explicitly requests it.
@@ -204,7 +204,7 @@ git commit -m "docs: add Codex repository guidance"
 
 - Produces: `parseVerifyArguments(argv): VerifyCodexOptions`
 - Produces: `runVerification(options, dependencies): Promise<VerifyCodexReport>`
-- Produces CLI: `npm run verify:codex -- --scope <scope> --json`
+- Produces CLI: `npm run --silent verify:codex -- --scope <scope> --json`
 
 ```ts
 interface VerifyCodexReport {
@@ -337,7 +337,7 @@ Run:
 
 ```powershell
 npx vitest run scripts/codex/verify-codex.test.ts scripts/codex/validate-guidance.test.ts
-npm run verify:codex -- --scope guidance --json
+npm run --silent verify:codex -- --scope guidance --json
 ```
 
 Expected: tests PASS; the CLI prints one valid JSON object with `"status":"passed"`, records `artifacts/codex/latest-verification.json`, and exits `0`.
@@ -640,7 +640,7 @@ Document:
 `npm run dev:stack`
 
 ## Run scoped verification
-`npm run verify:codex -- --scope project-v5 --json`
+`npm run --silent verify:codex -- --scope project-v5 --json`
 
 ## Available repository Skills
 - `robot-asset-onboarding`
@@ -664,7 +664,7 @@ Run:
 ```powershell
 npm run verify:guidance
 npx vitest run scripts/codex
-npm run verify:codex -- --scope project-v5 --json
+npm run --silent verify:codex -- --scope project-v5 --json
 git diff --check
 ```
 
@@ -689,5 +689,5 @@ This plan is complete only when:
 - the four `AGENTS.md` files are valid and discoverable;
 - all three repo Skills validate;
 - `npm run dev:stack` starts and cleanly stops Web and Gateway on Windows;
-- `npm run verify:codex -- --scope project-v5 --json` returns passing structured output;
+- `npm run --silent verify:codex -- --scope project-v5 --json` returns passing structured output;
 - no MCP, Project command, or external OPC UA write capability was added in this slice.

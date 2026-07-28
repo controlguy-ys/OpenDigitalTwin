@@ -711,7 +711,7 @@ README must state:
 - [ ] **Step 3: Run the complete operator verification**
 
 ```powershell
-npm run verify:codex -- --scope gateway --json
+npm run --silent verify:codex -- --scope gateway --json
 npm run dev:stack
 npm run mcp:smoke
 npm run demo:reset

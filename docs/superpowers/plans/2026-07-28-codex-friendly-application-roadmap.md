@@ -84,7 +84,7 @@ If implementation evidence requires a contract change, update the approved desig
 After all four plans:
 
 ```powershell
-npm run verify:codex -- --scope full --json
+npm run --silent verify:codex -- --scope full --json
 npm run mcp:smoke
 npm run diagnostics:bundle -- --sanitize
 npm run demo:reset

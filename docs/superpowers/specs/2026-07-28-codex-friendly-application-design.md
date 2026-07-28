@@ -459,7 +459,7 @@ The repository adds these stable entry points:
 ```text
 npm run dev:stack
 npm run demo:reset
-npm run verify:codex -- --scope <scope> --json
+npm run --silent verify:codex -- --scope <scope> --json
 npm run diagnostics:bundle -- --sanitize
 npm run mcp:smoke
 ```
@@ -588,7 +588,7 @@ The design is implemented successfully when all of the following are true:
 13. All failures include a stable code, path where applicable, correlation ID, and bounded recovery actions.
 14. A Diagnostic Bundle reconstructs the path from MCP request through Runtime result.
 15. Diagnostic output contains no credentials or CAD binaries.
-16. `npm run verify:codex -- --json` returns a valid JSON report and exit code `0` only when all required checks pass.
+16. `npm run --silent verify:codex -- --scope <scope> --json` returns a valid JSON report and exit code `0` only when all required checks pass.
 17. Root and nested `AGENTS.md` files route Codex to the correct Source of Truth and verification commands.
 18. Existing `npm run verify` checks and the new MCP runtime acceptance suite pass.
 

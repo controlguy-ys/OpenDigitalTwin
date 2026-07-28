@@ -9,7 +9,7 @@
 - Install: `npm install`
 - Targeted tests: `npm run test:run -- <paths>`
 - Full verification: `npm run verify`
-- Codex verification: `npm run verify:codex -- --scope <scope> --json`
+- Codex verification: `npm run --silent verify:codex -- --scope <scope> --json`
 
 ## Safety
 - Never perform an external OPC UA write or physical PLC/Robot action unless the current user explicitly requests it.

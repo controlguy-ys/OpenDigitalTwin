@@ -17,7 +17,7 @@ Choose the narrowest closed scope that covers the changed paths. For example,
 Project V5 work uses:
 
 ```powershell
-npm run verify:codex -- --scope project-v5 --json
+npm run --silent verify:codex -- --scope project-v5 --json
 ```
 
 | Scope | Use for | Checks run |

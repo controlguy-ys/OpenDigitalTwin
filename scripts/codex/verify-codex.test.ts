@@ -1,6 +1,33 @@
 import { describe, expect, it, vi } from 'vitest'
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { spawn as spawnChild } from 'node:child_process'
 // @ts-expect-error The production verification runner is intentionally plain ESM without a declaration file.
 import { createProcessLauncher, parseVerifyArguments, runVerification } from './verify-codex.mjs'
+
+function runNpm(cwd: string, args: string[]) {
+  const child = process.platform === 'win32'
+    ? spawnChild(
+        process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe',
+        ['/d', '/s', '/c', 'npm.cmd', ...args],
+        { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'] },
+      )
+    : spawnChild('npm', args, { cwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+
+  return new Promise<{ exitCode: number, stdout: string, stderr: string }>((resolveRun, rejectRun) => {
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk })
+    child.stderr.on('data', (chunk: string) => { stderr += chunk })
+    child.once('error', rejectRun)
+    child.once('close', (exitCode: number | null) => {
+      resolveRun({ exitCode: exitCode ?? 1, stdout, stderr })
+    })
+  })
+}
 
 describe('verify:codex', () => {
   it('runs the closed project-v5 profile in order and returns valid JSON data', async () => {
@@ -70,5 +97,46 @@ describe('verify:codex', () => {
     expect(writeLatest).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'passed', scope: 'guidance' }),
     )
+  })
+
+  it('emits one JSON document on stdout through the documented npm command', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'verify-codex-'))
+    try {
+      await mkdir(join(fixture, 'scripts/codex'), { recursive: true })
+      await copyFile(
+        join(process.cwd(), 'scripts/codex/verify-codex.mjs'),
+        join(fixture, 'scripts/codex/verify-codex.mjs'),
+      )
+      await writeFile(
+        join(fixture, 'package.json'),
+        JSON.stringify({
+          type: 'module',
+          scripts: { 'verify:codex': 'node scripts/codex/verify-codex.mjs' },
+        }),
+        'utf8',
+      )
+      await writeFile(
+        join(fixture, 'scripts/codex/validate-guidance.mjs'),
+        "process.stdout.write('fixture guidance passed\\n')\n",
+        'utf8',
+      )
+
+      const result = await runNpm(fixture, [
+        'run',
+        '--silent',
+        'verify:codex',
+        '--',
+        '--scope',
+        'guidance',
+        '--json',
+      ])
+      const report = JSON.parse(result.stdout)
+
+      expect(result.exitCode).toBe(0)
+      expect(report).toMatchObject({ status: 'passed', scope: 'guidance' })
+      expect(result.stderr).toContain('fixture guidance passed')
+    } finally {
+      await rm(fixture, { recursive: true, force: true })
+    }
   })
 })

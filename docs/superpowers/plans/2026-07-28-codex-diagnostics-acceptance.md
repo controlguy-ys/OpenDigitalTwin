@@ -609,7 +609,7 @@ Codex verification is command-driven in this phase. No pre-commit or pre-push ho
 - [ ] **Step 4: Run the final gate**
 
 ```powershell
-npm run verify:codex -- --scope full --json
+npm run --silent verify:codex -- --scope full --json
 npm run diagnostics:bundle -- --sanitize
 git diff --check
 ```
@@ -636,5 +636,5 @@ This plan is complete only when:
 - HTTP, MCP, CLI, and human UI expose the same bundle;
 - the real STDIO MCP acceptance scenario reads, previews, applies, validates, runs, polls, resets, and restores Project state;
 - the V5 Demo Job ends in `SUCCEEDED`;
-- `verify:codex -- --scope full --json` passes;
+- `npm run --silent verify:codex -- --scope full --json` passes;
 - no Git hook, external OPC UA write, PLC write, or CAD payload is added.
