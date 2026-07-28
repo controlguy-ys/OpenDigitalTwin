@@ -8,9 +8,10 @@ describe('verify:codex', () => {
       exitCode: 0,
       durationMs: 5,
     }))
+    const writeLatest = vi.fn(async () => undefined)
     const report = await runVerification(
       { scope: 'project-v5', json: true },
-      { run },
+      { run, writeLatest },
     )
     expect(run.mock.calls.map(([command, args]) => [command, args])).toEqual([
       ['node', ['scripts/codex/validate-guidance.mjs']],
@@ -19,6 +20,7 @@ describe('verify:codex', () => {
       ['npm', ['run', 'build']],
     ])
     expect(report.status).toBe('passed')
+    expect(writeLatest).toHaveBeenCalledOnce()
   })
 
   it('uses npm config fallback when npm consumes the planned scope and json arguments', () => {
@@ -49,9 +51,10 @@ describe('verify:codex', () => {
     const run = vi.fn()
       .mockResolvedValueOnce({ exitCode: 0, durationMs: 1 })
       .mockResolvedValueOnce({ exitCode: 1, durationMs: 2 })
+    const writeLatest = vi.fn(async () => undefined)
     const report = await runVerification(
       { scope: 'project-v5', json: true },
-      { run },
+      { run, writeLatest },
     )
     expect(report.status).toBe('failed')
     expect(report.checks.at(-1)).toMatchObject({ status: 'failed', exitCode: 1 })
