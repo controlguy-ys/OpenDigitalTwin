@@ -5,6 +5,10 @@ import {
 } from '../../../core/project-v5/test-support.js'
 import type { WorkcellProjectV5 } from '../../../core/project-v5/index.js'
 import {
+  createProjectRobotKinematicsFactoryV5,
+  type ProjectRobotKinematicsFactoryV5,
+} from '../../robot/v5/project-v5-robot-kinematics.js'
+import {
   createBrowserProjectRuntimeV5,
   type BrowserProjectRuntimeV5Options,
 } from './browser-project-runtime-v5.js'
@@ -12,6 +16,16 @@ import type { BrowserWebSocketV5 } from '../../runtime-gateway/v5/runtime-gatewa
 
 const CONFIG_A = 'a'.repeat(64)
 const CONFIG_B = 'b'.repeat(64)
+
+function rejectingCandidateKinematicsFactory(): ProjectRobotKinematicsFactoryV5 {
+  const delegate = createProjectRobotKinematicsFactoryV5()
+  return Object.freeze({
+    compileProject(project: WorkcellProjectV5, configRevision: string) {
+      if (configRevision === CONFIG_B) throw new Error('CANDIDATE_KINEMATICS_REJECTED')
+      return delegate.compileProject(project, configRevision)
+    },
+  })
+}
 
 function scheduler() {
   let next = 0
@@ -64,6 +78,35 @@ function options(overrides: Partial<BrowserProjectRuntimeV5Options> = {}): Brows
 }
 
 describe('BrowserProjectRuntimeV5 candidate lifecycle', () => {
+  it('keeps the active publication unchanged when candidate kinematics compilation rejects', async () => {
+    const runtime = createBrowserProjectRuntimeV5(options({
+      testHooks: {
+        createRobotKinematicsFactory: rejectingCandidateKinematicsFactory,
+      },
+    }))
+    try {
+      const active = runtime.readActiveBundle()!
+      const activeGraph = active.runtimeGraph
+      let publications = 0
+      const stop = runtime.bundle.subscribe(() => { publications += 1 })
+
+      await expect(runtime.prepare(project('revision-rejected'), CONFIG_B))
+        .rejects.toThrow('CANDIDATE_KINEMATICS_REJECTED')
+
+      stop()
+      expect(runtime.readActiveBundle()).toBe(active)
+      expect(runtime.bundle.getState()).toBe(active)
+      expect(runtime.bundle.getState().runtimeEpoch).toBe(active.runtimeEpoch)
+      expect(runtime.bundle.getState().projectRevisionId).toBe(active.projectRevisionId)
+      expect(runtime.bundle.getState().runtimeGraph).toBe(activeGraph)
+      expect(runtime.bundle.getState().runtimeGraph.robots).toBe(activeGraph.robots)
+      expect(runtime.bundle.getState().runtimeGraph.streamTarget).toBe(activeGraph.streamTarget)
+      expect(publications).toBe(0)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   it('rejects commit before the candidate has been applied', async () => {
     const runtime = createBrowserProjectRuntimeV5(options())
     const prepared = await runtime.prepare(project('revision-not-applied'), CONFIG_B)

@@ -21,6 +21,7 @@ import { createAttachmentRuntimeStoreV1 } from './attachment-runtime-store.js'
 import type { AttachmentRuntimeStoreV1 } from './attachment-runtime-store.js'
 import { createBrowserAttachmentInstructionPortV1 } from './browser-attachment-instruction-port.js'
 import type { StoreApi } from 'zustand/vanilla'
+import { createAttachmentPoseRuntimeV1 } from '../../scene/v5/attachment-pose-runtime.js'
 
 const CONFIG_REVISION = 'a'.repeat(64)
 const NEXT_CONFIG_REVISION = 'b'.repeat(64)
@@ -115,6 +116,18 @@ function context(robotId = 'robot-1', simulationMs = 100) {
 function expectBranded(error: unknown, code: string): void {
   expect(isAttachmentInstructionErrorV1(error)).toBe(true)
   expect(error).toMatchObject({ name: 'AttachmentInstructionErrorV1', code })
+}
+
+function expectSamePoseWithinFloatingPointNoise(
+  actual: RigidTransformV5 | null,
+  expected: RigidTransformV5 | null,
+): void {
+  expect(actual).not.toBeNull()
+  expect(expected).not.toBeNull()
+  expect(actual!.positionM).toEqual(expected!.positionM)
+  actual!.quaternion.forEach((value, index) => {
+    expect(value).toBeCloseTo(expected!.quaternion[index]!, 14)
+  })
 }
 
 function createFixture(project = projectWithEntity()) {
@@ -279,6 +292,37 @@ describe('V5 Browser Attachment instruction port', () => {
       parentFrameId: 'mcp',
       detachedAtSimulationMs: 200,
     })
+  })
+
+  it('keeps an attached Object on the injected World pose callbacks as the Tool moves, then retains its final World pose on Detach', async () => {
+    const fixture = createFixture()
+    const projection = createAttachmentPoseRuntimeV1(fixture.attachments)
+    const attachedTool = pose([0.4, 0.1, 0.2], [0, 0, 0])
+    const movedTool = pose([0.7, -0.3, 0.5], [20, 40, 60])
+    fixture.readRobotFrameWorldPose.mockReturnValue(attachedTool)
+    fixture.readSceneFrameWorldPose.mockReturnValue(pose())
+
+    await fixture.port.attach(
+      attach({ objectGraspFrameId: null, maximumDistanceM: 0.001 }),
+      context(),
+    )
+    const poseAtAttach = projection.readObjectWorldPose(
+      'cup', fixture.readRobotFrameWorldPose, fixture.readSceneFrameWorldPose,
+    )
+    fixture.readRobotFrameWorldPose.mockReturnValue(movedTool)
+    const poseWhileMoving = projection.readObjectWorldPose(
+      'cup', fixture.readRobotFrameWorldPose, fixture.readSceneFrameWorldPose,
+    )
+
+    await fixture.port.detach(detach(), context('robot-1', 200))
+    const poseAfterDetach = projection.readObjectWorldPose(
+      'cup', fixture.readRobotFrameWorldPose, fixture.readSceneFrameWorldPose,
+    )
+
+    expect(poseAtAttach).toEqual(fixture.objectWorld)
+    expect(poseWhileMoving).not.toEqual(poseAtAttach)
+    expectSamePoseWithinFloatingPointNoise(poseAfterDetach, poseWhileMoving)
+    expect(fixture.readRobotFrameWorldPose).toHaveBeenCalledWith('robot-1', 'Tool')
   })
 
   it('rejects Project/config replacement performed by an injected reader before commit', async () => {

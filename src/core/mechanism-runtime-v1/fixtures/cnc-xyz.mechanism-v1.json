@@ -1,0 +1,31 @@
+{
+  "mechanismId": "fixture-cnc-xyz",
+  "name": "CNC XYZ fixture",
+  "topologyKind": "tree",
+  "solverRef": {
+    "solverKey": "open-digital-twin/tree-fk",
+    "contractVersion": "1",
+    "parameters": {},
+    "normalizedParametersHash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "bodies": [
+    { "bodyId": "base", "name": "Base" },
+    { "bodyId": "x-carriage", "name": "X carriage" },
+    { "bodyId": "y-carriage", "name": "Y carriage" },
+    { "bodyId": "z-carriage", "name": "Z carriage" }
+  ],
+  "joints": [
+    { "jointId": "axis-x", "jointType": "prismatic", "parentBodyId": "base", "childBodyId": "x-carriage", "origin": { "positionM": [0, 0, 0], "quaternion": [0, 0, 0, 1] }, "axis": [1, 0, 0], "minimum": 0, "maximum": 1, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "axis-y", "jointType": "prismatic", "parentBodyId": "x-carriage", "childBodyId": "y-carriage", "origin": { "positionM": [0, 0, 0], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": 0, "maximum": 1, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "axis-z", "jointType": "prismatic", "parentBodyId": "y-carriage", "childBodyId": "z-carriage", "origin": { "positionM": [0, 0, 0], "quaternion": [0, 0, 0, 1] }, "axis": [0, 0, 1], "minimum": 0, "maximum": 1, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 }
+  ],
+  "frames": [
+    { "frameId": "spindle", "name": "Spindle", "role": "tool", "parent": { "type": "body", "bodyId": "z-carriage" }, "localPose": { "positionM": [0, 0, 0], "quaternion": [0, 0, 0, 1] } }
+  ],
+  "motionGroups": [
+    { "motionGroupId": "xyz", "name": "XYZ", "coordinateJointIds": ["axis-x", "axis-y", "axis-z"], "endFrameIds": ["spindle"] }
+  ],
+  "constraints": [],
+  "geometryBindings": [],
+  "sourceProvenance": { "sourceKind": "fixture", "sourceDetail": "Deterministic CNC XYZ fixture.", "sourceName": "cnc-xyz.mechanism-v1.json", "sourceRevision": "1", "adapterKey": null, "adapterVersion": null }
+}

@@ -1,0 +1,1876 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "26e559931d70e937cfdf624e98fcb0da6099bd03",
+  "successCases": [
+    {
+      "caseId": "minimal-one-axis",
+      "expected": {
+        "jointValues": {
+          "J1": 30
+        },
+        "linkLocalPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.2588190451025208,
+              0.9659258262890684
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.2588190451025208,
+              0.9659258262890684
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.2588190451025208,
+              0.9659258262890684
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.2588190451025208,
+              0.9659258262890684
+            ]
+          }
+        }
+      }
+    },
+    {
+      "caseId": "non-identity-base-pose",
+      "expected": {
+        "jointValues": {
+          "J1": -45
+        },
+        "linkLocalPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              -0.3826834323650898,
+              0.9238795325112867
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "L0": {
+            "positionM": [
+              1.25,
+              -2.5,
+              3.75
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.7071067811865475,
+              0.7071067811865475
+            ]
+          },
+          "L1": {
+            "positionM": [
+              1.25,
+              -2.5,
+              3.75
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.3826834323650898,
+              0.9238795325112867
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              1.25,
+              -2.5,
+              3.75
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.7071067811865475,
+              0.7071067811865475
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              1.25,
+              -2.5,
+              3.75
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.3826834323650898,
+              0.9238795325112867
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              1.25,
+              -2.5,
+              3.75
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.3826834323650898,
+              0.9238795325112867
+            ]
+          }
+        }
+      }
+    },
+    {
+      "caseId": "rotated-joint-origin",
+      "expected": {
+        "jointValues": {
+          "J1": 45
+        },
+        "linkLocalPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0.3,
+              -0.2,
+              0.1
+            ],
+            "quaternion": [
+              0.2705980500730985,
+              0.6532814824381883,
+              0.2705980500730985,
+              0.6532814824381883
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0.3,
+              -0.2,
+              0.1
+            ],
+            "quaternion": [
+              0.2705980500730985,
+              0.6532814824381883,
+              0.2705980500730985,
+              0.6532814824381883
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              0.3,
+              -0.2,
+              0.1
+            ],
+            "quaternion": [
+              0.2705980500730985,
+              0.6532814824381883,
+              0.2705980500730985,
+              0.6532814824381883
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              0.3,
+              -0.2,
+              0.1
+            ],
+            "quaternion": [
+              0.2705980500730985,
+              0.6532814824381883,
+              0.2705980500730985,
+              0.6532814824381883
+            ]
+          }
+        }
+      }
+    },
+    {
+      "caseId": "reverse-direction-with-offset",
+      "expected": {
+        "jointValues": {
+          "J1": 20
+        },
+        "linkLocalPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              -0.2588190451025208,
+              0.9659258262890684
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              -0.2588190451025208,
+              0.9659258262890684
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              -0.2588190451025208,
+              0.9659258262890684
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              -0.2588190451025208,
+              0.9659258262890684
+            ]
+          }
+        }
+      }
+    },
+    {
+      "caseId": "prismatic-serial-robot",
+      "expected": {
+        "jointValues": {
+          "J1": 0.4
+        },
+        "linkLocalPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0.5,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0.5,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              0.5,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              0.5,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        }
+      }
+    },
+    {
+      "caseId": "nested-frames",
+      "expected": {
+        "jointValues": {
+          "J1": 90
+        },
+        "linkLocalPoses": {
+          "L0": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.7071067811865475,
+              0.7071067811865476
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "L0": {
+            "positionM": [
+              1,
+              2,
+              3
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "L1": {
+            "positionM": [
+              1,
+              2,
+              3
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.7071067811865475,
+              0.7071067811865476
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              1.1,
+              2,
+              3
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              1.1,
+              2.2,
+              3
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.7071067811865475,
+              0.7071067811865475
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              1.1,
+              2.2,
+              3.3
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.7071067811865475,
+              0.7071067811865475
+            ]
+          }
+        }
+      }
+    },
+    {
+      "caseId": "two-offset-six-axis",
+      "expected": {
+        "jointValues": {
+          "J1": 30,
+          "J2": -25,
+          "J3": 40,
+          "J4": -15,
+          "J5": 20,
+          "J6": 60
+        },
+        "linkLocalPoses": {
+          "LINK00": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK01": {
+            "positionM": [
+              0,
+              0,
+              0.1
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.2588190451025208,
+              0.9659258262890684
+            ]
+          },
+          "LINK02": {
+            "positionM": [
+              0,
+              0,
+              0.42
+            ],
+            "quaternion": [
+              0,
+              -0.2164396139381029,
+              0,
+              0.9762960071199335
+            ]
+          },
+          "LINK03": {
+            "positionM": [
+              0,
+              0,
+              0.2
+            ],
+            "quaternion": [
+              0,
+              0.3420201433256687,
+              0,
+              0.9396926207859084
+            ]
+          },
+          "LINK04": {
+            "positionM": [
+              0,
+              0,
+              0.1
+            ],
+            "quaternion": [
+              -0.1305261922200516,
+              0,
+              0,
+              0.9914448613738105
+            ]
+          },
+          "LINK05": {
+            "positionM": [
+              0,
+              0,
+              0.1
+            ],
+            "quaternion": [
+              0,
+              0.17364817766693036,
+              0,
+              0.9848077530122081
+            ]
+          },
+          "LINK06": {
+            "positionM": [
+              0,
+              0,
+              0.1
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.49999999999999994,
+              0.8660254037844387
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "LINK00": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK01": {
+            "positionM": [
+              0,
+              0,
+              0.1
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.2588190451025208,
+              0.9659258262890684
+            ]
+          },
+          "LINK02": {
+            "positionM": [
+              0,
+              0,
+              0.5200000000000001
+            ],
+            "quaternion": [
+              0.05601869420181803,
+              -0.20906461293484896,
+              0.25268400030018495,
+              0.9430295273800398
+            ]
+          },
+          "LINK03": {
+            "positionM": [
+              -0.07319963015413337,
+              -0.04226182617406995,
+              0.7012615574073302
+            ],
+            "quaternion": [
+              -0.033782664431261815,
+              0.12607862007251905,
+              0.25660481229257065,
+              0.9576621969425486
+            ]
+          },
+          "LINK04": {
+            "positionM": [
+              -0.05078524334993204,
+              -0.029320873918943915,
+              0.797854140036237
+            ],
+            "quaternion": [
+              -0.15849364905389032,
+              0.09150635094610964,
+              0.2708660847496849,
+              0.9450597415393835
+            ]
+          },
+          "LINK05": {
+            "positionM": [
+              -0.04207556051044711,
+              0.005593512885257421,
+              0.891155410225459
+            ],
+            "quaternion": [
+              -0.20312117640002625,
+              0.2542240657662789,
+              0.23922888695956138,
+              0.9148122494409557
+            ]
+          },
+          "LINK06": {
+            "positionM": [
+              -0.0052805932069310835,
+              0.05492060900189792,
+              0.9699777926420854
+            ],
+            "quaternion": [
+              -0.048796065925863524,
+              0.32172508740697653,
+              0.6645844181465339,
+              0.6726362042292737
+            ]
+          }
+        },
+        "frameWorldPoses": {}
+      }
+    },
+    {
+      "caseId": "ned2-home",
+      "expected": {
+        "jointValues": {
+          "J1": 0,
+          "J2": 0,
+          "J3": 0,
+          "J4": 0,
+          "J5": 0,
+          "J6": 0
+        },
+        "linkLocalPoses": {
+          "LINK00": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK01": {
+            "positionM": [
+              -0.014465181741197104,
+              0.0033250000000000085,
+              0.09805
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK02": {
+            "positionM": [
+              0.018915181741197096,
+              0.006524999999999715,
+              0.06873043518969293
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK03": {
+            "positionM": [
+              0.011550000000000032,
+              -0.00984999999999971,
+              0.22452347318151705
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK04": {
+            "positionM": [
+              0.051999999999999824,
+              0,
+              0.02849609162878991
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK05": {
+            "positionM": [
+              0.16435000000000005,
+              0.0032500000000000376,
+              0.00012499999999998623
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK06": {
+            "positionM": [
+              0.03109999999999996,
+              -0.0032500000000000463,
+              0.00838233100565483
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "LINK00": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK01": {
+            "positionM": [
+              -0.014465181741197104,
+              0.0033250000000000085,
+              0.09805
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK02": {
+            "positionM": [
+              0.004449999999999992,
+              0.009849999999999724,
+              0.16678043518969293
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK03": {
+            "positionM": [
+              0.016000000000000025,
+              1.3877787807814457e-17,
+              0.39130390837121
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK04": {
+            "positionM": [
+              0.06799999999999985,
+              1.3877787807814457e-17,
+              0.4197999999999999
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK05": {
+            "positionM": [
+              0.2323499999999999,
+              0.0032500000000000515,
+              0.4199249999999999
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK06": {
+            "positionM": [
+              0.26344999999999985,
+              5.204170427930421e-18,
+              0.4283073310056547
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Flange": {
+            "positionM": [
+              0.26344999999999985,
+              5.204170427930421e-18,
+              0.4283073310056547
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Tool0": {
+            "positionM": [
+              0.26344999999999985,
+              5.204170427930421e-18,
+              0.4283073310056547
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              0.26344999999999985,
+              5.204170427930421e-18,
+              0.4283073310056547
+            ],
+            "quaternion": [
+              0,
+              0.7071067811865475,
+              0,
+              0.7071067811865475
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              0.26344999999999985,
+              5.204170427930421e-18,
+              0.4283073310056547
+            ],
+            "quaternion": [
+              0,
+              0.7071067811865475,
+              0,
+              0.7071067811865475
+            ]
+          }
+        }
+      }
+    },
+    {
+      "caseId": "ned2-mid-range",
+      "expected": {
+        "jointValues": {
+          "J1": 0,
+          "J2": 0,
+          "J3": -70,
+          "J4": 0,
+          "J5": 0,
+          "J6": 0
+        },
+        "linkLocalPoses": {
+          "LINK00": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK01": {
+            "positionM": [
+              -0.014465181741197104,
+              0.0033250000000000085,
+              0.09805
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK02": {
+            "positionM": [
+              0.018915181741197096,
+              0.006524999999999715,
+              0.06873043518969293
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK03": {
+            "positionM": [
+              0.011550000000000032,
+              -0.00984999999999971,
+              0.22452347318151705
+            ],
+            "quaternion": [
+              0,
+              -0.573576436351046,
+              0,
+              0.8191520442889918
+            ]
+          },
+          "LINK04": {
+            "positionM": [
+              0.051999999999999824,
+              0,
+              0.02849609162878991
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK05": {
+            "positionM": [
+              0.16435000000000005,
+              0.0032500000000000376,
+              0.00012499999999998623
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK06": {
+            "positionM": [
+              0.03109999999999996,
+              -0.0032500000000000463,
+              0.00838233100565483
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "LINK00": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK01": {
+            "positionM": [
+              -0.014465181741197104,
+              0.0033250000000000085,
+              0.09805
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK02": {
+            "positionM": [
+              0.004449999999999992,
+              0.009849999999999724,
+              0.16678043518969293
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK03": {
+            "positionM": [
+              0.016000000000000025,
+              1.3877787807814457e-17,
+              0.39130390837121
+            ],
+            "quaternion": [
+              0,
+              -0.573576436351046,
+              0,
+              0.8191520442889918
+            ]
+          },
+          "LINK04": {
+            "positionM": [
+              0.007007480428121774,
+              1.3877787807814457e-17,
+              0.44991416199517714
+            ],
+            "quaternion": [
+              0,
+              -0.573576436351046,
+              0,
+              0.8191520442889918
+            ]
+          },
+          "LINK05": {
+            "positionM": [
+              0.06310102940609721,
+              0.0032500000000000515,
+              0.6043953967392569
+            ],
+            "quaternion": [
+              0,
+              -0.573576436351046,
+              0,
+              0.8191520442889918
+            ]
+          },
+          "LINK06": {
+            "positionM": [
+              0.06586104127252673,
+              5.204170427930421e-18,
+              0.6364867632976559
+            ],
+            "quaternion": [
+              0,
+              -0.573576436351046,
+              0,
+              0.8191520442889918
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Flange": {
+            "positionM": [
+              0.06586104127252673,
+              5.204170427930421e-18,
+              0.6364867632976559
+            ],
+            "quaternion": [
+              0,
+              -0.573576436351046,
+              0,
+              0.8191520442889918
+            ]
+          },
+          "Tool0": {
+            "positionM": [
+              0.06586104127252673,
+              5.204170427930421e-18,
+              0.6364867632976559
+            ],
+            "quaternion": [
+              0,
+              -0.573576436351046,
+              0,
+              0.8191520442889918
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              0.06586104127252673,
+              5.204170427930421e-18,
+              0.6364867632976559
+            ],
+            "quaternion": [
+              0,
+              0.17364817766693033,
+              0,
+              0.9848077530122081
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              0.06586104127252673,
+              5.204170427930421e-18,
+              0.6364867632976559
+            ],
+            "quaternion": [
+              0,
+              0.17364817766693033,
+              0,
+              0.9848077530122081
+            ]
+          }
+        }
+      }
+    },
+    {
+      "caseId": "ned2-limit-adjacent",
+      "expected": {
+        "jointValues": {
+          "J1": -269.999,
+          "J2": 179.999,
+          "J3": -224.999,
+          "J4": 179.999,
+          "J5": -179.999,
+          "J6": 269.999
+        },
+        "linkLocalPoses": {
+          "LINK00": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK01": {
+            "positionM": [
+              -0.014465181741197104,
+              0.0033250000000000085,
+              0.09805
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.7071129518303703,
+              0.7071006104888755
+            ]
+          },
+          "LINK02": {
+            "positionM": [
+              0.018915181741197096,
+              0.006524999999999715,
+              0.06873043518969293
+            ],
+            "quaternion": [
+              0,
+              0.9999999999619229,
+              0,
+              0.000008726646260010395
+            ]
+          },
+          "LINK03": {
+            "positionM": [
+              0.011550000000000032,
+              -0.00984999999999971,
+              0.22452347318151705
+            ],
+            "quaternion": [
+              0,
+              0.9238828720190518,
+              0,
+              0.38267536998065116
+            ]
+          },
+          "LINK04": {
+            "positionM": [
+              0.051999999999999824,
+              0,
+              0.02849609162878991
+            ],
+            "quaternion": [
+              0.9999999999619229,
+              0,
+              0,
+              0.000008726646260010395
+            ]
+          },
+          "LINK05": {
+            "positionM": [
+              0.16435000000000005,
+              0.0032500000000000376,
+              0.00012499999999998623
+            ],
+            "quaternion": [
+              0,
+              -0.9999999999619229,
+              0,
+              0.000008726646260010395
+            ]
+          },
+          "LINK06": {
+            "positionM": [
+              0.03109999999999996,
+              -0.0032500000000000463,
+              0.00838233100565483
+            ],
+            "quaternion": [
+              -0.7071129518303703,
+              0,
+              0,
+              0.7071006104888755
+            ]
+          }
+        },
+        "linkWorldPoses": {
+          "LINK00": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "LINK01": {
+            "positionM": [
+              -0.014465181741197104,
+              0.0033250000000000085,
+              0.09805
+            ],
+            "quaternion": [
+              0,
+              0,
+              0.7071129518303703,
+              0.7071006104888755
+            ]
+          },
+          "LINK02": {
+            "positionM": [
+              -0.020990511872402987,
+              0.02224006785558247,
+              0.16678043518969293
+            ],
+            "quaternion": [
+              -0.7071129518034455,
+              0.7071006104619512,
+              0.000006170724596495411,
+              0.000006170616897973812
+            ]
+          },
+          "LINK03": {
+            "positionM": [
+              -0.011140310356768712,
+              0.010694158447886381,
+              -0.05774323954315591
+            ],
+            "quaternion": [
+              0.27060041147625646,
+              -0.2705956886493332,
+              0.6532871833697185,
+              0.6532757814569077
+            ]
+          },
+          "LINK04": {
+            "positionM": [
+              -0.01114060042652837,
+              0.027313931439024837,
+              -0.0008239072934250261
+            ],
+            "quaternion": [
+              -0.6532781428661016,
+              -0.6532848219519889,
+              -0.27060138964518526,
+              0.2705947105592978
+            ]
+          },
+          "LINK05": {
+            "positionM": [
+              -0.007892628087299016,
+              0.143615335870834,
+              0.11530074395630913
+            ],
+            "quaternion": [
+              0.2706070905621437,
+              0.27060041153454245,
+              -0.6532757813986217,
+              0.6532824605427947
+            ]
+          },
+          "LINK06": {
+            "positionM": [
+              -0.01114228711677396,
+              0.11569737563920761,
+              0.09923639878491047
+            ],
+            "quaternion": [
+              -0.2705980501143127,
+              0.653281482338687,
+              -0.2705866480778593,
+              0.6532862052651107
+            ]
+          }
+        },
+        "frameWorldPoses": {
+          "Base": {
+            "positionM": [
+              0,
+              0,
+              0
+            ],
+            "quaternion": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "Flange": {
+            "positionM": [
+              -0.01114228711677396,
+              0.11569737563920761,
+              0.09923639878491047
+            ],
+            "quaternion": [
+              -0.2705980501143127,
+              0.653281482338687,
+              -0.2705866480778593,
+              0.6532862052651107
+            ]
+          },
+          "Tool0": {
+            "positionM": [
+              -0.01114228711677396,
+              0.11569737563920761,
+              0.09923639878491047
+            ],
+            "quaternion": [
+              -0.2705980501143127,
+              0.653281482338687,
+              -0.2705866480778593,
+              0.6532862052651107
+            ]
+          },
+          "Tool": {
+            "positionM": [
+              -0.01114228711677396,
+              0.11569737563920761,
+              0.09923639878491047
+            ],
+            "quaternion": [
+              -0.000008062457295537897,
+              0.923882871983872,
+              -0.3826753699660799,
+              0.0000033396133012342237
+            ]
+          },
+          "TCP": {
+            "positionM": [
+              -0.01114228711677396,
+              0.11569737563920761,
+              0.09923639878491047
+            ],
+            "quaternion": [
+              -0.000008062457295537897,
+              0.923882871983872,
+              -0.3826753699660799,
+              0.0000033396133012342237
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "errorCases": [
+    {
+      "caseId": "joint-count-too-small",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_COUNT_TOO_SMALL",
+        "path": "$.definition.joints",
+        "message": "ROBOT_JOINT_COUNT_TOO_SMALL at $.definition.joints: At least one Joint is required.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "joint-count-too-large",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_LIMIT_EXCEEDED",
+        "path": "$.definition.joints",
+        "message": "ROBOT_JOINT_LIMIT_EXCEEDED at $.definition.joints: At most 16 Joints are supported.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "link-count-invalid",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_CHAIN_INVALID",
+        "path": "$.definition.links",
+        "message": "ROBOT_JOINT_CHAIN_INVALID at $.definition.links: A serial Robot must have exactly Joints + 1 Links.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "duplicate-link-id",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "PROJECT_ID_DUPLICATE",
+        "path": "$.definition.links[1].id",
+        "message": "PROJECT_ID_DUPLICATE at $.definition.links[1].id: Definition-local id L0 is duplicated.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "duplicate-joint-id",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "PROJECT_ID_DUPLICATE",
+        "path": "$.definition.joints[1].id",
+        "message": "PROJECT_ID_DUPLICATE at $.definition.joints[1].id: Definition-local id J1 is duplicated.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "duplicate-frame-id",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "PROJECT_ID_DUPLICATE",
+        "path": "$.definition.frames[1].id",
+        "message": "PROJECT_ID_DUPLICATE at $.definition.frames[1].id: Definition-local id Base is duplicated.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "missing-link",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_LINK_NOT_FOUND",
+        "path": "$.definition.joints[0]",
+        "message": "ROBOT_LINK_NOT_FOUND at $.definition.joints[0]: Joint Link does not exist.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "branched-chain",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_CHAIN_INVALID",
+        "path": "$.definition.joints[1]",
+        "message": "ROBOT_JOINT_CHAIN_INVALID at $.definition.joints[1]: Robot Joint graph must be an unbranched serial chain.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "cyclic-chain",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_CHAIN_INVALID",
+        "path": "$.definition.joints[0]",
+        "message": "ROBOT_JOINT_CHAIN_INVALID at $.definition.joints[0]: Robot Joint graph must be an unbranched serial chain.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "missing-frame-parent",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "FRAME_PARENT_NOT_FOUND",
+        "path": "$.definition.frames[0].parentFrameId",
+        "message": "FRAME_PARENT_NOT_FOUND at $.definition.frames[0].parentFrameId: Definition Frame parent missing does not exist.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "cyclic-frame-parent",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "FRAME_CYCLE",
+        "path": "$.definition.frames",
+        "message": "FRAME_CYCLE at $.definition.frames: Frame Base participates in a cycle.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "joint-key-set-mismatch",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_KEY_SET_MISMATCH",
+        "path": "$.jointValues",
+        "message": "ROBOT_JOINT_KEY_SET_MISMATCH at $.jointValues: Joint value keys must exactly match the Robot Definition.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "hostile-accessor-record",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "PROJECT_VALUE_INVALID",
+        "path": "$.jointValues",
+        "message": "PROJECT_VALUE_INVALID at $.jointValues: Joint values must use enumerable own data properties.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "hostile-symbol-record",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "PROJECT_VALUE_INVALID",
+        "path": "$.jointValues",
+        "message": "PROJECT_VALUE_INVALID at $.jointValues: Joint value keys must be strings.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "hostile-prototype-record",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "PROJECT_VALUE_INVALID",
+        "path": "$.jointValues",
+        "message": "PROJECT_VALUE_INVALID at $.jointValues: Joint values must not use a custom prototype.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "non-finite-command",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_VALUE_NOT_FINITE",
+        "path": "$.jointValues.J1",
+        "message": "ROBOT_JOINT_VALUE_NOT_FINITE at $.jointValues.J1: Joint command must be finite.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "invalid-limits",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_LIMIT_INVALID",
+        "path": "$.joints.J1",
+        "message": "ROBOT_JOINT_LIMIT_INVALID at $.joints.J1: Joint limits must be finite and ordered.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "out-of-range-command",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_VALUE_OUT_OF_RANGE",
+        "path": "$.jointValues.J1",
+        "message": "ROBOT_JOINT_VALUE_OUT_OF_RANGE at $.jointValues.J1: Joint command must be within -180..180.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "invalid-offset",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_VALUE_NOT_FINITE",
+        "path": "$.joints.J1.zeroOffset",
+        "message": "ROBOT_JOINT_VALUE_NOT_FINITE at $.joints.J1.zeroOffset: Joint zero offset must be finite.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "invalid-direction",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_DIRECTION_INVALID",
+        "path": "$.joints.J1.direction",
+        "message": "ROBOT_JOINT_DIRECTION_INVALID at $.joints.J1.direction: Joint direction must be 1 or -1.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "invalid-axis",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "JOINT_AXIS_NOT_NORMALIZABLE",
+        "path": "$.joints.J1.axis",
+        "message": "JOINT_AXIS_NOT_NORMALIZABLE at $.joints.J1.axis: Joint axis must be finite and non-zero.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "unsupported-joint-type",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "ROBOT_JOINT_TYPE_UNSUPPORTED",
+        "path": "$.joints.J1.type",
+        "message": "ROBOT_JOINT_TYPE_UNSUPPORTED at $.joints.J1.type: Joint type continuous is not supported.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "non-finite-root-position",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "PROJECT_VALUE_INVALID",
+        "path": "$.worldBasePose",
+        "message": "PROJECT_VALUE_INVALID at $.worldBasePose: Rigid transform components must be finite.",
+        "recovery": "Correct the Robot Definition or Joint values and try again."
+      }
+    },
+    {
+      "caseId": "non-normalizable-root-quaternion",
+      "expected": {
+        "name": "ProjectV5Error",
+        "code": "QUATERNION_NOT_NORMALIZABLE",
+        "path": "$.worldBasePose",
+        "message": "QUATERNION_NOT_NORMALIZABLE at $.worldBasePose: Quaternion must contain finite values and have non-zero magnitude.",
+        "recovery": "Provide a finite, non-zero quaternion in [x, y, z, w] order."
+      }
+    }
+  ]
+}

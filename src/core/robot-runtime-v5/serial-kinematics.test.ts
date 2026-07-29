@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { makeMinimalWorkcellProjectV5 } from '../project-v5/test-support.js'
 import type { RobotJointDefinitionV5 } from '../project-v5/types.js'
 import { computeSerialRobotPoseV5, jointMotionTransformV5 } from './serial-kinematics.js'
+import { buildSerialKinematicsSuccessCaseV5 } from './test-support.js'
 
 describe('V5 serial kinematics', () => {
   it('uses degree revolute commands, metre prismatic commands, and normalized axes', () => {
@@ -33,6 +34,16 @@ describe('V5 serial kinematics', () => {
     expect(result.frameWorldPoses[robot.selectedTcpFrameId]).toBeDefined()
     const source = await readFile('src/core/robot-runtime-v5/serial-kinematics.ts', 'utf8')
     expect(source).not.toMatch(/project-v4|RigidTransformV4|RobotDefinitionV4/u)
+  })
+
+  it('builds fresh detached characterization inputs', () => {
+    const first = buildSerialKinematicsSuccessCaseV5('nested-frames')
+    const second = buildSerialKinematicsSuccessCaseV5('nested-frames')
+    expect(first).not.toBe(second)
+    expect(first.definition).not.toBe(second.definition)
+    expect(first.jointValues).not.toBe(second.jointValues)
+    ;(first.definition.joints as RobotJointDefinitionV5[])[0] = { ...first.definition.joints[0]!, id: 'changed' }
+    expect(second.definition.joints[0]!.id).toBe('J1')
   })
 
   it('rejects an incomplete Joint key set', () => {

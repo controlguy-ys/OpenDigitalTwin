@@ -2,9 +2,46 @@ import { describe, expect, it } from 'vitest'
 
 import { makeMinimalWorkcellProjectV5 } from '../../../core/project-v5/test-support.js'
 import type { StateBatchV1 } from '../../../core/runtime-protocol/v1.js'
+import {
+  createProjectRobotKinematicsFactoryV5,
+  type ProjectRobotKinematicsFactoryV5,
+  type RobotPoseEvaluationRequestV5,
+} from './project-v5-robot-kinematics.js'
 import { createRobotJointRuntimeStoreV5 } from './robot-joint-runtime-store.js'
 
 const REVISION = 'a'.repeat(64)
+
+function recordingKinematicsFactory(options: {
+  readonly reject?: (projectRevisionId: string, configRevision: string) => Error | null
+  readonly rejectEvaluation?: (request: RobotPoseEvaluationRequestV5) => Error | null
+} = {}) {
+  const delegate = createProjectRobotKinematicsFactoryV5()
+  const compileCalls: Array<{ readonly projectRevisionId: string; readonly configRevision: string }> = []
+  const evaluations: RobotPoseEvaluationRequestV5[] = []
+  const evaluatorCompileIndexes: number[] = []
+  const results: unknown[] = []
+  const factory: ProjectRobotKinematicsFactoryV5 = {
+    compileProject(project, configRevision) {
+      compileCalls.push({ projectRevisionId: project.revisionId, configRevision })
+      const failure = options.reject?.(project.revisionId, configRevision)
+      if (failure !== null && failure !== undefined) throw failure
+      const compiled = delegate.compileProject(project, configRevision)
+      const compileIndex = compileCalls.length - 1
+      return {
+        evaluateRobot(request) {
+          evaluations.push(request)
+          evaluatorCompileIndexes.push(compileIndex)
+          const evaluationFailure = options.rejectEvaluation?.(request)
+          if (evaluationFailure !== null && evaluationFailure !== undefined) throw evaluationFailure
+          const result = compiled.evaluateRobot(request)
+          results.push(result)
+          return result
+        },
+      }
+    },
+  }
+  return { compileCalls, evaluations, evaluatorCompileIndexes, factory, results }
+}
 
 function projectWithOpcUaRobot() {
   const project = structuredClone(makeMinimalWorkcellProjectV5())
@@ -305,5 +342,62 @@ describe('RobotJointRuntimeStoreV5', () => {
     expect(robots.getState().readRobot('robot-1')).toMatchObject({ jointValues: { J1: 20 }, quality: 'BAD', statusCode: 'BadOutOfRange' })
     expect(() => robots.getState().ingest(jointBatch(Number.NaN, 4, { sourceTimestampMs: 40, publishedTimestampMs: 40 }), 4)).toThrow('RUNTIME_PROTOCOL_INVALID')
     expect(robots.getState().readRobot('robot-1')).toMatchObject({ jointValues: { J1: 20 }, quality: 'BAD', statusCode: 'BadOutOfRange' })
+  })
+
+  it('compiles and evaluates initial Robot state once, then reuses the evaluator cache for unchanged reads', () => {
+    const kinematics = recordingKinematicsFactory()
+    const robots = createRobotJointRuntimeStoreV5(makeMinimalWorkcellProjectV5(), REVISION, { kinematicsFactory: kinematics.factory })
+
+    expect(kinematics.compileCalls).toEqual([{ projectRevisionId: 'revision-1', configRevision: REVISION }])
+    expect(kinematics.evaluations).toMatchObject([{ robotId: 'robot-1', coordinateRevision: 0, jointValues: { J1: 0 } }])
+    const first = robots.getState().readRobotPose('robot-1')
+    const second = robots.getState().readRobotPose('robot-1')
+    expect(second).toBe(first)
+    expect(kinematics.evaluations).toHaveLength(3)
+    expect(kinematics.evaluatorCompileIndexes).toEqual([0, 0, 0])
+  })
+
+  it('validates a prospective partial Joint write before publishing without poisoning the previous pose cache', () => {
+    const kinematics = recordingKinematicsFactory({
+      rejectEvaluation: (request) => request.jointValues.J1 === 20 ? new Error('prospective evaluation rejected') : null,
+    })
+    const robots = createRobotJointRuntimeStoreV5(makeMinimalWorkcellProjectV5(), REVISION, { kinematicsFactory: kinematics.factory })
+    const initialPose = robots.getState().readRobotPose('robot-1')
+
+    robots.getState().writeJointValues('robot-1', { J1: 10 }, 'simulation')
+    expect(kinematics.evaluations).toMatchObject([
+      { robotId: 'robot-1', coordinateRevision: 0, jointValues: { J1: 0 } },
+      { robotId: 'robot-1', coordinateRevision: 0, jointValues: { J1: 0 } },
+      { robotId: 'robot-1', coordinateRevision: 1, jointValues: { J1: 10 } },
+    ])
+    const updatedPose = robots.getState().readRobotPose('robot-1')
+    expect(updatedPose).not.toBe(initialPose)
+    expect(kinematics.evaluations).toHaveLength(4)
+    expect(kinematics.results[2]).toBe(kinematics.results[3])
+
+    expect(() => robots.getState().writeJointValues('robot-1', { J1: 20 }, 'simulation')).toThrow('prospective evaluation rejected')
+    expect(robots.getState().readRobot('robot-1')).toMatchObject({ jointValues: { J1: 10 }, revision: 1 })
+    expect(robots.getState().readRobotPose('robot-1')).toBe(updatedPose)
+    expect(kinematics.evaluations).toHaveLength(6)
+    expect(kinematics.results[3]).toBe(kinematics.results[4])
+  })
+
+  it('keeps the active context, evaluator cache, and catch-up guard when replacement compilation fails', () => {
+    const kinematics = recordingKinematicsFactory({
+      reject: (_projectRevisionId, configRevision) => configRevision === 'b'.repeat(64) ? new Error('replacement compilation rejected') : null,
+    })
+    const project = projectWithOpcUaRobot()
+    const robots = createRobotJointRuntimeStoreV5(project, REVISION, { kinematicsFactory: kinematics.factory })
+    const pose = robots.getState().readRobotPose('robot-1')
+    const guard = robots.getState().beginEndpointCatchup('endpoint-1', 1)
+
+    expect(() => robots.getState().replaceProject(structuredClone(project), 'b'.repeat(64))).toThrow('replacement compilation rejected')
+    expect(robots.getState()).toMatchObject({ projectRevisionId: project.revisionId, configRevision: REVISION })
+    expect(robots.getState().readRobotPose('robot-1')).toEqual(pose)
+    expect(kinematics.compileCalls).toHaveLength(2)
+    expect(kinematics.evaluations).toHaveLength(3)
+    expect(kinematics.evaluatorCompileIndexes).toEqual([0, 0, 0])
+    expect(() => robots.getState().beginEndpointCatchup('endpoint-1', 2)).toThrow('ENDPOINT_CATCHUP_ALREADY_ACTIVE')
+    guard.abort()
   })
 })

@@ -8,4 +8,13 @@ if (!rootElement) {
   throw new Error('Root element not found')
 }
 
-createRoot(rootElement).render(<App />)
+const mechanismFixture = new URLSearchParams(window.location.search).get('mechanismFixture')
+const root = createRoot(rootElement)
+
+if (import.meta.env.MODE === 'test' && (mechanismFixture === 'humanoid' || mechanismFixture === 'cnc')) {
+  void import('./features/scene/v5/MechanismTreeViewportFixtureApp.js').then(({ MechanismTreeViewportFixtureApp }) => {
+    root.render(<MechanismTreeViewportFixtureApp mechanismFixture={mechanismFixture} />)
+  })
+} else {
+  root.render(<App />)
+}

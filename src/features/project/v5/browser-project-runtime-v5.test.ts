@@ -6,6 +6,14 @@ import {
 import type { OpcUaMappingV5, WorkcellProjectV5 } from '../../../core/project-v5/index.js'
 import type { StateBatchV1 } from '../../../core/runtime-protocol/v1.js'
 import {
+  createDefaultApplicationKinematicsServiceV1,
+  type ApplicationKinematicsServiceV1,
+} from '../../../core/mechanism-runtime-v1/application-kinematics-service.js'
+import {
+  createProjectRobotKinematicsFactoryV5,
+  type ProjectRobotKinematicsFactoryV5,
+} from '../../robot/v5/project-v5-robot-kinematics.js'
+import {
   createBrowserProjectRuntimeV5,
   type BrowserProjectResourcesV5,
   type BrowserProjectRuntimeV5Options,
@@ -14,6 +22,30 @@ import type { BrowserWebSocketV5 } from '../../runtime-gateway/v5/runtime-gatewa
 
 const CONFIG_A = 'a'.repeat(64)
 const CONFIG_B = 'b'.repeat(64)
+
+function countedKinematicsFactory(): {
+  readonly factory: ProjectRobotKinematicsFactoryV5
+  readonly evaluations: { value: number }
+} {
+  const defaultService = createDefaultApplicationKinematicsServiceV1()
+  const evaluations = { value: 0 }
+  const service: ApplicationKinematicsServiceV1 = {
+    compile(definition) {
+      const compiled = defaultService.compile(definition)
+      return Object.freeze({
+        ...compiled,
+        evaluateForward(request: Parameters<typeof compiled.evaluateForward>[0]) {
+          evaluations.value += 1
+          return compiled.evaluateForward(request)
+        },
+      })
+    },
+  }
+  return Object.freeze({
+    factory: createProjectRobotKinematicsFactoryV5(service),
+    evaluations,
+  })
+}
 
 function poseMapping(
   id: string,
@@ -933,6 +965,39 @@ describe('BrowserProjectRuntimeV5', () => {
       expect(graph.jobs.getState().byRobotId['robot-1']).toMatchObject({ state: 'SUCCEEDED', stepIndex: 1 })
       expect(graph.attachments.getState().attachmentsByObjectId.part).toMatchObject({ toolFrameId: 'TCP' })
       expect(graph.world.readObjectWorldPose('part')).toMatchObject({ positionM: [1, 0, 0] })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it('owns one kinematics factory per graph and shares its FK cache across world reads', async () => {
+    const { factory, evaluations } = countedKinematicsFactory()
+    let factoryCreations = 0
+    const runtime = createBrowserProjectRuntimeV5(options({
+      initialProject: attachmentProject({ mappedRobotFrameId: 'Base' }),
+      stream: {
+        url: 'ws://runtime.test/runtime/ws',
+        createWebSocket: () => { throw new Error('Socket was not expected in this test.') },
+        nowMs: () => 200,
+      },
+      testHooks: {
+        createRobotKinematicsFactory: () => {
+          factoryCreations += 1
+          return factory
+        },
+      },
+    }))
+    try {
+      const graph = runtime.bundle.getState().runtimeGraph
+      expect(graph.robotFrames.ingest(robotFrameBatch('map-robot-base', [1, 0, 0]), 100)).toBe(true)
+      const beforeWorldReads = evaluations.value
+
+      expect(graph.world.readRobotFrameWorldPose('robot-1', 'Base')).not.toBeNull()
+      expect(graph.world.readRobotLinkWorldPose('robot-1', 'L0')).not.toBeNull()
+      expect(graph.world.readRobotFrameWorldPose('robot-1', 'TCP')).not.toBeNull()
+
+      expect(factoryCreations).toBe(1)
+      expect(evaluations.value).toBe(beforeWorldReads + 1)
     } finally {
       await runtime.dispose()
     }

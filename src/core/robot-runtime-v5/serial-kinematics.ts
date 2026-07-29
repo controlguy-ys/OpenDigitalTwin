@@ -1,23 +1,39 @@
 import { failProjectV5 } from '../project-v5/errors.js'
-import { MAX_ROBOT_JOINTS_V5, MIN_ROBOT_JOINTS_V5 } from '../project-v5/limits.js'
 import {
-  composeRigidTransformV5,
   normalizeRigidTransformV5,
   type QuaternionV5,
   type RigidTransformV5,
   type Vector3V5,
 } from '../project-v5/rigid-transform.js'
 import type {
-  FrameDefinitionV5,
   RobotDefinitionV5,
   RobotJointDefinitionV5,
 } from '../project-v5/types.js'
+import {
+  createDefaultApplicationKinematicsServiceV1,
+  type ApplicationKinematicsServiceV1,
+} from '../mechanism-runtime-v1/application-kinematics-service.js'
+import {
+  canonicalCoordinatesFromRobotV5,
+  projectRobotDefinitionV5ToMechanismV1,
+  rethrowSerialRobotCompatibilityErrorV5,
+  serialRobotPoseFromMechanismV1,
+  validateSerialRobotCompatibilityInputV5,
+} from './robot-mechanism-adapter.js'
 
 export interface SerialRobotPoseV5 {
   readonly jointValues: Readonly<Record<string, number>>
   readonly linkLocalPoses: Readonly<Record<string, RigidTransformV5>>
   readonly linkWorldPoses: Readonly<Record<string, RigidTransformV5>>
   readonly frameWorldPoses: Readonly<Record<string, RigidTransformV5>>
+}
+
+export interface SerialRobotKinematicsV5 {
+  evaluate(
+    definition: RobotDefinitionV5,
+    jointValues: Readonly<Record<string, number>>,
+    worldBasePose?: RigidTransformV5,
+  ): SerialRobotPoseV5
 }
 
 function invalid(code: string, path: string, message: string): never {
@@ -27,11 +43,31 @@ function invalid(code: string, path: string, message: string): never {
 function canonical(value: number): number { return value === 0 ? 0 : value }
 function identity(): RigidTransformV5 { return { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] } }
 
-function normalizedPose(value: RigidTransformV5, path: string): RigidTransformV5 {
-  if (value.positionM.some((v) => !Number.isFinite(v)) || value.quaternion.some((v) => !Number.isFinite(v))) {
-    invalid('PROJECT_VALUE_INVALID', path, 'Rigid transform components must be finite.')
+function detachedPose(value: RigidTransformV5): RigidTransformV5 {
+  return {
+    positionM: [value.positionM[0], value.positionM[1], value.positionM[2]],
+    quaternion: [value.quaternion[0], value.quaternion[1], value.quaternion[2], value.quaternion[3]],
   }
-  return normalizeRigidTransformV5({ positionM: [...value.positionM], quaternion: [...value.quaternion] }, path)
+}
+
+/**
+ * Serial FK never consumed home, maximum velocity, or geometry occurrence
+ * transforms. Normalize only those projection-only fields in a detached copy
+ * so the stricter general adapter cannot change this compatibility API.
+ */
+function serialProjectionDefinitionV5(definition: RobotDefinitionV5): RobotDefinitionV5 {
+  return {
+    ...definition,
+    links: definition.links.map((link) => ({ ...link, geometryOccurrences: [] })),
+    joints: definition.joints.map((joint) => ({
+      ...joint,
+      origin: detachedPose(joint.origin),
+      axis: [joint.axis[0], joint.axis[1], joint.axis[2]],
+      home: joint.min,
+      maximumVelocity: 0,
+    })),
+    frames: definition.frames.map((frame) => ({ ...frame, localPose: detachedPose(frame.localPose) })),
+  }
 }
 
 function normalizedAxis(joint: RobotJointDefinitionV5): Vector3V5 {
@@ -68,106 +104,37 @@ export function jointMotionTransformV5(joint: RobotJointDefinitionV5, commandedV
   return normalizeRigidTransformV5({ positionM: [0, 0, 0], quaternion }, '$.jointMotion')
 }
 
-interface ChainFacts {
-  readonly rootLinkId: string
-  readonly byParent: ReadonlyMap<string, RobotJointDefinitionV5>
+export function createSerialRobotKinematicsV5(
+  applicationService: ApplicationKinematicsServiceV1 = createDefaultApplicationKinematicsServiceV1(),
+): SerialRobotKinematicsV5 {
+  return Object.freeze({
+    evaluate(
+      definition: RobotDefinitionV5,
+      jointValues: Readonly<Record<string, number>>,
+      worldBasePose: RigidTransformV5 = identity(),
+    ): SerialRobotPoseV5 {
+      try {
+        validateSerialRobotCompatibilityInputV5(definition, jointValues, worldBasePose)
+        const projected = projectRobotDefinitionV5ToMechanismV1(serialProjectionDefinitionV5(definition))
+        const compiled = applicationService.compile(projected.mechanismDefinition)
+        const result = compiled.evaluateForward({
+          rootWorldPose: worldBasePose,
+          coordinatesByStableId: canonicalCoordinatesFromRobotV5(definition, jointValues),
+        })
+        return serialRobotPoseFromMechanismV1(definition, jointValues, result)
+      } catch (error) {
+        return rethrowSerialRobotCompatibilityErrorV5(error)
+      }
+    },
+  })
 }
 
-function chain(definition: RobotDefinitionV5): ChainFacts {
-  if (definition.joints.length < MIN_ROBOT_JOINTS_V5) invalid('ROBOT_JOINT_COUNT_TOO_SMALL', '$.definition.joints', 'At least one Joint is required.')
-  if (definition.joints.length > MAX_ROBOT_JOINTS_V5) invalid('ROBOT_JOINT_LIMIT_EXCEEDED', '$.definition.joints', `At most ${MAX_ROBOT_JOINTS_V5} Joints are supported.`)
-  if (definition.links.length !== definition.joints.length + 1) invalid('ROBOT_JOINT_CHAIN_INVALID', '$.definition.links', 'A serial Robot must have exactly Joints + 1 Links.')
-  const ids = new Set<string>()
-  const links = new Set<string>()
-  definition.links.forEach((link, index) => {
-    if (ids.has(link.id)) invalid('PROJECT_ID_DUPLICATE', `$.definition.links[${index}].id`, `Definition-local id ${link.id} is duplicated.`)
-    ids.add(link.id); links.add(link.id)
-  })
-  const incoming = new Map([...links].map((id) => [id, 0]))
-  const outgoing = new Map([...links].map((id) => [id, 0]))
-  const byParent = new Map<string, RobotJointDefinitionV5>()
-  definition.joints.forEach((joint, index) => {
-    if (ids.has(joint.id)) invalid('PROJECT_ID_DUPLICATE', `$.definition.joints[${index}].id`, `Definition-local id ${joint.id} is duplicated.`)
-    ids.add(joint.id)
-    if (!links.has(joint.parentLinkId) || !links.has(joint.childLinkId)) invalid('ROBOT_LINK_NOT_FOUND', `$.definition.joints[${index}]`, 'Joint Link does not exist.')
-    const nextOut = outgoing.get(joint.parentLinkId)! + 1
-    const nextIn = incoming.get(joint.childLinkId)! + 1
-    if (joint.parentLinkId === joint.childLinkId || nextOut > 1 || nextIn > 1) invalid('ROBOT_JOINT_CHAIN_INVALID', `$.definition.joints[${index}]`, 'Robot Joint graph must be an unbranched serial chain.')
-    outgoing.set(joint.parentLinkId, nextOut); incoming.set(joint.childLinkId, nextIn); byParent.set(joint.parentLinkId, joint)
-  })
-  const roots = [...links].filter((id) => incoming.get(id) === 0)
-  const tips = [...links].filter((id) => outgoing.get(id) === 0)
-  if (roots.length !== 1 || tips.length !== 1) invalid('ROBOT_JOINT_CHAIN_INVALID', '$.definition.joints', 'Robot Joint graph must have exactly one root and one tip.')
-  const visited = new Set<string>(); let cursor: string | undefined = roots[0]
-  while (cursor !== undefined && !visited.has(cursor)) { visited.add(cursor); cursor = byParent.get(cursor)?.childLinkId }
-  if (visited.size !== links.size || cursor !== undefined) invalid('ROBOT_JOINT_CHAIN_INVALID', '$.definition.joints', 'Robot Joint graph must be connected and acyclic.')
-  definition.frames.forEach((frame, index) => {
-    if (ids.has(frame.id)) invalid('PROJECT_ID_DUPLICATE', `$.definition.frames[${index}].id`, `Definition-local id ${frame.id} is duplicated.`)
-    ids.add(frame.id)
-  })
-  return { rootLinkId: roots[0]!, byParent }
-}
-
-function exactJointValues(definition: RobotDefinitionV5, values: Readonly<Record<string, number>>): Readonly<Record<string, number>> {
-  if (values === null || typeof values !== 'object' || Array.isArray(values)) invalid('PROJECT_VALUE_INVALID', '$.jointValues', 'Joint values must be a plain record.')
-  const prototype = Object.getPrototypeOf(values)
-  if (prototype !== Object.prototype && prototype !== null) invalid('PROJECT_VALUE_INVALID', '$.jointValues', 'Joint values must not use a custom prototype.')
-  const expected = new Set(definition.joints.map((joint) => joint.id))
-  const descriptors = new Map<string, number>()
-  for (const key of Reflect.ownKeys(values)) {
-    if (typeof key !== 'string') invalid('PROJECT_VALUE_INVALID', '$.jointValues', 'Joint value keys must be strings.')
-    const descriptor = Object.getOwnPropertyDescriptor(values, key)
-    if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) invalid('PROJECT_VALUE_INVALID', '$.jointValues', 'Joint values must use enumerable own data properties.')
-    descriptors.set(key, descriptor.value as number)
-  }
-  const keys = [...descriptors.keys()]
-  if (keys.length !== expected.size || keys.some((key) => !expected.has(key))) invalid('ROBOT_JOINT_KEY_SET_MISMATCH', '$.jointValues', 'Joint value keys must exactly match the Robot Definition.')
-  return Object.freeze(Object.fromEntries(definition.joints.map((joint) => {
-    const value = descriptors.get(joint.id)!
-    validateCommand(joint, value)
-    return [joint.id, value]
-  })))
-}
-
-function frames(
-  definitionFrames: readonly FrameDefinitionV5[],
-  links: ReadonlyMap<string, RigidTransformV5>,
-): Readonly<Record<string, RigidTransformV5>> {
-  const entries = new Map(definitionFrames.map((frame, index) => [frame.id, { frame, index }]))
-  for (const { frame, index } of entries.values()) {
-    if (frame.parentFrameId === null || (!links.has(frame.parentFrameId) && !entries.has(frame.parentFrameId))) {
-      invalid('FRAME_PARENT_NOT_FOUND', `$.definition.frames[${index}].parentFrameId`, `Definition Frame parent ${String(frame.parentFrameId)} does not exist.`)
-    }
-  }
-  const resolving = new Set<string>(); const resolved = new Map<string, RigidTransformV5>()
-  const resolve = (frameId: string): RigidTransformV5 => {
-    const prior = resolved.get(frameId); if (prior !== undefined) return prior
-    if (resolving.has(frameId)) invalid('FRAME_CYCLE', '$.definition.frames', `Frame ${frameId} participates in a cycle.`)
-    resolving.add(frameId)
-    const entry = entries.get(frameId)!
-    const parent = links.get(entry.frame.parentFrameId!) ?? resolve(entry.frame.parentFrameId!)
-    const output = composeRigidTransformV5(parent, normalizedPose(entry.frame.localPose, `$.definition.frames[${entry.index}].localPose`))
-    resolving.delete(frameId); resolved.set(frameId, output); return output
-  }
-  definitionFrames.forEach((frame) => resolve(frame.id))
-  return Object.freeze(Object.fromEntries(resolved))
-}
+const defaultSerialRobotKinematicsV5 = createSerialRobotKinematicsV5()
 
 export function computeSerialRobotPoseV5(
   definition: RobotDefinitionV5,
   jointValues: Readonly<Record<string, number>>,
   worldBasePose: RigidTransformV5 = identity(),
 ): SerialRobotPoseV5 {
-  const facts = chain(definition)
-  const copied = exactJointValues(definition, jointValues)
-  const local = new Map<string, RigidTransformV5>([[facts.rootLinkId, identity()]])
-  const world = new Map<string, RigidTransformV5>([[facts.rootLinkId, normalizedPose(worldBasePose, '$.worldBasePose')]])
-  let parent = facts.rootLinkId; let joint = facts.byParent.get(parent)
-  while (joint !== undefined) {
-    const childLocal = composeRigidTransformV5(normalizedPose(joint.origin, `$.definition.joints.${joint.id}.origin`), jointMotionTransformV5(joint, copied[joint.id]!))
-    local.set(joint.childLinkId, childLocal)
-    world.set(joint.childLinkId, composeRigidTransformV5(world.get(parent)!, childLocal))
-    parent = joint.childLinkId; joint = facts.byParent.get(parent)
-  }
-  return Object.freeze({ jointValues: copied, linkLocalPoses: Object.freeze(Object.fromEntries(local)), linkWorldPoses: Object.freeze(Object.fromEntries(world)), frameWorldPoses: frames(definition.frames, world) })
+  return defaultSerialRobotKinematicsV5.evaluate(definition, jointValues, worldBasePose)
 }

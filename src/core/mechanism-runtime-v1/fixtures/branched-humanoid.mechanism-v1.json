@@ -1,0 +1,51 @@
+{
+  "mechanismId": "fixture-branched-humanoid",
+  "name": "Branched humanoid fixture",
+  "topologyKind": "tree",
+  "solverRef": {
+    "solverKey": "open-digital-twin/tree-fk",
+    "contractVersion": "1",
+    "parameters": {},
+    "normalizedParametersHash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "bodies": [
+    { "bodyId": "torso", "name": "Torso" },
+    { "bodyId": "head", "name": "Head" },
+    { "bodyId": "left-upper-arm", "name": "Left upper arm" },
+    { "bodyId": "left-lower-arm", "name": "Left lower arm" },
+    { "bodyId": "right-upper-arm", "name": "Right upper arm" },
+    { "bodyId": "right-lower-arm", "name": "Right lower arm" },
+    { "bodyId": "left-upper-leg", "name": "Left upper leg" },
+    { "bodyId": "left-lower-leg", "name": "Left lower leg" },
+    { "bodyId": "right-upper-leg", "name": "Right upper leg" },
+    { "bodyId": "right-lower-leg", "name": "Right lower leg" }
+  ],
+  "joints": [
+    { "jointId": "head-yaw", "jointType": "revolute", "parentBodyId": "torso", "childBodyId": "head", "origin": { "positionM": [0, 0, 0.65], "quaternion": [0, 0, 0, 1] }, "axis": [0, 0, 1], "minimum": -1.5707963267948966, "maximum": 1.5707963267948966, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "left-shoulder", "jointType": "revolute", "parentBodyId": "torso", "childBodyId": "left-upper-arm", "origin": { "positionM": [-0.35, 0, 0.4], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": -1.5707963267948966, "maximum": 1.5707963267948966, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "left-elbow", "jointType": "revolute", "parentBodyId": "left-upper-arm", "childBodyId": "left-lower-arm", "origin": { "positionM": [0, 0, -0.4], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": -1.5707963267948966, "maximum": 1.5707963267948966, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "right-shoulder", "jointType": "revolute", "parentBodyId": "torso", "childBodyId": "right-upper-arm", "origin": { "positionM": [0.35, 0, 0.4], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": -1.5707963267948966, "maximum": 1.5707963267948966, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "right-elbow", "jointType": "revolute", "parentBodyId": "right-upper-arm", "childBodyId": "right-lower-arm", "origin": { "positionM": [0, 0, -0.4], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": -1.5707963267948966, "maximum": 1.5707963267948966, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "left-hip", "jointType": "revolute", "parentBodyId": "torso", "childBodyId": "left-upper-leg", "origin": { "positionM": [-0.2, 0, -0.45], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": -1.0471975511965976, "maximum": 1.0471975511965976, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "left-knee", "jointType": "revolute", "parentBodyId": "left-upper-leg", "childBodyId": "left-lower-leg", "origin": { "positionM": [0, 0, -0.5], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": -1.0471975511965976, "maximum": 1.0471975511965976, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "right-hip", "jointType": "revolute", "parentBodyId": "torso", "childBodyId": "right-upper-leg", "origin": { "positionM": [0.2, 0, -0.45], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": -1.0471975511965976, "maximum": 1.0471975511965976, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 },
+    { "jointId": "right-knee", "jointType": "revolute", "parentBodyId": "right-upper-leg", "childBodyId": "right-lower-leg", "origin": { "positionM": [0, 0, -0.5], "quaternion": [0, 0, 0, 1] }, "axis": [0, 1, 0], "minimum": -1.0471975511965976, "maximum": 1.0471975511965976, "home": 0, "zeroOffset": 0, "direction": 1, "maximumVelocity": 1 }
+  ],
+  "frames": [
+    { "frameId": "head-frame", "name": "Head", "role": "tool", "parent": { "type": "body", "bodyId": "head" }, "localPose": { "positionM": [0, 0, 0.2], "quaternion": [0, 0, 0, 1] } },
+    { "frameId": "left-hand", "name": "Left hand", "role": "tool", "parent": { "type": "body", "bodyId": "left-lower-arm" }, "localPose": { "positionM": [0, 0, -0.35], "quaternion": [0, 0, 0, 1] } },
+    { "frameId": "right-hand", "name": "Right hand", "role": "tool", "parent": { "type": "body", "bodyId": "right-lower-arm" }, "localPose": { "positionM": [0, 0, -0.35], "quaternion": [0, 0, 0, 1] } },
+    { "frameId": "left-foot", "name": "Left foot", "role": "tool", "parent": { "type": "body", "bodyId": "left-lower-leg" }, "localPose": { "positionM": [0, 0, -0.5], "quaternion": [0, 0, 0, 1] } },
+    { "frameId": "right-foot", "name": "Right foot", "role": "tool", "parent": { "type": "body", "bodyId": "right-lower-leg" }, "localPose": { "positionM": [0, 0, -0.5], "quaternion": [0, 0, 0, 1] } }
+  ],
+  "motionGroups": [
+    { "motionGroupId": "head", "name": "Head", "coordinateJointIds": ["head-yaw"], "endFrameIds": ["head-frame"] },
+    { "motionGroupId": "left-arm", "name": "Left arm", "coordinateJointIds": ["left-shoulder", "left-elbow"], "endFrameIds": ["left-hand"] },
+    { "motionGroupId": "right-arm", "name": "Right arm", "coordinateJointIds": ["right-shoulder", "right-elbow"], "endFrameIds": ["right-hand"] },
+    { "motionGroupId": "left-leg", "name": "Left leg", "coordinateJointIds": ["left-hip", "left-knee"], "endFrameIds": ["left-foot"] },
+    { "motionGroupId": "right-leg", "name": "Right leg", "coordinateJointIds": ["right-hip", "right-knee"], "endFrameIds": ["right-foot"] }
+  ],
+  "constraints": [],
+  "geometryBindings": [],
+  "sourceProvenance": { "sourceKind": "fixture", "sourceDetail": "Deterministic branched humanoid fixture.", "sourceName": "branched-humanoid.mechanism-v1.json", "sourceRevision": "1", "adapterKey": null, "adapterVersion": null }
+}

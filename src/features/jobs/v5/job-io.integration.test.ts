@@ -16,6 +16,7 @@ import { createBrowserAttachmentInstructionPortV1 } from '../../actions/v5/brows
 import { createRobotJointRuntimeStoreV5 } from '../../robot/v5/robot-joint-runtime-store.js'
 import { createAttachmentPoseRuntimeV1 } from '../../scene/v5/attachment-pose-runtime.js'
 import { createLogicalSignalRuntimeStoreV1 } from '../../signals/v5/logical-signal-runtime-store.js'
+import type { WorldResolverV5 } from '../../project/v5/browser-runtime-bundle-store-v5.js'
 import {
   createGatewaySignalWritePortV1,
   type RuntimeGatewayCommandClientV1,
@@ -28,6 +29,11 @@ const IDENTITY_POSE: RigidTransformV5 = Object.freeze({
   positionM: Object.freeze([0, 0, 0] as const),
   quaternion: Object.freeze([0, 0, 0, 1] as const),
 })
+
+type WorldPoseFacade = Pick<
+  WorldResolverV5,
+  'readRobotFrameWorldPose' | 'readSceneFrameWorldPose' | 'readObjectWorldPose'
+>
 
 function authoredInstructions(): readonly RobotJobInstructionV1[] {
   return Object.freeze([
@@ -157,36 +163,50 @@ function integratedHarness(project: WorkcellProjectV5) {
     frameId === 'world' || frameId === 'mcp' || frameId === 'fixture' ? IDENTITY_POSE : null
   ))
   const authoredPartPose = project.spatialEntities.find(({ id }) => id === 'part')?.localPose ?? null
-  const readObjectWorldPose = vi.fn((objectId: string): RigidTransformV5 | null => (
-    attachmentPoses.readObjectWorldPose(objectId, readRobotFrameWorldPose, readSceneFrameWorldPose)
-    ?? (objectId === 'part' ? authoredPartPose : null)
-  ))
+  let world!: WorldPoseFacade
+  world = Object.freeze({
+    readRobotFrameWorldPose,
+    readSceneFrameWorldPose,
+    readObjectWorldPose: vi.fn((objectId: string): RigidTransformV5 | null => (
+      attachmentPoses.readObjectWorldPose(
+        objectId,
+        world.readRobotFrameWorldPose,
+        world.readSceneFrameWorldPose,
+      ) ?? (objectId === 'part' ? authoredPartPose : null)
+    )),
+  })
   const browserAttachments = createBrowserAttachmentInstructionPortV1({
     readProject: () => project,
     readConfigRevision: () => CONFIG_REVISION,
     attachments,
-    readRobotFrameWorldPose,
-    readSceneFrameWorldPose,
-    readObjectWorldPose,
+    readRobotFrameWorldPose: world.readRobotFrameWorldPose,
+    readSceneFrameWorldPose: world.readSceneFrameWorldPose,
+    readObjectWorldPose: world.readObjectWorldPose,
   })
   const poseDiscontinuities: Array<{ readonly positionM: number; readonly orientationDeg: number }> = []
+  let attachedPoseAtAttach: RigidTransformV5 | null = null
+  let attachedPoseBeforeDetach: RigidTransformV5 | null = null
+  let detachedPoseAfterDetach: RigidTransformV5 | null = null
   const observedAttachments = {
     async attach(
       instruction: Extract<RobotJobInstructionV1, { readonly kind: 'attach' }>,
       context: Parameters<typeof browserAttachments.attach>[1],
     ): Promise<void> {
-      const before = readObjectWorldPose(instruction.objectId)
+      const before = world.readObjectWorldPose(instruction.objectId)
       await browserAttachments.attach(instruction, context)
-      const after = readObjectWorldPose(instruction.objectId)
+      const after = world.readObjectWorldPose(instruction.objectId)
+      attachedPoseAtAttach = after
       if (before !== null && after !== null) poseDiscontinuities.push(poseDifference(before, after))
     },
     async detach(
       instruction: Extract<RobotJobInstructionV1, { readonly kind: 'detach' }>,
       context: Parameters<typeof browserAttachments.detach>[1],
     ): Promise<void> {
-      const before = readObjectWorldPose(instruction.objectId)
+      const before = world.readObjectWorldPose(instruction.objectId)
+      attachedPoseBeforeDetach = before
       await browserAttachments.detach(instruction, context)
-      const after = readObjectWorldPose(instruction.objectId)
+      const after = world.readObjectWorldPose(instruction.objectId)
+      detachedPoseAfterDetach = after
       if (before !== null && after !== null) poseDiscontinuities.push(poseDifference(before, after))
     },
   }
@@ -212,7 +232,9 @@ function integratedHarness(project: WorkcellProjectV5) {
   return {
     project, robots, jobs, signals, attachments, attachmentPoses,
     fakeCommandClient, executor, authoredOrder, poseDiscontinuities,
-    readRobotFrameWorldPose, readSceneFrameWorldPose, readObjectWorldPose,
+    world, attachedPoseAtAttach: () => attachedPoseAtAttach,
+    attachedPoseBeforeDetach: () => attachedPoseBeforeDetach,
+    detachedPoseAfterDetach: () => detachedPoseAfterDetach,
     dispose: () => { unsubscribeOrder(); executor.shutdown() },
   }
 }
@@ -221,8 +243,8 @@ describe('V5 Job I/O integration', () => {
   it('executes all seven instructions in authored order with quality gates and continuous attachment poses', async () => {
     const harness = integratedHarness(jobProject())
     try {
-      const initialPart = harness.readObjectWorldPose('part')
-      const initialTcp = harness.readRobotFrameWorldPose('robot-1', 'TCP')
+      const initialPart = harness.world.readObjectWorldPose('part')
+      const initialTcp = harness.world.readRobotFrameWorldPose('robot-1', 'TCP')
       expect(initialPart).toEqual(initialTcp)
 
       harness.executor.startJob('job-1', 0)
@@ -268,10 +290,16 @@ describe('V5 Job I/O integration', () => {
       expect(harness.robots.getState().readRobot('robot-1')).toMatchObject({ jointValues: { J1: 90 } })
       expect(Object.keys(harness.attachments.getState().attachmentsByObjectId)).toHaveLength(0)
       expect(harness.attachments.getState().detachedOverridesByObjectId.part).toMatchObject({ parentFrameId: 'fixture' })
+      expect(harness.attachedPoseAtAttach()).not.toBeNull()
+      expect(harness.attachedPoseBeforeDetach()).not.toBeNull()
+      expect(harness.detachedPoseAfterDetach()).toEqual(harness.attachedPoseBeforeDetach())
+      expect(poseDifference(harness.attachedPoseAtAttach()!, harness.attachedPoseBeforeDetach()!).orientationDeg)
+        .toBeGreaterThan(0)
       expect(harness.poseDiscontinuities).toHaveLength(2)
       expect(harness.poseDiscontinuities.every(({ positionM, orientationDeg }) => (
         positionM <= 0.0005 && orientationDeg <= 0.1
       ))).toBe(true)
+      expect(harness.world.readRobotFrameWorldPose).toHaveBeenCalledWith('robot-1', 'TCP')
     } finally {
       harness.dispose()
     }
@@ -296,6 +324,27 @@ describe('V5 Job I/O integration', () => {
       expect(attachmentPublications).toBe(0)
     } finally {
       unsubscribe()
+      harness.dispose()
+    }
+  })
+
+  it('stops when the Robot runtime rejects a Joint command before attachment or any gateway write', async () => {
+    const harness = integratedHarness(jobProject({ instructions: [{
+      id: 'rejected-move', kind: 'move-joint', jointValues: { J1: 9 }, speedPercentToNext: 100,
+    }] }))
+    const rejectInvalidJoint = vi.spyOn(harness.robots.getState(), 'writeJointValues')
+      .mockImplementation(() => { throw new Error('ROBOT_JOINT_VALUE_OUT_OF_RANGE') })
+    try {
+      harness.executor.startJob('job-1', 0)
+      await harness.executor.advanceAll(0)
+
+      expect(harness.jobs.getState().byRobotId['robot-1']).toMatchObject({
+        state: 'FAILED', failureCode: 'JOB_EXECUTION_FAILED', stepIndex: 0,
+      })
+      expect(Object.keys(harness.attachments.getState().attachmentsByObjectId)).toHaveLength(0)
+      expect(harness.fakeCommandClient.writeBoolean).not.toHaveBeenCalled()
+    } finally {
+      rejectInvalidJoint.mockRestore()
       harness.dispose()
     }
   })

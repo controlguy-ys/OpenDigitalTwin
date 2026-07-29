@@ -4,9 +4,14 @@ import {
   type RigidTransformV5,
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
-import { computeSerialRobotPoseV5, type SerialRobotPoseV5 } from '../../../core/robot-runtime-v5/serial-kinematics.js'
+import type { SerialRobotPoseV5 } from '../../../core/robot-runtime-v5/serial-kinematics.js'
 import { validateStateBatchV1, type StateBatchV1 } from '../../../core/runtime-protocol/v1.js'
 import { createStore, type StoreApi } from 'zustand/vanilla'
+import {
+  createProjectRobotKinematicsFactoryV5,
+  type CompiledProjectRobotKinematicsV5,
+  type ProjectRobotKinematicsFactoryV5,
+} from './project-v5-robot-kinematics.js'
 
 export type RobotJointRuntimeQualityV5 = 'GOOD' | 'UNCERTAIN' | 'BAD' | 'STALE'
 export type RobotJointWriterV5 = 'simulation' | 'manual' | `opcua:${string}`
@@ -42,6 +47,10 @@ export interface RobotJointRuntimeStoreV5 {
 
 export interface RobotJointCatchupGuardV5 { commit(): void; abort(): void }
 
+export interface RobotJointRuntimeStoreOptionsV5 {
+  readonly kinematicsFactory?: ProjectRobotKinematicsFactoryV5
+}
+
 interface JointChannel {
   readonly mappingId: string
   readonly endpointId: string
@@ -54,6 +63,7 @@ interface JointChannel {
 interface Context {
   readonly project: WorkcellProjectV5
   readonly configRevision: string
+  readonly kinematics: CompiledProjectRobotKinematicsV5
   readonly definitionByRobotId: ReadonlyMap<string, WorkcellProjectV5['robotDefinitions'][number]>
   readonly channelsByMappingId: ReadonlyMap<string, JointChannel>
   readonly channelsByEndpoint: ReadonlyMap<string, readonly JointChannel[]>
@@ -118,9 +128,14 @@ function inspectPartialJointRecord(value: unknown, path: string): readonly [stri
   return entries
 }
 
-function compile(projectInput: WorkcellProjectV5, config: string): { readonly context: Context; readonly initial: Readonly<Record<string, RobotJointRuntimeValueV5>> } {
+function compile(
+  projectInput: WorkcellProjectV5,
+  config: string,
+  kinematicsFactory: ProjectRobotKinematicsFactoryV5,
+): { readonly context: Context; readonly initial: Readonly<Record<string, RobotJointRuntimeValueV5>> } {
   const project = validateWorkcellProjectV5(projectInput)
   const configRevision = revision(config)
+  const kinematics = kinematicsFactory.compileProject(project, configRevision)
   const definitions = new Map(project.robotDefinitions.map((definition) => [definition.id, definition]))
   const definitionByRobotId = new Map(project.robots.map((robot) => [robot.id, definitions.get(robot.definitionId)!]))
   const initial = Object.fromEntries(project.robots.map((robot) => [robot.id, frozenRobot({
@@ -128,7 +143,14 @@ function compile(projectInput: WorkcellProjectV5, config: string): { readonly co
     jointSource: robot.jointSource, quality: 'BAD', statusCode: 'BadWaitingForInitialData',
     sourceTimestampMs: 0, publishedTimestampMs: 0, receivedTimestampMs: 0, revision: 0,
   })])) as Record<string, RobotJointRuntimeValueV5>
-  for (const robot of project.robots) computeSerialRobotPoseV5(definitionByRobotId.get(robot.id)!, robot.initialJointValues, robot.localBasePose)
+  for (const robot of project.robots) {
+    kinematics.evaluateRobot({
+      robotId: robot.id,
+      coordinateRevision: 0,
+      jointValues: robot.initialJointValues,
+      rootWorldPose: robot.localBasePose,
+    })
+  }
   const endpointById = new Map(project.opcUa.endpoints.map((endpoint) => [endpoint.endpointId, endpoint]))
   const channelsByMappingId = new Map<string, JointChannel>()
   const byEndpoint = new Map<string, JointChannel[]>()
@@ -149,7 +171,7 @@ function compile(projectInput: WorkcellProjectV5, config: string): { readonly co
   }
   return {
     context: {
-      project, configRevision, definitionByRobotId, channelsByMappingId,
+      project, configRevision, kinematics, definitionByRobotId, channelsByMappingId,
       channelsByEndpoint: new Map([...byEndpoint].map(([id, entries]) => [id, Object.freeze([...entries])])),
       endpoints: new Set(project.opcUa.endpoints.filter((endpoint) => endpoint.enabled).map((endpoint) => endpoint.endpointId)),
       endpointSequence: new Map(), endpointReceipt: new Map(), sourceFences: new Map(), publishedFences: new Map(),
@@ -182,8 +204,13 @@ function acceptedValue(
   })
 }
 
-export function createRobotJointRuntimeStoreV5(project: WorkcellProjectV5, configRevision: string): StoreApi<RobotJointRuntimeStoreV5> {
-  let prepared = compile(project, configRevision)
+export function createRobotJointRuntimeStoreV5(
+  project: WorkcellProjectV5,
+  configRevision: string,
+  options: RobotJointRuntimeStoreOptionsV5 = {},
+): StoreApi<RobotJointRuntimeStoreV5> {
+  const kinematicsFactory = options.kinematicsFactory ?? createProjectRobotKinematicsFactoryV5()
+  let prepared = compile(project, configRevision, kinematicsFactory)
   let context = prepared.context
   const guards = new Map<string, Guard>()
   const noOpGuards = new Map<string, { active: boolean; readonly epoch: number }>()
@@ -317,7 +344,7 @@ export function createRobotJointRuntimeStoreV5(project: WorkcellProjectV5, confi
         publish(next)
       },
       replaceProject: (nextProject, nextConfig) => {
-        const nextPrepared = compile(nextProject, nextConfig)
+        const nextPrepared = compile(nextProject, nextConfig, kinematicsFactory)
         for (const guard of guards.values()) guard.active = false
         for (const guard of noOpGuards.values()) guard.active = false
         prepared = nextPrepared; context = prepared.context; guards.clear(); noOpGuards.clear(); guardEpoch += 1; publish(prepared.initial)
@@ -327,10 +354,14 @@ export function createRobotJointRuntimeStoreV5(project: WorkcellProjectV5, confi
         return Object.hasOwn(robots, robotId) ? robots[robotId]! : null
       },
       readRobotPose: (robotId, worldBasePose) => {
-        const state = requireRobot(robotId); const definition = context.definitionByRobotId.get(robotId)
-        if (definition === undefined) failure('ROBOT_INSTANCE_NOT_FOUND', `$.robots.${robotId}`, `Robot Instance ${robotId} has no Definition.`)
+        const state = requireRobot(robotId)
         const authored = context.project.robots.find((robot) => robot.id === robotId)!
-        return computeSerialRobotPoseV5(definition, state.jointValues, worldBasePose ?? authored.localBasePose)
+        return context.kinematics.evaluateRobot({
+          robotId,
+          coordinateRevision: state.revision,
+          jointValues: state.jointValues,
+          rootWorldPose: worldBasePose ?? authored.localBasePose,
+        }).pose
       },
       writeJointValues: (robotId, values, writer) => {
         const state = requireRobot(robotId)
@@ -344,8 +375,16 @@ export function createRobotJointRuntimeStoreV5(project: WorkcellProjectV5, confi
           if (!Number.isFinite(value)) failure('ROBOT_JOINT_VALUE_NOT_FINITE', `$.robots.${robotId}.jointValues.${id}`, 'Joint command must be finite.')
           if (value < joint.min || value > joint.max) failure('ROBOT_JOINT_VALUE_OUT_OF_RANGE', `$.robots.${robotId}.jointValues.${id}`, `Joint command must be within ${joint.min}..${joint.max}.`)
         }
-        const merged = Object.fromEntries([...Object.entries(state.jointValues), ...update]); computeSerialRobotPoseV5(definition, merged)
-        publish({ ...get().byRobotId, [robotId]: frozenRobot({ ...state, jointValues: merged, quality: 'GOOD', statusCode: 'Good', revision: increment(state.revision) }) })
+        const merged = Object.fromEntries([...Object.entries(state.jointValues), ...update])
+        const nextRevision = increment(state.revision)
+        const authored = context.project.robots.find((robot) => robot.id === robotId)!
+        context.kinematics.evaluateRobot({
+          robotId,
+          coordinateRevision: nextRevision,
+          jointValues: merged,
+          rootWorldPose: authored.localBasePose,
+        })
+        publish({ ...get().byRobotId, [robotId]: frozenRobot({ ...state, jointValues: merged, quality: 'GOOD', statusCode: 'Good', revision: nextRevision }) })
       },
     }
   })

@@ -36,6 +36,10 @@ import {
   type RobotJointRuntimeStoreV5,
 } from '../../robot/v5/robot-joint-runtime-store.js'
 import {
+  createProjectRobotKinematicsFactoryV5,
+  type ProjectRobotKinematicsFactoryV5,
+} from '../../robot/v5/project-v5-robot-kinematics.js'
+import {
   createEndpointLifecycleRouterV5,
   type EndpointLifecycleRouterV5,
 } from '../../runtime-gateway/v5/endpoint-lifecycle-router.js'
@@ -102,6 +106,7 @@ export interface BrowserRuntimeCommandOptionsV5 {
 }
 
 export interface BrowserProjectRuntimeTestHooksV5 {
+  readonly createRobotKinematicsFactory?: () => ProjectRobotKinematicsFactoryV5
   readonly detachedApplyGate?: (
     step: BrowserRuntimeDetachedApplyStepV5,
     signal: AbortSignal,
@@ -466,7 +471,9 @@ function createOwnedGraph(
   const project = validateWorkcellProjectV5(projectInput)
   const configRevision = requireConfigRevision(configRevisionInput)
   const nowMs = options.stream.nowMs
-  const robots = createRobotJointRuntimeStoreV5(project, configRevision)
+  const kinematicsFactory = options.testHooks?.createRobotKinematicsFactory?.()
+    ?? createProjectRobotKinematicsFactoryV5()
+  const robots = createRobotJointRuntimeStoreV5(project, configRevision, { kinematicsFactory })
   const robotFrames = createRobotFrameStatusRuntimeStoreV5(project, configRevision)
   const objects = createObjectRuntimeStateV5(project, configRevision)
   const signals = createLogicalSignalRuntimeStoreV1(project, configRevision)
