@@ -47,29 +47,26 @@ describe('ApplicationShellV6', () => {
     view.store.getState().setDockSize('explorer', 360)
     view.store.getState().setDockVisible('wide', 'explorer', false)
     view.store.getState().setDockVisible('wide', 'explorer', true)
-    fireEvent.click(screen.getByRole('button', { name: 'Maximize Main View' }))
-    const restore = screen.getByRole('button', { name: 'Restore Main View' })
-    fireEvent.click(restore)
-    fireEvent.click(screen.getByRole('button', { name: 'Maximize Main View' }))
+    act(() => view.store.getState().toggleMainViewMaximized())
+    act(() => view.store.getState().restoreMainView())
+    act(() => view.store.getState().toggleMainViewMaximized())
     fireEvent.keyDown(document, { key: 'Escape' })
 
     expect(screen.getByTestId('viewport')).toBe(viewport)
     expect(view.mounts).toBe(1)
   })
 
-  it('restores exact panel preferences and retains focus on the persistent presentation control', () => {
+  it('restores exact panel preferences without the shell owning a Main View command control', () => {
     const view = renderShell()
     view.store.getState().setDockSize('explorer', 360)
     view.store.getState().setDockSize('inspector', 410)
     view.store.getState().setDockVisible('wide', 'bottom', false)
     const before = structuredClone(view.store.getState().preferences)
-    const button = screen.getByRole('button', { name: 'Maximize Main View' })
-    fireEvent.click(button)
-    expect(document.activeElement).toBe(button)
-    fireEvent.click(button)
+    act(() => view.store.getState().toggleMainViewMaximized())
+    act(() => view.store.getState().restoreMainView())
 
     expect(view.store.getState().preferences).toEqual(before)
-    expect(document.activeElement).toBe(button)
+    expect(screen.queryByRole('button', { name: 'Maximize Main View' })).toBeNull()
   })
 
   it('masks mounted chrome from accessibility and does not call fullscreen or storage for presentation toggles', () => {
@@ -82,13 +79,23 @@ describe('ApplicationShellV6', () => {
     Object.defineProperty(document.documentElement, 'requestFullscreen', { configurable: true, value: requestFullscreen })
     const view = renderShell({ storage })
     const shell = screen.getByTestId('v6-application-shell')
-    fireEvent.click(screen.getByRole('button', { name: 'Maximize Main View' }))
+    act(() => view.store.getState().toggleMainViewMaximized())
 
     expect(shell).toHaveAttribute('data-main-view-presentation', 'maximized')
     expect(screen.getByTestId('v6-header')).toHaveAttribute('aria-hidden', 'true')
     expect(screen.getByTestId('v6-explorer')).toHaveAttribute('inert')
     expect(requestFullscreen).not.toHaveBeenCalled()
     expect(storage.setItem).not.toHaveBeenCalled()
+    expect(view.store.getState().mainViewPresentation).toBe('maximized')
+  })
+
+  it('honors a higher-priority overlay that consumes Escape before restoring Main View', () => {
+    const view = renderShell({
+      explorer: <button onKeyDown={(event) => event.preventDefault()} type="button">Context action</button>,
+    })
+    act(() => view.store.getState().toggleMainViewMaximized())
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Context action', hidden: true }), { key: 'Escape' })
+
     expect(view.store.getState().mainViewPresentation).toBe('maximized')
   })
 

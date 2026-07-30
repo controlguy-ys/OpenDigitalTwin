@@ -91,15 +91,6 @@
 .v6-shell-inspector-resize { grid-column: 5; grid-row: 2; }
 .v6-shell-bottom-resize { grid-column: 4; grid-row: 3; }
 
-.v6-main-view-toolbar {
-  align-items: center;
-  border-bottom: 1px solid var(--v6-color-border);
-  display: flex;
-  justify-content: flex-end;
-  min-height: 40px;
-  padding: 4px;
-}
-
 .v6-main-view-viewport {
   min-height: 0;
   min-width: 0;

@@ -45,7 +45,12 @@ export function ApplicationShellV6({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const current = store.getState()
-      if (event.key === 'Escape' && current.mainViewPresentation === 'maximized' && current.openDialog === null) {
+      if (
+        event.key === 'Escape'
+        && !event.defaultPrevented
+        && current.mainViewPresentation === 'maximized'
+        && current.openDialog === null
+      ) {
         event.preventDefault()
         current.restoreMainView()
       }
@@ -150,20 +155,7 @@ export function ApplicationShellV6({
           valueFromPointerDelta={(start, delta) => start + delta}
         />
       )}
-      <main aria-label="3D viewport" className="v6-shell-main" id="v6-main-view">
-        <div className="v6-main-view-toolbar">
-          <button
-            aria-controls="v6-main-view"
-            aria-pressed={maximized}
-            onClick={(event) => {
-              store.getState().toggleMainViewMaximized()
-              event.currentTarget.focus()
-            }}
-            type="button"
-          >
-            {maximized ? 'Restore Main View' : 'Maximize Main View'}
-          </button>
-        </div>
+      <main aria-label="3D viewport" className="v6-shell-main">
         <div className="v6-main-view-viewport" data-testid="v6-main-view-viewport">{viewport}</div>
       </main>
       {inspectorHandleVisible && (
