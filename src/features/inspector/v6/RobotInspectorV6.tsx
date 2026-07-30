@@ -29,9 +29,13 @@ function Section({ title, children }: { readonly title: string; readonly childre
   return <details className="v6-inspector-section" open><summary aria-label={`${title} section`}>{title}</summary><div className="v6-inspector-section-body">{children}</div></details>
 }
 
-export function RobotInspectorV6({ project, robotId, runtime, mutations }: RobotInspectorV6Props): ReactNode {
-  const robot = project.robots.find((candidate) => candidate.id === robotId)
+export function RobotInspectorV6(props: RobotInspectorV6Props): ReactNode {
+  const robot = props.project.robots.find((candidate) => candidate.id === props.robotId)
   if (robot === undefined) return <section className="v6-selection-inspector" aria-live="polite"><p>Selected Robot is no longer available.</p></section>
+  return <RobotInspectorContent {...props} robot={robot} />
+}
+
+function RobotInspectorContent({ project, robotId, runtime, mutations, robot }: RobotInspectorV6Props & { readonly robot: WorkcellProjectV5['robots'][number] }): ReactNode {
   const definition = project.robotDefinitions.find((candidate) => candidate.id === robot.definitionId)
   const robotRuntime = runtime?.robots.getState().readRobot(robotId) ?? null
   const job = runtime?.jobs?.getState().byRobotId[robotId]

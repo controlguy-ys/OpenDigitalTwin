@@ -101,4 +101,23 @@ describe('RobotInspectorV6', () => {
     expect(screen.getByText('Selected Robot is no longer available.')).toBeInTheDocument()
     expect(screen.queryByText(project.robots[0]?.name ?? '')).toBeNull()
   })
+
+  it('transitions from a valid Robot to a stale selection without a hook-order error', () => {
+    const project = projectWithSecondRobot()
+    const { rerender } = render(<RobotInspectorV6 project={project} robotId="robot-2" />)
+    rerender(<RobotInspectorV6 project={project} robotId="deleted-robot" />)
+    expect(screen.getByText('Selected Robot is no longer available.')).toBeInTheDocument()
+  })
+
+  it('uses a distinct latest publication revision and mutates only its selected Robot', () => {
+    const project = projectWithSecondRobot()
+    const latest: WorkcellProjectV5 = { ...project, revisionId: 'revision-new', robots: project.robots.map((robot) => robot.id === 'robot-1' ? { ...robot, localBasePose: { ...robot.localBasePose, positionM: [99, 0, 0] } } : robot) }
+    const mutate = vi.fn<(request: MutationRequest) => Promise<void>>(() => Promise.resolve())
+    render(<RobotInspectorV6 mutations={{ readPublished: () => ({ project: latest, revisionId: latest.revisionId }), mutate }} project={project} robotId="robot-2" />)
+    fireEvent.change(screen.getByLabelText('X (m)'), { target: { value: '14' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Base Transform' }))
+    const request = mutate.mock.calls[0]?.[0]
+    expect(request?.expectedRevisionId).toBe('revision-new')
+    expect(request?.recipe(latest).robots.map((robot) => robot.localBasePose.positionM[0])).toEqual([99, 14])
+  })
 })
