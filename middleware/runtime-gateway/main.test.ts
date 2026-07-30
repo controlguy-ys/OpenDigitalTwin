@@ -3027,8 +3027,11 @@ describe('runtime Gateway entrypoint', () => {
       expect(session.browse).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 'ns=0;i=85', requestedMaxReferencesPerNode: 25 }))
       expect((await requestJson(port, 'POST', '/runtime/opcua/browse/release', { type: 'opcua-address-space-browse-release-request-v1', protocolVersion: 1, continuationToken: 'page_token' })).status).toBe(200)
       expect(session.browseNext).toHaveBeenCalledWith([Buffer.from('page-2')], true)
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse/release', { type: 'opcua-address-space-browse-release-request-v1', protocolVersion: 1, continuationToken: 'unknown_token' })).status).toBe(409)
       expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, limit: 101 })).status).toBe(400)
-      expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, parentNodeId: 'ns=0;i=01' })).status).toBe(400)
+      for (const parentNodeId of ['ns=0;i=01', 'ns=0;s=', 'ns=0;g=12345678-1234-1234-1234-123456789ABC', 'ns=0;b=AQI']) {
+        expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, parentNodeId })).status).toBe(400)
+      }
       expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, endpointId: 'other' })).status).toBe(409)
       expect(write).not.toHaveBeenCalled()
     } finally { await service.stop() }

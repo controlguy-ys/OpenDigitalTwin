@@ -24,5 +24,6 @@ describe('JobInstructionListV6', () => {
     fireEvent.dragStart(screen.getByRole('button', { name: 'Drag step 1' }))
     fireEvent.dragOver(destination)
     fireEvent.drop(destination)
+    expect(reorder).toHaveBeenLastCalledWith('delay-0', 'delay-2')
   })
 })

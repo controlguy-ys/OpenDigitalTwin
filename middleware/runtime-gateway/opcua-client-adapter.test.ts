@@ -1735,6 +1735,30 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     await adapter.stop()
   })
 
+  it('releases retained Address Space continuations before closing an endpoint Session', async () => {
+    const connection = fakeConnection()
+    const rawSession = connection.session as typeof connection.session & {
+      browse: ReturnType<typeof vi.fn>
+      browseNext: ReturnType<typeof vi.fn>
+      requestedMaxReferencesPerNode?: number
+    }
+    rawSession.browse = vi.fn(async () => ({ statusCode: { isGood: () => true }, continuationPoint: Buffer.from('disconnect-page'), references: [] }))
+    rawSession.browseNext = vi.fn(async () => ({ statusCode: { isGood: () => true }, continuationPoint: null, references: [] }))
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
+      publish: () => undefined, createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    const browser = adapter.addressSpaceBrowser!
+    await browser.browse({ endpointId: 'plc', parentNodeId: null, limit: 1, continuationToken: null })
+
+    await adapter.disconnectEndpoint!('plc')
+
+    expect(rawSession.browseNext).toHaveBeenCalledWith(Buffer.from('disconnect-page'), true)
+    expect(connection.session.close).toHaveBeenCalledOnce()
+  })
+
   it('settles live stop and closes every resource exactly once when the Gateway clock becomes invalid', async () => {
     const connection = fakeConnection()
     let samples = 0

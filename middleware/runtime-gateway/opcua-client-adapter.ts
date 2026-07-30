@@ -1360,6 +1360,7 @@ export function createOpcUaClientAdapterV1(
     const wasLive = runtime.connected
     runtime.stopped = true
     runtime.generation += 1
+    await addressSpaceBrowser.releaseEndpoint(runtime.endpoint.endpointId)
     if (wasLive) {
       try {
         publishDisconnectedForSession(runtime)

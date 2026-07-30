@@ -1,7 +1,9 @@
 import { validateOpcUaNodeAddressV1, type OpcUaNodeAddressV1 } from '../../src/core/project-v5/index.js'
+import { validateOpcUaAddressSpaceBrowseResponseV1 } from '../../src/core/runtime-protocol/opcua-connectivity-v1.js'
 
 export const OPC_UA_OBJECTS_FOLDER_NODE_ID_V1 = 'ns=0;i=85'
 export const MAX_OPC_UA_BROWSE_PAGE_SIZE_V1 = 100
+const MAX_RELEASE_ATTEMPTS_V1 = 8
 
 export interface OpcUaAddressSpaceBrowseReferenceV1 {
   readonly sessionNodeId: string
@@ -33,6 +35,9 @@ export interface OpcUaAddressSpaceBrowseSessionProofV1 {
 export interface OpcUaAddressSpaceBrowserV1 {
   browse(request: OpcUaAddressSpaceBrowseInputV1): Promise<OpcUaAddressSpaceBrowseOutputV1>
   release(continuationToken: string): Promise<void>
+  releaseEndpoint(endpointId: string): Promise<void>
+  dispose(): Promise<void>
+  pendingReleaseCount(): number
 }
 
 export interface OpcUaAddressSpaceBrowseInputV1 {
@@ -67,6 +72,8 @@ export interface OpcUaAddressSpaceBrowserOptionsV1 {
   readonly continuationTtlMs?: number
   readonly maxContinuations?: number
   readonly maxContinuationsPerEndpoint?: number
+  readonly setTimeout?: (callback: () => void, delayMs: number) => unknown
+  readonly clearTimeout?: (timer: unknown) => void
 }
 
 interface ContinuationV1 {
@@ -77,6 +84,9 @@ interface ContinuationV1 {
   readonly continuationPoint: Uint8Array
   readonly createdAtMs: number
   readonly expiresAtMs: number
+  pendingRelease: boolean
+  releaseAttempts: number
+  lastReleaseError: string | null
 }
 
 const NODE_CLASSES: Readonly<Record<number, string>> = Object.freeze({
@@ -128,11 +138,74 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
   const continuationTtlMs = options.continuationTtlMs ?? 30_000
   const maxContinuations = options.maxContinuations ?? 32
   const maxContinuationsPerEndpoint = options.maxContinuationsPerEndpoint ?? 8
+  const scheduleTimeout = options.setTimeout ?? ((callback: () => void, delayMs: number) => setTimeout(callback, delayMs))
+  const cancelTimeout = options.clearTimeout ?? ((timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>))
+  const timers = new Map<string, unknown>()
+  let cleanupSequence = 0
   if (!Number.isSafeInteger(continuationTtlMs) || continuationTtlMs < 1 || continuationTtlMs > 300_000 || !Number.isSafeInteger(maxContinuations) || maxContinuations < 1 || maxContinuations > 128 || !Number.isSafeInteger(maxContinuationsPerEndpoint) || maxContinuationsPerEndpoint < 1 || maxContinuationsPerEndpoint > maxContinuations) throw new Error('OPC_UA_BROWSE_CONFIGURATION_INVALID')
 
-  const abandon = async (token: string, state: ContinuationV1): Promise<void> => {
+  const clearTimer = (token: string): void => {
+    const timer = timers.get(token)
+    if (timer !== undefined) cancelTimeout(timer)
+    timers.delete(token)
+  }
+  const remove = (token: string): void => {
+    clearTimer(token)
     continuations.delete(token)
-    try { await state.session.browseNext([state.continuationPoint], true) } catch { }
+  }
+  const scheduleRelease = (token: string, state: ContinuationV1, delayMs: number): void => {
+    clearTimer(token)
+    timers.set(token, scheduleTimeout(() => { void abandon(token, state) }, delayMs))
+  }
+  const abandon = async (token: string, state: ContinuationV1): Promise<boolean> => {
+    if (continuations.get(token) !== state || state.pendingRelease) return false
+    state.pendingRelease = true
+    try {
+      await state.session.browseNext([state.continuationPoint], true)
+      remove(token)
+      return true
+    } catch (error) {
+      state.pendingRelease = false
+      state.releaseAttempts += 1
+      state.lastReleaseError = error instanceof Error ? error.message.slice(0, 256) : String(error).slice(0, 256)
+      if (state.releaseAttempts < MAX_RELEASE_ATTEMPTS_V1) scheduleRelease(token, state, Math.min(5_000, 25 * 2 ** state.releaseAttempts))
+      return false
+    }
+  }
+  const retainForRelease = (
+    endpointId: string,
+    parentNodeId: string,
+    proof: OpcUaAddressSpaceBrowseSessionProofV1,
+    continuationPoint: Uint8Array,
+  ): readonly [string, ContinuationV1] => {
+    const createdAtMs = nowMs()
+    const token = `internal_cleanup:${++cleanupSequence}`
+    const state: ContinuationV1 = {
+      endpointId,
+      parentNodeId,
+      generation: proof.generation,
+      session: proof.session,
+      continuationPoint,
+      createdAtMs,
+      expiresAtMs: createdAtMs + continuationTtlMs,
+      pendingRelease: false,
+      releaseAttempts: 0,
+      lastReleaseError: null,
+    }
+    continuations.set(token, state)
+    return [token, state]
+  }
+  const releaseReturnedContinuation = async (
+    endpointId: string,
+    parentNodeId: string,
+    proof: OpcUaAddressSpaceBrowseSessionProofV1,
+    continuationPoint: Uint8Array,
+  ): Promise<void> => {
+    const [token, state] = retainForRelease(endpointId, parentNodeId, proof, continuationPoint)
+    if (!await abandon(token, state)) throw new Error('OPC_UA_BROWSE_CLEANUP_PENDING')
+  }
+  const releaseTrackedContinuation = async (token: string, state: ContinuationV1): Promise<void> => {
+    if (!await abandon(token, state)) throw new Error('OPC_UA_BROWSE_CLEANUP_PENDING')
   }
   const sweep = async (): Promise<void> => {
     const now = nowMs()
@@ -146,7 +219,7 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
         .filter(([, state]) => continuations.size >= maxContinuations || state.endpointId === endpointId)
         .sort(([, left], [, right]) => left.createdAtMs - right.createdAtMs)[0]
       if (candidate === undefined) return
-      await abandon(candidate[0], candidate[1])
+      if (!await abandon(candidate[0], candidate[1])) throw new Error('OPC_UA_BROWSE_CLEANUP_PENDING')
     }
   }
 
@@ -154,12 +227,20 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
     await sweep()
     const state = continuations.get(continuationToken)
     if (state === undefined) throw new Error('OPC_UA_BROWSE_CONTINUATION_INVALID')
-    continuations.delete(continuationToken)
-    await state.session.browseNext([state.continuationPoint], true)
+    if (!await abandon(continuationToken, state)) throw new Error('OPC_UA_BROWSE_RELEASE_FAILED')
   }
 
   return Object.freeze({
     release,
+    async releaseEndpoint(endpointId: string): Promise<void> {
+      const results = await Promise.all([...continuations.entries()].filter(([, state]) => state.endpointId === endpointId).map(async ([token, state]) => abandon(token, state)))
+      if (results.some((released) => !released)) throw new Error('OPC_UA_BROWSE_RELEASE_FAILED')
+    },
+    async dispose(): Promise<void> {
+      const results = await Promise.all([...continuations.entries()].map(async ([token, state]) => abandon(token, state)))
+      if (results.some((released) => !released)) throw new Error('OPC_UA_BROWSE_RELEASE_FAILED')
+    },
+    pendingReleaseCount: () => [...continuations.values()].filter((state) => state.lastReleaseError !== null).length,
     async browse(request: OpcUaAddressSpaceBrowseInputV1): Promise<OpcUaAddressSpaceBrowseOutputV1> {
       await sweep()
       if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > MAX_OPC_UA_BROWSE_PAGE_SIZE_V1) throw new Error('OPC_UA_BROWSE_REQUEST_INVALID')
@@ -184,24 +265,31 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
       } catch { throw new Error('OPC_UA_BROWSE_FAILED') }
       if (!result.good) throw new Error('OPC_UA_BROWSE_FAILED')
       if (!sameSession(options.currentSession(request.endpointId), first)) {
-        if (result.continuationPoint !== null) await first.session.browseNext([result.continuationPoint], true).catch(() => undefined)
+        if (result.continuationPoint !== null) await releaseReturnedContinuation(request.endpointId, parentNodeId, first, result.continuationPoint)
         throw new Error('OPC_UA_BROWSE_SESSION_STALE')
       }
-      if (continuation !== undefined) continuations.delete(request.continuationToken!)
+      if (continuation !== undefined) remove(request.continuationToken!)
       if (result.references.length > request.limit || result.references.some((reference) => !validReference(reference))) {
-        if (result.continuationPoint !== null) await first.session.browseNext([result.continuationPoint], true).catch(() => undefined)
+        if (result.continuationPoint !== null) await releaseReturnedContinuation(request.endpointId, parentNodeId, first, result.continuationPoint)
         throw new Error('OPC_UA_BROWSE_RESPONSE_INVALID')
       }
       let continuationToken: string | null = null
       if (result.continuationPoint !== null) {
         continuationToken = createToken()
         if (!/^[A-Za-z0-9_-]{1,256}$/u.test(continuationToken) || continuations.has(continuationToken)) {
-          await first.session.browseNext([result.continuationPoint], true).catch(() => undefined)
+          await releaseReturnedContinuation(request.endpointId, parentNodeId, first, result.continuationPoint)
           throw new Error('OPC_UA_BROWSE_TOKEN_INVALID')
         }
-        await makeRoom(request.endpointId)
+        try {
+          await makeRoom(request.endpointId)
+        } catch (error) {
+          await releaseReturnedContinuation(request.endpointId, parentNodeId, first, result.continuationPoint)
+          throw error
+        }
         const createdAtMs = nowMs()
-        continuations.set(continuationToken, Object.freeze({ endpointId: request.endpointId, parentNodeId, generation: first.generation, session: first.session, continuationPoint: result.continuationPoint, createdAtMs, expiresAtMs: createdAtMs + continuationTtlMs }))
+        const state: ContinuationV1 = { endpointId: request.endpointId, parentNodeId, generation: first.generation, session: first.session, continuationPoint: result.continuationPoint, createdAtMs, expiresAtMs: createdAtMs + continuationTtlMs, pendingRelease: false, releaseAttempts: 0, lastReleaseError: null }
+        continuations.set(continuationToken, state)
+        scheduleRelease(continuationToken, state, continuationTtlMs)
       }
       const nodes = result.references.map((reference) => Object.freeze({
         sessionNodeId: reference.sessionNodeId,
@@ -217,7 +305,16 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
       if (Buffer.byteLength(JSON.stringify(output)) > 64 * 1024) {
         if (continuationToken !== null) {
           const state = continuations.get(continuationToken)
-          if (state !== undefined) await abandon(continuationToken, state)
+          if (state !== undefined) await releaseTrackedContinuation(continuationToken, state)
+        }
+        throw new Error('OPC_UA_BROWSE_RESPONSE_INVALID')
+      }
+      try {
+        validateOpcUaAddressSpaceBrowseResponseV1({ type: 'opcua-address-space-browse-response-v1', protocolVersion: 1, ...output })
+      } catch {
+        if (continuationToken !== null) {
+          const state = continuations.get(continuationToken)
+          if (state !== undefined) await releaseTrackedContinuation(continuationToken, state)
         }
         throw new Error('OPC_UA_BROWSE_RESPONSE_INVALID')
       }

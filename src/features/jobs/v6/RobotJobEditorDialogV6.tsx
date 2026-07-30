@@ -1,4 +1,4 @@
-import { useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useState, type ReactNode, type RefObject } from 'react'
 import { useStore } from 'zustand'
 import type { StoreApi } from 'zustand/vanilla'
 
@@ -34,6 +34,10 @@ function instructionKind(value: string): RobotJobInstructionV1['kind'] {
   if (value === 'move-joint' || value === 'set-do' || value === 'wait-di' || value === 'delay' || value === 'attach' || value === 'detach') return value
   return 'move-joint'
 }
+function poseDraft(instruction: RobotJobInstructionV1 | null, jointIds: readonly string[]): Record<string, string> {
+  if (instruction?.kind !== 'move-joint') return Object.fromEntries(jointIds.map((id) => [id, '0']))
+  return Object.fromEntries(jointIds.map((id) => [id, String(instruction.jointValues[id] ?? 0)]))
+}
 
 export function RobotJobEditorDialogV6(props: RobotJobEditorDialogV6Props): ReactNode {
   if (props.runtime === undefined) return <EditorContent {...props} runtimeState={undefined} />
@@ -52,12 +56,26 @@ function EditorContent({ project, jobId, authoring, onClose, triggerRef, runtime
   const [kind, setKind] = useState<RobotJobInstructionV1['kind']>('move-joint')
   if (job === null) return null
   const selected = job.instructions.find((instruction) => instruction.id === selectedId) ?? null; const running = runtimeState?.state === 'RUNNING'
+  const robot = project.robots.find((candidate) => candidate.id === job.robotId)
+  const definition = robot === undefined ? undefined : project.robotDefinitions.find((candidate) => candidate.id === robot.definitionId)
+  const jointIds = definition?.joints.map((joint) => joint.id) ?? []
+  const [pose, setPose] = useState<Record<string, string>>(() => poseDraft(selected, jointIds))
+  const [speed, setSpeed] = useState(selected?.kind === 'move-joint' ? String(selected.speedPercentToNext) : '30')
+  const [draftError, setDraftError] = useState('')
+  useEffect(() => { setPose(poseDraft(selected, jointIds)); setSpeed(selected?.kind === 'move-joint' ? String(selected.speedPercentToNext) : '30'); setDraftError('') }, [selectedId, project.revisionId])
   const invoke = (operation: () => Promise<void>): void => { if (!running) void operation() }
   const draft = defaultInstruction(project, job.id, kind)
-  const insert = (beforeId: string | null): void => { if (draft !== null) invoke(() => authoring.insert(job.id, draft, beforeId)) }
-  const replace = (): void => { if (draft !== null && selected !== null) invoke(() => authoring.replace(job.id, { ...draft, id: selected.id })) }
+  const moveDraft = (): RobotJobInstructionV1 | null => {
+    if (selected === null || jointIds.length === 0) return null
+    const values = jointIds.map((id) => Number(pose[id]))
+    const speedValue = Number(speed)
+    if (values.some((value) => !Number.isFinite(value)) || !Number.isSafeInteger(speedValue) || speedValue < 1 || speedValue > 100) { setDraftError('Every joint must be finite and speed must be an integer from 1 to 100.'); return null }
+    return { id: selected.id, kind: 'move-joint', jointValues: Object.fromEntries(jointIds.map((id, index) => [id, values[index]])), speedPercentToNext: speedValue }
+  }
+  const insert = (beforeId: string | null): void => { const candidate = kind === 'move-joint' ? moveDraft() : draft; if (candidate !== null) invoke(() => authoring.insert(job.id, { ...candidate, id: `job-instruction-${crypto.randomUUID()}` }, beforeId)) }
+  const replace = (): void => { const candidate = kind === 'move-joint' ? moveDraft() : draft === null || selected === null ? null : { ...draft, id: selected.id }; if (candidate !== null) invoke(() => authoring.replace(job.id, candidate)) }
   return <ModalDialogV6 className="v6-job-editor-dialog" footer={<footer className="v6-job-editor-footer"><button onClick={onClose} type="button">Close</button></footer>} header={<header className="v6-job-editor-header"><h2 id="v6-job-editor-title">Edit Job: {job.name}</h2><p>{running ? 'A running Job is read-only.' : 'Changes publish one Project revision per action.'}</p></header>} onClose={onClose} size="editor" titleId="v6-job-editor-title" {...(triggerRef === undefined ? {} : { triggerRef })}>
     <div className="v6-job-editor-body"><JobInstructionListV6 disabled={running} instructions={job.instructions} onReorder={(id, beforeId) => invoke(() => authoring.reorder(job.id, id, beforeId))} onSelect={setSelectedId} project={project} selectedInstructionId={selectedId} state={runtimeState?.state ?? 'IDLE'} stepIndex={runtimeState?.stepIndex ?? null} />
-      <aside aria-label="Step Inspector" className="v6-job-step-inspector"><h3>Step Inspector</h3>{selected === null ? <p>Select a step.</p> : <><p><strong>{selected.kind}</strong></p><p>{jobInstructionSummaryV6(selected, project)}</p><label>Instruction kind<select aria-label="Instruction kind" disabled={running} onChange={(event) => setKind(instructionKind(event.currentTarget.value))} value={kind}><option value="move-joint">Move joint</option><option value="set-do">Set DO</option><option value="wait-di">Wait DI</option><option value="delay">Delay</option><option value="attach">Attach</option><option value="detach">Detach</option></select></label><div className="v6-job-context-actions"><button disabled={running || draft === null} onClick={replace} type="button">Edit</button><button disabled={running || draft === null} onClick={() => insert(selected.id)} type="button">Insert Before</button><button disabled={running || draft === null} onClick={() => insert(job.instructions[job.instructions.indexOf(selected) + 1]?.id ?? null)} type="button">Insert After</button><button disabled={running} onClick={() => invoke(() => authoring.duplicate(job.id, selected.id))} type="button">Duplicate</button><button disabled={running} onClick={() => invoke(() => authoring.remove(job.id, selected.id))} type="button">Delete</button><button disabled={running} onClick={() => invoke(() => authoring.reorder(job.id, selected.id, job.instructions[Math.max(0, job.instructions.indexOf(selected) - 1)]?.id ?? null))} type="button">Move Before</button><button disabled={running} onClick={() => invoke(() => authoring.reorder(job.id, selected.id, job.instructions[job.instructions.indexOf(selected) + 2]?.id ?? null))} type="button">Move After</button></div></>}</aside></div>
+      <aside aria-label="Step Inspector" className="v6-job-step-inspector"><h3>Step Inspector</h3>{selected === null ? <p>Select a step.</p> : <><p><strong>{selected.kind}</strong></p><p>{jobInstructionSummaryV6(selected, project)}</p><label>Instruction kind<select aria-label="Instruction kind" disabled={running} onChange={(event) => setKind(instructionKind(event.currentTarget.value))} value={kind}><option value="move-joint">Move joint</option><option value="set-do">Set DO</option><option value="wait-di">Wait DI</option><option value="delay">Delay</option><option value="attach">Attach</option><option value="detach">Detach</option></select></label>{kind === 'move-joint' && <fieldset disabled={running}><legend>Pose</legend>{jointIds.map((id) => <label key={id}>{id}<input aria-label={id} onChange={(event) => { const value = event.currentTarget.value; setPose((current) => ({ ...current, [id]: value })) }} type="number" value={pose[id] ?? ''} /></label>)}<label>Speed (%)<input aria-label="Speed (%)" max={100} min={1} onChange={(event) => setSpeed(event.currentTarget.value)} step={1} type="number" value={speed} /></label></fieldset>}{draftError && <p role="alert">{draftError}</p>}<div className="v6-job-context-actions"><button disabled={running || (kind !== 'move-joint' && draft === null)} onClick={replace} type="button">Edit</button><button disabled={running || draft === null} onClick={() => insert(selected.id)} type="button">Insert Before</button><button disabled={running || draft === null} onClick={() => insert(job.instructions[job.instructions.indexOf(selected) + 1]?.id ?? null)} type="button">Insert After</button><button disabled={running} onClick={() => invoke(() => authoring.duplicate(job.id, selected.id))} type="button">Duplicate</button><button disabled={running} onClick={() => invoke(() => authoring.remove(job.id, selected.id))} type="button">Delete</button><button disabled={running} onClick={() => invoke(() => authoring.reorder(job.id, selected.id, job.instructions[Math.max(0, job.instructions.indexOf(selected) - 1)]?.id ?? null))} type="button">Move Before</button><button disabled={running} onClick={() => invoke(() => authoring.reorder(job.id, selected.id, job.instructions[job.instructions.indexOf(selected) + 2]?.id ?? null))} type="button">Move After</button></div></>}</aside></div>
   </ModalDialogV6>
 }
