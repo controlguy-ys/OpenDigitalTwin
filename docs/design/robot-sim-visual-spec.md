@@ -77,3 +77,19 @@ All icons use the same 1.75px outline weight and 16px optical size.
 - Keep controls and text code-native in the implementation.
 - Use the approved workcell composition: a gray, white, and red ABB GoFa-like six-axis robot, clean industrial workbench, two cups, one machine cabinet, grid floor, one selected-object outline, and a realistic red/yellow/green three-lens stack light.
 - Do not add decorative gradients, pills, badges, hero copy, card grids, fake metrics, new component families, or unapproved visible copy.
+
+## UI V6 Workspace Boundary
+
+UI V6 is a workspace presentation over Project V5. It does not create or imply
+Project `schemaVersion: 6`; unsupported capabilities remain absent and runtime
+session state is not restored after reload. The V6 workspace uses wide (at
+least 1200px), compact (960..1199px), and narrow (below 960px) modes while
+keeping the central viewport primary.
+
+The Main View presentation toggle is an application-pane mode, not browser
+fullscreen. It is represented by `view.main.maximize` in both the View menu and
+Main View pane toolbar inventory; it begins with the label `Maximize Main View`
+and never creates a Project mutation. In maximized presentation, workspace
+chrome is masked while the existing Canvas, camera, selection, runtime state,
+and prior dock arrangement survive restoration. Right-click is reserved for
+viewport and Explorer context actions and never pans the camera.
