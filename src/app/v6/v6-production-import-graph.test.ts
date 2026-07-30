@@ -204,6 +204,10 @@ describe('V6 production import graph', () => {
     expect(boundary.productionFiles).toEqual(expect.arrayContaining([
       'src/features/commands/v6/app-command-v6.ts',
       'src/features/interaction/v6/workcell-selection-v6.ts',
+      'src/features/ui/v6/IconButtonV6.tsx',
+      'src/features/ui/v6/StatusBadgeV6.tsx',
+      'src/features/ui/v6/SwitchFieldV6.tsx',
+      'src/features/ui/v6/TooltipV6.tsx',
     ]))
     expect(boundary.forbiddenImports).toEqual([])
     expect(boundary.imports).not.toContainEqual(

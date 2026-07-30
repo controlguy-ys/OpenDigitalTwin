@@ -1,0 +1,50 @@
+:root {
+  color-scheme: dark;
+  --v6-color-canvas: #10151d;
+  --v6-color-panel: #18212c;
+  --v6-color-viewport: #0b1017;
+  --v6-color-border: #3b4b5e;
+  --v6-color-text: #f1f5f9;
+  --v6-color-muted: #a8b4c2;
+  --v6-color-accent: #60a5fa;
+  --v6-color-success: #4ade80;
+  --v6-color-warning: #facc15;
+  --v6-color-fault: #fb7185;
+  --v6-color-selection: #38bdf8;
+  --v6-color-focus: #93c5fd;
+  --v6-color-overlay: #020617cc;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --v6-color-canvas: #10151d;
+  --v6-color-panel: #18212c;
+  --v6-color-viewport: #0b1017;
+  --v6-color-border: #3b4b5e;
+  --v6-color-text: #f1f5f9;
+  --v6-color-muted: #a8b4c2;
+  --v6-color-accent: #60a5fa;
+  --v6-color-success: #4ade80;
+  --v6-color-warning: #facc15;
+  --v6-color-fault: #fb7185;
+  --v6-color-selection: #38bdf8;
+  --v6-color-focus: #93c5fd;
+  --v6-color-overlay: #020617cc;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --v6-color-canvas: #e8eef5;
+  --v6-color-panel: #ffffff;
+  --v6-color-viewport: #d9e2ec;
+  --v6-color-border: #8293a8;
+  --v6-color-text: #102033;
+  --v6-color-muted: #4b5d72;
+  --v6-color-accent: #0759bd;
+  --v6-color-success: #137333;
+  --v6-color-warning: #8a4b00;
+  --v6-color-fault: #b4233a;
+  --v6-color-selection: #006cc2;
+  --v6-color-focus: #004fae;
+  --v6-color-overlay: #102033cc;
+}

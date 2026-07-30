@@ -1,0 +1,73 @@
+.v6-icon-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--v6-color-border);
+  border-radius: 4px;
+  background: var(--v6-color-panel);
+  color: var(--v6-color-text);
+  cursor: pointer;
+}
+
+.v6-icon-button:hover:not(:disabled) {
+  border-color: var(--v6-color-accent);
+  color: var(--v6-color-accent);
+}
+
+.v6-icon-button:disabled {
+  color: var(--v6-color-muted);
+  cursor: not-allowed;
+}
+
+.v6-tooltip {
+  position: absolute;
+  z-index: 1;
+  width: max-content;
+  max-width: 20rem;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--v6-color-border);
+  border-radius: 4px;
+  background: var(--v6-color-overlay);
+  color: var(--v6-color-text);
+  font-size: 0.75rem;
+}
+
+.v6-status-badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  color: var(--v6-color-muted);
+}
+
+.v6-status-badge[data-state="success"] { color: var(--v6-color-success); }
+.v6-status-badge[data-state="warning"] { color: var(--v6-color-warning); }
+.v6-status-badge[data-state="fault"] { color: var(--v6-color-fault); }
+.v6-status-badge[data-state="selection"] { color: var(--v6-color-selection); }
+
+.v6-switch-field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.v6-switch-field input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--v6-color-accent);
+}
+
+.v6-switch-field label {
+  color: var(--v6-color-text);
+}
+
+.v6-switch-field-description {
+  display: block;
+  margin-top: 2px;
+  color: var(--v6-color-muted);
+  font-size: 0.875rem;
+}
