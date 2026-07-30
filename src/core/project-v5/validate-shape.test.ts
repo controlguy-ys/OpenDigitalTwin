@@ -10,6 +10,53 @@ import {
 import { validateWorkcellProjectV5 } from './validate'
 
 describe('Project V5 aggregate shape validation', () => {
+  function projectWithEntity(): ReturnType<typeof makeMinimalWorkcellProjectV5> {
+    const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(project.spatialEntities as unknown as Array<Record<string, unknown>>).push({
+      id: 'box',
+      name: 'Box',
+      geometry: { kind: 'box', dimensionsM: [0.1, 0.1, 0.1], color: '#808080' },
+      parentFrameId: 'world',
+      localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+      visible: true,
+      groupId: null,
+      removable: true,
+      transformOwner: 'manual',
+      numericStatus: { value: 0, sourceOwnership: 'manual', overlay: { visible: false, frameId: null } },
+      graspable: false,
+      graspFrames: [],
+      movingFrames: [],
+    })
+    return project
+  }
+
+  it('accepts optional Object communications metadata and rejects wrong field types', () => {
+    const omitted = projectWithEntity()
+    expect(validateWorkcellProjectV5(omitted).spatialEntities[0]).toMatchObject({ id: 'box' })
+
+    const explicit = projectWithEntity()
+    Object.assign(explicit.spatialEntities[0] as unknown as Record<string, unknown>, {
+      enableComms: true,
+      tagName: '',
+    })
+    expect(validateWorkcellProjectV5(explicit).spatialEntities[0]).toMatchObject({
+      enableComms: true,
+      tagName: '',
+    })
+
+    const wrongEnabled = projectWithEntity()
+    ;(wrongEnabled.spatialEntities[0] as unknown as Record<string, unknown>).enableComms = 'true'
+    expect(() => validateWorkcellProjectV5(wrongEnabled)).toThrowError(
+      expect.objectContaining({ path: '$.spatialEntities[0].enableComms' }),
+    )
+
+    const wrongTag = projectWithEntity()
+    ;(wrongTag.spatialEntities[0] as unknown as Record<string, unknown>).tagName = 42
+    expect(() => validateWorkcellProjectV5(wrongTag)).toThrowError(
+      expect.objectContaining({ path: '$.spatialEntities[0].tagName' }),
+    )
+  })
+
   function projectWithMechanics(mechanics: RobotMechanicsMetadataV1 | Record<string, unknown>): unknown {
     const project = makeMinimalWorkcellProjectV5()
     const definition = project.robotDefinitions[0]!

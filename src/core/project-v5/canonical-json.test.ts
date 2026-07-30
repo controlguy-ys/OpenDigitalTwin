@@ -20,6 +20,25 @@ function reverseObjectKeys<T>(value: T): T {
 }
 
 describe('canonical Project V5 JSON', () => {
+  it('preserves explicit Object communications metadata while legacy omissions remain omitted', () => {
+    const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(project.spatialEntities as unknown as Array<Record<string, unknown>>).push({
+      id: 'box', name: 'Box', geometry: { kind: 'box', dimensionsM: [0.1, 0.1, 0.1], color: '#808080' },
+      parentFrameId: 'world', localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+      visible: true, groupId: null, removable: true, transformOwner: 'manual',
+      numericStatus: { value: 0, sourceOwnership: 'manual', overlay: { visible: false, frameId: null } },
+      graspable: false, graspFrames: [], movingFrames: [], enableComms: true, tagName: 'Packaging station',
+    })
+    const explicit = JSON.parse(canonicalProjectV5Json(project)) as { spatialEntities: Array<Record<string, unknown>> }
+    expect(explicit.spatialEntities[0]).toMatchObject({ enableComms: true, tagName: 'Packaging station' })
+
+    delete (project.spatialEntities[0] as unknown as Record<string, unknown>).enableComms
+    delete (project.spatialEntities[0] as unknown as Record<string, unknown>).tagName
+    const legacy = JSON.parse(canonicalProjectV5Json(project)) as { spatialEntities: Array<Record<string, unknown>> }
+    expect(legacy.spatialEntities[0]).not.toHaveProperty('enableComms')
+    expect(legacy.spatialEntities[0]).not.toHaveProperty('tagName')
+  })
+
   it('keeps instruction array order while canonicalizing object keys', async () => {
     const project = makeMinimalWorkcellProjectV5()
 

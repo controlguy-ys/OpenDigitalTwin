@@ -97,6 +97,38 @@ describe('binding editor model', () => {
     })
   })
 
+  it('auto-enables Object communications and only fills blank tags from an explicit browse-name suggestion', () => {
+    const project = projectWithBox()
+    const target = { type: 'entity-status', entityId: 'box' } as const
+    const draft = {
+      ...createBindingMappingDraftV1(project, target, 'mapping-box-status'),
+      namespaceUri: 'urn:virtual-plc',
+      identifier: 'Object.Status',
+    }
+    const suggested = validateWorkcellProjectV5(saveBindingMappingV1(project, draft, {
+      suggestedTagName: 'Browser Object Status',
+    }))
+    expect(suggested.spatialEntities[0]).toMatchObject({ enableComms: true, tagName: 'Browser Object Status' })
+
+    const blank = validateWorkcellProjectV5({
+      ...project,
+      spatialEntities: [{ ...project.spatialEntities[0]!, tagName: '' }],
+    })
+    const blankSuggested = validateWorkcellProjectV5(saveBindingMappingV1(blank, draft, {
+      suggestedTagName: 'Blank tag browse name',
+    }))
+    expect(blankSuggested.spatialEntities[0]).toMatchObject({ tagName: 'Blank tag browse name' })
+
+    const explicit = validateWorkcellProjectV5({
+      ...project,
+      spatialEntities: [{ ...project.spatialEntities[0]!, tagName: 'Operator tag' }],
+    })
+    const preserved = validateWorkcellProjectV5(saveBindingMappingV1(explicit, draft, {
+      suggestedTagName: 'Different browse name',
+    }))
+    expect(preserved.spatialEntities[0]).toMatchObject({ enableComms: true, tagName: 'Operator tag' })
+  })
+
   it('takes manual control for the whole Robot Joint ownership scope', () => {
     const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
     const target = { type: 'robot-joint', robotId: 'robot-1', jointId: 'J1' } as const

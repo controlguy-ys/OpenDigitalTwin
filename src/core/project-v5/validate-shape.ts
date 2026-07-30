@@ -416,9 +416,11 @@ function validateSpatialEntity(value: unknown, path: string): void {
   const record = expectClosedRecord(value, path, [
     'id', 'name', 'geometry', 'parentFrameId', 'localPose', 'visible', 'groupId', 'removable',
     'transformOwner', 'numericStatus', 'graspable', 'graspFrames', 'movingFrames',
-  ])
+  ], ['enableComms', 'tagName'])
   validateId(record.id, `${path}.id`)
   validateName(record.name, `${path}.name`)
+  if (Object.hasOwn(record, 'enableComms')) expectBoolean(record.enableComms, `${path}.enableComms`)
+  if (Object.hasOwn(record, 'tagName')) validateBoundedText(record.tagName, `${path}.tagName`, MAX_NAME_UTF8_BYTES_V5, true)
   validateSpatialGeometry(record.geometry, `${path}.geometry`)
   validateId(record.parentFrameId, `${path}.parentFrameId`)
   validateRigidTransform(record.localPose, `${path}.localPose`)

@@ -230,6 +230,8 @@ export interface MovingFrameV5 {
 export interface SpatialEntityV5 {
   readonly id: SpatialEntityIdV5
   readonly name: string
+  readonly enableComms?: boolean
+  readonly tagName?: string
   readonly geometry: SpatialGeometryV5
   readonly parentFrameId: FrameIdV5
   readonly localPose: RigidTransformV5
