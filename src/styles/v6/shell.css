@@ -1,0 +1,88 @@
+.v6-application-shell {
+  display: grid;
+  grid-template-columns: auto var(--v6-explorer-width) 6px minmax(0, 1fr) 6px var(--v6-inspector-width);
+  grid-template-rows: auto minmax(0, 1fr) 6px var(--v6-bottom-height);
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.v6-shell-header {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.v6-shell-toolbox,
+.v6-shell-explorer,
+.v6-shell-inspector,
+.v6-shell-bottom,
+.v6-shell-main {
+  background: var(--v6-color-panel);
+  color: var(--v6-color-text);
+  min-height: 0;
+  min-width: 0;
+}
+
+.v6-shell-toolbox { grid-column: 1; grid-row: 2; }
+.v6-shell-explorer { grid-column: 2; grid-row: 2; }
+.v6-shell-main { grid-column: 4; grid-row: 2; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.v6-shell-inspector { grid-column: 6; grid-row: 2; }
+.v6-shell-bottom { grid-column: 1 / -1; grid-row: 4; }
+
+.v6-dock-resize-handle {
+  background: var(--v6-color-border);
+  min-height: 0;
+  min-width: 0;
+  outline-offset: -2px;
+  touch-action: none;
+}
+
+.v6-shell-explorer-resize { grid-column: 3; grid-row: 2; }
+.v6-shell-inspector-resize { grid-column: 5; grid-row: 2; }
+.v6-shell-bottom-resize { grid-column: 1 / -1; grid-row: 3; }
+
+.v6-main-view-toolbar {
+  align-items: center;
+  border-bottom: 1px solid var(--v6-color-border);
+  display: flex;
+  justify-content: flex-end;
+  min-height: 40px;
+  padding: 4px;
+}
+
+.v6-main-view-viewport {
+  min-height: 0;
+  min-width: 0;
+  padding: var(--v6-viewport-safe-top) var(--v6-viewport-safe-right) var(--v6-viewport-safe-bottom) var(--v6-viewport-safe-left);
+}
+
+.v6-application-shell[data-main-view-presentation='maximized'] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.v6-application-shell[data-main-view-presentation='maximized'] > :not(.v6-shell-main):not(.v6-viewport-safe-area) {
+  display: none;
+}
+
+.v6-application-shell[data-main-view-presentation='maximized'] .v6-shell-main {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.v6-viewport-safe-area { display: none; }
+
+@media (max-width: 1199px) {
+  .v6-application-shell { grid-template-columns: auto var(--v6-explorer-width) 6px minmax(0, 1fr); }
+  .v6-shell-inspector { display: none; }
+}
+
+@media (max-width: 959px) {
+  .v6-application-shell { grid-template-columns: auto minmax(0, 1fr); }
+  .v6-shell-explorer,
+  .v6-shell-inspector,
+  .v6-shell-bottom,
+  .v6-dock-resize-handle { display: none; }
+  .v6-shell-main { grid-column: 2; }
+}
