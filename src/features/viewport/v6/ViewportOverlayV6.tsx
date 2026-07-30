@@ -1,6 +1,18 @@
-import { Crosshair, Home, Maximize, Move, Rotate3D } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  Box,
+  Compass,
+  Crosshair,
+  Home,
+  Maximize,
+  Move,
+  Rotate3D,
+} from 'lucide-react'
 
-import type { CameraControllerV6 } from './camera-controller-v6.js'
+import type { CameraControllerV6, CameraOrientationV6 } from './camera-controller-v6.js'
 
 export interface SelectedTcpMarkerInputV6 {
   readonly projectRevisionId: string
@@ -16,16 +28,69 @@ export function selectedTcpMarkerV6(input: SelectedTcpMarkerInputV6): { readonly
   return Object.freeze({ robotId: input.robot.id, frameId: input.tcp.frameId })
 }
 
-export interface ViewportOverlayV6Props { readonly camera: CameraControllerV6 }
+export interface ViewportTransformControlV6 {
+  readonly enabled: boolean
+  readonly explanation: string
+  translate(): void
+}
 
-export function ViewportOverlayV6({ camera }: ViewportOverlayV6Props) {
+export interface ViewportOverlayV6Props {
+  readonly camera: CameraControllerV6
+  readonly tcpMarker?: SelectedTcpMarkerInputV6
+  readonly transformControl?: ViewportTransformControlV6
+}
+
+interface OrientationControlV6 {
+  readonly value: Exclude<CameraOrientationV6, 'isometric'>
+  readonly Icon: typeof ArrowUp
+}
+
+const ORIENTATION_CONTROLS: readonly OrientationControlV6[] = Object.freeze([
+  { value: 'top', Icon: ArrowUp },
+  { value: 'front', Icon: Compass },
+  { value: 'right', Icon: ArrowRight },
+  { value: 'back', Icon: Box },
+  { value: 'left', Icon: ArrowLeft },
+  { value: 'bottom', Icon: ArrowDown },
+])
+
+export function ViewportOverlayV6({ camera, tcpMarker, transformControl }: ViewportOverlayV6Props) {
+  const marker = tcpMarker === undefined ? null : selectedTcpMarkerV6(tcpMarker)
+  const translateAvailable = transformControl?.enabled === true
+  const translateExplanation = transformControl?.explanation
+    ?? 'Translation is unavailable until a manual transform controller is connected.'
   return <div aria-label="Viewport controls" className="v6-viewport-overlay">
-    <div aria-label="View Cube" className="v6-view-cube" data-testid="v6-view-cube"><Rotate3D aria-hidden="true" size={20} /></div>
-    <div className="v6-camera-controls" data-safe-placement="below-cube" data-testid="v6-camera-controls">
-      <button aria-label="Home view" onClick={() => camera.home()} type="button"><Home aria-hidden="true" size={18} /></button>
-      <button aria-label="Fit all visible geometry" onClick={() => camera.fitAll()} type="button"><Maximize aria-hidden="true" size={18} /></button>
-      <button aria-label="Focus selection" onClick={() => camera.focusSelection()} type="button"><Crosshair aria-hidden="true" size={18} /></button>
-      <button aria-label="Translate selection" type="button"><Move aria-hidden="true" size={18} /></button>
+    <button
+      aria-label="Set isometric view"
+      className="v6-view-cube"
+      data-testid="v6-view-cube"
+      onClick={() => camera.setOrientation('isometric')}
+      title="Set isometric view"
+      type="button"
+    ><Rotate3D aria-hidden="true" size={20} /></button>
+    <div aria-label="Standard camera orientations" className="v6-camera-orientations">
+      {ORIENTATION_CONTROLS.map(({ Icon, value }) => <button
+        aria-label={`Set ${value} view`}
+        key={value}
+        onClick={() => camera.setOrientation(value)}
+        title={`Set ${value} view`}
+        type="button"
+      ><Icon aria-hidden="true" size={16} /></button>)}
     </div>
+    <div className="v6-camera-controls" data-safe-placement="below-cube" data-testid="v6-camera-controls">
+      <button aria-label="Home view" onClick={() => camera.home()} title="Home view" type="button"><Home aria-hidden="true" size={18} /></button>
+      <button aria-label="Fit all visible geometry" onClick={() => camera.fitAll()} title="Fit all visible geometry" type="button"><Maximize aria-hidden="true" size={18} /></button>
+      <button aria-label="Focus selection" onClick={() => camera.focusSelection()} title="Focus selection" type="button"><Crosshair aria-hidden="true" size={18} /></button>
+      <button
+        aria-describedby="v6-translate-explanation"
+        aria-label="Translate selection"
+        disabled={!translateAvailable}
+        onClick={() => transformControl?.translate()}
+        title="Translate selection"
+        type="button"
+      ><Move aria-hidden="true" size={18} /></button>
+      {!translateAvailable && <span className="v6-transform-explanation" id="v6-translate-explanation">{translateExplanation}</span>}
+    </div>
+    {marker !== null && <output aria-label={`Selected TCP ${marker.robotId} ${marker.frameId}`} className="v6-tcp-marker" data-testid="v6-tcp-marker">{marker.robotId} / {marker.frameId}</output>}
   </div>
 }

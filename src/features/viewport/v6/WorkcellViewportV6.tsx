@@ -1,5 +1,12 @@
 import { Maximize2, Minimize2 } from 'lucide-react'
-import { useState, useSyncExternalStore, type MouseEvent, type ReactNode } from 'react'
+import {
+  useState,
+  useSyncExternalStore,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+  type WheelEvent,
+} from 'react'
 
 import type { AppCommandRegistryV6 } from '../../commands/v6/app-command-v6.js'
 import { invokeCommandSurfaceV6 } from '../../ui/v6/CommandSurfaceControlV6.js'
@@ -11,7 +18,16 @@ export interface WorkcellViewportV6Props {
   readonly canvas: ReactNode
   readonly overlay?: ReactNode
   readonly onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void
+  readonly interaction?: ViewportInteractionPortV6
   readonly layoutStore?: WorkspaceLayoutStoreV6
+}
+
+export interface ViewportInteractionPortV6 {
+  select(event: PointerEvent<HTMLDivElement>): void
+  orbit(event: PointerEvent<HTMLDivElement>): void
+  pan(event: PointerEvent<HTMLDivElement>): void
+  context(event: PointerEvent<HTMLDivElement>): void
+  zoom(event: WheelEvent<HTMLDivElement>): void
 }
 
 const noSubscription = () => () => {}
@@ -24,7 +40,14 @@ export function isCameraPointerInputV6(button: number, shiftKey: boolean): 'sele
   return null
 }
 
-export function WorkcellViewportV6({ canvas, layoutStore, onContextMenu, overlay, registry }: WorkcellViewportV6Props) {
+export function WorkcellViewportV6({
+  canvas,
+  interaction,
+  layoutStore,
+  onContextMenu,
+  overlay,
+  registry,
+}: WorkcellViewportV6Props) {
   const [, setVersion] = useState(0)
   const presentation = useSyncExternalStore(
     layoutStore?.subscribe ?? noSubscription,
@@ -60,6 +83,28 @@ export function WorkcellViewportV6({ canvas, layoutStore, onContextMenu, overlay
         event.preventDefault()
         onContextMenu?.(event)
       }}
+      onPointerDown={(event) => {
+        switch (isCameraPointerInputV6(event.button, event.shiftKey)) {
+          case 'select':
+            interaction?.select(event)
+            break
+          case 'orbit':
+            event.preventDefault()
+            interaction?.orbit(event)
+            break
+          case 'pan':
+            event.preventDefault()
+            interaction?.pan(event)
+            break
+          case 'context-menu':
+            event.preventDefault()
+            interaction?.context(event)
+            break
+          default:
+            break
+        }
+      }}
+      onWheel={(event) => interaction?.zoom(event)}
     >
       {canvas}
       {overlay}
