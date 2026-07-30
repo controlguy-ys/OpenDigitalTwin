@@ -22,6 +22,10 @@ import {
   takeManualBindingOwnershipV1,
   type BindingMappingDraftV1,
 } from './binding-editor-model.js'
+import {
+  OpcUaAddressSpaceBrowserDialogV1,
+  type OpcUaAddressSpaceBrowsePortV1,
+} from './OpcUaAddressSpaceBrowserDialog.js'
 import { resolveSessionNodeIdDraftV1 } from './opcua-node-address-draft.js'
 
 type MutationPortV1 = Pick<ProjectV5AtomicMutationPort, 'readPublished' | 'mutate'>
@@ -33,6 +37,7 @@ export interface BindingEditorDialogPropsV1 {
   readonly mutations: MutationPortV1
   readonly nodeAddressResolver: NamespaceIndexResolutionPortV1
   readonly browseSessionAvailable: (endpointId: string) => boolean
+  readonly addressSpaceBrowsePort?: OpcUaAddressSpaceBrowsePortV1
   readonly onClose: () => void
   readonly onSaved?: () => void
   readonly createMappingId?: () => string
@@ -65,6 +70,7 @@ export function BindingEditorDialogV1({
   mutations,
   nodeAddressResolver,
   browseSessionAvailable,
+  addressSpaceBrowsePort,
   onClose,
   onSaved,
   createMappingId,
@@ -75,6 +81,7 @@ export function BindingEditorDialogV1({
   const baselineRevisionIdRef = useRef(activeProject.revisionId)
   const manualActionRef = useRef<HTMLButtonElement>(null)
   const manualConfirmRef = useRef<HTMLButtonElement>(null)
+  const browseTriggerRef = useRef<HTMLButtonElement>(null)
   const manualConfirmationWasShownRef = useRef(false)
   const [draft, setDraft] = useState<BindingMappingDraftV1>(() => (
     createBindingMappingDraftV1(
@@ -88,6 +95,7 @@ export function BindingEditorDialogV1({
   const [manualConfirmation, setManualConfirmation] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [browseOpen, setBrowseOpen] = useState(false)
   const existing = activeProject.opcUa.mappings.some(({ id }) => id === draft.mappingId)
   const frameTarget = target.type === 'entity-frame' || target.type === 'robot-frame'
 
@@ -238,6 +246,7 @@ export function BindingEditorDialogV1({
                 <label><span>Paste session NodeId</span><input aria-label="Paste session NodeId" disabled={busy || !browseSessionAvailable(draft.endpointId)} onChange={(event) => setSessionNodeId(event.currentTarget.value)} placeholder="ns=2;s=ObjectPos" value={sessionNodeId} /></label>
                 <button disabled={busy || sessionNodeId.trim().length === 0 || !browseSessionAvailable(draft.endpointId)} onClick={resolvePastedNodeId} type="button">Resolve from Browse Session</button>
               </div>
+              {browseSessionAvailable(draft.endpointId) && addressSpaceBrowsePort !== undefined ? <button disabled={busy} onClick={() => { setError(null); setBrowseOpen(true) }} ref={browseTriggerRef} type="button">Browse Address Space</button> : null}
               <p>{browseSessionAvailable(draft.endpointId) ? 'The current Browse Session will resolve ns=N to its Namespace URI.' : 'Connect this Endpoint to enable session NodeId paste.'}</p>
             </section>
 
@@ -274,6 +283,21 @@ export function BindingEditorDialogV1({
             {error === null ? null : <p role="alert">{error}</p>}
           </div>
         </form>
+        {browseOpen && addressSpaceBrowsePort !== undefined ? <OpcUaAddressSpaceBrowserDialogV1
+          browsePort={addressSpaceBrowsePort}
+          endpointId={draft.endpointId}
+          onClose={() => setBrowseOpen(false)}
+          onSelect={(nodeAddress) => {
+            setDraft((current) => Object.freeze({
+              ...current,
+              namespaceUri: nodeAddress.namespaceUri,
+              identifierType: nodeAddress.identifierType,
+              identifier: nodeAddress.identifier,
+            }))
+            setBrowseOpen(false)
+          }}
+          triggerRef={browseTriggerRef}
+        /> : null}
     </ModalDialogV6>
   )
 }

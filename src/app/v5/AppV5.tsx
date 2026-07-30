@@ -428,6 +428,7 @@ export function AppV5({ resources: injectedResources }: AppV5Props): ReactNode {
     />}
     {activeProject !== null && bindingTarget !== null && <BindingEditorDialogV1
       activeProject={activeProject}
+      addressSpaceBrowsePort={resources.gateway}
       browseSessionAvailable={browseSessionAvailable}
       {...(bindingMappingId === undefined ? {} : { mappingId: bindingMappingId })}
       mutations={resources.mutations}
