@@ -60,6 +60,12 @@ function browserPort(): OpcUaAddressSpaceBrowsePortV1 {
   }
 }
 
+function deferred<Value>() {
+  let resolve: (value: Value) => void = () => undefined
+  const promise = new Promise<Value>((complete) => { resolve = complete })
+  return { promise, resolve }
+}
+
 function BrowserHarness({ port, onSelect = vi.fn() }: {
   readonly port: OpcUaAddressSpaceBrowsePortV1
   readonly onSelect?: (address: OpcUaAddressSpaceBrowseNodeV1['nodeAddress'] & {}) => void
@@ -138,5 +144,67 @@ describe('OpcUaAddressSpaceBrowserDialogV1', () => {
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'OPC UA Address Space' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Browse' })).toHaveFocus()
+  })
+
+  it('releases a continuation on close and keeps a release failure visible for retry', async () => {
+    const user = userEvent.setup()
+    const port = browserPort()
+    port.releaseAddressSpaceBrowse = vi.fn()
+      .mockRejectedValueOnce(new Error('release denied'))
+      .mockResolvedValueOnce(undefined)
+    render(<BrowserHarness port={port} />)
+    const machine = await screen.findByRole('treeitem', { name: /Machine/ })
+    machine.focus()
+    await user.keyboard('{ArrowRight}')
+    await screen.findByRole('treeitem', { name: /Temperature/ })
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('OPC_UA_BROWSE_RELEASE_FAILED: release denied')
+    expect(screen.getByRole('dialog', { name: 'OPC UA Address Space' })).toBeVisible()
+    expect(port.releaseAddressSpaceBrowse).toHaveBeenCalledWith('next-page')
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'OPC UA Address Space' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Browse' })).toHaveFocus()
+  })
+
+  it('shows browse and clipboard failures without applying a node', async () => {
+    const user = userEvent.setup()
+    const browseFailure: OpcUaAddressSpaceBrowsePortV1 = {
+      browseAddressSpace: vi.fn(async () => { throw new Error('session stale') }),
+      releaseAddressSpaceBrowse: vi.fn(async () => undefined),
+    }
+    const view = render(<BrowserHarness port={browseFailure} />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('session stale')
+    view.unmount()
+
+    const port = browserPort()
+    const writeText = vi.fn(async () => { throw new Error('clipboard denied') })
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<BrowserHarness port={port} />)
+    const machine = await screen.findByRole('treeitem', { name: /Machine/ })
+    machine.focus()
+    await user.keyboard('{ArrowRight}')
+    await user.click(await screen.findByRole('treeitem', { name: /Temperature/ }))
+    await user.click(screen.getByRole('button', { name: 'Copy NodeId' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('clipboard denied')
+  })
+
+  it('aborts and ignores a stale response after close before a new browse starts', async () => {
+    const user = userEvent.setup()
+    const first = deferred<OpcUaAddressSpaceBrowseResponseV1>()
+    let firstSignal: AbortSignal | undefined
+    const port: OpcUaAddressSpaceBrowsePortV1 = {
+      browseAddressSpace: vi.fn()
+        .mockImplementationOnce((_request, signal: AbortSignal | undefined) => { firstSignal = signal; return first.promise })
+        .mockResolvedValueOnce(response('ns=0;i=85', [node('ns=2;s=Fresh', { displayName: 'Fresh' })])),
+      releaseAddressSpaceBrowse: vi.fn(async () => undefined),
+    }
+    render(<BrowserHarness port={port} />)
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'OPC UA Address Space' })).not.toBeInTheDocument())
+    expect(firstSignal?.aborted).toBe(true)
+    await user.click(screen.getByRole('button', { name: 'Browse' }))
+    await screen.findByRole('treeitem', { name: /Fresh/ })
+    first.resolve(response('ns=0;i=85', [node('ns=2;s=Stale', { displayName: 'Stale' })]))
+    await waitFor(() => expect(screen.queryByRole('treeitem', { name: /Stale/ })).not.toBeInTheDocument())
   })
 })

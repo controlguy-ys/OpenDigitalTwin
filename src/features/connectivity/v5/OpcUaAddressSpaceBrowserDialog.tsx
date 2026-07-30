@@ -1,19 +1,9 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-  type RefObject,
-} from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 
 import type { OpcUaNodeAddressV1 } from '../../../core/project-v5/index.js'
-import type {
-  OpcUaAddressSpaceBrowseNodeV1,
-  OpcUaAddressSpaceBrowseResponseV1,
-} from '../../../core/runtime-protocol/opcua-connectivity-v1.js'
+import type { OpcUaAddressSpaceBrowseResponseV1 } from '../../../core/runtime-protocol/opcua-connectivity-v1.js'
 import { ModalDialogV6 } from '../../ui/v6/ModalDialogV6.js'
+import { addressTreeNavigationV1, createAddressTreeRowsV1, findAddressTreeRowV1, replaceAddressTreeRowV1, visibleAddressTreeRowsV1, type AddressTreeRowV1 } from './opcua-address-space-tree-model.js'
 
 const OBJECTS_NODE_ID_V1 = 'ns=0;i=85'
 const BROWSE_PAGE_SIZE_V1 = 25
@@ -28,95 +18,10 @@ export interface OpcUaAddressSpaceBrowsePortV1 {
   releaseAddressSpaceBrowse(continuationToken: string, signal?: AbortSignal): Promise<void>
 }
 
-export interface OpcUaAddressSpaceBrowserDialogPropsV1 {
-  readonly endpointId: string
-  readonly browsePort: OpcUaAddressSpaceBrowsePortV1
-  readonly onClose: () => void
-  readonly onSelect: (nodeAddress: OpcUaNodeAddressV1) => void
-  readonly triggerRef?: RefObject<HTMLElement | null>
-}
-
-interface AddressTreeRowV1 {
-  readonly rowId: string
-  readonly parentRowId: string | null
-  readonly node: OpcUaAddressSpaceBrowseNodeV1
-  readonly children: readonly AddressTreeRowV1[] | null
-  readonly expanded: boolean
-  readonly loading: boolean
-  readonly continuationToken: string | null
-}
-
-interface VisibleAddressTreeRowV1 {
-  readonly row: AddressTreeRowV1
-  readonly level: number
-}
+export interface OpcUaAddressSpaceBrowserDialogPropsV1 { readonly endpointId: string; readonly browsePort: OpcUaAddressSpaceBrowsePortV1; readonly onClose: () => void; readonly onSelect: (nodeAddress: OpcUaNodeAddressV1) => void; readonly triggerRef?: RefObject<HTMLElement | null> }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
-}
-
-function rowId(parentRowId: string | null, sessionNodeId: string): string {
-  return `${parentRowId ?? 'Objects'}>${sessionNodeId}`
-}
-
-function createRows(
-  parentRowId: string | null,
-  nodes: readonly OpcUaAddressSpaceBrowseNodeV1[],
-): readonly AddressTreeRowV1[] {
-  return nodes.map((node) => Object.freeze({
-    rowId: rowId(parentRowId, node.sessionNodeId),
-    parentRowId,
-    node,
-    children: null,
-    expanded: false,
-    loading: false,
-    continuationToken: null,
-  }))
-}
-
-function replaceRow(
-  rows: readonly AddressTreeRowV1[],
-  targetRowId: string,
-  update: (row: AddressTreeRowV1) => AddressTreeRowV1,
-): readonly AddressTreeRowV1[] {
-  return rows.map((row) => {
-    if (row.rowId === targetRowId) return update(row)
-    if (row.children === null) return row
-    const children = replaceRow(row.children, targetRowId, update)
-    return children === row.children ? row : Object.freeze({ ...row, children })
-  })
-}
-
-function findRow(rows: readonly AddressTreeRowV1[], targetRowId: string | null): AddressTreeRowV1 | null {
-  if (targetRowId === null) return null
-  for (const row of rows) {
-    if (row.rowId === targetRowId) return row
-    const descendant = row.children === null ? null : findRow(row.children, targetRowId)
-    if (descendant !== null) return descendant
-  }
-  return null
-}
-
-function rowMatchesFilter(row: AddressTreeRowV1, normalizedFilter: string): boolean {
-  if (normalizedFilter.length === 0) return true
-  return [row.node.browseName, row.node.displayName, row.node.sessionNodeId, row.node.nodeClass]
-    .some((value) => value.toLocaleLowerCase().includes(normalizedFilter))
-}
-
-function visibleRows(
-  rows: readonly AddressTreeRowV1[],
-  normalizedFilter: string,
-  level = 1,
-): readonly VisibleAddressTreeRowV1[] {
-  const result: VisibleAddressTreeRowV1[] = []
-  for (const row of rows) {
-    const descendants = row.children === null ? [] : visibleRows(row.children, normalizedFilter, level + 1)
-    const visible = rowMatchesFilter(row, normalizedFilter) || descendants.length > 0
-    if (!visible) continue
-    result.push(Object.freeze({ row, level }))
-    if (row.expanded || normalizedFilter.length > 0) result.push(...descendants)
-  }
-  return result
 }
 
 function responseMatches(
@@ -142,14 +47,15 @@ export function OpcUaAddressSpaceBrowserDialogV1({
   const [activeRowId, setActiveRowId] = useState<string | null>(null)
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [closing, setClosing] = useState(false)
   const rowRefs = useRef(new Map<string, HTMLDivElement>())
   const controllersRef = useRef(new Set<AbortController>())
   const continuationTokensRef = useRef(new Set<string>())
   const mountedRef = useRef(true)
   const operationGenerationRef = useRef(0)
   const normalizedFilter = filter.trim().toLocaleLowerCase()
-  const flattenedRows = useMemo(() => visibleRows(rows, normalizedFilter), [rows, normalizedFilter])
-  const selectedRow = findRow(rows, selectedRowId)
+  const flattenedRows = useMemo(() => visibleAddressTreeRowsV1(rows, normalizedFilter), [rows, normalizedFilter])
+  const selectedRow = findAddressTreeRowV1(rows, selectedRowId)
 
   const focusRow = (targetRowId: string | null): void => {
     if (targetRowId === null) return
@@ -157,10 +63,29 @@ export function OpcUaAddressSpaceBrowserDialogV1({
     window.requestAnimationFrame(() => rowRefs.current.get(targetRowId)?.focus())
   }
 
-  const releaseContinuations = (): void => {
+  const releaseContinuations = async (showError: boolean): Promise<boolean> => {
     const tokens = [...continuationTokensRef.current]
-    continuationTokensRef.current.clear()
-    for (const token of tokens) void browsePort.releaseAddressSpaceBrowse(token).catch(() => undefined)
+    const results = await Promise.allSettled(tokens.map(async (token) => {
+      await browsePort.releaseAddressSpaceBrowse(token)
+      return token
+    }))
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    for (const result of results) if (result.status === 'fulfilled') continuationTokensRef.current.delete(result.value)
+    if (failures.length === 0) return true
+    if (showError && mountedRef.current) setError(`OPC_UA_BROWSE_RELEASE_FAILED: ${errorMessage(failures[0]!.reason)}`)
+    return false
+  }
+
+  const close = (): void => {
+    if (closing) return
+    operationGenerationRef.current += 1
+    for (const controller of controllersRef.current) controller.abort()
+    controllersRef.current.clear()
+    setClosing(true)
+    void releaseContinuations(true).then((released) => {
+      if (released) onClose()
+      else if (mountedRef.current) setClosing(false)
+    })
   }
 
   const requestRows = (
@@ -173,7 +98,7 @@ export function OpcUaAddressSpaceBrowserDialogV1({
     controllersRef.current.add(controller)
     setError(null)
     if (parentRowId === null) setRootLoading(true)
-    else setRows((current) => replaceRow(current, parentRowId, (row) => Object.freeze({ ...row, loading: true })))
+    else setRows((current) => replaceAddressTreeRowV1(current, parentRowId, (row) => Object.freeze({ ...row, loading: true })))
     void browsePort.browseAddressSpace({
       endpointId,
       parentNodeId,
@@ -184,12 +109,12 @@ export function OpcUaAddressSpaceBrowserDialogV1({
       if (!responseMatches(response, endpointId, parentNodeId)) throw new Error('OPC_UA_BROWSE_RESPONSE_INVALID')
       if (continuationToken !== null) continuationTokensRef.current.delete(continuationToken)
       if (response.continuationToken !== null) continuationTokensRef.current.add(response.continuationToken)
-      const additions = createRows(parentRowId, response.nodes)
+      const additions = createAddressTreeRowsV1(parentRowId, response.nodes)
       if (parentRowId === null) {
         setRows((current) => [...current, ...additions])
         setRootContinuationToken(response.continuationToken)
       } else {
-        setRows((current) => replaceRow(current, parentRowId, (row) => Object.freeze({
+        setRows((current) => replaceAddressTreeRowV1(current, parentRowId, (row) => Object.freeze({
           ...row,
           children: [...(row.children ?? []), ...additions],
           continuationToken: response.continuationToken,
@@ -201,7 +126,7 @@ export function OpcUaAddressSpaceBrowserDialogV1({
     }).catch((browseError: unknown) => {
       if (!mountedRef.current || operationGenerationRef.current !== generation || (browseError instanceof Error && browseError.name === 'AbortError')) return
       setError(errorMessage(browseError))
-      if (parentRowId !== null) setRows((current) => replaceRow(current, parentRowId, (row) => Object.freeze({ ...row, loading: false })))
+      if (parentRowId !== null) setRows((current) => replaceAddressTreeRowV1(current, parentRowId, (row) => Object.freeze({ ...row, loading: false })))
     }).finally(() => {
       controllersRef.current.delete(controller)
       if (mountedRef.current && operationGenerationRef.current === generation && parentRowId === null) setRootLoading(false)
@@ -215,7 +140,7 @@ export function OpcUaAddressSpaceBrowserDialogV1({
       operationGenerationRef.current += 1
       for (const controller of controllersRef.current) controller.abort()
       controllersRef.current.clear()
-      releaseContinuations()
+      void releaseContinuations(false)
     }
   }, [])
 
@@ -230,12 +155,12 @@ export function OpcUaAddressSpaceBrowserDialogV1({
       requestRows(row.rowId, row.node.sessionNodeId, null)
       return
     }
-    setRows((current) => replaceRow(current, row.rowId, (currentRow) => Object.freeze({ ...currentRow, expanded: true })))
+    setRows((current) => replaceAddressTreeRowV1(current, row.rowId, (currentRow) => Object.freeze({ ...currentRow, expanded: true })))
   }
 
   const collapse = (row: AddressTreeRowV1): void => {
     if (!row.node.hasChildren || !row.expanded) return
-    setRows((current) => replaceRow(current, row.rowId, (currentRow) => Object.freeze({ ...currentRow, expanded: false })))
+    setRows((current) => replaceAddressTreeRowV1(current, row.rowId, (currentRow) => Object.freeze({ ...currentRow, expanded: false })))
   }
 
   const selectRow = (row: AddressTreeRowV1): void => {
@@ -249,35 +174,13 @@ export function OpcUaAddressSpaceBrowserDialogV1({
   }
 
   const onTreeKeyDown = (event: KeyboardEvent<HTMLDivElement>, row: AddressTreeRowV1): void => {
-    const index = flattenedRows.findIndex(({ row: visibleRow }) => visibleRow.rowId === row.rowId)
-    const next = flattenedRows[index + 1]?.row
-    const previous = flattenedRows[index - 1]?.row
-    if (event.key === 'ArrowDown') { event.preventDefault(); focusRow(next?.rowId ?? row.rowId); return }
-    if (event.key === 'ArrowUp') { event.preventDefault(); focusRow(previous?.rowId ?? row.rowId); return }
-    if (event.key === 'Home') { event.preventDefault(); focusRow(flattenedRows[0]?.row.rowId ?? row.rowId); return }
-    if (event.key === 'End') { event.preventDefault(); focusRow(flattenedRows.at(-1)?.row.rowId ?? row.rowId); return }
-    if (event.key === 'ArrowRight') {
-      event.preventDefault()
-      if (!row.expanded) expand(row)
-      else focusRow(row.children?.[0]?.rowId ?? row.rowId)
-      return
-    }
-    if (event.key === 'ArrowLeft') {
-      event.preventDefault()
-      if (row.expanded) collapse(row)
-      else focusRow(row.parentRowId)
-      return
-    }
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      if (row.node.hasChildren) {
-        if (row.expanded) collapse(row)
-        else expand(row)
-      } else {
-        selectRow(row)
-        if (row.node.nodeAddress !== null) onSelect(row.node.nodeAddress)
-      }
-    }
+    const action = addressTreeNavigationV1(event.key, flattenedRows, row)
+    if (action === null) return
+    event.preventDefault()
+    if (action.type === 'focus') focusRow(action.rowId)
+    else if (action.type === 'expand') expand(action.row)
+    else if (action.type === 'collapse') collapse(action.row)
+    else { selectRow(action.row); if (action.row.node.nodeAddress !== null) onSelect(action.row.node.nodeAddress) }
   }
 
   const copySelectedNodeId = (): void => {
@@ -291,18 +194,19 @@ export function OpcUaAddressSpaceBrowserDialogV1({
   }
 
   return <ModalDialogV6
+    busy={closing}
     className="opcua-address-browser-dialog"
     footer={<footer className="opcua-settings-footer">
-      <button onClick={onClose} type="button">Close</button>
-      <button disabled={selectedRow === null} onClick={copySelectedNodeId} type="button">Copy NodeId</button>
-      <button disabled={selectedRow?.node.nodeAddress === null || selectedRow === null} onClick={applySelectedNode} type="button">Select Node</button>
+      <button disabled={closing} onClick={close} type="button">Close</button>
+      <button disabled={closing || selectedRow === null} onClick={copySelectedNodeId} type="button">Copy NodeId</button>
+      <button disabled={closing || selectedRow?.node.nodeAddress === null || selectedRow === null} onClick={applySelectedNode} type="button">Select Node</button>
     </footer>}
     header={<header className="opcua-settings-header">
       <div><p>Connectivity / Mapping</p><h2 id="opcua-address-space-browser-title">OPC UA Address Space</h2></div>
       <p>Read-only browse session</p>
     </header>}
     nestedDialog={{ parentDialogId: 'binding-editor-v1-title' }}
-    onClose={onClose}
+    onClose={close}
     size="wide"
     testId="opcua-address-space-browser-overlay"
     titleId="opcua-address-space-browser-title"
