@@ -20,7 +20,7 @@
 .v6-inspector-section { min-width: 0; border: 1px solid var(--v6-color-border); border-radius: 4px; background: var(--v6-color-panel); }
 .v6-inspector-section > summary { list-style: none; }
 .v6-inspector-section > summary::-webkit-details-marker { display: none; }
-.v6-inspector-section > summary button { width: 100%; min-height: 32px; padding: 6px 8px; border: 0; background: transparent; color: var(--v6-color-text); font: inherit; font-weight: 600; text-align: left; }
+.v6-inspector-section > summary { min-height: 32px; box-sizing: border-box; padding: 6px 8px; color: var(--v6-color-text); font-weight: 600; cursor: pointer; }
 .v6-inspector-section-body { display: grid; gap: 8px; min-width: 0; padding: 0 8px 8px; }
 .v6-inspector-section dl { display: grid; gap: 4px; margin: 0; }
 .v6-inspector-section dl div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }

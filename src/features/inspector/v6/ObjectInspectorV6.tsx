@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import {
   quaternionToRpyDegreesV5,
@@ -28,7 +28,7 @@ function draftFor(entity: SpatialEntityV5): PoseDraft {
   return Object.freeze({ x: String(entity.localPose.positionM[0]), y: String(entity.localPose.positionM[1]), z: String(entity.localPose.positionM[2]), roll: String(rpy[0]), pitch: String(rpy[1]), yaw: String(rpy[2]) })
 }
 
-function samePose(entity: SpatialEntityV5, values: readonly number[]): boolean {
+function samePose(entity: SpatialEntityV5, values: readonly [number, number, number, number, number, number]): boolean {
   const rpy = quaternionToRpyDegreesV5(entity.localPose.quaternion)
   return entity.localPose.positionM.every((value, index) => value === values[index]) && rpy.every((value, index) => value === values[index + 3])
 }
@@ -42,7 +42,7 @@ function ownershipDescription(owner: SpatialEntityV5['transformOwner']): string 
 
 function Section({ title, children }: { readonly title: string; readonly children: ReactNode }): ReactNode {
   return <details className="v6-inspector-section" open>
-    <summary><button aria-label={title} type="button">{title}</button></summary>
+    <summary aria-label={`${title} section`}>{title}</summary>
     <div className="v6-inspector-section-body">{children}</div>
   </details>
 }
@@ -56,7 +56,6 @@ export function ObjectInspectorV6({ project, entityId, mutations, onOpenBinding 
     setDraftKey(key)
     setDraft(entity === undefined ? Object.freeze({ x: '', y: '', z: '', roll: '', pitch: '', yaw: '' }) : draftFor(entity))
   }
-  useEffect(() => undefined, [key])
   if (entity === undefined) return <section className="v6-selection-inspector" aria-live="polite"><p>Selected Object is no longer available.</p></section>
   const manual = entity.transformOwner === 'manual'
   const comms = entityCommsDisplayStateV1(project, entity)
@@ -65,7 +64,10 @@ export function ObjectInspectorV6({ project, entityId, mutations, onOpenBinding 
     if (!manual || mutations === undefined) return
     const rawValues = [draft.x, draft.y, draft.z, draft.roll, draft.pitch, draft.yaw]
     if (rawValues.some((value) => value.trim().length === 0)) return
-    const values = rawValues.map(Number)
+    const values: readonly [number, number, number, number, number, number] = [
+      Number(rawValues[0]), Number(rawValues[1]), Number(rawValues[2]),
+      Number(rawValues[3]), Number(rawValues[4]), Number(rawValues[5]),
+    ]
     if (values.some((value) => !Number.isFinite(value)) || samePose(entity, values)) return
     const published = mutations.readPublished()
     if (published === null) return
@@ -79,8 +81,8 @@ export function ObjectInspectorV6({ project, entityId, mutations, onOpenBinding 
           : {
               ...candidate,
               localPose: {
-                positionM: [values[0]!, values[1]!, values[2]!],
-                quaternion: rpyDegreesToQuaternionV5([values[3]!, values[4]!, values[5]!]),
+                positionM: [values[0], values[1], values[2]],
+                quaternion: rpyDegreesToQuaternionV5([values[3], values[4], values[5]]),
               },
             }),
       }),
@@ -92,9 +94,10 @@ export function ObjectInspectorV6({ project, entityId, mutations, onOpenBinding 
     if (published === null) return
     void mutations.mutate({ expectedRevisionId: published.revisionId, description: 'Update Object communications', recipe: (active) => updateEntityCommsV1(active, entityId, patch) })
   }
-  const bindingTarget: OpcUaProjectTargetV5 = entity.movingFrames[0] === undefined
+  const movingFrame = entity.movingFrames[0]
+  const bindingTarget: OpcUaProjectTargetV5 = movingFrame === undefined
     ? { type: 'entity-status', entityId }
-    : { type: 'entity-frame', entityId, frameId: entity.movingFrames[0].frameId }
+    : { type: 'entity-frame', entityId, frameId: movingFrame.frameId }
   return <section className="v6-selection-inspector" aria-label={`${entity.name} inspector`}>
     <header><h2>{entity.name}</h2><p>{ownershipDescription(entity.transformOwner)}</p></header>
     <Section title="Runtime"><dl><div><dt>Owner</dt><dd>{entity.transformOwner}</dd></div><div><dt>Parent frame</dt><dd>{entity.parentFrameId}</dd></div></dl></Section>
