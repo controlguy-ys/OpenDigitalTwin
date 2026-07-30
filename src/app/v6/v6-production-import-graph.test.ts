@@ -14,6 +14,10 @@ import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 const projectRoot = realpathSync(process.cwd())
+const removedV5ShellFiles = Object.freeze([
+  'src/app/v5/AppV5.tsx',
+  'src/app/v5/AppV5.test.tsx',
+])
 const sourceExtensions = Object.freeze([
   '.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs',
 ])
@@ -212,6 +216,20 @@ describe('V6 production import graph', () => {
     expect(boundary.forbiddenImports).toEqual([])
     expect(boundary.imports).not.toContainEqual(
       expect.stringMatching(/ -> src\/(?:app\/v4|features\/.+\/v4)\//u),
+    )
+  })
+
+  it('keeps the superseded V5 shell deleted while retaining the shared V5 bootstrap and workcell authority', () => {
+    for (const removedFile of removedV5ShellFiles) {
+      expect(existsSync(resolve(projectRoot, removedFile)), removedFile).toBe(false)
+    }
+
+    const graph = inspectV6ProductionBoundary(projectRoot)
+    expect(graph.imports).toContain(
+      'src/app/v6/AppV6.tsx -> src/app/v5/initial-project-bootstrap-v5.ts',
+    )
+    expect(graph.imports).toContain(
+      'src/app/v6/AppV6.tsx -> src/features/scene/v5/V5WorkcellWorkspace.tsx',
     )
   })
 })
