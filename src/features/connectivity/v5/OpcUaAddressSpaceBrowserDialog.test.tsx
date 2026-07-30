@@ -207,4 +207,32 @@ describe('OpcUaAddressSpaceBrowserDialogV1', () => {
     first.resolve(response('ns=0;i=85', [node('ns=2;s=Stale', { displayName: 'Stale' })]))
     await waitFor(() => expect(screen.queryByRole('treeitem', { name: /Stale/ })).not.toBeInTheDocument())
   })
+
+  it('releases an acquired continuation exactly once when its parent unmounts during a pending child page', async () => {
+    const user = userEvent.setup()
+    const pendingPage = deferred<OpcUaAddressSpaceBrowseResponseV1>()
+    let pendingSignal: AbortSignal | undefined
+    const releaseAddressSpaceBrowse = vi.fn(async () => undefined)
+    const port: OpcUaAddressSpaceBrowsePortV1 = {
+      browseAddressSpace: vi.fn()
+        .mockResolvedValueOnce(response('ns=0;i=85', [node('ns=2;s=Machine', { displayName: 'Machine', hasChildren: true })]))
+        .mockResolvedValueOnce(response('ns=2;s=Machine', [node('ns=2;s=Machine.Temp', { displayName: 'Temperature' })], 'continuation-a'))
+        .mockImplementationOnce((_request, signal: AbortSignal | undefined) => { pendingSignal = signal; return pendingPage.promise }),
+      releaseAddressSpaceBrowse,
+    }
+    const view = render(<BrowserHarness port={port} />)
+    const machine = await screen.findByRole('treeitem', { name: /Machine/ })
+    machine.focus()
+    await user.keyboard('{ArrowRight}')
+    await screen.findByRole('treeitem', { name: /Temperature/ })
+    await user.click(screen.getByRole('button', { name: 'Load more Machine' }))
+
+    view.unmount()
+    await waitFor(() => expect(releaseAddressSpaceBrowse).toHaveBeenCalledTimes(1))
+    expect(releaseAddressSpaceBrowse).toHaveBeenCalledWith('continuation-a')
+    expect(pendingSignal?.aborted).toBe(true)
+    pendingPage.resolve(response('ns=2;s=Machine', [node('ns=2;s=Machine.Late', { displayName: 'Late' })]))
+    await waitFor(() => expect(screen.queryByRole('treeitem', { name: /Late/ })).not.toBeInTheDocument())
+    expect(releaseAddressSpaceBrowse).toHaveBeenCalledTimes(1)
+  })
 })
