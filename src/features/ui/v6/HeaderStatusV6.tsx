@@ -36,9 +36,14 @@ function opcUaBadge(connectivity: ConnectivityPresentationStateV1): HeaderStatus
 }
 
 export function HeaderStatusV6({ projectName, saveState, simulation, connectivity }: HeaderStatusV6Props) {
-  return <div data-one-row="true" data-testid="v6-header-status">
-    <span>{projectName}</span>
-    <span aria-label={`Project ${saveState}`}>{saveState}</span>
+  return <div
+    aria-label="Project and runtime status"
+    className="v6-header-status"
+    data-testid="v6-header-status"
+    role="group"
+  >
+    <span className="v6-header-status-project" title={projectName}>{projectName}</span>
+    <span aria-label={`Project ${saveState}`} className="v6-header-status-save">{saveState}</span>
     <StatusBadgeV6 {...simulation} />
     <StatusBadgeV6 {...gatewayBadge(connectivity)} />
     <StatusBadgeV6 {...opcUaBadge(connectivity)} />

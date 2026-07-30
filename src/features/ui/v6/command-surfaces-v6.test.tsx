@@ -1,16 +1,24 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Circle } from 'lucide-react'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { ConnectivityPresentationStateV1 } from '../../connectivity/v5/connectivity-presentation-store.js'
 import { createAppCommandRegistryV6, createMainViewMaximizeCommandV6, type AppCommandSnapshotV6 } from '../../commands/v6/app-command-v6.js'
 import { AppMenuBarV6 } from './AppMenuBarV6.js'
+import { MainViewPaneToolbarCommandV6 } from './AppMenuBarV6.js'
+import { CommandSurfaceControlV6 } from './CommandSurfaceControlV6.js'
 import { HeaderStatusV6 } from './HeaderStatusV6.js'
 import { HelpOverlayV6 } from './HelpOverlayV6.js'
 import { ModelToolboxV6 } from './ModelToolboxV6.js'
 
-function command(id: AppCommandSnapshotV6['id'], label: string = id): AppCommandSnapshotV6 {
-  return { id, label, enabled: true, visible: true, execute: vi.fn() }
+function command(
+  id: AppCommandSnapshotV6['id'],
+  label: string = id,
+  overrides: Partial<AppCommandSnapshotV6> = {},
+): AppCommandSnapshotV6 {
+  return { id, label, enabled: true, visible: true, execute: vi.fn(), ...overrides }
 }
 
 describe('V6 command surfaces', () => {
@@ -18,13 +26,26 @@ describe('V6 command surfaces', () => {
     const addBox = command('model.addBox', 'Add Box')
     const addCylinder = command('model.addCylinder', 'Add Cylinder')
     const registry = createAppCommandRegistryV6([addBox, addCylinder])
-    const context = vi.fn(async () => registry.invoke('model.addBox'))
-    render(<><AppMenuBarV6 registry={registry} /><ModelToolboxV6 registry={registry} /><button data-command-id="model.addBox" onClick={() => void context()} type="button">Context Add Box</button></>)
+    const view = render(<>
+      <AppMenuBarV6 registry={registry} />
+      <ModelToolboxV6 registry={registry} />
+      <div role="menu">
+        <CommandSurfaceControlV6
+          commandId="model.addBox"
+          registry={registry}
+          surface="viewport-context-menu"
+        />
+      </div>
+    </>)
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }))
-    const menuAddBox = screen.getByRole('menuitem', { name: 'Add Box' })
+    const menuAddBox = view.container.querySelector<HTMLElement>(
+      '[data-command-surface="model-menu"][data-command-id="model.addBox"]',
+    )!
     const toolboxAddBox = screen.getByRole('button', { name: 'Add Box' })
-    const contextAddBox = screen.getByRole('button', { name: 'Context Add Box' })
+    const contextAddBox = view.container.querySelector<HTMLElement>(
+      '[data-command-surface="viewport-context-menu"][data-command-id="model.addBox"]',
+    )!
     expect(menuAddBox).toHaveAttribute('data-command-id', 'model.addBox')
     expect(toolboxAddBox).toHaveAttribute('data-command-id', 'model.addBox')
     expect(contextAddBox).toHaveAttribute('data-command-id', 'model.addBox')
@@ -40,16 +61,28 @@ describe('V6 command surfaces', () => {
       isMainViewMaximized: () => maximized,
       toggleMainView: () => { maximized = !maximized },
     })])
-    render(<AppMenuBarV6 registry={registry} />)
+    render(<>
+      <AppMenuBarV6 registry={registry} />
+      <MainViewPaneToolbarCommandV6 registry={registry} />
+    </>)
 
     const viewTrigger = screen.getByRole('menuitem', { name: 'View' })
     fireEvent.click(viewTrigger)
-    const maximize = screen.getByRole('menuitem', { name: 'Maximize Main View' })
+    const maximize = screen.getByRole('menuitemcheckbox', { name: 'Maximize Main View' })
+    const toolbar = screen.getByRole('button', { name: 'Maximize Main View' })
     expect(maximize).toHaveAttribute('aria-checked', 'false')
-    fireEvent.click(maximize)
+    expect(toolbar).toHaveAttribute('data-command-id', 'view.main.maximize')
+    expect(toolbar).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toolbar)
+    await vi.waitFor(() => expect(
+      screen.getByRole('menuitemcheckbox', { name: 'Restore Main View' }),
+    ).toHaveAttribute('aria-checked', 'true'))
+    expect(toolbar).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Restore Main View' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Restore Main View' }))
     await vi.waitFor(() => expect(viewTrigger).toHaveFocus())
     fireEvent.click(viewTrigger)
-    expect(screen.getByRole('menuitem', { name: 'Restore Main View' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('menuitemcheckbox', { name: 'Maximize Main View' })).toHaveAttribute('aria-checked', 'false')
   })
 
   it('keeps the header compact and free of removed persistent command clusters', () => {
@@ -68,7 +101,15 @@ describe('V6 command surfaces', () => {
       saveState="Saved"
     />)
 
-    expect(screen.getByTestId('v6-header-status')).toHaveAttribute('data-one-row', 'true')
+    const header = screen.getByTestId('v6-header-status')
+    expect(header).toHaveClass('v6-header-status')
+    expect(header).not.toHaveAttribute('data-one-row')
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/components.css'), 'utf8')
+    const headerRule = css.match(/\.v6-header-status\s*\{([^}]*)\}/u)?.[1] ?? ''
+    expect(headerRule).toMatch(/display:\s*flex/u)
+    expect(headerRule).toMatch(/flex-wrap:\s*nowrap/u)
+    expect(headerRule).toMatch(/min-width:\s*0/u)
+    expect(headerRule).toMatch(/overflow:\s*hidden/u)
     expect(screen.getByText('Gateway Online')).toBeVisible()
     expect(screen.getByText('OPC UA Off')).toBeVisible()
     expect(screen.queryByRole('button', { name: /OPC UA Settings|Connection Monitor|Binding Overview|Docker Run Guide|Add Box|Add Cylinder/u })).toBeNull()
@@ -81,7 +122,15 @@ describe('V6 command surfaces', () => {
     const maximize = createMainViewMaximizeCommandV6({ isMainViewMaximized: () => maximized, toggleMainView: () => { maximized = false } })
     const registry = createAppCommandRegistryV6([save, controls, maximize])
     const closeTransient = vi.fn()
-    render(<AppMenuBarV6 registry={registry} transientUi={{ hasActiveTransient: () => true, closeActiveTransient: closeTransient }} />)
+    const requestContextMenu = vi.fn()
+    render(<AppMenuBarV6
+      contextMenu={{
+        resolveTarget: () => ({ kind: 'explorer-row', rowKey: 'row-focused' }),
+        requestOpen: requestContextMenu,
+      }}
+      registry={registry}
+      transientUi={{ hasActiveTransient: () => true, closeActiveTransient: closeTransient }}
+    />)
 
     fireEvent.keyDown(document, { key: 's', ctrlKey: true })
     fireEvent.keyDown(document, { key: 'F1' })
@@ -89,24 +138,76 @@ describe('V6 command surfaces', () => {
     fireEvent.keyDown(document, { key: 'F1', isComposing: true })
     const input = document.createElement('input')
     document.body.append(input)
-    fireEvent.keyDown(input, { key: 's', ctrlKey: true })
+    expect(fireEvent.keyDown(input, { key: 's', ctrlKey: true })).toBe(false)
+    expect(fireEvent.keyDown(input, { key: 'F1' })).toBe(false)
+    expect(fireEvent.keyDown(input, { key: 'Escape' })).toBe(true)
+    expect(fireEvent.keyDown(input, { key: 'F10', shiftKey: true })).toBe(true)
     fireEvent.keyDown(document, { key: 'Escape' })
 
-    await vi.waitFor(() => expect(save.execute).toHaveBeenCalledOnce())
-    expect(controls.execute).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(save.execute).toHaveBeenCalledTimes(2))
+    expect(controls.execute).toHaveBeenCalledTimes(2)
     expect(closeTransient).toHaveBeenCalledOnce()
+    expect(requestContextMenu).not.toHaveBeenCalled()
     expect(maximized).toBe(true)
+  })
+
+  it('uses roving top-level focus and opens and closes menus from the keyboard', async () => {
+    const registry = createAppCommandRegistryV6([
+      command('model.addBox', 'Add Box'),
+      command('model.addCylinder', 'Add Cylinder'),
+    ])
+    render(<AppMenuBarV6 registry={registry} />)
+    const project = screen.getByRole('menuitem', { name: 'Project' })
+    const home = screen.getByRole('menuitem', { name: 'Home' })
+    const model = screen.getByRole('menuitem', { name: 'Model' })
+
+    expect(project).toHaveAttribute('tabindex', '0')
+    expect(home).toHaveAttribute('tabindex', '-1')
+    project.focus()
+    fireEvent.keyDown(project, { key: 'ArrowRight' })
+    expect(home).toHaveFocus()
+    expect(home).toHaveAttribute('tabindex', '0')
+    fireEvent.keyDown(home, { key: 'ArrowRight' })
+    expect(model).toHaveFocus()
+    fireEvent.keyDown(model, { key: 'ArrowDown' })
+    await vi.waitFor(() => expect(screen.getByRole('menuitem', { name: 'Add Box' })).toHaveFocus())
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Add Box' }), { key: 'Escape' })
+    expect(model).toHaveFocus()
+    expect(screen.queryByRole('menu', { name: 'Model menu' })).toBeNull()
+    fireEvent.keyDown(model, { key: 'Enter' })
+    expect(screen.getByRole('menu', { name: 'Model menu' })).toBeVisible()
+  })
+
+  it('uses radio roles and checked state for the exclusive theme commands', () => {
+    const registry = createAppCommandRegistryV6([
+      command('view.theme.system', 'System Theme', { checked: false }),
+      command('view.theme.dark', 'Dark Theme', { checked: true }),
+      command('view.theme.light', 'Light Theme', { checked: false }),
+    ])
+    render(<AppMenuBarV6 registry={registry} />)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'View' }))
+
+    expect(screen.getByRole('menuitemradio', { name: 'System Theme' })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('menuitemradio', { name: 'Dark Theme' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('menuitemradio', { name: 'Light Theme' })).toHaveAttribute('aria-checked', 'false')
   })
 
   it('restores Main View only after no transient UI is active and dispatches Shift+F10 through its seam', async () => {
     let maximized = true
+    const selectedTarget = {
+      kind: 'selection',
+      selection: { kind: 'entity', id: 'entity-selected' },
+    } as const
     const requestContextMenu = vi.fn()
     const registry = createAppCommandRegistryV6([createMainViewMaximizeCommandV6({
       isMainViewMaximized: () => maximized,
       toggleMainView: () => { maximized = false },
     })])
     render(<AppMenuBarV6
-      onRequestContextMenu={requestContextMenu}
+      contextMenu={{
+        resolveTarget: () => selectedTarget,
+        requestOpen: requestContextMenu,
+      }}
       registry={registry}
       transientUi={{ hasActiveTransient: () => false, closeActiveTransient: vi.fn() }}
     />)
@@ -115,7 +216,7 @@ describe('V6 command surfaces', () => {
     fireEvent.keyDown(document, { key: 'F10', shiftKey: true })
 
     await vi.waitFor(() => expect(maximized).toBe(false))
-    expect(requestContextMenu).toHaveBeenCalledOnce()
+    expect(requestContextMenu).toHaveBeenCalledExactlyOnceWith(selectedTarget)
   })
 
   it('renders the exact requested help topic and closes it', () => {

@@ -119,6 +119,18 @@ export function createAppCommandCompositionV6(
     execute: () => void | Promise<void>,
     enabled: () => boolean = () => true,
   ): AppCommandSnapshotV6 => ({ id, label, get enabled() { return enabled() }, visible: true, execute })
+  const themeCommand = (
+    id: 'view.theme.system' | 'view.theme.dark' | 'view.theme.light',
+    label: string,
+    theme: 'system' | 'dark' | 'light',
+  ): AppCommandSnapshotV6 => ({
+    id,
+    label,
+    enabled: true,
+    visible: true,
+    get checked() { return context.layout.getState().preferences.theme === theme },
+    execute: () => context.layout.getState().setTheme(theme),
+  })
   const commands: readonly AppCommandSnapshotV6[] = [
     command('project.new', 'New Project', () => context.resources.store.getState().newProject(), () => projectIsReady(context)),
     createLoadDemoCommand(context),
@@ -143,9 +155,9 @@ export function createAppCommandCompositionV6(
       toggleMainView: () => context.layout.getState().toggleMainViewMaximized(),
     }),
     command('view.layout.reset', 'Reset Layout', () => context.layout.getState().resetLayout()),
-    command('view.theme.system', 'System Theme', () => context.layout.getState().setTheme('system'), () => true),
-    command('view.theme.dark', 'Dark Theme', () => context.layout.getState().setTheme('dark'), () => true),
-    command('view.theme.light', 'Light Theme', () => context.layout.getState().setTheme('light'), () => true),
+    themeCommand('view.theme.system', 'System Theme', 'system'),
+    themeCommand('view.theme.dark', 'Dark Theme', 'dark'),
+    themeCommand('view.theme.light', 'Light Theme', 'light'),
     command('help.controls', 'Controls', () => context.openDialog({ kind: 'help', topic: 'controls' }), () => true),
     command('help.about', 'About', () => context.openDialog({ kind: 'help', topic: 'about' }), () => true),
   ]

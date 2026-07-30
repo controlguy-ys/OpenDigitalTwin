@@ -130,4 +130,16 @@ describe('createAppCommandCompositionV6', () => {
     expect(harness.layout.getState().mainViewPresentation).toBe('maximized')
     expect(harness.mutate).not.toHaveBeenCalled()
   })
+
+  it('publishes exclusive checked state for the browser-local theme commands', async () => {
+    const harness = createHarness()
+    const registry = createAppCommandCompositionV6(harness.context)
+
+    expect(registry.get('view.theme.system')?.checked).toBe(true)
+    expect(registry.get('view.theme.dark')?.checked).toBe(false)
+    await registry.invoke('view.theme.dark')
+    expect(registry.get('view.theme.system')?.checked).toBe(false)
+    expect(registry.get('view.theme.dark')?.checked).toBe(true)
+    expect(registry.get('view.theme.light')?.checked).toBe(false)
+  })
 })

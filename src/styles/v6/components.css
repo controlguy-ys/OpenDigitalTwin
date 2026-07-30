@@ -47,6 +47,27 @@
 .v6-status-badge[data-state="fault"] { color: var(--v6-color-fault); }
 .v6-status-badge[data-state="selection"] { color: var(--v6-color-selection); }
 
+.v6-header-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.v6-header-status-project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v6-header-status-save,
+.v6-header-status .v6-status-badge {
+  flex: 0 0 auto;
+}
+
 .v6-switch-field {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
