@@ -85,6 +85,7 @@ interface ContinuationV1 {
   readonly createdAtMs: number
   readonly expiresAtMs: number
   pendingRelease: boolean
+  releaseInFlight: Promise<boolean> | null
   releaseAttempts: number
   lastReleaseError: string | null
 }
@@ -158,18 +159,27 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
     timers.set(token, scheduleTimeout(() => { void abandon(token, state) }, delayMs))
   }
   const abandon = async (token: string, state: ContinuationV1): Promise<boolean> => {
-    if (continuations.get(token) !== state || state.pendingRelease) return false
+    if (continuations.get(token) !== state) return false
+    if (state.releaseInFlight !== null) return state.releaseInFlight
     state.pendingRelease = true
+    const inFlight = (async (): Promise<boolean> => {
+      try {
+        await state.session.browseNext([state.continuationPoint], true)
+        remove(token)
+        return true
+      } catch (error) {
+        state.pendingRelease = false
+        state.releaseAttempts += 1
+        state.lastReleaseError = error instanceof Error ? error.message.slice(0, 256) : String(error).slice(0, 256)
+        if (state.releaseAttempts < MAX_RELEASE_ATTEMPTS_V1) scheduleRelease(token, state, Math.min(5_000, 25 * 2 ** state.releaseAttempts))
+        return false
+      }
+    })()
+    state.releaseInFlight = inFlight
     try {
-      await state.session.browseNext([state.continuationPoint], true)
-      remove(token)
-      return true
-    } catch (error) {
-      state.pendingRelease = false
-      state.releaseAttempts += 1
-      state.lastReleaseError = error instanceof Error ? error.message.slice(0, 256) : String(error).slice(0, 256)
-      if (state.releaseAttempts < MAX_RELEASE_ATTEMPTS_V1) scheduleRelease(token, state, Math.min(5_000, 25 * 2 ** state.releaseAttempts))
-      return false
+      return await inFlight
+    } finally {
+      if (state.releaseInFlight === inFlight) state.releaseInFlight = null
     }
   }
   const retainForRelease = (
@@ -189,6 +199,7 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
       createdAtMs,
       expiresAtMs: createdAtMs + continuationTtlMs,
       pendingRelease: false,
+      releaseInFlight: null,
       releaseAttempts: 0,
       lastReleaseError: null,
     }
@@ -287,7 +298,7 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
           throw error
         }
         const createdAtMs = nowMs()
-        const state: ContinuationV1 = { endpointId: request.endpointId, parentNodeId, generation: first.generation, session: first.session, continuationPoint: result.continuationPoint, createdAtMs, expiresAtMs: createdAtMs + continuationTtlMs, pendingRelease: false, releaseAttempts: 0, lastReleaseError: null }
+        const state: ContinuationV1 = { endpointId: request.endpointId, parentNodeId, generation: first.generation, session: first.session, continuationPoint: result.continuationPoint, createdAtMs, expiresAtMs: createdAtMs + continuationTtlMs, pendingRelease: false, releaseInFlight: null, releaseAttempts: 0, lastReleaseError: null }
         continuations.set(continuationToken, state)
         scheduleRelease(continuationToken, state, continuationTtlMs)
       }

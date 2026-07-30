@@ -127,6 +127,23 @@ describe('createOpcUaAddressSpaceBrowserV1', () => {
     expect(browser.pendingReleaseCount()).toBe(0)
   })
 
+  it('shares one in-flight release between an HTTP-token release and endpoint cleanup', async () => {
+    let resolveRelease: (() => void) | null = null
+    const session = {
+      browse: vi.fn(async () => ({ good: true, continuationPoint: Buffer.from('shared'), references: [] })),
+      browseNext: vi.fn(async () => new Promise<{ readonly good: boolean; readonly continuationPoint: null; readonly references: readonly [] }>((resolve) => { resolveRelease = () => resolve({ good: true, continuationPoint: null, references: [] }) })),
+      readNamespaceArray: vi.fn(async () => ['http://opcfoundation.org/UA/']),
+    }
+    const browser = createOpcUaAddressSpaceBrowserV1({ currentSession: () => ({ endpointId: 'plc-a', generation: 1, session }), createToken: () => 'shared_token' })
+    await browser.browse({ endpointId: 'plc-a', parentNodeId: null, limit: 1, continuationToken: null })
+    const release = browser.release('shared_token')
+    await vi.waitFor(() => expect(session.browseNext).toHaveBeenCalledOnce())
+    const disconnectCleanup = browser.releaseEndpoint('plc-a')
+    resolveRelease!()
+    await expect(Promise.all([release, disconnectCleanup])).resolves.toEqual([undefined, undefined])
+    expect(session.browseNext).toHaveBeenCalledOnce()
+  })
+
   it('replaces a consumed page token and releases the replacement continuation', async () => {
     const session = { browse: vi.fn(async () => ({ good: true, continuationPoint: Buffer.from('first'), references: [] })), browseNext: vi.fn(async (_points: readonly Uint8Array[], release: boolean) => release ? { good: true, continuationPoint: null, references: [] } : { good: true, continuationPoint: Buffer.from('second'), references: [] }), readNamespaceArray: vi.fn(async () => ['http://opcfoundation.org/UA/']) }
     let token = 0

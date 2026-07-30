@@ -1759,6 +1759,38 @@ describe('OPC UA client adapter V1 Project V5 root-notification boundary', () =>
     expect(connection.session.close).toHaveBeenCalledOnce()
   })
 
+  it('waits for an in-flight browser release before disconnecting and closing its Session', async () => {
+    const connection = fakeConnection()
+    const events: string[] = []
+    let resolveRelease: (() => void) | null = null
+    const rawSession = connection.session as typeof connection.session & {
+      browse: ReturnType<typeof vi.fn>
+      browseNext: ReturnType<typeof vi.fn>
+      requestedMaxReferencesPerNode?: number
+    }
+    rawSession.browse = vi.fn(async () => ({ statusCode: { isGood: () => true }, continuationPoint: Buffer.from('race-page'), references: [] }))
+    rawSession.browseNext = vi.fn(async () => new Promise((resolve) => { resolveRelease = () => { events.push('release-complete'); resolve({ statusCode: { isGood: () => true }, continuationPoint: null, references: [] }) } }))
+    rawSession.close = vi.fn(async () => { events.push('session-close') })
+    const adapter = createOpcUaClientAdapterV1(readProject(), {
+      gatewayId: 'gateway-local', originId: 'gateway-local:client', configRevision: REVISION,
+      publish: () => undefined, createClient: () => connection.client as never,
+    })
+    await adapter.start()
+    await eventually(() => adapter.status()[0]?.phase === 'connected')
+    const browser = adapter.addressSpaceBrowser!
+    const page = await browser.browse({ endpointId: 'plc', parentNodeId: null, limit: 1, continuationToken: null })
+    const release = browser.release(page.continuationToken!)
+    await eventually(() => rawSession.browseNext.mock.calls.length === 1)
+    const disconnect = adapter.disconnectEndpoint!('plc')
+    await Promise.resolve()
+    expect(rawSession.close).not.toHaveBeenCalled()
+    resolveRelease!()
+    await expect(Promise.all([release, disconnect])).resolves.toEqual([undefined, undefined])
+    expect(rawSession.browseNext).toHaveBeenCalledOnce()
+    expect(rawSession.close).toHaveBeenCalledOnce()
+    expect(events).toEqual(['release-complete', 'session-close'])
+  })
+
   it('settles live stop and closes every resource exactly once when the Gateway clock becomes invalid', async () => {
     const connection = fakeConnection()
     let samples = 0
