@@ -181,6 +181,6 @@ describe('Project V5 production import graph', () => {
     expect(forbiddenModules, 'Project V4 authorities remain reachable').toEqual([])
     expect(forbiddenSymbolHits, 'fixed or legacy symbols remain reachable').toEqual([])
     expect(forbiddenSourceFragmentHits, 'fixed-lane source fragments remain reachable').toEqual([])
-    expect(graph.modules.has(realpathSync(resolve(projectRoot, 'src/app/v5/AppV5.tsx')))).toBe(true)
+    expect(graph.modules.has(realpathSync(resolve(projectRoot, 'src/app/v6/AppV6.tsx')))).toBe(true)
   })
 })

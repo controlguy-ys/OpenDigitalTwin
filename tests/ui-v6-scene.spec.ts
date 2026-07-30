@@ -1,14 +1,17 @@
 import { expect, test } from '@playwright/test'
 
-test('V6 Scene Explorer selects items and opens a context action without camera navigation', async ({ page, request }) => {
-  await request.delete('http://127.0.0.1:8081/runtime/project', { data: { type: 'runtime-project-deactivate-v1', protocolVersion: 1, unconditional: true } })
+test('V6 Scene Explorer selection and context actions do not turn a right click into a camera pan', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 })
   await page.goto('/')
   const tree = page.getByRole('tree', { name: 'Scene Explorer' })
-  await expect(tree).toBeVisible()
   const item = tree.getByRole('treeitem', { name: /MCP/u })
   await item.click()
   await expect(item).toHaveAttribute('aria-selected', 'true')
+  const canvas = page.getByTestId('v6-canvas-host')
+  const mapping = await canvas.getAttribute('data-camera-mapping')
   await item.click({ button: 'right' })
-  await expect(page.getByRole('menu', { name: 'Scene actions' })).toBeVisible()
+  const actions = page.getByRole('menu', { name: 'Scene actions' })
+  await expect(actions).toBeVisible()
+  await actions.getByRole('menuitem', { name: 'Focus' }).click()
+  expect(await canvas.getAttribute('data-camera-mapping')).toBe(mapping)
 })

@@ -11,7 +11,7 @@ import {
 import { Circle } from 'lucide-react'
 import { useStore } from 'zustand'
 
-import type { OpcUaProjectTargetV5, WorkcellProjectV5 } from '../../core/project-v5/index.js'
+import type { OpcUaProjectTargetV5 } from '../../core/project-v5/index.js'
 import { BindingEditorDialogV1 } from '../../features/connectivity/v5/BindingEditorDialog.js'
 import { BindingOverviewDialogV1 } from '../../features/connectivity/v5/BindingOverviewDialog.js'
 import { ConnectionMonitorPanel, type ConnectionMonitorPanelControlV1 } from '../../features/connectivity/v5/ConnectionMonitorPanel.js'
@@ -42,47 +42,10 @@ import { ViewportOverlayV6 } from '../../features/viewport/v6/ViewportOverlayV6.
 import { WorkcellViewportV6 } from '../../features/viewport/v6/WorkcellViewportV6.js'
 import { createInitialProjectBootstrapV5 } from '../v5/initial-project-bootstrap-v5.js'
 import { createAppCommandCompositionV6 } from './app-command-composition-v6.js'
+import { errorMessageV6, initialJobIdV6, selectedTargetV6, useViewportBoundsV6 } from './app-v6-support.js'
 
 export interface AppV6Props {
   readonly resources?: BrowserProjectApplicationResourcesV5
-}
-
-interface ViewportBounds {
-  readonly width: number
-  readonly height: number
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function useViewportBounds(): ViewportBounds {
-  const [bounds, setBounds] = useState<ViewportBounds>(() => ({ width: window.innerWidth, height: window.innerHeight }))
-  useEffect(() => {
-    const update = () => setBounds({ width: window.innerWidth, height: window.innerHeight })
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
-  return bounds
-}
-
-function selectedTarget(project: WorkcellProjectV5, selection: V6WorkcellSelection | null): OpcUaProjectTargetV5 | null {
-  if (selection === null) return null
-  if (selection.kind === 'entity') {
-    const entity = project.spatialEntities.find((candidate) => candidate.id === selection.id)
-    if (entity === undefined) return null
-    const frame = entity.movingFrames[0]
-    return frame === undefined
-      ? { type: 'entity-status', entityId: entity.id }
-      : { type: 'entity-frame', entityId: entity.id, frameId: frame.frameId }
-  }
-  if (selection.kind !== 'robot') return null
-  const robot = project.robots.find((candidate) => candidate.id === selection.id)
-  return robot === undefined ? null : { type: 'robot-frame', robotId: robot.id, frameId: robot.selectedTcpFrameId }
-}
-
-function initialJobId(project: WorkcellProjectV5 | null): string | null {
-  return project?.jobs[0]?.id ?? null
 }
 
 export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
@@ -92,7 +55,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   const bundle = useSyncExternalStore(resources.runtime.bundle.subscribe, resources.runtime.bundle.readActiveState, resources.runtime.bundle.readActiveState)
   const [settingsState, setSettingsState] = useState(() => resources.settings.getState())
   const [selection, setSelection] = useState<V6WorkcellSelection | null>(null)
-  const [jobId, setJobId] = useState<string | null>(() => initialJobId(projectState.activeProject))
+  const [jobId, setJobId] = useState<string | null>(() => initialJobIdV6(projectState.activeProject))
   const [operationError, setOperationError] = useState<string | null>(null)
   const [interactionMode, setInteractionMode] = useState<'select' | 'translate' | 'rotate'>('select')
   const [contextTarget, setContextTarget] = useState<SceneContextTargetV6 | null>(null)
@@ -101,7 +64,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   const lifecycleGenerationRef = useRef(0)
   const layout = useMemo(() => createWorkspaceLayoutStoreV6({ storage: window.localStorage }), [])
   const bootstrap = useMemo(() => createInitialProjectBootstrapV5(resources.store), [resources.store])
-  const viewportBounds = useViewportBounds()
+  const viewportBounds = useViewportBoundsV6()
 
   useEffect(() => resources.settings.subscribe(() => setSettingsState(resources.settings.getState())), [resources.settings])
   useEffect(() => {
@@ -109,7 +72,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   }, [bundle?.runtimeEpoch])
   useEffect(() => {
     const project = bundle?.project ?? projectState.activeProject
-    setJobId((current) => current !== null && project?.jobs.some((job) => job.id === current) ? current : initialJobId(project))
+    setJobId((current) => current !== null && project?.jobs.some((job) => job.id === current) ? current : initialJobIdV6(project))
   }, [bundle?.project, projectState.activeProject])
   useEffect(() => {
     document.documentElement.dataset.theme = layout.getState().preferences.theme
@@ -122,7 +85,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     void bootstrap.run(() => active).then(() => {
       if (active && resources.runtime.readActiveBundle() !== null) resources.runtime.startGatewayStream()
     }, (error: unknown) => {
-      if (active) setOperationError(errorMessage(error))
+      if (active) setOperationError(errorMessageV6(error))
     })
     return () => {
       active = false
@@ -175,7 +138,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     setContextTarget(null)
     if (workspaceProject === null) return
     if (action === 'open-binding') {
-      const bindingTarget = target.kind === 'empty' ? null : selectedTarget(workspaceProject, target.selection)
+      const bindingTarget = target.kind === 'empty' ? null : selectedTargetV6(workspaceProject, target.selection)
       if (bindingTarget !== null) openBinding(bindingTarget)
       return
     }
@@ -190,24 +153,24 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
         : target.kind === 'object'
           ? { kind: 'entity' as const, id: target.id }
           : { kind: 'group' as const, id: target.id }
-      void sceneCommands.setVisibility(selection, visible).catch((error: unknown) => setOperationError(errorMessage(error)))
+      void sceneCommands.setVisibility(selection, visible).catch((error: unknown) => setOperationError(errorMessageV6(error)))
       return
     }
     if (action === 'duplicate' && target.kind === 'object') {
-      void sceneCommands.duplicateEntity(target.id).catch((error: unknown) => setOperationError(errorMessage(error)))
+      void sceneCommands.duplicateEntity(target.id).catch((error: unknown) => setOperationError(errorMessageV6(error)))
       return
     }
     if (action === 'delete' && target.kind === 'object') {
-      void sceneCommands.deleteEntity(target.id).catch((error: unknown) => setOperationError(errorMessage(error)))
+      void sceneCommands.deleteEntity(target.id).catch((error: unknown) => setOperationError(errorMessageV6(error)))
       return
     }
     if (action === 'delete' && target.kind === 'group') {
-      void sceneCommands.deleteGroup(target.id).catch((error: unknown) => setOperationError(errorMessage(error)))
+      void sceneCommands.deleteGroup(target.id).catch((error: unknown) => setOperationError(errorMessageV6(error)))
       return
     }
     if (action === 'add-box' || action === 'add-cylinder' || action === 'fit-all') {
       const commandId = action === 'add-box' ? 'model.addBox' : action === 'add-cylinder' ? 'model.addCylinder' : 'view.fitAll'
-      void registry.invoke(commandId).catch((error: unknown) => setOperationError(errorMessage(error)))
+      void registry.invoke(commandId).catch((error: unknown) => setOperationError(errorMessageV6(error)))
     }
   }, [openBinding, registry, sceneCommands, workspaceProject])
   const requestViewportContext = useCallback((event: MouseEvent<HTMLDivElement>) => {
@@ -265,7 +228,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
       explorer={workspaceProject === null ? null : <SceneExplorerV6
         onContextMenu={setContextTarget}
         onSelectionChange={setSelection}
-        onToggleVisibility={(nextSelection, visible) => { void sceneCommands.setVisibility(nextSelection, visible).catch((error: unknown) => setOperationError(errorMessage(error))) }}
+        onToggleVisibility={(nextSelection, visible) => { void sceneCommands.setVisibility(nextSelection, visible).catch((error: unknown) => setOperationError(errorMessageV6(error))) }}
         project={workspaceProject}
         selection={selection}
       />}

@@ -143,6 +143,15 @@
 
 .v6-viewport-safe-area { display: none; }
 
+.v6-workspace-dock-toggles {
+  position: absolute;
+  z-index: 6;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  gap: 4px;
+}
+
 .v6-application-shell[data-workspace-mode='compact'] {
   grid-template-columns:
     var(--v6-toolbox-width)

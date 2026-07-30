@@ -206,6 +206,17 @@ export function ApplicationShellV6({
       >
         {bottom}
       </section>
+      {!maximized && <nav aria-label="Workspace docks" className="v6-workspace-dock-toggles">
+        <button onClick={() => explorerPresentation === 'dock'
+          ? store.getState().setDockVisible(state.mode, 'explorer', !explorerVisible)
+          : store.getState().setDrawerOpen('explorer', !explorerVisible)} type="button">{explorerVisible ? 'Hide' : 'Show'} Scene Explorer</button>
+        <button onClick={() => inspectorPresentation === 'dock'
+          ? store.getState().setDockVisible(state.mode, 'inspector', !inspectorVisible)
+          : store.getState().setDrawerOpen('inspector', !inspectorVisible)} type="button">{inspectorVisible ? 'Hide' : 'Show'} Inspector</button>
+        <button onClick={() => bottomPresentation === 'dock'
+          ? store.getState().setDockVisible(state.mode, 'bottom', !bottomVisible)
+          : store.getState().setDrawerOpen('bottom', !bottomVisible)} type="button">{bottomVisible ? 'Hide' : 'Show'} Job Monitor</button>
+      </nav>}
       <div className="v6-viewport-safe-area" data-safe-area={`${safeArea.top},${safeArea.right},${safeArea.bottom},${safeArea.left}`} />
     </section>
   )
