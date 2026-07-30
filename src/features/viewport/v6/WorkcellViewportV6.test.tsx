@@ -142,13 +142,15 @@ describe('WorkcellViewportV6', () => {
       execute: () => layoutStore.getState().toggleMainViewMaximized(),
     }])
     const cameraState = { position: [3, 4, 5] as [number, number, number], target: [0, 0, 0] as [number, number, number] }
+    const selectionCenter: readonly [number, number, number] = [2, 3, 4]
+    const visibleCenter: readonly [number, number, number] = [6, 7, 8]
     const cameraUpdate = vi.fn()
     const controller = createCameraControllerV6({
       camera: cameraState,
       home: { position: [9, 9, 9], target: [1, 1, 1] },
-      selectionBounds: vi.fn(() => ({ center: [2, 3, 4], radius: 1 })),
+      selectionBounds: vi.fn(() => ({ center: selectionCenter, radius: 1 })),
       update: cameraUpdate,
-      visibleBounds: vi.fn(() => ({ center: [6, 7, 8], radius: 2 })),
+      visibleBounds: vi.fn(() => ({ center: visibleCenter, radius: 2 })),
     })
     const camera = {
       home: vi.fn(() => controller.home()),
@@ -189,8 +191,15 @@ describe('WorkcellViewportV6', () => {
       expect(camera.home).toHaveBeenCalledOnce()
       expect(camera.fitAll).toHaveBeenCalledOnce()
       expect(cameraUpdate).toHaveBeenCalledTimes(2)
-      act(() => runtimeStore.update({ activeJob: 'job-18' }))
-      const probeSnapshot = {
+      act(() => runtimeStore.update({
+        activeJob: 'job-18',
+        projectRevision: 'revision-10',
+        selection: { kind: 'robot', id: 'robot-2' },
+      }))
+      const cameraSnapshot = probe.getAttribute('data-camera-snapshot')
+      expect(probe).toHaveAttribute('data-selection', 'robot:robot-2')
+      expect(probe).toHaveAttribute('data-project-revision', 'revision-10')
+      const runtimeSnapshot = {
         camera: probe.getAttribute('data-camera-snapshot'),
         selection: probe.getAttribute('data-selection'),
         activeJob: probe.getAttribute('data-active-job'),
@@ -203,8 +212,20 @@ describe('WorkcellViewportV6', () => {
       const button = screen.getByRole('button', { name: 'Maximize Main View' })
 
       fireEvent.click(button)
+      act(() => runtimeStore.update({
+        projectRevision: 'revision-11',
+        selection: { kind: 'object', id: 'object-1' },
+      }))
+      expect(probe).toHaveAttribute('data-selection', 'object:object-1')
+      expect(probe).toHaveAttribute('data-project-revision', 'revision-11')
       fireEvent.click(screen.getByRole('button', { name: 'Restore Main View' }))
+      expect(probe).toHaveAttribute('data-selection', 'object:object-1')
+      expect(probe).toHaveAttribute('data-project-revision', 'revision-11')
       fireEvent.click(button)
+      act(() => runtimeStore.update({
+        projectRevision: 'revision-12',
+        selection: { kind: 'frame', id: 'frame-1' },
+      }))
       fireEvent.keyDown(document, { key: 'Escape' })
 
       expect(screen.getByTestId('preserved-canvas')).toBe(canvas)
@@ -212,11 +233,11 @@ describe('WorkcellViewportV6', () => {
       expect(screen.getByRole('button', { name: 'Maximize Main View' })).toBe(button)
       expect({
         camera: probe.getAttribute('data-camera-snapshot'),
-        selection: probe.getAttribute('data-selection'),
-        activeJob: probe.getAttribute('data-active-job'),
-        runtimeEpoch: probe.getAttribute('data-runtime-epoch'),
-        projectRevision: probe.getAttribute('data-project-revision'),
-      }).toEqual(probeSnapshot)
+      }).toEqual({ camera: cameraSnapshot })
+      expect(probe).toHaveAttribute('data-selection', 'frame:frame-1')
+      expect(probe).toHaveAttribute('data-active-job', 'job-18')
+      expect(probe).toHaveAttribute('data-project-revision', 'revision-12')
+      expect(runtimeSnapshot).toMatchObject({ activeJob: 'job-18', runtimeEpoch: '12' })
       expect(runtimeStore.metrics).toEqual({ mounts: 1, subscriptions: 1, unsubscriptions: 0, listeners: 1 })
       expect(camera.home).not.toHaveBeenCalled()
       expect(camera.fitAll).not.toHaveBeenCalled()
@@ -226,6 +247,8 @@ describe('WorkcellViewportV6', () => {
       expect(screen.getByTestId('runtime-probe')).toBe(probe)
       expect(probe).toHaveAttribute('data-active-job', 'job-18')
       expect(probe).toHaveAttribute('data-runtime-epoch', '13')
+      expect(probe).toHaveAttribute('data-selection', 'frame:frame-1')
+      expect(probe).toHaveAttribute('data-project-revision', 'revision-12')
       expect(runtimeStore.metrics).toEqual({ mounts: 1, subscriptions: 1, unsubscriptions: 0, listeners: 1 })
       fireEvent.click(screen.getByRole('button', { name: 'Home view' }))
       fireEvent.click(screen.getByRole('button', { name: 'Fit all visible geometry' }))
