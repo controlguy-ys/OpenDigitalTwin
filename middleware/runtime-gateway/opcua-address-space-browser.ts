@@ -63,6 +63,10 @@ export interface OpcUaAddressSpaceBrowseOutputV1 {
 export interface OpcUaAddressSpaceBrowserOptionsV1 {
   readonly currentSession: (endpointId: string) => OpcUaAddressSpaceBrowseSessionProofV1 | null
   readonly createToken?: () => string
+  readonly nowMs?: () => number
+  readonly continuationTtlMs?: number
+  readonly maxContinuations?: number
+  readonly maxContinuationsPerEndpoint?: number
 }
 
 interface ContinuationV1 {
@@ -71,6 +75,8 @@ interface ContinuationV1 {
   readonly generation: number
   readonly session: OpcUaAddressSpaceBrowseSessionV1
   readonly continuationPoint: Uint8Array
+  readonly createdAtMs: number
+  readonly expiresAtMs: number
 }
 
 const NODE_CLASSES: Readonly<Record<number, string>> = Object.freeze({
@@ -100,18 +106,52 @@ function parseNodeId(sessionNodeId: string, namespaceArray: readonly string[]): 
 }
 
 function nodeHasChildren(nodeClass: number): boolean {
-  return nodeClass !== 4
+  // This is deliberately conservative: the browse response does not expose
+  // a child-count for the referenced node, so only container node classes are
+  // offered as expandable. Leaf Variables never claim children.
+  return nodeClass === 1 || nodeClass === 8 || nodeClass === 16 || nodeClass === 128
 }
 
-function releaseSilently(state: ContinuationV1): void {
-  void state.session.browseNext([state.continuationPoint], true).catch(() => undefined)
+function validReference(reference: OpcUaAddressSpaceBrowseReferenceV1): boolean {
+  return /^ns=(0|[1-9][0-9]*);(?:i=(?:0|[1-9][0-9]{0,9})|s=.{1,4096}|g=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|b=(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)$/u.test(reference.sessionNodeId)
+    && reference.browseName.length > 0 && Buffer.byteLength(reference.browseName) <= 1_024
+    && reference.displayName.length > 0 && Buffer.byteLength(reference.displayName) <= 1_024
+    && /^ns=(0|[1-9][0-9]*);(?:i=(?:0|[1-9][0-9]{0,9})|s=.{1,4096}|g=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|b=(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)$/u.test(reference.referenceTypeId)
+    && (reference.typeDefinitionId === null || /^ns=(0|[1-9][0-9]*);(?:i=(?:0|[1-9][0-9]{0,9})|s=.{1,4096}|g=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|b=(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?)$/u.test(reference.typeDefinitionId))
+    && NODE_CLASSES[reference.nodeClass] !== undefined
 }
 
 export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrowserOptionsV1): OpcUaAddressSpaceBrowserV1 {
   const continuations = new Map<string, ContinuationV1>()
   const createToken = options.createToken ?? (() => globalThis.crypto.randomUUID())
+  const nowMs = options.nowMs ?? Date.now
+  const continuationTtlMs = options.continuationTtlMs ?? 30_000
+  const maxContinuations = options.maxContinuations ?? 32
+  const maxContinuationsPerEndpoint = options.maxContinuationsPerEndpoint ?? 8
+  if (!Number.isSafeInteger(continuationTtlMs) || continuationTtlMs < 1 || continuationTtlMs > 300_000 || !Number.isSafeInteger(maxContinuations) || maxContinuations < 1 || maxContinuations > 128 || !Number.isSafeInteger(maxContinuationsPerEndpoint) || maxContinuationsPerEndpoint < 1 || maxContinuationsPerEndpoint > maxContinuations) throw new Error('OPC_UA_BROWSE_CONFIGURATION_INVALID')
+
+  const abandon = async (token: string, state: ContinuationV1): Promise<void> => {
+    continuations.delete(token)
+    try { await state.session.browseNext([state.continuationPoint], true) } catch { }
+  }
+  const sweep = async (): Promise<void> => {
+    const now = nowMs()
+    for (const [token, state] of continuations) {
+      if (state.expiresAtMs <= now) await abandon(token, state)
+    }
+  }
+  const makeRoom = async (endpointId: string): Promise<void> => {
+    while (continuations.size >= maxContinuations || [...continuations.values()].filter((state) => state.endpointId === endpointId).length >= maxContinuationsPerEndpoint) {
+      const candidate = [...continuations.entries()]
+        .filter(([, state]) => continuations.size >= maxContinuations || state.endpointId === endpointId)
+        .sort(([, left], [, right]) => left.createdAtMs - right.createdAtMs)[0]
+      if (candidate === undefined) return
+      await abandon(candidate[0], candidate[1])
+    }
+  }
 
   const release = async (continuationToken: string): Promise<void> => {
+    await sweep()
     const state = continuations.get(continuationToken)
     if (state === undefined) throw new Error('OPC_UA_BROWSE_CONTINUATION_INVALID')
     continuations.delete(continuationToken)
@@ -121,6 +161,7 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
   return Object.freeze({
     release,
     async browse(request: OpcUaAddressSpaceBrowseInputV1): Promise<OpcUaAddressSpaceBrowseOutputV1> {
+      await sweep()
       if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > MAX_OPC_UA_BROWSE_PAGE_SIZE_V1) throw new Error('OPC_UA_BROWSE_REQUEST_INVALID')
       const parentNodeId = request.parentNodeId ?? OPC_UA_OBJECTS_FOLDER_NODE_ID_V1
       const continuation = request.continuationToken === null ? undefined : continuations.get(request.continuationToken)
@@ -129,8 +170,7 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
       const first = options.currentSession(request.endpointId)
       if (first === null) throw new Error('OPC_UA_BROWSE_SESSION_UNAVAILABLE')
       if (continuation !== undefined && (continuation.generation !== first.generation || continuation.session !== first.session)) {
-        continuations.delete(request.continuationToken!)
-        releaseSilently(continuation)
+        await abandon(request.continuationToken!, continuation)
         throw new Error('OPC_UA_BROWSE_SESSION_STALE')
       }
       let namespaceArray: readonly string[]
@@ -144,15 +184,24 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
       } catch { throw new Error('OPC_UA_BROWSE_FAILED') }
       if (!result.good) throw new Error('OPC_UA_BROWSE_FAILED')
       if (!sameSession(options.currentSession(request.endpointId), first)) {
-        if (result.continuationPoint !== null) releaseSilently({ endpointId: request.endpointId, parentNodeId, generation: first.generation, session: first.session, continuationPoint: result.continuationPoint })
+        if (result.continuationPoint !== null) await first.session.browseNext([result.continuationPoint], true).catch(() => undefined)
         throw new Error('OPC_UA_BROWSE_SESSION_STALE')
       }
       if (continuation !== undefined) continuations.delete(request.continuationToken!)
+      if (result.references.length > request.limit || result.references.some((reference) => !validReference(reference))) {
+        if (result.continuationPoint !== null) await first.session.browseNext([result.continuationPoint], true).catch(() => undefined)
+        throw new Error('OPC_UA_BROWSE_RESPONSE_INVALID')
+      }
       let continuationToken: string | null = null
       if (result.continuationPoint !== null) {
         continuationToken = createToken()
-        if (continuationToken.length === 0 || continuations.has(continuationToken)) throw new Error('OPC_UA_BROWSE_TOKEN_INVALID')
-        continuations.set(continuationToken, Object.freeze({ endpointId: request.endpointId, parentNodeId, generation: first.generation, session: first.session, continuationPoint: result.continuationPoint }))
+        if (!/^[A-Za-z0-9_-]{1,256}$/u.test(continuationToken) || continuations.has(continuationToken)) {
+          await first.session.browseNext([result.continuationPoint], true).catch(() => undefined)
+          throw new Error('OPC_UA_BROWSE_TOKEN_INVALID')
+        }
+        await makeRoom(request.endpointId)
+        const createdAtMs = nowMs()
+        continuations.set(continuationToken, Object.freeze({ endpointId: request.endpointId, parentNodeId, generation: first.generation, session: first.session, continuationPoint: result.continuationPoint, createdAtMs, expiresAtMs: createdAtMs + continuationTtlMs }))
       }
       const nodes = result.references.map((reference) => Object.freeze({
         sessionNodeId: reference.sessionNodeId,
@@ -164,7 +213,15 @@ export function createOpcUaAddressSpaceBrowserV1(options: OpcUaAddressSpaceBrows
         hasChildren: nodeHasChildren(reference.nodeClass),
         nodeAddress: parseNodeId(reference.sessionNodeId, namespaceArray),
       }))
-      return Object.freeze({ endpointId: request.endpointId, parentNodeId, nodes: Object.freeze(nodes), continuationToken })
+      const output = Object.freeze({ endpointId: request.endpointId, parentNodeId, nodes: Object.freeze(nodes), continuationToken })
+      if (Buffer.byteLength(JSON.stringify(output)) > 64 * 1024) {
+        if (continuationToken !== null) {
+          const state = continuations.get(continuationToken)
+          if (state !== undefined) await abandon(continuationToken, state)
+        }
+        throw new Error('OPC_UA_BROWSE_RESPONSE_INVALID')
+      }
+      return output
     },
   })
 }

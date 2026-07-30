@@ -3008,11 +3008,13 @@ describe('runtime Gateway entrypoint', () => {
     const port = await findAvailablePort()
     const write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))
     const client = connectedClientAdapter(write)
-    const browse = vi.fn(async () => ({
-      endpointId: 'endpoint-1', parentNodeId: 'ns=0;i=85', continuationToken: null,
-      nodes: [{ sessionNodeId: 'ns=1;s=Machine.Temperature', browseName: 'Temperature', displayName: 'Machine temperature', nodeClass: 'Variable', referenceTypeId: 'ns=0;i=47', typeDefinitionId: 'ns=0;i=63', hasChildren: true, nodeAddress: { namespaceUri: 'urn:plant', identifierType: 'string' as const, identifier: 'Machine.Temperature' } }],
-    }))
-    client.adapter.addressSpaceBrowser = { browse, release: vi.fn(async () => undefined) }
+    const { createOpcUaAddressSpaceBrowserV1 } = await import('./opcua-address-space-browser.js')
+    const session = {
+      browse: vi.fn(async () => ({ good: true, continuationPoint: Buffer.from('page-2'), references: [{ sessionNodeId: 'ns=1;s=Machine.Temperature', browseName: 'Temperature', displayName: 'Machine temperature', nodeClass: 2, referenceTypeId: 'ns=0;i=47', typeDefinitionId: null }] })),
+      browseNext: vi.fn(async () => ({ good: true, continuationPoint: null, references: [] })),
+      readNamespaceArray: vi.fn(async () => ['http://opcfoundation.org/UA/', 'urn:plant']),
+    }
+    client.adapter.addressSpaceBrowser = createOpcUaAddressSpaceBrowserV1({ currentSession: (endpointId) => endpointId === 'endpoint-1' ? { endpointId, generation: 1, session } : null, createToken: () => 'page_token' })
     const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter })
     await service.start()
     try {
@@ -3022,8 +3024,11 @@ describe('runtime Gateway entrypoint', () => {
       const response = await requestJson(port, 'POST', '/runtime/opcua/browse', valid)
       expect(response.status).toBe(200)
       expect(await response.json()).toMatchObject({ type: 'opcua-address-space-browse-response-v1', endpointId: valid.endpointId, parentNodeId: 'ns=0;i=85' })
-      expect(browse).toHaveBeenCalledWith(expect.objectContaining({ parentNodeId: null, limit: 25 }))
+      expect(session.browse).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 'ns=0;i=85', requestedMaxReferencesPerNode: 25 }))
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse/release', { type: 'opcua-address-space-browse-release-request-v1', protocolVersion: 1, continuationToken: 'page_token' })).status).toBe(200)
+      expect(session.browseNext).toHaveBeenCalledWith([Buffer.from('page-2')], true)
       expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, limit: 101 })).status).toBe(400)
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, parentNodeId: 'ns=0;i=01' })).status).toBe(400)
       expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, endpointId: 'other' })).status).toBe(409)
       expect(write).not.toHaveBeenCalled()
     } finally { await service.stop() }

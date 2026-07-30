@@ -37,7 +37,7 @@ describe('createOpcUaAddressSpaceBrowserV1', () => {
       endpointId: 'plc-a', parentNodeId: 'ns=0;i=85',
       nodes: [{
         sessionNodeId: 'ns=1;s=Machine.Temperature', browseName: 'Temperature', displayName: 'Machine temperature',
-        nodeClass: 'Variable', referenceTypeId: 'ns=0;i=47', typeDefinitionId: 'ns=0;i=63', hasChildren: true,
+        nodeClass: 'Variable', referenceTypeId: 'ns=0;i=47', typeDefinitionId: 'ns=0;i=63', hasChildren: false,
         nodeAddress: { namespaceUri: 'urn:plant', identifierType: 'string', identifier: 'Machine.Temperature' },
       }],
       continuationToken: 'opaque-page-token',
@@ -64,5 +64,44 @@ describe('createOpcUaAddressSpaceBrowserV1', () => {
 
     expect(firstSession.browseNext).toHaveBeenCalledWith([Buffer.from('page-2')], true)
     expect(nextSession.browseNext).not.toHaveBeenCalled()
+  })
+
+  it('bounds retained continuations per endpoint, expires them, and releases every abandoned point', async () => {
+    let now = 1_000
+    const session = {
+      browse: vi.fn(async () => ({ good: true, continuationPoint: Buffer.from(`page-${session.browse.mock.calls.length}`), references: [] })),
+      browseNext: vi.fn(async () => ({ good: true, continuationPoint: null, references: [] })),
+      readNamespaceArray: vi.fn(async () => ['http://opcfoundation.org/UA/']),
+    }
+    let token = 0
+    const browser = createOpcUaAddressSpaceBrowserV1({
+      currentSession: () => ({ endpointId: 'plc-a', generation: 1, session }),
+      createToken: () => `token_${++token}`,
+      nowMs: () => now,
+      continuationTtlMs: 10,
+      maxContinuations: 2,
+      maxContinuationsPerEndpoint: 1,
+    })
+    await browser.browse({ endpointId: 'plc-a', parentNodeId: null, limit: 1, continuationToken: null })
+    await browser.browse({ endpointId: 'plc-a', parentNodeId: null, limit: 1, continuationToken: null })
+    expect(session.browseNext).toHaveBeenCalledWith([Buffer.from('page-1')], true)
+    now += 11
+    await browser.browse({ endpointId: 'plc-a', parentNodeId: null, limit: 1, continuationToken: null })
+    expect(session.browseNext).toHaveBeenCalledWith([Buffer.from('page-2')], true)
+    await expect(browser.release('token_1')).rejects.toThrow('OPC_UA_BROWSE_CONTINUATION_INVALID')
+  })
+
+  it('rejects oversized reference pages, releases their continuation, and marks leaf Variables as non-expandable', async () => {
+    const session = {
+      browse: vi.fn(async () => ({ good: true, continuationPoint: Buffer.from('oversized'), references: [
+        { sessionNodeId: 'ns=0;i=85', browseName: 'Objects', displayName: 'Objects', nodeClass: 1, referenceTypeId: 'ns=0;i=35', typeDefinitionId: null },
+        { sessionNodeId: 'ns=1;s=Leaf', browseName: 'Leaf', displayName: 'Leaf', nodeClass: 2, referenceTypeId: 'ns=0;i=47', typeDefinitionId: null },
+      ] })),
+      browseNext: vi.fn(async () => ({ good: true, continuationPoint: null, references: [] })),
+      readNamespaceArray: vi.fn(async () => ['http://opcfoundation.org/UA/', 'urn:plant']),
+    }
+    const browser = createOpcUaAddressSpaceBrowserV1({ currentSession: () => ({ endpointId: 'plc-a', generation: 1, session }) })
+    await expect(browser.browse({ endpointId: 'plc-a', parentNodeId: null, limit: 1, continuationToken: null })).rejects.toThrow('OPC_UA_BROWSE_RESPONSE_INVALID')
+    expect(session.browseNext).toHaveBeenCalledWith([Buffer.from('oversized')], true)
   })
 })
