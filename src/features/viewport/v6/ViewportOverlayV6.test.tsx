@@ -40,4 +40,24 @@ describe('ViewportOverlayV6', () => {
     expect(translate).toHaveBeenCalledOnce()
     expect(selectedTcpMarkerV6({ ...markerInput, runtimeRevisionId: 'r2' })).toBeNull()
   })
+
+  it.each([
+    ['non-robot selection', { selection: { kind: 'object', id: 'robot' } }],
+    ['selected robot mismatch', { selection: { kind: 'robot', id: 'other-robot' } }],
+    ['selected TCP mismatch', { robot: { id: 'robot', selectedTcpFrameId: 'other-tcp' } }],
+    ['TCP frame mismatch', { tcp: { robotId: 'robot', frameId: 'other-tcp', role: 'tcp' } }],
+    ['non-TCP role', { tcp: { robotId: 'robot', frameId: 'tcp', role: 'tool' } }],
+    ['runtime revision mismatch', { runtimeRevisionId: 'r2' }],
+  ])('does not render a TCP marker for %s', (_reason, override) => {
+    const camera = { home: vi.fn(), fitAll: vi.fn(), focusSelection: vi.fn(), setOrientation: vi.fn() }
+    const markerInput = {
+      projectRevisionId: 'r1', runtimeRevisionId: 'r1',
+      selection: { kind: 'robot', id: 'robot' },
+      robot: { id: 'robot', selectedTcpFrameId: 'tcp' },
+      tcp: { robotId: 'robot', frameId: 'tcp', role: 'tcp' },
+      ...override,
+    }
+    render(<ViewportOverlayV6 camera={camera} tcpMarker={markerInput} />)
+    expect(screen.queryByTestId('v6-tcp-marker')).toBeNull()
+  })
 })
