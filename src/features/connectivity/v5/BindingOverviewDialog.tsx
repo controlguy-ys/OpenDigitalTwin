@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useRef,
   type ReactNode,
   type RefObject,
@@ -9,6 +8,7 @@ import type {
   OpcUaProjectTargetV5,
   WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
+import { ModalDialogV6 } from '../../ui/v6/ModalDialogV6.js'
 import {
   availableBindingTargetsV1,
   bindingTargetKeyV1,
@@ -20,11 +20,6 @@ export interface BindingOverviewDialogPropsV1 {
   readonly onClose: () => void
   readonly onEdit: (target: OpcUaProjectTargetV5, mappingId?: string) => void
   readonly triggerRef?: RefObject<HTMLElement | null>
-}
-
-function tabbableElements(root: HTMLElement): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>('button, [tabindex]'))
-    .filter((element) => element.tabIndex >= 0 && element.closest('[hidden]') === null)
 }
 
 function targetOf(project: WorkcellProjectV5, mappingId: string): OpcUaProjectTargetV5 | null {
@@ -47,15 +42,7 @@ export function BindingOverviewDialogV1({
   onEdit,
   triggerRef,
 }: BindingOverviewDialogPropsV1): ReactNode {
-  const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    const timer = window.setTimeout(() => closeRef.current?.focus(), 0)
-    return () => {
-      window.clearTimeout(timer)
-      triggerRef?.current?.focus()
-    }
-  }, [triggerRef])
 
   const mappedTargetKeys = new Set(activeProject.opcUa.mappings
     .map(({ id }) => targetOf(activeProject, id))
@@ -65,44 +52,20 @@ export function BindingOverviewDialogV1({
     .filter(({ target }) => !mappedTargetKeys.has(bindingTargetKeyV1(target)))
 
   return (
-    <div
-      aria-labelledby="binding-overview-v1-title"
-      aria-modal="true"
-      className="opcua-settings-overlay"
-      data-testid="binding-overview-overlay"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape' && !event.nativeEvent.isComposing) {
-          event.preventDefault()
-          onClose()
-          return
-        }
-        if (event.key !== 'Tab') return
-        const root = dialogRef.current
-        if (root === null) return
-        const elements = tabbableElements(root)
-        const first = elements[0]
-        const last = elements.at(-1)
-        const activeIndex = elements.indexOf(document.activeElement as HTMLElement)
-        if (
-          (!event.shiftKey && (activeIndex < 0 || activeIndex === elements.length - 1))
-          || (event.shiftKey && activeIndex <= 0)
-        ) {
-          event.preventDefault()
-          ;(event.shiftKey ? last : first)?.focus()
-        }
-      }}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      ref={dialogRef}
-      role="dialog"
-      tabIndex={-1}
-    >
-      <section className="opcua-settings-dialog binding-overview-dialog">
-        <header className="opcua-settings-header">
+    <ModalDialogV6
+      className="opcua-settings-dialog binding-overview-dialog"
+      footer={<footer className="opcua-settings-footer"><button onClick={onClose} ref={closeRef} type="button">Close</button></footer>}
+      header={<header className="opcua-settings-header">
           <div><p>Connectivity / Mapping</p><h2 id="binding-overview-v1-title">Binding Overview</h2></div>
           <p>{activeProject.opcUa.mappings.length} mapping{activeProject.opcUa.mappings.length === 1 ? '' : 's'}</p>
-        </header>
+        </header>}
+      initialFocusRef={closeRef}
+      onClose={onClose}
+      overlayClassName="opcua-settings-overlay"
+      testId="binding-overview-overlay"
+      titleId="binding-overview-v1-title"
+      triggerRef={triggerRef}
+    >
         <div className="opcua-settings-body">
           {activeProject.opcUa.endpoints.map((endpoint) => {
             const mappings = activeProject.opcUa.mappings.filter((mapping) => mapping.endpointId === endpoint.endpointId)
@@ -144,8 +107,6 @@ export function BindingOverviewDialogV1({
             )}
           </section>
         </div>
-        <footer className="opcua-settings-footer"><button onClick={onClose} ref={closeRef} type="button">Close</button></footer>
-      </section>
-    </div>
+    </ModalDialogV6>
   )
 }

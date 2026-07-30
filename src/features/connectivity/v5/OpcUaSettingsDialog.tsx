@@ -14,6 +14,7 @@ import {
   type OpcUaBridgeRouteV5,
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
+import { ModalDialogV6 } from '../../ui/v6/ModalDialogV6.js'
 import type { ConnectivityPresentationStateV1 } from './connectivity-presentation-store.js'
 import type { OpcUaSettingsControllerV1 } from './opcua-settings-activation.js'
 import {
@@ -162,14 +163,12 @@ export function OpcUaSettingsDialog({
       wasOpenRef.current = true
       invalidateDiagnostic()
       setInteractionIssue(null)
-      const timer = window.setTimeout(() => roleRef.current?.focus(), 0)
-      return () => window.clearTimeout(timer)
+      return undefined
     }
     if (wasOpenRef.current) {
       wasOpenRef.current = false
       invalidateDiagnostic()
       setInteractionIssue(null)
-      triggerRef?.current?.focus()
     }
     return undefined
   }, [invalidateDiagnostic, state.open, triggerRef])
@@ -284,53 +283,27 @@ export function OpcUaSettingsDialog({
         if (generation === testGenerationRef.current) setTesting(false)
       })
   }
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'Escape') {
-      if (event.nativeEvent.isComposing) return
-      event.preventDefault()
-      event.stopPropagation()
-      if (!busy) close()
-      return
-    }
-    if (event.key !== 'Tab') return
-    const root = dialogRef.current
-    if (root === null) return
-    const elements = tabbableElements(root)
-    const first = elements[0]
-    const last = elements.at(-1)
-    const activeIndex = elements.indexOf(document.activeElement as HTMLElement)
-    if (
-      (!event.shiftKey && (activeIndex < 0 || activeIndex === elements.length - 1))
-      || (event.shiftKey && activeIndex <= 0)
-    ) {
-      event.preventDefault()
-      ;(event.shiftKey ? last : first)?.focus()
-    }
-  }
-
   return (
-    <div
-      aria-labelledby="opcua-settings-v1-title"
-      aria-modal="true"
-      className="opcua-settings-overlay"
-      data-testid="opcua-settings-overlay"
-      onKeyDown={onKeyDown}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !busy) close()
-      }}
-      ref={dialogRef}
-      role="dialog"
-      tabIndex={-1}
-    >
-      <section className="opcua-settings-dialog">
-        <header className="opcua-settings-header">
+    <ModalDialogV6
+      busy={busy}
+      className="opcua-settings-dialog"
+      dialogRef={dialogRef}
+      footer={<footer className="opcua-settings-footer"><button disabled={disabled} onClick={close} type="button">Cancel</button><button disabled={disabled} form="opcua-settings-v1-form" type="submit">Apply &amp; Activate</button></footer>}
+      header={<header className="opcua-settings-header">
           <div>
             <p>Connectivity</p>
             <h2 id="opcua-settings-v1-title">OPC UA Settings</h2>
           </div>
           <p>{busy ? 'Applying settings…' : 'Draft changes are not active until applied.'}</p>
-        </header>
-        <form onSubmit={(event) => { event.preventDefault(); apply() }}>
+        </header>}
+      initialFocusRef={roleRef}
+      onClose={close}
+      overlayClassName="opcua-settings-overlay"
+      testId="opcua-settings-overlay"
+      titleId="opcua-settings-v1-title"
+      triggerRef={triggerRef}
+    >
+        <form id="opcua-settings-v1-form" onSubmit={(event) => { event.preventDefault(); apply() }}>
           <div className="opcua-settings-body">
             <section aria-labelledby="opcua-overview-title">
               <h3 id="opcua-overview-title">Overview</h3>
@@ -444,9 +417,7 @@ export function OpcUaSettingsDialog({
             </section>
             {currentIssue === null ? null : <p data-validation-path="$" role="alert" tabIndex={-1}>{currentIssue}</p>}
           </div>
-          <footer className="opcua-settings-footer"><button disabled={disabled} onClick={close} type="button">Cancel</button><button disabled={disabled} type="submit">Apply &amp; Activate</button></footer>
         </form>
-      </section>
-    </div>
+    </ModalDialogV6>
   )
 }

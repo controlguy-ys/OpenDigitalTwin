@@ -10,6 +10,7 @@ import type {
   OpcUaProjectTargetV5,
   WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
+import { ModalDialogV6 } from '../../ui/v6/ModalDialogV6.js'
 import type { ProjectV5AtomicMutationPort } from '../../project/v5/project-v5-mutation-service.js'
 import type { NamespaceIndexResolutionPortV1 } from './opcua-node-address-draft.js'
 import {
@@ -46,15 +47,6 @@ function nextMappingId(project: WorkcellProjectV5): string {
   }
 }
 
-function tabbableElements(root: HTMLElement): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]'))
-    .filter((element) => (
-      element.tabIndex >= 0
-      && element.closest('[hidden]') === null
-      && (!('disabled' in element) || element.disabled !== true)
-    ))
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -78,7 +70,6 @@ export function BindingEditorDialogV1({
   createMappingId,
   triggerRef,
 }: BindingEditorDialogPropsV1): ReactNode {
-  const dialogRef = useRef<HTMLDivElement>(null)
   const firstFieldRef = useRef<HTMLSelectElement>(null)
   const inFlightRef = useRef(false)
   const baselineRevisionIdRef = useRef(activeProject.revisionId)
@@ -99,14 +90,6 @@ export function BindingEditorDialogV1({
   const [error, setError] = useState<string | null>(null)
   const existing = activeProject.opcUa.mappings.some(({ id }) => id === draft.mappingId)
   const frameTarget = target.type === 'entity-frame' || target.type === 'robot-frame'
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => firstFieldRef.current?.focus(), 0)
-    return () => {
-      window.clearTimeout(timer)
-      triggerRef?.current?.focus()
-    }
-  }, [triggerRef])
 
   useEffect(() => {
     if (manualConfirmation) {
@@ -175,53 +158,40 @@ export function BindingEditorDialogV1({
     if (!busy) onClose()
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'Escape') {
-      if (event.nativeEvent.isComposing || busy) return
-      event.preventDefault()
-      event.stopPropagation()
-      close()
-      return
-    }
-    if (event.key !== 'Tab') return
-    const root = dialogRef.current
-    if (root === null) return
-    const elements = tabbableElements(root)
-    const first = elements[0]
-    const last = elements.at(-1)
-    const activeIndex = elements.indexOf(document.activeElement as HTMLElement)
-    if (
-      (!event.shiftKey && (activeIndex < 0 || activeIndex === elements.length - 1))
-      || (event.shiftKey && activeIndex <= 0)
-    ) {
-      event.preventDefault()
-      ;(event.shiftKey ? last : first)?.focus()
-    }
-  }
-
   return (
-    <div
-      aria-labelledby="binding-editor-v1-title"
-      aria-modal="true"
-      className="opcua-settings-overlay"
-      data-testid="binding-editor-overlay"
-      onKeyDown={onKeyDown}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) close()
-      }}
-      ref={dialogRef}
-      role="dialog"
-      tabIndex={-1}
-    >
-      <section className="opcua-settings-dialog binding-editor-dialog">
-        <header className="opcua-settings-header">
+    <ModalDialogV6
+      busy={busy}
+      busyEscapeBehavior="ignore"
+      className="opcua-settings-dialog binding-editor-dialog"
+      footer={<footer className="opcua-settings-footer">
+        <button disabled={busy} onClick={close} type="button">Cancel</button>
+        {existing ? <button disabled={busy} onClick={() => performMutation('Remove OPC UA binding', (project) => removeBindingMappingV1(project, draft.mappingId))} type="button">Remove Binding</button> : null}
+        {manualConfirmation ? (
+          <>
+            <span role="status">Manual ownership removes conflicting read mappings for this target.</span>
+            <button disabled={busy} onClick={() => setManualConfirmation(false)} type="button">Keep OPC UA Control</button>
+            <button disabled={busy} onClick={() => performMutation('Take manual binding ownership', (project) => takeManualBindingOwnershipV1(project, target))} ref={manualConfirmRef} type="button">Confirm Take Manual Ownership</button>
+          </>
+        ) : (
+          <button disabled={busy} onClick={() => setManualConfirmation(true)} ref={manualActionRef} type="button">Take Manual Ownership</button>
+        )}
+        <button disabled={busy || currentProject(mutations, activeProject).opcUa.endpoints.length === 0} form="binding-editor-v1-form" type="submit">Save Binding</button>
+      </footer>}
+      header={<header className="opcua-settings-header">
           <div>
             <p>Connectivity / Mapping</p>
             <h2 id="binding-editor-v1-title">OPC UA Binding</h2>
           </div>
           <p>{bindingTargetLabelV1(activeProject, target)}</p>
-        </header>
-        <form onSubmit={(event) => {
+        </header>}
+      initialFocusRef={firstFieldRef}
+      onClose={close}
+      overlayClassName="opcua-settings-overlay"
+      testId="binding-editor-overlay"
+      titleId="binding-editor-v1-title"
+      triggerRef={triggerRef}
+    >
+        <form id="binding-editor-v1-form" onSubmit={(event) => {
           event.preventDefault()
           performMutation('Save OPC UA binding', (project) => saveBindingMappingV1(project, draft))
         }}>
@@ -303,22 +273,7 @@ export function BindingEditorDialogV1({
             </section>
             {error === null ? null : <p role="alert">{error}</p>}
           </div>
-          <footer className="opcua-settings-footer">
-            <button disabled={busy} onClick={close} type="button">Cancel</button>
-            {existing ? <button disabled={busy} onClick={() => performMutation('Remove OPC UA binding', (project) => removeBindingMappingV1(project, draft.mappingId))} type="button">Remove Binding</button> : null}
-            {manualConfirmation ? (
-              <>
-                <span role="status">Manual ownership removes conflicting read mappings for this target.</span>
-                <button disabled={busy} onClick={() => setManualConfirmation(false)} type="button">Keep OPC UA Control</button>
-                <button disabled={busy} onClick={() => performMutation('Take manual binding ownership', (project) => takeManualBindingOwnershipV1(project, target))} ref={manualConfirmRef} type="button">Confirm Take Manual Ownership</button>
-              </>
-            ) : (
-              <button disabled={busy} onClick={() => setManualConfirmation(true)} ref={manualActionRef} type="button">Take Manual Ownership</button>
-            )}
-            <button disabled={busy || currentProject(mutations, activeProject).opcUa.endpoints.length === 0} type="submit">Save Binding</button>
-          </footer>
         </form>
-      </section>
-    </div>
+    </ModalDialogV6>
   )
 }

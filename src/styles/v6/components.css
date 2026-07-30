@@ -92,3 +92,85 @@
   color: var(--v6-color-muted);
   font-size: 0.875rem;
 }
+
+.v6-modal-backdrop {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--v6-color-overlay) 72%, transparent);
+}
+
+.v6-modal-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(640px, 100%);
+  max-height: min(760px, calc(100dvh - 48px));
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--v6-color-border);
+  border-radius: 6px;
+  background: var(--v6-color-panel);
+  color: var(--v6-color-text);
+  box-shadow: 0 20px 48px color-mix(in srgb, #000 42%, transparent);
+}
+
+.v6-modal-dialog--wide { width: min(980px, 100%); }
+.v6-modal-dialog--editor { width: min(1080px, 100%); max-height: min(880px, calc(100dvh - 48px)); }
+
+.v6-modal-dialog > form {
+  display: grid;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.v6-modal-dialog .opcua-settings-header,
+.v6-modal-dialog .opcua-settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.v6-modal-dialog .opcua-settings-header { border-bottom: 1px solid var(--v6-color-border); }
+.v6-modal-dialog .opcua-settings-footer { border-top: 1px solid var(--v6-color-border); }
+.v6-modal-dialog .opcua-settings-body { min-height: 0; overflow: auto; }
+.v6-modal-dialog .opcua-settings-footer { justify-content: flex-end; flex-wrap: wrap; }
+
+.v6-connectivity-menu {
+  display: grid;
+  min-width: 180px;
+  gap: 4px;
+}
+
+.v6-connectivity-menu > button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--v6-color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v6-connectivity-menu > button:hover:not(:disabled),
+.v6-connectivity-menu > button:focus-visible {
+  border-color: var(--v6-color-accent);
+  background: color-mix(in srgb, var(--v6-color-accent) 14%, transparent);
+}
+
+.v6-connectivity-menu > button:disabled {
+  color: var(--v6-color-muted);
+  cursor: not-allowed;
+}
+
+@media (max-width: 620px) {
+  .v6-modal-backdrop { padding: 8px; }
+  .v6-modal-dialog,
+  .v6-modal-dialog--editor { max-height: calc(100dvh - 16px); }
+}

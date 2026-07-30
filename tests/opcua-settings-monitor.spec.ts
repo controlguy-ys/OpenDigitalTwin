@@ -23,6 +23,10 @@ test('opens the active V5 Settings, modeless Monitor, Binding, and Docker surfac
 
   await page.getByRole('button', { name: 'Connection Monitor…' }).click()
   await expect(page.getByRole('heading', { name: 'Connection Monitor' })).toBeVisible()
+  const viewportSideSelection = page.locator('.v5-explorer button').first()
+  await expect(viewportSideSelection).toBeEnabled()
+  await viewportSideSelection.click()
+  await expect(viewportSideSelection).toHaveClass(/is-selected/u)
   await expect(page.getByRole('button', { name: 'Binding Overview…' })).toBeEnabled()
 
   await page.getByRole('button', { name: 'Docker Run Guide…' }).click()
