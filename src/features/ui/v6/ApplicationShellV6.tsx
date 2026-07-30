@@ -1,7 +1,12 @@
 import { useEffect, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 
 import { DockResizeHandleV6 } from './DockResizeHandleV6.js'
-import { dockSizeLimitsV6, resolveWorkspaceLayoutV6 } from './workspace-layout-geometry-v6.js'
+import {
+  DOCK_RESIZE_TARGET_PX_V6,
+  clampDockSizeV6,
+  dockSizeLimitsV6,
+  resolveWorkspaceLayoutV6,
+} from './workspace-layout-geometry-v6.js'
 import type { WorkspaceLayoutStoreV6 } from './workspace-layout-store-v6.js'
 
 export interface ApplicationShellV6Props {
@@ -16,13 +21,10 @@ export interface ApplicationShellV6Props {
   readonly viewport: ReactNode
 }
 
-type ShellStyle = CSSProperties & Record<
-  '--v6-explorer-width' | '--v6-inspector-width' | '--v6-bottom-height' | '--v6-viewport-safe-top' | '--v6-viewport-safe-right' | '--v6-viewport-safe-bottom' | '--v6-viewport-safe-left',
-  string
->
+type ShellStyle = CSSProperties & { [key: `--v6-${string}`]: string }
 
-function chromeAttributes(maximized: boolean): { readonly 'aria-hidden': boolean; readonly inert?: true } {
-  return maximized ? { 'aria-hidden': true, inert: true } : { 'aria-hidden': false }
+function visibilityAttributes(hidden: boolean): { readonly 'aria-hidden': boolean; readonly inert?: true } {
+  return hidden ? { 'aria-hidden': true, inert: true } : { 'aria-hidden': false }
 }
 
 export function ApplicationShellV6({
@@ -59,22 +61,45 @@ export function ApplicationShellV6({
   }, state.preferences)
   const safeArea = state.getSnapshot().viewportSafeArea
   const maximized = state.mainViewPresentation === 'maximized'
-  const explorerVisible = state.mode !== 'narrow' && state.preferences.visibleByMode[state.mode].explorer
-  const inspectorVisible = state.mode === 'wide' && state.preferences.visibleByMode.wide.inspector
-  const bottomVisible = state.mode !== 'narrow' && state.preferences.visibleByMode[state.mode].bottom
+  const explorerPresentation = state.mode === 'narrow' ? 'drawer' : 'dock'
+  const inspectorPresentation = state.mode === 'wide' ? 'dock' : 'drawer'
+  const bottomPresentation = state.mode === 'narrow' ? 'sheet' : 'dock'
+  const explorerVisible = explorerPresentation === 'dock'
+    ? state.preferences.visibleByMode[state.mode].explorer
+    : state.drawers.explorer
+  const inspectorVisible = inspectorPresentation === 'dock'
+    ? state.preferences.visibleByMode[state.mode].inspector
+    : state.drawers.inspector
+  const bottomVisible = bottomPresentation === 'dock'
+    ? state.preferences.visibleByMode[state.mode].bottom
+    : state.drawers.bottom
+  const toolboxVisible = !state.preferences.toolboxCollapsed
+  const explorerHandleVisible = explorerPresentation === 'dock' && explorerVisible
+  const inspectorHandleVisible = inspectorPresentation === 'dock' && inspectorVisible
+  const bottomHandleVisible = bottomPresentation === 'dock' && bottomVisible
   const [explorerMin, explorerMax] = dockSizeLimitsV6('explorer', state.workspaceHeightPx)
   const [inspectorMin, inspectorMax] = dockSizeLimitsV6('inspector', state.workspaceHeightPx)
   const [bottomMin, bottomMax] = dockSizeLimitsV6('bottom', state.workspaceHeightPx)
   const style: ShellStyle = {
+    '--v6-toolbox-width': `${resolved.toolboxWidthPx}px`,
     '--v6-explorer-width': `${resolved.explorerWidthPx}px`,
     '--v6-inspector-width': `${resolved.inspectorWidthPx}px`,
     '--v6-bottom-height': `${resolved.bottomHeightPx}px`,
+    '--v6-explorer-overlay-width': `${state.preferences.explorerWidthPx}px`,
+    '--v6-inspector-overlay-width': `${state.preferences.inspectorWidthPx}px`,
+    '--v6-bottom-overlay-height': `${clampDockSizeV6(
+      'bottom',
+      state.preferences.bottomHeightPx,
+      state.workspaceHeightPx,
+    )}px`,
+    '--v6-explorer-resize-width': `${explorerHandleVisible ? DOCK_RESIZE_TARGET_PX_V6 : 0}px`,
+    '--v6-inspector-resize-width': `${inspectorHandleVisible ? DOCK_RESIZE_TARGET_PX_V6 : 0}px`,
+    '--v6-bottom-resize-height': `${bottomHandleVisible ? DOCK_RESIZE_TARGET_PX_V6 : 0}px`,
     '--v6-viewport-safe-top': `${safeArea.top}px`,
     '--v6-viewport-safe-right': `${safeArea.right}px`,
     '--v6-viewport-safe-bottom': `${safeArea.bottom}px`,
     '--v6-viewport-safe-left': `${safeArea.left}px`,
   }
-  const chrome = chromeAttributes(maximized)
 
   return (
     <section
@@ -82,20 +107,36 @@ export function ApplicationShellV6({
       className="v6-application-shell"
       data-main-view-presentation={state.mainViewPresentation}
       data-testid="v6-application-shell"
+      data-toolbox-collapsed={state.preferences.toolboxCollapsed}
+      data-workspace-mode={state.mode}
       style={style}
     >
-      <header className="v6-shell-header" data-testid="v6-header" {...chrome}>{header}</header>
-      <aside className="v6-shell-toolbox" data-testid="v6-toolbox" {...chrome}>{toolbox}</aside>
+      <header
+        className="v6-shell-header"
+        data-testid="v6-header"
+        {...visibilityAttributes(maximized)}
+      >
+        {header}
+      </header>
+      <aside
+        className="v6-shell-toolbox"
+        data-testid="v6-toolbox"
+        data-visible={toolboxVisible}
+        {...visibilityAttributes(maximized || !toolboxVisible)}
+      >
+        {toolbox}
+      </aside>
       <aside
         aria-label="Scene Explorer"
         className="v6-shell-explorer"
+        data-presentation={explorerPresentation}
         data-testid="v6-explorer"
         data-visible={explorerVisible}
-        {...chrome}
+        {...visibilityAttributes(maximized || !explorerVisible)}
       >
         {explorer}
       </aside>
-      {explorerVisible && (
+      {explorerHandleVisible && (
         <DockResizeHandleV6
           className="v6-shell-explorer-resize"
           direction={1}
@@ -125,7 +166,7 @@ export function ApplicationShellV6({
         </div>
         <div className="v6-main-view-viewport" data-testid="v6-main-view-viewport">{viewport}</div>
       </main>
-      {inspectorVisible && (
+      {inspectorHandleVisible && (
         <DockResizeHandleV6
           className="v6-shell-inspector-resize"
           direction={-1}
@@ -142,13 +183,14 @@ export function ApplicationShellV6({
       <aside
         aria-label="Inspector"
         className="v6-shell-inspector"
+        data-presentation={inspectorPresentation}
         data-testid="v6-inspector"
         data-visible={inspectorVisible}
-        {...chrome}
+        {...visibilityAttributes(maximized || !inspectorVisible)}
       >
         {inspector}
       </aside>
-      {bottomVisible && (
+      {bottomHandleVisible && (
         <DockResizeHandleV6
           className="v6-shell-bottom-resize"
           direction={-1}
@@ -165,9 +207,10 @@ export function ApplicationShellV6({
       <section
         aria-label="Job Monitor"
         className="v6-shell-bottom"
+        data-presentation={bottomPresentation}
         data-testid="v6-bottom"
         data-visible={bottomVisible}
-        {...chrome}
+        {...visibilityAttributes(maximized || !bottomVisible)}
       >
         {bottom}
       </section>

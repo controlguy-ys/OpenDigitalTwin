@@ -60,6 +60,7 @@ describe('WorkspaceLayoutStoreV6', () => {
   it('serializes only the preference allow-list, never transient layout state', () => {
     const storage = new MemoryStorage()
     const store = createWorkspaceLayoutStoreV6({ storage })
+    Object.assign(store.getState().preferences, { sentinelRuntimeProperty: true })
     store.getState().setWorkspaceBounds(960, 700)
     store.getState().setDrawerOpen('inspector', true)
     store.getState().requestDialog({ kind: 'help', topic: 'about' })
@@ -83,6 +84,32 @@ describe('WorkspaceLayoutStoreV6', () => {
     expect(serialized).not.toHaveProperty('activeBottomTab')
     expect(serialized).not.toHaveProperty('project')
     expect(serialized).not.toHaveProperty('selection')
+    expect(serialized).not.toHaveProperty('sentinelRuntimeProperty')
+  })
+
+  it('closes every transient drawer when measured workspace mode changes', () => {
+    const store = createWorkspaceLayoutStoreV6({ storage: null })
+    store.getState().setWorkspaceBounds(959, 800)
+    store.getState().setDrawerOpen('explorer', true)
+    store.getState().setDrawerOpen('inspector', true)
+    store.getState().setDrawerOpen('bottom', true)
+    store.getState().setWorkspaceBounds(960, 800)
+
+    expect(store.getState().drawers).toEqual({ explorer: false, inspector: false, bottom: false })
+
+    store.getState().setDrawerOpen('inspector', true)
+    store.getState().setWorkspaceBounds(959, 800)
+    expect(store.getState().drawers).toEqual({ explorer: false, inspector: false, bottom: false })
+  })
+
+  it('clamps an open narrow Bottom sheet using the current measured height', () => {
+    const store = createWorkspaceLayoutStoreV6({ storage: null })
+    store.getState().setWorkspaceBounds(959, 800)
+    store.getState().setDockSize('bottom', 360)
+    store.getState().setWorkspaceBounds(959, 400)
+    store.getState().setDrawerOpen('bottom', true)
+
+    expect(store.getState().getSnapshot().viewportSafeArea.bottom).toBe(192)
   })
 
   it('resets geometry and visibility while preserving theme and selected bottom tab', () => {

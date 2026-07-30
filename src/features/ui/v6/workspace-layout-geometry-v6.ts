@@ -12,6 +12,7 @@ export interface WorkspaceLayoutBoundsV6 {
 }
 
 export interface ResolvedWorkspaceLayoutV6 {
+  readonly toolboxWidthPx: number
   readonly explorerWidthPx: number
   readonly inspectorWidthPx: number
   readonly bottomHeightPx: number
@@ -31,6 +32,7 @@ export interface ResolveViewportSafeAreaInputV6 {
   readonly drawers: Readonly<Record<WorkspaceDockV6, boolean>>
   readonly preferences: WorkspacePreferencesV6
   readonly resolved: ResolvedWorkspaceLayoutV6
+  readonly workspaceHeightPx: number
 }
 
 const MIN_VIEWPORT_WIDTH_PX = 480
@@ -40,6 +42,10 @@ const MIN_INSPECTOR_WIDTH_PX = 280
 const MAX_INSPECTOR_WIDTH_PX = 480
 const MIN_BOTTOM_HEIGHT_PX = 120
 const OVERLAY_GUTTER_PX = 12
+const COLLAPSED_TOOLBOX_WIDTH_PX = 48
+const EXPANDED_TOOLBOX_WIDTH_PX = 96
+
+export const DOCK_RESIZE_TARGET_PX_V6 = 32
 
 export const ZERO_VIEWPORT_SAFE_AREA_V6: ViewportSafeAreaV6 = Object.freeze({
   top: 0, right: 0, bottom: 0, left: 0,
@@ -55,7 +61,7 @@ function clamp(value: number, minimum: number, maximum: number): number {
 }
 
 function divider(bounds: WorkspaceLayoutBoundsV6): number {
-  return positive(bounds.dividerPx ?? 6, 6)
+  return positive(bounds.dividerPx ?? DOCK_RESIZE_TARGET_PX_V6, DOCK_RESIZE_TARGET_PX_V6)
 }
 
 function dockedVisible(
@@ -99,6 +105,9 @@ export function resolveWorkspaceLayoutV6(
   const heightPx = positive(inputBounds.heightPx, 800)
   const explorerVisible = dockedVisible(inputBounds.mode, 'explorer', preferences)
   const inspectorVisible = dockedVisible(inputBounds.mode, 'inspector', preferences)
+  const toolboxWidthPx = preferences.toolboxCollapsed
+    ? COLLAPSED_TOOLBOX_WIDTH_PX
+    : EXPANDED_TOOLBOX_WIDTH_PX
   const dividerPx = divider(inputBounds)
   const explorerDivider = explorerVisible ? dividerPx : 0
   const inspectorDivider = inspectorVisible ? dividerPx : 0
@@ -108,7 +117,10 @@ export function resolveWorkspaceLayoutV6(
   let inspectorWidthPx = inspectorVisible
     ? clampDockSizeV6('inspector', preferences.inspectorWidthPx, heightPx)
     : 0
-  const usableSideSpace = Math.max(0, widthPx - MIN_VIEWPORT_WIDTH_PX - explorerDivider - inspectorDivider)
+  const usableSideSpace = Math.max(
+    0,
+    widthPx - MIN_VIEWPORT_WIDTH_PX - toolboxWidthPx - explorerDivider - inspectorDivider,
+  )
   let overflow = Math.max(0, explorerWidthPx + inspectorWidthPx - usableSideSpace)
   const inspectorReduction = Math.min(inspectorWidthPx, overflow)
   inspectorWidthPx -= inspectorReduction
@@ -116,12 +128,17 @@ export function resolveWorkspaceLayoutV6(
   explorerWidthPx -= Math.min(explorerWidthPx, overflow)
 
   return Object.freeze({
+    toolboxWidthPx,
     explorerWidthPx,
     inspectorWidthPx,
     bottomHeightPx: dockedVisible(inputBounds.mode, 'bottom', preferences)
       ? clampDockSizeV6('bottom', preferences.bottomHeightPx, heightPx)
       : 0,
-    viewportWidthPx: Math.max(0, widthPx - explorerWidthPx - inspectorWidthPx - explorerDivider - inspectorDivider),
+    viewportWidthPx: Math.max(
+      0,
+      widthPx - toolboxWidthPx - explorerWidthPx - inspectorWidthPx
+        - explorerDivider - inspectorDivider,
+    ),
   })
 }
 
@@ -130,7 +147,7 @@ export function resolveViewportSafeAreaV6({
   presentation,
   drawers,
   preferences,
-  resolved,
+  workspaceHeightPx,
 }: ResolveViewportSafeAreaInputV6): ViewportSafeAreaV6 {
   if (presentation === 'maximized') return ZERO_VIEWPORT_SAFE_AREA_V6
   const explorer = mode === 'narrow' && drawers.explorer
@@ -140,7 +157,9 @@ export function resolveViewportSafeAreaV6({
   return Object.freeze({
     top: 0,
     right: inspector ? clampDockSizeV6('inspector', preferences.inspectorWidthPx, 800) + OVERLAY_GUTTER_PX : 0,
-    bottom: bottom ? clampDockSizeV6('bottom', preferences.bottomHeightPx, Math.max(1, resolved.bottomHeightPx / 0.45 || 800)) + OVERLAY_GUTTER_PX : 0,
+    bottom: bottom
+      ? clampDockSizeV6('bottom', preferences.bottomHeightPx, workspaceHeightPx) + OVERLAY_GUTTER_PX
+      : 0,
     left: explorer ? clampDockSizeV6('explorer', preferences.explorerWidthPx, 800) + OVERLAY_GUTTER_PX : 0,
   })
 }

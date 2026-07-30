@@ -1,12 +1,24 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { useEffect } from 'react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { useEffect, type ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ApplicationShellV6 } from './ApplicationShellV6.js'
 import { createWorkspaceLayoutStoreV6, type WorkspaceStorageV6 } from './workspace-layout-store-v6.js'
 
-function renderShell(storage: WorkspaceStorageV6 | null = null) {
-  const store = createWorkspaceLayoutStoreV6({ storage })
+interface RenderShellOptions {
+  readonly storage?: WorkspaceStorageV6 | null
+  readonly widthPx?: number
+  readonly heightPx?: number
+  readonly explorer?: ReactNode
+  readonly inspector?: ReactNode
+  readonly bottom?: ReactNode
+  readonly toolbox?: ReactNode
+}
+
+function renderShell(options: RenderShellOptions = {}) {
+  const store = createWorkspaceLayoutStoreV6({ storage: options.storage ?? null })
   let mounts = 0
   function Viewport() {
     useEffect(() => { mounts += 1 }, [])
@@ -15,13 +27,13 @@ function renderShell(storage: WorkspaceStorageV6 | null = null) {
   render(
     <ApplicationShellV6
       store={store}
-      workspaceHeightPx={800}
-      workspaceWidthPx={1440}
+      workspaceHeightPx={options.heightPx ?? 800}
+      workspaceWidthPx={options.widthPx ?? 1440}
       header={<div>Header</div>}
-      explorer={<div>Explorer</div>}
-      inspector={<div>Inspector</div>}
-      bottom={<div>Bottom</div>}
-      toolbox={<div>Toolbox</div>}
+      explorer={options.explorer ?? <div>Explorer</div>}
+      inspector={options.inspector ?? <div>Inspector</div>}
+      bottom={options.bottom ?? <div>Bottom</div>}
+      toolbox={options.toolbox ?? <div>Toolbox</div>}
       viewport={<Viewport />}
     />,
   )
@@ -68,7 +80,7 @@ describe('ApplicationShellV6', () => {
       removeItem: vi.fn(),
     }
     Object.defineProperty(document.documentElement, 'requestFullscreen', { configurable: true, value: requestFullscreen })
-    const view = renderShell(storage)
+    const view = renderShell({ storage })
     const shell = screen.getByTestId('v6-application-shell')
     fireEvent.click(screen.getByRole('button', { name: 'Maximize Main View' }))
 
@@ -97,5 +109,92 @@ describe('ApplicationShellV6', () => {
     expect(release).toHaveBeenCalledWith(4)
     fireEvent.doubleClick(handle)
     expect(view.store.getState().preferences.explorerWidthPx).toBe(280)
+  })
+
+  it('fully masks a collapsed dock from layout, input, and the accessibility tree', () => {
+    const view = renderShell({ explorer: <button type="button">Explorer action</button> })
+    act(() => view.store.getState().setDockVisible('wide', 'explorer', false))
+    const explorer = screen.getByTestId('v6-explorer')
+
+    expect(explorer).toHaveAttribute('data-visible', 'false')
+    expect(explorer).toHaveAttribute('aria-hidden', 'true')
+    expect(explorer).toHaveAttribute('inert')
+    expect(screen.queryByRole('button', { name: 'Explorer action' })).toBeNull()
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
+    const hiddenRule = css.match(
+      /\.v6-shell-toolbox\[data-visible='false'\],[\s\S]*?\.v6-shell-bottom\[data-visible='false'\]\s*\{([^}]*)\}/u,
+    )?.[1]
+    expect(hiddenRule).toContain('overflow: hidden')
+    expect(hiddenRule).toContain('pointer-events: none')
+    expect(hiddenRule).toContain('visibility: hidden')
+  })
+
+  it('renders compact and narrow transient drawers and the Bottom sheet', () => {
+    const compact = renderShell({ widthPx: 1000 })
+    act(() => compact.store.getState().setDrawerOpen('inspector', true))
+    const compactInspector = screen.getByTestId('v6-inspector')
+    expect(compactInspector).toHaveAttribute('data-presentation', 'drawer')
+    expect(compactInspector).toHaveAttribute('data-visible', 'true')
+    expect(compactInspector).toBeVisible()
+    expect(compact.store.getState().getSnapshot().viewportSafeArea.right).toBe(372)
+  })
+
+  it('renders every narrow overlay using the measured 400px workspace height', () => {
+    const narrow = renderShell({ widthPx: 900, heightPx: 400 })
+    act(() => {
+      narrow.store.getState().setDrawerOpen('explorer', true)
+      narrow.store.getState().setDrawerOpen('inspector', true)
+      narrow.store.getState().setDrawerOpen('bottom', true)
+    })
+
+    expect(screen.getByTestId('v6-explorer')).toHaveAttribute('data-presentation', 'drawer')
+    expect(screen.getByTestId('v6-inspector')).toHaveAttribute('data-presentation', 'drawer')
+    expect(screen.getByTestId('v6-bottom')).toHaveAttribute('data-presentation', 'sheet')
+    expect(screen.getByTestId('v6-bottom')).toHaveAttribute('data-visible', 'true')
+    expect(narrow.store.getState().getSnapshot().viewportSafeArea.bottom).toBe(192)
+  })
+
+  it('keys responsive CSS to measured workspace mode instead of browser media queries', () => {
+    const browserWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
+    try {
+      renderShell({ widthPx: 1000 })
+      expect(screen.getByTestId('v6-application-shell')).toHaveAttribute('data-workspace-mode', 'compact')
+      expect(screen.getByTestId('v6-inspector')).toHaveAttribute('data-presentation', 'drawer')
+      const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
+      expect(css).not.toMatch(/@media\s*\(/u)
+      expect(css).toContain(".v6-application-shell[data-workspace-mode='compact']")
+      expect(css).toContain(".v6-application-shell[data-workspace-mode='narrow']")
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: browserWidth })
+    }
+  })
+
+  it('uses the persisted Toolbox collapse state in rendering and geometry', () => {
+    const view = renderShell({ toolbox: <button type="button">Translate tool</button> })
+    const shell = screen.getByTestId('v6-application-shell')
+    const toolbox = screen.getByTestId('v6-toolbox')
+    expect(shell).toHaveAttribute('data-toolbox-collapsed', 'true')
+    expect(toolbox).toHaveAttribute('aria-hidden', 'true')
+    expect(toolbox).toHaveAttribute('inert')
+    expect(screen.queryByRole('button', { name: 'Translate tool' })).toBeNull()
+
+    act(() => view.store.getState().setToolboxCollapsed(false))
+    expect(shell).toHaveAttribute('data-toolbox-collapsed', 'false')
+    expect(toolbox).not.toHaveAttribute('inert')
+    expect(screen.getByRole('button', { name: 'Translate tool' })).toBeVisible()
+  })
+
+  it('provides 32px handle hit targets and aligns Bottom to the central Main View column', () => {
+    renderShell()
+    expect(screen.getByRole('separator', { name: 'Resize Scene Explorer' })).toBeInTheDocument()
+    expect(screen.getByRole('separator', { name: 'Resize Job Monitor' })).toBeInTheDocument()
+
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
+    expect(css).toMatch(/\.v6-dock-resize-handle--vertical\s*\{[^}]*min-width:\s*32px/u)
+    expect(css).toMatch(/\.v6-dock-resize-handle--horizontal\s*\{[^}]*min-height:\s*32px/u)
+    expect(css).toMatch(/\.v6-shell-main\s*\{[^}]*grid-column:\s*4/u)
+    expect(css).toMatch(/\.v6-shell-bottom\s*\{[^}]*grid-column:\s*4/u)
+    expect(css).toMatch(/\.v6-shell-bottom-resize\s*\{[^}]*grid-column:\s*4/u)
   })
 })

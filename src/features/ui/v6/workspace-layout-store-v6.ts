@@ -143,9 +143,40 @@ function readPreferences(storage: WorkspaceStorageV6 | null): WorkspacePreferenc
   }
 }
 
+function allowListedPreferences(preferences: WorkspacePreferencesV6): WorkspacePreferencesV6 {
+  return {
+    version: 1,
+    theme: preferences.theme,
+    explorerWidthPx: preferences.explorerWidthPx,
+    inspectorWidthPx: preferences.inspectorWidthPx,
+    bottomHeightPx: preferences.bottomHeightPx,
+    toolboxCollapsed: preferences.toolboxCollapsed,
+    visibleByMode: {
+      wide: {
+        explorer: preferences.visibleByMode.wide.explorer,
+        inspector: preferences.visibleByMode.wide.inspector,
+        bottom: preferences.visibleByMode.wide.bottom,
+      },
+      compact: {
+        explorer: preferences.visibleByMode.compact.explorer,
+        inspector: preferences.visibleByMode.compact.inspector,
+        bottom: preferences.visibleByMode.compact.bottom,
+      },
+      narrow: {
+        explorer: preferences.visibleByMode.narrow.explorer,
+        inspector: preferences.visibleByMode.narrow.inspector,
+        bottom: preferences.visibleByMode.narrow.bottom,
+      },
+    },
+  }
+}
+
 function writePreferences(storage: WorkspaceStorageV6 | null, preferences: WorkspacePreferencesV6): void {
   try {
-    storage?.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY_V6, JSON.stringify(preferences))
+    storage?.setItem(
+      WORKSPACE_PREFERENCES_STORAGE_KEY_V6,
+      JSON.stringify(allowListedPreferences(preferences)),
+    )
   } catch {}
 }
 
@@ -155,8 +186,9 @@ export function createWorkspaceLayoutStoreV6(
   const initialPreferences = readPreferences(options.storage)
   return createStore<WorkspaceLayoutStateV6>((set, get) => {
     const replacePreferences = (preferences: WorkspacePreferencesV6) => {
-      writePreferences(options.storage, preferences)
-      set({ preferences })
+      const allowed = allowListedPreferences(preferences)
+      writePreferences(options.storage, allowed)
+      set({ preferences: allowed })
     }
     const currentSnapshot = (): WorkspaceLayoutSnapshotV6 => {
       const state = get()
@@ -173,6 +205,7 @@ export function createWorkspaceLayoutStoreV6(
           drawers: state.drawers,
           preferences: state.preferences,
           resolved,
+          workspaceHeightPx: state.workspaceHeightPx,
         }),
       })
     }
@@ -189,7 +222,13 @@ export function createWorkspaceLayoutStoreV6(
       setWorkspaceBounds(widthPx, heightPx) {
         const safeWidth = Number.isFinite(widthPx) && widthPx > 0 ? widthPx : 1200
         const safeHeight = Number.isFinite(heightPx) && heightPx > 0 ? heightPx : 800
-        set({ workspaceWidthPx: safeWidth, workspaceHeightPx: safeHeight, mode: resolveWorkspaceModeV6(safeWidth) })
+        const nextMode = resolveWorkspaceModeV6(safeWidth)
+        set({
+          workspaceWidthPx: safeWidth,
+          workspaceHeightPx: safeHeight,
+          mode: nextMode,
+          drawers: nextMode === get().mode ? get().drawers : CLOSED_DRAWERS,
+        })
       },
       setDockSize(dock, sizePx) {
         const current = get()
