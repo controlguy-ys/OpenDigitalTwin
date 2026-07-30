@@ -50,6 +50,12 @@ function assertFreshId(project: WorkcellProjectV5, id: string): void {
   if (id.length === 0 || allIds.has(id)) fail(`Generated V6 scene ID ${id} is not fresh.`)
 }
 
+function reserveFreshId(project: WorkcellProjectV5, reserved: Set<string>, id: string): void {
+  assertFreshId(project, id)
+  if (reserved.has(id)) fail(`Generated V6 scene ID ${id} is not fresh.`)
+  reserved.add(id)
+}
+
 function pruneEntityMappings(project: WorkcellProjectV5, entityId: string): WorkcellProjectV5['opcUa'] {
   const mappings = project.opcUa.mappings.flatMap((mapping) => {
     const leaves = mapping.leaves.filter((leaf) => !(
@@ -105,9 +111,15 @@ export function createSceneCommandServiceV6(options: SceneCommandServiceV6Option
     async duplicateEntity(entityId: string) {
       const active = activePublication(options.mutations)
       const snapshot = requireEntity(active.project, entityId)
-      const entityIdCopy = options.createId()
+      const reservedIds = new Set<string>()
+      const createFreshId = (): string => {
+        const id = options.createId()
+        reserveFreshId(active.project, reservedIds, id)
+        return id
+      }
+      const entityIdCopy = createFreshId()
       const frameIdByOriginal = new Map<string, string>()
-      for (const frame of [...snapshot.graspFrames, ...snapshot.movingFrames]) frameIdByOriginal.set(frame.frameId, options.createId())
+      for (const frame of [...snapshot.graspFrames, ...snapshot.movingFrames]) frameIdByOriginal.set(frame.frameId, createFreshId())
       await mutate(active.revisionId, `Duplicate Object ${entityId}`, (active) => {
         const entity = requireEntity(active, entityId)
         assertFreshId(active, entityIdCopy)

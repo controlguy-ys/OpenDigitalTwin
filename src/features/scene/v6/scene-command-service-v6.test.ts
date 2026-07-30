@@ -69,6 +69,20 @@ describe('createSceneCommandServiceV6', () => {
     expect(state.current().opcUa.mappings).toHaveLength(1)
   })
 
+  it('rejects duplicate generated entity or frame IDs before mutation and selection changes', async () => {
+    const state = mutations(project())
+    const setSelection = vi.fn()
+    const service = createSceneCommandServiceV6({
+      mutations: state.mutations,
+      createId: vi.fn().mockReturnValueOnce('copy').mockReturnValueOnce('copy').mockReturnValueOnce('copy-moving'),
+      onSelectionChange: setSelection,
+    })
+
+    await expect(service.duplicateEntity('box')).rejects.toThrow('not fresh')
+    expect(state.mutate).not.toHaveBeenCalled()
+    expect(setSelection).not.toHaveBeenCalled()
+  })
+
   it('rejects protected Object and non-empty Group deletion before mutation and preserves stale selection', async () => {
     const source = project()
     const locked = { ...source.spatialEntities[0]!, removable: false }

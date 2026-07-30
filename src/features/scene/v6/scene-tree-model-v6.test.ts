@@ -8,6 +8,12 @@ function project(): WorkcellProjectV5 {
   const base = makeMinimalWorkcellProjectV5()
   return {
     ...base,
+    scene: {
+      frames: [...base.scene.frames, {
+        id: 'station', name: 'Station', parentFrameId: 'mcp',
+        localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] }, role: 'custom',
+      }],
+    },
     robots: [...base.robots, { ...base.robots[0]!, id: 'robot-2', name: 'Robot 2', serialNumber: 'ROBOT-SAMPLE-002' }],
     sceneGroups: [
       { id: 'fixtures', name: 'Fixtures', parentGroupId: null, visible: true },
@@ -26,11 +32,14 @@ describe('buildSceneTreeRowsV6', () => {
     const rows = buildSceneTreeRowsV6(project())
 
     expect(rows.map(({ key }) => key)).toEqual([
-      'section:frames', 'frame:world', 'frame:mcp',
+      'section:frames', 'frame:world', 'frame:mcp', 'frame:station',
       'section:robots', 'robot:robot-1', 'robot:robot-2',
       'section:groups', 'group:fixtures', 'object:box-a', 'group:infeed', 'object:box-b',
       'section:objects', 'object:box-c',
     ])
+    expect(rows.find(({ key }) => key === 'frame:world')).toMatchObject({ parentKey: 'section:frames', depth: 1 })
+    expect(rows.find(({ key }) => key === 'frame:mcp')).toMatchObject({ parentKey: 'frame:world', depth: 2 })
+    expect(rows.find(({ key }) => key === 'frame:station')).toMatchObject({ parentKey: 'frame:mcp', depth: 3 })
     expect(rows.find(({ key }) => key === 'group:infeed')).toMatchObject({ parentKey: 'group:fixtures', depth: 2, visible: false })
     expect(rows.find(({ key }) => key === 'object:box-b')).toMatchObject({ parentKey: 'group:infeed', depth: 3, ownerLabel: 'OPC UA: endpoint-1' })
     expect(rows.find(({ key }) => key === 'robot:robot-1')).toMatchObject({ depth: 1, ownerLabel: 'Simulation' })
@@ -40,6 +49,9 @@ describe('buildSceneTreeRowsV6', () => {
     const rows = buildSceneTreeRowsV6(project())
     expect(filterSceneTreeRowsV6(rows, 'box b').map(({ key }) => key)).toEqual([
       'section:groups', 'group:fixtures', 'group:infeed', 'object:box-b',
+    ])
+    expect(filterSceneTreeRowsV6(rows, 'station').map(({ key }) => key)).toEqual([
+      'section:frames', 'frame:world', 'frame:mcp', 'frame:station',
     ])
   })
 })

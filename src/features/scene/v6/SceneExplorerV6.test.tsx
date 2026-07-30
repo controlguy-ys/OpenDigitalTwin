@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { WorkcellProjectV5 } from '../../../core/project-v5/index.js'
@@ -62,5 +63,39 @@ describe('SceneExplorerV6', () => {
     expect(onToggleVisibility).toHaveBeenCalledWith({ kind: 'entity', id: 'box' }, false)
     expect(onContextMenu).toHaveBeenCalledTimes(2)
     expect(onContextMenu).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'object', id: 'box' }))
+  })
+
+  it('navigates and requests a context menu for the focused row instead of a stale active row', () => {
+    const onContextMenu = vi.fn()
+    render(<SceneExplorerV6 onContextMenu={onContextMenu} onSelectionChange={vi.fn()} project={project()} selection={null} />)
+    const object = screen.getByRole('treeitem', { name: /Searchable workpiece/u })
+    const world = screen.getByRole('treeitem', { name: /World/u })
+    const mcp = screen.getByRole('treeitem', { name: /MCP/u })
+    fireEvent.click(object)
+    world.focus()
+    fireEvent.keyDown(world, { key: 'ArrowDown' })
+    expect(mcp).toHaveFocus()
+    fireEvent.keyDown(mcp, { key: 'F10', shiftKey: true })
+    expect(onContextMenu).toHaveBeenCalledWith(expect.objectContaining({ kind: 'frame', id: 'mcp' }))
+  })
+
+  it('lets a nested visibility button handle Space once and use its containing row target', async () => {
+    const user = userEvent.setup()
+    const onToggleVisibility = vi.fn()
+    const onContextMenu = vi.fn()
+    render(<SceneExplorerV6
+      onContextMenu={onContextMenu}
+      onSelectionChange={vi.fn()}
+      onToggleVisibility={onToggleVisibility}
+      project={project()}
+      selection={null}
+    />)
+    await user.click(screen.getByRole('treeitem', { name: /Searchable workpiece/u }))
+    const robotVisibility = screen.getByRole('button', { name: 'Hide Robot 1' })
+    robotVisibility.focus()
+    await user.keyboard(' ')
+    expect(onToggleVisibility).toHaveBeenCalledExactlyOnceWith({ kind: 'robot', id: 'robot-1' }, false)
+    fireEvent.keyDown(robotVisibility, { key: 'F10', shiftKey: true })
+    expect(onContextMenu).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'robot', id: 'robot-1' }))
   })
 })

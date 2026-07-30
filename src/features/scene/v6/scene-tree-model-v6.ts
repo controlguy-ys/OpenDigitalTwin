@@ -25,9 +25,21 @@ export function buildSceneTreeRowsV6(project: WorkcellProjectV5): readonly Scene
   const rows: SceneTreeRowV6[] = []
   const frames = section('frames')
   rows.push(frames)
+  const frameIds = new Set(project.scene.frames.map((frame) => frame.id))
+  const depthByFrameId = new Map<string, number>()
+  const frameDepth = (frameId: string, visited: ReadonlySet<string> = new Set()): number => {
+    const cached = depthByFrameId.get(frameId)
+    if (cached !== undefined) return cached
+    const frame = project.scene.frames.find((candidate) => candidate.id === frameId)
+    if (frame === undefined || frame.parentFrameId === null || !frameIds.has(frame.parentFrameId) || visited.has(frameId)) return 1
+    const depth = frameDepth(frame.parentFrameId, new Set([...visited, frameId])) + 1
+    depthByFrameId.set(frameId, depth)
+    return depth
+  }
   rows.push(...project.scene.frames.map((frame) => ({
-    key: `frame:${frame.id}`, kind: 'frame' as const, id: frame.id, parentKey: frames.key,
-    depth: 1, name: frame.name, visible: null, ownerLabel: frame.role,
+    key: `frame:${frame.id}`, kind: 'frame' as const, id: frame.id,
+    parentKey: frame.parentFrameId !== null && frameIds.has(frame.parentFrameId) ? `frame:${frame.parentFrameId}` : frames.key,
+    depth: frameDepth(frame.id), name: frame.name, visible: null, ownerLabel: frame.role,
   })))
 
   const robots = section('robots')

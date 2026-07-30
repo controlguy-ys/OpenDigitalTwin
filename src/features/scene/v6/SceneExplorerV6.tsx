@@ -62,13 +62,26 @@ export function SceneExplorerV6({
     if (item !== null) onContextMenu?.(resolveSceneContextTargetV6(project, item))
   }
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    const focusedRowKey = event.target instanceof HTMLElement
+      ? event.target.closest<HTMLElement>('[data-row-key]')?.dataset.rowKey
+      : undefined
+    const focusedRow = focusedRowKey === undefined
+      ? undefined
+      : visibleRows.find((row) => row.key === focusedRowKey)
+    const nestedControl = event.target instanceof HTMLElement
+      && event.target.closest('[data-row-key]') !== event.target
+      && event.target.matches('button, input, select, textarea, [contenteditable="true"]')
     const focusRow = (key: string): void => {
       event.currentTarget.querySelectorAll<HTMLElement>('[role="treeitem"]')
         .forEach((element) => { if (element.dataset.rowKey === key) element.focus() })
     }
-    const currentIndex = Math.max(0, visibleRows.findIndex((row) => row.key === activeKey))
+    const currentIndex = Math.max(0, visibleRows.findIndex((row) => row.key === (focusedRow?.key ?? activeKey)))
     const current = visibleRows[currentIndex]
     if (current === undefined) return
+    if (nestedControl) {
+      if (event.key === 'F10' && event.shiftKey) { event.preventDefault(); requestContext(current) }
+      return
+    }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       const step = event.key === 'ArrowDown' ? 1 : -1
@@ -113,6 +126,7 @@ export function SceneExplorerV6({
           key={row.key}
           onClick={() => activate(row)}
           onContextMenu={(event) => { event.preventDefault(); setActiveKey(row.key); requestContext(row) }}
+          onFocus={() => setActiveKey(row.key)}
           role="treeitem"
           style={{ '--v6-tree-depth': row.depth } as CSSProperties}
           tabIndex={activeKey === row.key ? 0 : -1}
