@@ -1,33 +1,67 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { useEffect, useState } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createAppCommandRegistryV6 } from '../../commands/v6/app-command-v6.js'
 import { ApplicationShellV6 } from '../../ui/v6/ApplicationShellV6.js'
 import { createWorkspaceLayoutStoreV6 } from '../../ui/v6/workspace-layout-store-v6.js'
 import { createCameraControllerV6 } from './camera-controller-v6.js'
+import { ViewportOverlayV6 } from './ViewportOverlayV6.js'
 import { WorkcellViewportV6 } from './WorkcellViewportV6.js'
 
-interface RuntimeProbeCounters {
-  mounts: number
-  subscriptions: number
+interface RuntimeProbeSnapshot {
+  readonly selection: { readonly kind: string; readonly id: string }
+  readonly activeJob: string
+  readonly runtimeEpoch: number
+  readonly projectRevision: string
 }
 
-function MountedRuntimeProbe({ camera, counters }: {
+interface RuntimeProbeMetrics {
+  mounts: number
+  subscriptions: number
+  unsubscriptions: number
+  listeners: number
+}
+
+interface RuntimeProbeStore {
+  subscribe(listener: () => void): () => void
+  getSnapshot(): RuntimeProbeSnapshot
+  update(value: Partial<RuntimeProbeSnapshot>): void
+  readonly metrics: RuntimeProbeMetrics
+}
+
+function createRuntimeProbeStore(initial: RuntimeProbeSnapshot): RuntimeProbeStore {
+  let snapshot = initial
+  const listeners = new Set<() => void>()
+  const metrics: RuntimeProbeMetrics = { mounts: 0, subscriptions: 0, unsubscriptions: 0, listeners: 0 }
+  return {
+    subscribe(listener) {
+      metrics.subscriptions += 1
+      listeners.add(listener)
+      metrics.listeners = listeners.size
+      return () => {
+        metrics.unsubscriptions += 1
+        listeners.delete(listener)
+        metrics.listeners = listeners.size
+      }
+    },
+    getSnapshot: () => snapshot,
+    update(value) {
+      snapshot = { ...snapshot, ...value }
+      listeners.forEach((listener) => listener())
+    },
+    metrics,
+  }
+}
+
+function MountedRuntimeProbe({ camera, store }: {
   readonly camera: { readonly position: readonly number[]; readonly target: readonly number[] }
-  readonly counters: RuntimeProbeCounters
+  readonly store: RuntimeProbeStore
 }) {
-  const [snapshot] = useState(() => ({
-    selection: { kind: 'robot', id: 'robot-1' },
-    activeJob: 'job-17',
-    runtimeEpoch: 12,
-    projectRevision: 'revision-9',
-  }))
+  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   useEffect(() => {
-    counters.mounts += 1
-    counters.subscriptions += 1
-    return () => { counters.subscriptions -= 1 }
-  }, [counters])
+    store.metrics.mounts += 1
+  }, [store])
   return <output
     data-active-job={snapshot.activeJob}
     data-camera-snapshot={JSON.stringify(camera)}
@@ -108,16 +142,24 @@ describe('WorkcellViewportV6', () => {
       execute: () => layoutStore.getState().toggleMainViewMaximized(),
     }])
     const cameraState = { position: [3, 4, 5] as [number, number, number], target: [0, 0, 0] as [number, number, number] }
+    const cameraUpdate = vi.fn()
     const controller = createCameraControllerV6({
       camera: cameraState,
       home: { position: [9, 9, 9], target: [1, 1, 1] },
-      selectionBounds: vi.fn(() => null),
-      update: vi.fn(),
-      visibleBounds: vi.fn(() => null),
+      selectionBounds: vi.fn(() => ({ center: [2, 3, 4], radius: 1 })),
+      update: cameraUpdate,
+      visibleBounds: vi.fn(() => ({ center: [6, 7, 8], radius: 2 })),
     })
-    const home = vi.fn(() => controller.home())
-    const fitAll = vi.fn(() => controller.fitAll())
-    const counters = { mounts: 0, subscriptions: 0 }
+    const camera = {
+      home: vi.fn(() => controller.home()),
+      fitAll: vi.fn(() => controller.fitAll()),
+      focusSelection: () => controller.focusSelection(),
+      setOrientation: (value: Parameters<typeof controller.setOrientation>[0]) => controller.setOrientation(value),
+    }
+    const runtimeStore = createRuntimeProbeStore({
+      selection: { kind: 'robot', id: 'robot-1' },
+      activeJob: 'job-17', runtimeEpoch: 12, projectRevision: 'revision-9',
+    })
     const requestFullscreen = vi.fn()
     const fullscreenDescriptor = Object.getOwnPropertyDescriptor(document.documentElement, 'requestFullscreen')
     try {
@@ -131,9 +173,9 @@ describe('WorkcellViewportV6', () => {
           store={layoutStore}
           toolbox={<div>Toolbox</div>}
           viewport={<WorkcellViewportV6
-            canvas={<><canvas data-testid="preserved-canvas" /><MountedRuntimeProbe camera={cameraState} counters={counters} /></>}
+            canvas={<><canvas data-testid="preserved-canvas" /><MountedRuntimeProbe camera={cameraState} store={runtimeStore} /></>}
             layoutStore={layoutStore}
-            overlay={<div data-testid="real-overlay"><button onClick={home} type="button">Home probe</button><button onClick={fitAll} type="button">Fit probe</button></div>}
+            overlay={<ViewportOverlayV6 camera={camera} />}
             registry={registry}
           />}
           workspaceHeightPx={800}
@@ -142,6 +184,12 @@ describe('WorkcellViewportV6', () => {
       )
       const canvas = screen.getByTestId('preserved-canvas')
       const probe = screen.getByTestId('runtime-probe')
+      fireEvent.click(screen.getByRole('button', { name: 'Home view' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Fit all visible geometry' }))
+      expect(camera.home).toHaveBeenCalledOnce()
+      expect(camera.fitAll).toHaveBeenCalledOnce()
+      expect(cameraUpdate).toHaveBeenCalledTimes(2)
+      act(() => runtimeStore.update({ activeJob: 'job-18' }))
       const probeSnapshot = {
         camera: probe.getAttribute('data-camera-snapshot'),
         selection: probe.getAttribute('data-selection'),
@@ -149,6 +197,9 @@ describe('WorkcellViewportV6', () => {
         runtimeEpoch: probe.getAttribute('data-runtime-epoch'),
         projectRevision: probe.getAttribute('data-project-revision'),
       }
+      camera.home.mockClear()
+      camera.fitAll.mockClear()
+      cameraUpdate.mockClear()
       const button = screen.getByRole('button', { name: 'Maximize Main View' })
 
       fireEvent.click(button)
@@ -166,10 +217,21 @@ describe('WorkcellViewportV6', () => {
         runtimeEpoch: probe.getAttribute('data-runtime-epoch'),
         projectRevision: probe.getAttribute('data-project-revision'),
       }).toEqual(probeSnapshot)
-      expect(counters).toEqual({ mounts: 1, subscriptions: 1 })
-      expect(home).not.toHaveBeenCalled()
-      expect(fitAll).not.toHaveBeenCalled()
+      expect(runtimeStore.metrics).toEqual({ mounts: 1, subscriptions: 1, unsubscriptions: 0, listeners: 1 })
+      expect(camera.home).not.toHaveBeenCalled()
+      expect(camera.fitAll).not.toHaveBeenCalled()
+      expect(cameraUpdate).not.toHaveBeenCalled()
       expect(requestFullscreen).not.toHaveBeenCalled()
+      act(() => runtimeStore.update({ runtimeEpoch: 13 }))
+      expect(screen.getByTestId('runtime-probe')).toBe(probe)
+      expect(probe).toHaveAttribute('data-active-job', 'job-18')
+      expect(probe).toHaveAttribute('data-runtime-epoch', '13')
+      expect(runtimeStore.metrics).toEqual({ mounts: 1, subscriptions: 1, unsubscriptions: 0, listeners: 1 })
+      fireEvent.click(screen.getByRole('button', { name: 'Home view' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Fit all visible geometry' }))
+      expect(camera.home).toHaveBeenCalledOnce()
+      expect(camera.fitAll).toHaveBeenCalledOnce()
+      expect(cameraUpdate).toHaveBeenCalledTimes(2)
     } finally {
       if (fullscreenDescriptor === undefined) delete (document.documentElement as { requestFullscreen?: unknown }).requestFullscreen
       else Object.defineProperty(document.documentElement, 'requestFullscreen', fullscreenDescriptor)
