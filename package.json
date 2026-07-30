@@ -44,7 +44,8 @@
     "test:e2e:viewport": "playwright test tests/viewport-context-viewcube.spec.ts",
     "test:e2e:layout": "playwright test tests/docked-ribbon-layout.spec.ts",
     "test:e2e:v5": "playwright test tests/project-v5-browser-cutover.spec.ts tests/opcua-settings-monitor.spec.ts",
-    "test:e2e": "npm run test:e2e:v5",
+    "test:e2e:v6": "playwright test tests/ui-v6-shell.spec.ts tests/ui-v6-scene.spec.ts tests/ui-v6-jobs.spec.ts tests/ui-v6-connectivity.spec.ts tests/ui-v6-accessibility.spec.ts",
+    "test:e2e": "npm run test:e2e:v6",
     "verify": "npm run lint && npm run test:run && npm run cad:validate && npm run deploy:validate && npm run build:gateway && node dist-gateway/middleware/runtime-gateway/main.js --check-config && npm run build && npm run test:e2e"
   },
   "dependencies": {

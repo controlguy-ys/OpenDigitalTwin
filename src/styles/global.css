@@ -27,6 +27,54 @@ body {
   overflow: hidden;
 }
 
+.v6-app-root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.v6-app-header {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  overflow: visible;
+  background: var(--v6-color-panel);
+  border-bottom: 1px solid var(--v6-color-border);
+}
+
+.v6-app-header > .v6-header-status { margin-left: auto; }
+
+.v6-operation-error {
+  position: fixed;
+  z-index: 50;
+  top: 8px;
+  left: 50%;
+  max-width: min(42rem, calc(100vw - 2rem));
+  padding: 8px 12px;
+  color: var(--v6-color-text);
+  background: var(--v6-color-overlay);
+  border: 1px solid var(--v6-color-fault);
+  transform: translateX(-50%);
+}
+
+.v6-main-view-canvas-host .v5-scene-canvas,
+.v6-main-view-canvas-host .v5-scene-canvas > div {
+  width: 100%;
+  height: 100%;
+}
+
+.v6-main-view-canvas-host .v5-scene-canvas { position: absolute; inset: 0; }
+
+@media (max-width: 900px) {
+  .v6-app-header { gap: 6px; padding-inline: 8px; }
+  .v6-app-header > strong { font-size: 0.875rem; }
+  .v6-header-status-project { display: none; }
+}
+
 button {
   color: inherit;
   font: inherit;

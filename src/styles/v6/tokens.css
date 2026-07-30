@@ -11,6 +11,7 @@
   --v6-color-warning: #facc15;
   --v6-color-fault: #fb7185;
   --v6-color-selection: #38bdf8;
+  --v6-color-selection-bg: #075985;
   --v6-color-focus: #93c5fd;
   --v6-color-overlay: #020617cc;
 }
@@ -28,6 +29,7 @@
   --v6-color-warning: #facc15;
   --v6-color-fault: #fb7185;
   --v6-color-selection: #38bdf8;
+  --v6-color-selection-bg: #075985;
   --v6-color-focus: #93c5fd;
   --v6-color-overlay: #020617cc;
 }
@@ -45,6 +47,7 @@
   --v6-color-warning: #8a4b00;
   --v6-color-fault: #b4233a;
   --v6-color-selection: #006cc2;
+  --v6-color-selection-bg: #006cc2;
   --v6-color-focus: #004fae;
   --v6-color-overlay: #102033cc;
 }

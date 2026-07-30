@@ -32,6 +32,13 @@ export interface V5WorkcellWorkspaceProps {
   readonly onOpenBinding: (target: OpcUaProjectTargetV5) => void
 }
 
+export interface V5WorkcellCanvasProps {
+  readonly project: WorkcellProjectV5
+  readonly bundle: BrowserRuntimeBundleStateV5 | null
+  readonly selection: V5WorkcellSelection | null
+  readonly onSelect: (selection: V5WorkcellSelection) => void
+}
+
 function transformProps(pose: RigidTransformV5): {
   readonly position: [number, number, number]
   readonly quaternion: [number, number, number, number]
@@ -199,7 +206,17 @@ export function V5WorkcellWorkspace({
       <span>{project.spatialEntities.length} Objects</span>
       <button disabled={target === null} onClick={() => { if (target !== null) onOpenBinding(target) }} type="button">Open Binding…</button>
     </div>
-    <div className="v5-scene-canvas" data-testid="scene-canvas-surface">
+    <V5WorkcellCanvas bundle={bundle} onSelect={onSelect} project={project} selection={selection} />
+  </main>
+}
+
+export function V5WorkcellCanvas({
+  project,
+  bundle,
+  selection,
+  onSelect,
+}: V5WorkcellCanvasProps): ReactNode {
+  return <div className="v5-scene-canvas" data-testid="scene-canvas-surface">
       {bundle === null
         ? <div className="v5-empty-state">Project runtime is not active.</div>
         : <Canvas onPointerMissed={() => undefined} shadows>
@@ -250,5 +267,4 @@ export function V5WorkcellWorkspace({
           />)}
         </Canvas>}
     </div>
-  </main>
 }
