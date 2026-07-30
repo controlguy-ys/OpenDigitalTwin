@@ -7,10 +7,15 @@ import {
 import type {
   AppCommandIdV6,
   AppCommandRegistryV6,
-  AppCommandSurfaceV6,
 } from '../../commands/v6/app-command-v6.js'
 import type { V6WorkcellSelection } from '../../interaction/v6/workcell-selection-v6.js'
 import { ConnectivityMenuV6, type ConnectivityMenuV6Props } from '../../connectivity/v6/ConnectivityMenuV6.js'
+import {
+  isEditableMenuTargetV6,
+  MENU_COMMANDS_V6,
+  MENU_NAMES_V6,
+  MENU_SURFACES_V6,
+} from './app-menu-bar-config-v6.js'
 import {
   CommandSurfaceControlV6,
   invokeCommandSurfaceV6,
@@ -37,34 +42,6 @@ export interface AppMenuBarV6Props {
   readonly connectivity?: ConnectivityMenuV6Props
 }
 
-const MENU_COMMANDS: Readonly<Record<string, readonly AppCommandIdV6[]>> = Object.freeze({
-  Project: ['project.new', 'project.loadDemo', 'project.save', 'project.export', 'project.import'],
-  Home: ['tool.select', 'tool.translate', 'tool.rotate', 'view.focusSelection', 'view.fitAll'],
-  Model: ['model.addBox', 'model.addCylinder'],
-  Job: ['job.openEditor', 'job.start', 'job.cancel'],
-  Simulation: [],
-  Connectivity: [],
-  View: ['view.focusSelection', 'view.fitAll', 'view.main.maximize', 'view.layout.reset', 'view.theme.system', 'view.theme.dark', 'view.theme.light'],
-  Help: ['help.controls', 'help.about'],
-})
-const MENU_NAMES = Object.freeze(Object.keys(MENU_COMMANDS))
-
-const MENU_SURFACES: Readonly<Record<string, AppCommandSurfaceV6 | undefined>> = Object.freeze({
-  Project: 'project-menu',
-  Home: 'home-menu',
-  Model: 'model-menu',
-  Job: 'job-menu',
-  Simulation: undefined,
-  Connectivity: undefined,
-  View: 'view-menu',
-  Help: 'help-menu',
-})
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
-}
-
 export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity }: AppMenuBarV6Props) {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [activeMenuIndex, setActiveMenuIndex] = useState(0)
@@ -76,11 +53,11 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
     }
   }
   const normalizedMenuIndex = (index: number) => (
-    (index + MENU_NAMES.length) % MENU_NAMES.length
+    (index + MENU_NAMES_V6.length) % MENU_NAMES_V6.length
   )
   const focusMenuTrigger = (index: number, keepMenuOpen: boolean) => {
     const nextIndex = normalizedMenuIndex(index)
-    const nextMenu = MENU_NAMES[nextIndex]!
+    const nextMenu = MENU_NAMES_V6[nextIndex]!
     setActiveMenuIndex(nextIndex)
     setOpenMenu(keepMenuOpen ? nextMenu : null)
     document.getElementById(`v6-menu-trigger-${nextMenu.toLowerCase()}`)?.focus()
@@ -128,7 +105,7 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
     if (event.key === 'Escape') {
       event.preventDefault()
       setOpenMenu(null)
-      const menu = MENU_NAMES[index]!
+      const menu = MENU_NAMES_V6[index]!
       document.getElementById(`v6-menu-trigger-${menu.toLowerCase()}`)?.focus()
     } else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
       event.preventDefault()
@@ -159,7 +136,7 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
         }
         return
       }
-      if (isEditableTarget(event.target)) return
+      if (isEditableMenuTargetV6(event.target)) return
       if (event.key === 'Escape') {
         if (openMenu !== null) {
           event.preventDefault()
@@ -188,10 +165,10 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
   return (
     <nav aria-label="Application commands">
       <div aria-label="Application menu" role="menubar">
-        {Object.entries(MENU_COMMANDS).map(([menu, commandIds], index) => {
+        {Object.entries(MENU_COMMANDS_V6).map(([menu, commandIds], index) => {
           const open = openMenu === menu
           const triggerId = `v6-menu-trigger-${menu.toLowerCase()}`
-          const surface = MENU_SURFACES[menu]
+          const surface = MENU_SURFACES_V6[menu]
           return <span key={menu}>
             <button
               aria-expanded={open}
