@@ -205,7 +205,7 @@ expect(productionV6Imports).not.toContainEqual(
 ```
 
 Test duplicate command IDs, unknown invocation, hidden commands, disabled commands, and a rejected asynchronous command.
-Verify `view.main.maximize` is exposed by both the View menu and Main View pane toolbar, changes from `Maximize Main View` with `Maximize2` to `Restore Main View` with `Minimize2`, and never invokes a Project mutation.
+Verify the `view.main.maximize` command contract and placement inventory identify both the View menu and Main View pane toolbar, use the initial label `Maximize Main View`, and never invoke a Project mutation. Task 4 proves View-menu surface parity and Task 6 proves the mounted pane-toolbar control, checked state, dynamic `Restore Main View` label, and `Maximize2`/`Minimize2` icon swap.
 
 - [ ] **Step 3: Implement the minimal command registry**
 
@@ -655,6 +655,8 @@ git commit -m "feat(inspector): add focused V6 Robot and Object panels"
 ---
 
 ### Task 8: Replace the Horizontal Job Strip with a Monitor and Vertical Editor
+
+**Execution dependency:** Complete Task 9 before starting this task because `RobotJobEditorDialogV6` consumes `ModalDialogV6`.
 
 **Files:**
 - Create: `src/features/jobs/v6/RobotJobMonitorV6.tsx`
