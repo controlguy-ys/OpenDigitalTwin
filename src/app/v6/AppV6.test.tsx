@@ -82,6 +82,11 @@ async function resourcesHarness() {
   return { dispose, resources, startGatewayStream, startHeader }
 }
 
+async function openOpcUaSettingsFromMenu(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole('menuitem', { name: 'Connectivity' }))
+  await user.click(within(screen.getByRole('menu', { name: 'Connectivity menu' })).getByRole('menuitem', { name: 'OPC UA Settings' }))
+}
+
 describe('AppV6', () => {
   it('boots the single V5 authority into V6 landmarks and the runtime-owned Project', async () => {
     const harness = await resourcesHarness()
@@ -124,7 +129,7 @@ describe('AppV6', () => {
     render(<AppV6 resources={harness.resources} />)
     await waitFor(() => expect(screen.getByTestId('runtime-canvas')).toHaveTextContent('revision-app-a / Epoch 1'))
 
-    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await openOpcUaSettingsFromMenu(user)
     const settings = await screen.findByRole('dialog', { name: 'OPC UA Settings' })
     const overviewTrigger = within(settings).getByRole('button', { name: 'Open Binding Overview' })
     await user.click(overviewTrigger)
@@ -147,7 +152,7 @@ describe('AppV6', () => {
     render(<AppV6 resources={harness.resources} />)
     await waitFor(() => expect(screen.getByTestId('runtime-canvas')).toHaveTextContent('revision-app-a / Epoch 1'))
 
-    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await openOpcUaSettingsFromMenu(user)
     const settings = await screen.findByRole('dialog', { name: 'OPC UA Settings' })
     const dockerTrigger = within(settings).getByRole('button', { name: 'Open Docker Run Guide' })
     await user.click(dockerTrigger)

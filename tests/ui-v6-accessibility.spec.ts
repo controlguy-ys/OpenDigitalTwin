@@ -27,14 +27,16 @@ test('V6 supports keyboard dialog flows, themed 200-percent layout, and axe-clea
   await page.getByRole('menuitemradio', { name: 'Light Theme' }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
 
-  const settingsTrigger = page.getByRole('button', { name: 'OPC UA Settings' })
+  const connectivityTrigger = page.getByRole('menuitem', { name: 'Connectivity' })
+  await connectivityTrigger.press('Enter')
+  const settingsTrigger = page.getByRole('menu', { name: 'Connectivity menu' }).getByRole('menuitem', { name: 'OPC UA Settings' })
   await settingsTrigger.press('Enter')
   const settings = page.getByRole('dialog', { name: 'OPC UA Settings' })
   await expect(settings).toBeVisible()
   await expectNoSeriousOrCritical(page, '[data-testid="opcua-settings-overlay"] [role="dialog"]')
   await page.keyboard.press('Escape')
   await expect(settings).toBeHidden()
-  await expect(settingsTrigger).toBeFocused()
+  await expect(connectivityTrigger).toBeFocused()
 
   const tree = page.getByRole('tree', { name: 'Scene Explorer' })
   const robot = await selectV6DemoRobot(page)

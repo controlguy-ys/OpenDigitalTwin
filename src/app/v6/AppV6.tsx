@@ -27,7 +27,6 @@ import { SceneExplorerV6 } from '../../features/scene/v6/SceneExplorerV6.js'
 import { V5WorkcellCanvas } from '../../features/scene/v5/V5WorkcellWorkspace.js'
 import { AppMenuBarV6 } from '../../features/ui/v6/AppMenuBarV6.js'
 import { ApplicationShellV6 } from '../../features/ui/v6/ApplicationShellV6.js'
-import { ConnectivityMenuV6 } from '../../features/connectivity/v6/ConnectivityMenuV6.js'
 import { HeaderStatusV6 } from '../../features/ui/v6/HeaderStatusV6.js'
 import { ModelToolboxV6 } from '../../features/ui/v6/ModelToolboxV6.js'
 import type { DialogParentV6 } from '../../features/ui/v6/dialog-request-v6.js'
@@ -190,17 +189,19 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
 
   const header = <div className="v6-app-header">
     <strong>OpenDigitalTwin</strong>
-    <AppMenuBarV6 registry={registry} />
-    <ConnectivityMenuV6
-      onOpenBindingOverview={(opener) => { bindingOverviewTriggerRef.current = opener; layout.getState().requestDialog({ kind: 'binding-overview' }) }}
-      onOpenConnectionMonitor={(opener) => monitorRef.current?.open(opener)}
-      onOpenDockerRunGuide={(opener) => { dockerGuideTriggerRef.current = opener; layout.getState().requestDialog({ kind: 'docker-guide' }) }}
-      onOpenOpcUaSettings={(opener) => {
-        settingsTriggerRef.current = opener
-        if (projectState.activeProject !== null) resources.settings.open(projectState.activeProject)
-        layout.getState().requestDialog({ kind: 'opcua-settings' })
+    <AppMenuBarV6
+      connectivity={{
+        onOpenBindingOverview: (opener) => { bindingOverviewTriggerRef.current = opener; layout.getState().requestDialog({ kind: 'binding-overview' }) },
+        onOpenConnectionMonitor: (opener) => monitorRef.current?.open(opener),
+        onOpenDockerRunGuide: (opener) => { dockerGuideTriggerRef.current = opener; layout.getState().requestDialog({ kind: 'docker-guide' }) },
+        onOpenOpcUaSettings: (opener) => {
+          settingsTriggerRef.current = opener
+          if (projectState.activeProject !== null) resources.settings.open(projectState.activeProject)
+          layout.getState().requestDialog({ kind: 'opcua-settings' })
+        },
+        projectAvailable: projectState.activeProject !== null,
       }}
-      projectAvailable={projectState.activeProject !== null}
+      registry={registry}
     />
     <HeaderStatusV6
       connectivity={connectivity}

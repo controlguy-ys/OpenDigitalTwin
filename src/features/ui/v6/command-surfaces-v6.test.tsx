@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Circle } from 'lucide-react'
@@ -113,6 +113,34 @@ describe('V6 command surfaces', () => {
     expect(screen.getByText('Gateway Online')).toBeVisible()
     expect(screen.getByText('OPC UA Off')).toBeVisible()
     expect(screen.queryByRole('button', { name: /OPC UA Settings|Connection Monitor|Binding Overview|Docker Run Guide|Add Box|Add Cylinder/u })).toBeNull()
+  })
+
+  it('places all connectivity actions in the Connectivity menu and preserves the stable menu trigger for focus restoration', () => {
+    const openSettings = vi.fn()
+    const openMonitor = vi.fn()
+    const openOverview = vi.fn()
+    const openDocker = vi.fn()
+    const registry = createAppCommandRegistryV6([])
+    render(<AppMenuBarV6
+      connectivity={{
+        onOpenBindingOverview: openOverview,
+        onOpenConnectionMonitor: openMonitor,
+        onOpenDockerRunGuide: openDocker,
+        onOpenOpcUaSettings: openSettings,
+        projectAvailable: true,
+      }}
+      registry={registry}
+    />)
+
+    const trigger = screen.getByRole('menuitem', { name: 'Connectivity' })
+    fireEvent.click(trigger)
+    const menu = screen.getByRole('menu', { name: 'Connectivity menu' })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'OPC UA Settings', 'Connection Monitor', 'Binding Overview', 'Docker Run Guide',
+    ])
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'OPC UA Settings' }))
+    expect(openSettings).toHaveBeenCalledExactlyOnceWith(trigger)
+    expect(screen.queryByRole('menu', { name: 'Connectivity menu' })).toBeNull()
   })
 
   it('dispatches Ctrl+S and F1 once, ignores editable/repeated/composition keys, and gives Escape transient priority', async () => {

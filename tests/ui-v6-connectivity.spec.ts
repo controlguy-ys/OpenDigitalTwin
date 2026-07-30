@@ -65,12 +65,19 @@ async function expandMachine(browser: import('@playwright/test').Locator): Promi
   return temperature
 }
 
+async function openConnectivityMenu(page: import('@playwright/test').Page): Promise<import('@playwright/test').Locator> {
+  await page.getByRole('menuitem', { name: 'Connectivity' }).click()
+  const menu = page.getByRole('menu', { name: 'Connectivity menu' })
+  await expect(menu).toBeVisible()
+  return menu
+}
+
 test('V6 opens a real Binding Editor, deterministically browses nested OPC UA addresses, and keeps the monitor modeless', async ({ page }) => {
   await mockConnectedBrowseSession(page)
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await loadV6Demo(page)
 
-  await page.getByRole('button', { name: 'OPC UA Settings' }).click()
+  await (await openConnectivityMenu(page)).getByRole('menuitem', { name: 'OPC UA Settings' }).click()
   const settings = page.getByRole('dialog', { name: 'OPC UA Settings' })
   await settings.getByRole('button', { name: 'Add Endpoint' }).click()
   await settings.getByRole('button', { name: 'Apply & Activate' }).click()
@@ -105,7 +112,7 @@ test('V6 opens a real Binding Editor, deterministically browses nested OPC UA ad
 
   await editor.getByRole('button', { name: 'Cancel' }).click()
   await expect(bindingTrigger).toBeFocused()
-  await page.getByRole('button', { name: 'Connection Monitor' }).click()
+  await (await openConnectivityMenu(page)).getByRole('menuitem', { name: 'Connection Monitor' }).click()
   const monitor = page.getByRole('complementary', { name: 'Connection Monitor' })
   await expect(monitor).toBeVisible()
   await page.getByTestId('v6-canvas-host').click({ button: 'right', position: { x: 8, y: 8 } })

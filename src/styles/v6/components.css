@@ -146,7 +146,7 @@
   gap: 4px;
 }
 
-.v6-connectivity-menu > button {
+.v6-connectivity-menu-item {
   min-height: 32px;
   padding: 6px 10px;
   border: 1px solid transparent;
@@ -158,13 +158,13 @@
   cursor: pointer;
 }
 
-.v6-connectivity-menu > button:hover:not(:disabled),
-.v6-connectivity-menu > button:focus-visible {
+.v6-connectivity-menu-item:hover:not(:disabled),
+.v6-connectivity-menu-item:focus-visible {
   border-color: var(--v6-color-accent);
   background: color-mix(in srgb, var(--v6-color-accent) 14%, transparent);
 }
 
-.v6-connectivity-menu > button:disabled {
+.v6-connectivity-menu-item:disabled {
   color: var(--v6-color-muted);
   cursor: not-allowed;
 }

@@ -9,6 +9,7 @@ test('V6 resizes and restores docks without remounting Main View or losing the a
   await loadV6Demo(page)
 
   const shell = page.getByTestId('v6-application-shell')
+  const header = page.locator('.v6-app-header')
   const explorer = page.getByTestId('v6-explorer')
   const inspector = page.getByTestId('v6-inspector')
   const monitor = page.getByTestId('v6-bottom')
@@ -17,6 +18,14 @@ test('V6 resizes and restores docks without remounting Main View or losing the a
   const projectBefore = await readRuntimeGatewayStatusV6(request)
 
   await expect(canvas).toBeAttached()
+  expect((await bounds(header)).height).toBeLessThan(64)
+  await page.getByRole('menuitem', { name: 'Connectivity' }).click()
+  const connectivityMenu = page.getByRole('menu', { name: 'Connectivity menu' })
+  await expect(connectivityMenu.getByRole('menuitem', { name: 'OPC UA Settings' })).toBeVisible()
+  await expect(connectivityMenu.getByRole('menuitem', { name: 'Connection Monitor' })).toBeVisible()
+  await expect(connectivityMenu.getByRole('menuitem', { name: 'Binding Overview' })).toBeVisible()
+  await expect(connectivityMenu.getByRole('menuitem', { name: 'Docker Run Guide' })).toBeVisible()
+  await page.keyboard.press('Escape')
   const selectedRobot = await selectV6DemoRobot(page)
   const selectedRobotKey = await selectedRobot.getAttribute('data-row-key')
   if (selectedRobotKey === null) throw new Error('Selected Robot did not expose its stable Scene Explorer row key.')

@@ -10,6 +10,7 @@ import type {
   AppCommandSurfaceV6,
 } from '../../commands/v6/app-command-v6.js'
 import type { V6WorkcellSelection } from '../../interaction/v6/workcell-selection-v6.js'
+import { ConnectivityMenuV6, type ConnectivityMenuV6Props } from '../../connectivity/v6/ConnectivityMenuV6.js'
 import {
   CommandSurfaceControlV6,
   invokeCommandSurfaceV6,
@@ -33,6 +34,7 @@ export interface AppMenuBarV6Props {
   readonly registry: AppCommandRegistryV6
   readonly transientUi?: V6TransientUiPort
   readonly contextMenu?: V6KeyboardContextMenuPortV6
+  readonly connectivity?: ConnectivityMenuV6Props
 }
 
 const MENU_COMMANDS: Readonly<Record<string, readonly AppCommandIdV6[]>> = Object.freeze({
@@ -63,7 +65,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
 
-export function AppMenuBarV6({ registry, transientUi, contextMenu }: AppMenuBarV6Props) {
+export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity }: AppMenuBarV6Props) {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [activeMenuIndex, setActiveMenuIndex] = useState(0)
   const invoke = async (id: AppCommandIdV6, trigger?: HTMLElement) => {
@@ -132,6 +134,10 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu }: AppMenuBarV
       event.preventDefault()
       focusMenuTrigger(index + (event.key === 'ArrowRight' ? 1 : -1), true)
     }
+  }
+  const stableMenuTrigger = (triggerId: string, fallback: HTMLButtonElement): HTMLButtonElement => {
+    const trigger = document.getElementById(triggerId)
+    return trigger instanceof HTMLButtonElement ? trigger : fallback
   }
 
   useEffect(() => {
@@ -202,7 +208,29 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu }: AppMenuBarV
               type="button"
             >{menu}</button>
             {open && <div aria-label={`${menu} menu`} id={`v6-menu-${menu.toLowerCase()}`} role="menu">
-              {commandIds.map((id) => {
+              {menu === 'Connectivity' && connectivity !== undefined
+                ? <ConnectivityMenuV6
+                    {...connectivity}
+                    onMenuItemKeyDown={(event) => onMenuItemKeyDown(event, index)}
+                    onOpenBindingOverview={(opener) => {
+                      connectivity.onOpenBindingOverview(stableMenuTrigger(triggerId, opener))
+                      setOpenMenu(null)
+                    }}
+                    onOpenConnectionMonitor={(opener) => {
+                      connectivity.onOpenConnectionMonitor(stableMenuTrigger(triggerId, opener))
+                      setOpenMenu(null)
+                    }}
+                    onOpenDockerRunGuide={(opener) => {
+                      connectivity.onOpenDockerRunGuide(stableMenuTrigger(triggerId, opener))
+                      setOpenMenu(null)
+                    }}
+                    onOpenOpcUaSettings={(opener) => {
+                      connectivity.onOpenOpcUaSettings(stableMenuTrigger(triggerId, opener))
+                      setOpenMenu(null)
+                    }}
+                    presentation="menu"
+                  />
+                : commandIds.map((id) => {
                 if (surface === undefined) return null
                 return <CommandSurfaceControlV6
                   commandId={id}
