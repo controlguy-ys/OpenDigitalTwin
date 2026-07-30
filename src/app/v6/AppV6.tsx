@@ -61,6 +61,11 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   const [contextTarget, setContextTarget] = useState<SceneContextTargetV6 | null>(null)
   const [cameraVersion, setCameraVersion] = useState(0)
   const monitorRef = useRef<ConnectionMonitorPanelControlV1>(null)
+  const settingsTriggerRef = useRef<HTMLElement>(null)
+  const bindingOverviewTriggerRef = useRef<HTMLElement>(null)
+  const bindingEditorTriggerRef = useRef<HTMLElement>(null)
+  const dockerGuideTriggerRef = useRef<HTMLElement>(null)
+  const jobEditorTriggerRef = useRef<HTMLElement>(null)
   const lifecycleGenerationRef = useRef(0)
   const layout = useMemo(() => createWorkspaceLayoutStoreV6({ storage: window.localStorage }), [])
   const bootstrap = useMemo(() => createInitialProjectBootstrapV5(resources.store), [resources.store])
@@ -125,6 +130,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   void cameraVersion
 
   const openBinding = useCallback((target: OpcUaProjectTargetV5, mappingId?: string) => {
+    if (document.activeElement instanceof HTMLElement) bindingEditorTriggerRef.current = document.activeElement
     layout.getState().requestDialog({
       kind: 'binding-editor',
       target,
@@ -184,10 +190,11 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     <strong>OpenDigitalTwin</strong>
     <AppMenuBarV6 registry={registry} />
     <ConnectivityMenuV6
-      onOpenBindingOverview={() => layout.getState().requestDialog({ kind: 'binding-overview' })}
+      onOpenBindingOverview={(opener) => { bindingOverviewTriggerRef.current = opener; layout.getState().requestDialog({ kind: 'binding-overview' }) }}
       onOpenConnectionMonitor={(opener) => monitorRef.current?.open(opener)}
-      onOpenDockerRunGuide={() => layout.getState().requestDialog({ kind: 'docker-guide' })}
-      onOpenOpcUaSettings={() => {
+      onOpenDockerRunGuide={(opener) => { dockerGuideTriggerRef.current = opener; layout.getState().requestDialog({ kind: 'docker-guide' }) }}
+      onOpenOpcUaSettings={(opener) => {
+        settingsTriggerRef.current = opener
         if (projectState.activeProject !== null) resources.settings.open(projectState.activeProject)
         layout.getState().requestDialog({ kind: 'opcua-settings' })
       }}
@@ -216,11 +223,11 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     <ApplicationShellV6
       bottom={workspaceProject === null || selectedJob === null ? <section aria-label="Job monitor">No Jobs in this Project.</section> : bundle === null ? <RobotJobMonitorV6
         jobId={selectedJob.id}
-        onOpenEditor={() => layout.getState().requestDialog({ kind: 'job-editor', jobId: selectedJob.id })}
+        onOpenEditor={() => { if (document.activeElement instanceof HTMLElement) jobEditorTriggerRef.current = document.activeElement; layout.getState().requestDialog({ kind: 'job-editor', jobId: selectedJob.id }) }}
         project={workspaceProject}
       /> : <RobotJobMonitorV6
         jobId={selectedJob.id}
-        onOpenEditor={() => layout.getState().requestDialog({ kind: 'job-editor', jobId: selectedJob.id })}
+        onOpenEditor={() => { if (document.activeElement instanceof HTMLElement) jobEditorTriggerRef.current = document.activeElement; layout.getState().requestDialog({ kind: 'job-editor', jobId: selectedJob.id }) }}
         playback={bundle.runtimeGraph.playback}
         project={workspaceProject}
         runtime={bundle.runtimeGraph.jobs}
@@ -255,8 +262,9 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
       onOpenBindingOverview={() => layout.getState().requestDialog({ kind: 'binding-overview' })}
       onOpenDockerRunGuide={() => layout.getState().requestDialog({ kind: 'docker-guide' })}
       presentation={connectivity}
+      triggerRef={settingsTriggerRef}
     />}
-    {workspaceProject !== null && dialog?.kind === 'binding-overview' && <BindingOverviewDialogV1 activeProject={workspaceProject} onClose={() => layout.getState().closeDialog()} onEdit={openBinding} />}
+    {workspaceProject !== null && dialog?.kind === 'binding-overview' && <BindingOverviewDialogV1 activeProject={workspaceProject} onClose={() => layout.getState().closeDialog()} onEdit={openBinding} triggerRef={bindingOverviewTriggerRef} />}
     {workspaceProject !== null && dialog?.kind === 'binding-editor' && <BindingEditorDialogV1
       activeProject={workspaceProject}
       addressSpaceBrowsePort={resources.gateway}
@@ -267,9 +275,10 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
       onClose={() => layout.getState().closeDialog()}
       onSaved={() => layout.getState().closeDialog()}
       target={dialog.target}
+      triggerRef={bindingEditorTriggerRef}
     />}
-    {dialog?.kind === 'docker-guide' && <DockerRunGuideDialogV1 onClose={() => layout.getState().closeDialog()} status={connectivity.status} />}
-    {workspaceProject !== null && dialog?.kind === 'job-editor' && jobAuthoring !== null && bundle !== null && <RobotJobEditorDialogV6 authoring={jobAuthoring} jobId={dialog.jobId} onClose={() => layout.getState().closeDialog()} project={workspaceProject} runtime={bundle.runtimeGraph.jobs} />}
+    {dialog?.kind === 'docker-guide' && <DockerRunGuideDialogV1 onClose={() => layout.getState().closeDialog()} status={connectivity.status} triggerRef={dockerGuideTriggerRef} />}
+    {workspaceProject !== null && dialog?.kind === 'job-editor' && jobAuthoring !== null && bundle !== null && <RobotJobEditorDialogV6 authoring={jobAuthoring} jobId={dialog.jobId} onClose={() => layout.getState().closeDialog()} project={workspaceProject} runtime={bundle.runtimeGraph.jobs} triggerRef={jobEditorTriggerRef} />}
     <HelpOverlayV6 onClose={() => layout.getState().closeDialog()} request={dialog?.kind === 'help' ? dialog : null} />
   </div>
 }

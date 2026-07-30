@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 
-import type { WorkcellProjectV5 } from '../../../core/project-v5/index.js'
+import type { OpcUaProjectTargetV5, WorkcellProjectV5 } from '../../../core/project-v5/index.js'
 import type { StoreApi } from 'zustand/vanilla'
 import type { RobotJointRuntimeStoreV5 } from '../../robot/v5/robot-joint-runtime-store.js'
 import type { JobRuntimeStoreV5 } from '../../jobs/v5/job-runtime-store.js'
@@ -11,6 +11,7 @@ export interface RobotInspectorV6Props {
   readonly robotId: string
   readonly runtime?: { readonly robots: StoreApi<RobotJointRuntimeStoreV5>; readonly jobs?: StoreApi<JobRuntimeStoreV5> }
   readonly mutations?: InspectorMutationPortV6
+  readonly onOpenBinding?: (target: OpcUaProjectTargetV5) => void
 }
 
 type BaseDraft = Readonly<{ x: string; y: string; z: string }>
@@ -35,7 +36,7 @@ export function RobotInspectorV6(props: RobotInspectorV6Props): ReactNode {
   return <RobotInspectorContent {...props} robot={robot} />
 }
 
-function RobotInspectorContent({ project, robotId, runtime, mutations, robot }: RobotInspectorV6Props & { readonly robot: WorkcellProjectV5['robots'][number] }): ReactNode {
+function RobotInspectorContent({ project, robotId, runtime, mutations, onOpenBinding, robot }: RobotInspectorV6Props & { readonly robot: WorkcellProjectV5['robots'][number] }): ReactNode {
   const definition = project.robotDefinitions.find((candidate) => candidate.id === robot.definitionId)
   const robotRuntime = runtime?.robots.getState().readRobot(robotId) ?? null
   const job = runtime?.jobs?.getState().byRobotId[robotId]
@@ -67,6 +68,6 @@ function RobotInspectorContent({ project, robotId, runtime, mutations, robot }: 
     <Section title="Joints"><p>{jointExplanation}</p><div className="v6-robot-joints">{definition?.joints.map((joint) => { const value = robotRuntime?.jointValues[joint.id] ?? robot.initialJointValues[joint.id] ?? joint.home; const unit = joint.type === 'revolute' ? 'deg' : 'm'; return <label key={joint.id}>{joint.id}<input aria-label={joint.id} disabled={jointDisabled} max={joint.max} min={joint.min} onChange={(event) => runtime?.robots.getState().writeJointValues(robotId, { [joint.id]: Number(event.currentTarget.value) }, 'manual')} step={joint.type === 'revolute' ? 1 : 0.001} type="range" value={value} /><output>{value} {unit}</output></label> })}</div></Section>
     <Section title="Tool/TCP"><dl><div><dt>Tool frame</dt><dd>{robot.selectedToolFrameId}</dd></div><div><dt>TCP frame</dt><dd>{robot.selectedTcpFrameId}</dd></div></dl></Section>
     <Section title="Status"><dl><div><dt>Value</dt><dd>{robot.numericStatus.value}</dd></div><div><dt>Owner</dt><dd>{robot.numericStatus.sourceOwnership}</dd></div></dl></Section>
-    <Section title="Communications"><p>Robot bindings are read-only in this Inspector. Use Open Binding from the selected target.</p><dl><div><dt>Joint source</dt><dd>{robot.jointSource}</dd></div></dl></Section>
+    <Section title="Communications"><p>Robot bindings are read-only in this Inspector.</p><dl><div><dt>Joint source</dt><dd>{robot.jointSource}</dd></div></dl><button onClick={() => onOpenBinding?.({ type: 'robot-frame', robotId, frameId: robot.selectedTcpFrameId })} type="button">Open Binding</button></Section>
   </section>
 }

@@ -26,5 +26,6 @@ export function SelectionInspectorV6({ project, selection, mutations, runtime, o
     robotId={selection.id}
     {...(mutations === undefined ? {} : { mutations })}
     {...(runtime === undefined ? {} : { runtime })}
+    {...(onOpenBinding === undefined ? {} : { onOpenBinding })}
   />
 }

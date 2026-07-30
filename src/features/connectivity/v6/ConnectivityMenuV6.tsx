@@ -2,10 +2,10 @@ import type { ReactNode } from 'react'
 
 export interface ConnectivityMenuV6Props {
   readonly projectAvailable: boolean
-  readonly onOpenOpcUaSettings: () => void
+  readonly onOpenOpcUaSettings: (opener: HTMLButtonElement) => void
   readonly onOpenConnectionMonitor: (opener: HTMLButtonElement) => void
-  readonly onOpenBindingOverview: () => void
-  readonly onOpenDockerRunGuide: () => void
+  readonly onOpenBindingOverview: (opener: HTMLButtonElement) => void
+  readonly onOpenDockerRunGuide: (opener: HTMLButtonElement) => void
 }
 
 export function ConnectivityMenuV6({
@@ -16,9 +16,9 @@ export function ConnectivityMenuV6({
   onOpenDockerRunGuide,
 }: ConnectivityMenuV6Props): ReactNode {
   return <div aria-label="Connectivity" className="v6-connectivity-menu" role="group">
-    <button disabled={!projectAvailable} onClick={onOpenOpcUaSettings} type="button">OPC UA Settings</button>
+    <button disabled={!projectAvailable} onClick={(event) => onOpenOpcUaSettings(event.currentTarget)} type="button">OPC UA Settings</button>
     <button onClick={(event) => onOpenConnectionMonitor(event.currentTarget)} type="button">Connection Monitor</button>
-    <button disabled={!projectAvailable} onClick={onOpenBindingOverview} type="button">Binding Overview</button>
-    <button onClick={onOpenDockerRunGuide} type="button">Docker Run Guide</button>
+    <button disabled={!projectAvailable} onClick={(event) => onOpenBindingOverview(event.currentTarget)} type="button">Binding Overview</button>
+    <button onClick={(event) => onOpenDockerRunGuide(event.currentTarget)} type="button">Docker Run Guide</button>
   </div>
 }
