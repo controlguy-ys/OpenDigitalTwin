@@ -1,9 +1,11 @@
 import {
   AttributeIds,
+  BrowseDirection,
   MessageSecurityMode,
   OPCUAClient,
   SecurityPolicy,
   TimestampsToReturn,
+  type BrowseResult,
   type ClientMonitoredItemGroup,
   type ClientSession,
   type ClientSubscription,
@@ -52,6 +54,12 @@ import {
   createOpcUaNodeAddressResolverV1,
   type OpcUaNodeAddressResolverV1,
 } from './opcua-node-address-resolver.js'
+import {
+  createOpcUaAddressSpaceBrowserV1,
+  type OpcUaAddressSpaceBrowseResultV1,
+  type OpcUaAddressSpaceBrowseSessionV1,
+  type OpcUaAddressSpaceBrowserV1,
+} from './opcua-address-space-browser.js'
 
 export interface OpcUaClientSnapshotAssemblerOptionsV1 {
   readonly project: WorkcellProjectV5
@@ -99,6 +107,7 @@ export interface OpcUaClientAdapterV1 {
   resolveNamespaceIndex?: (endpointId: string, namespaceUri: string) => Promise<number>
   resolveNodeAddress?: OpcUaNodeAddressResolverV1['resolve']
   readNamespaceSessionProof?: (endpointId: string) => Readonly<{ readonly endpointId: string; readonly generation: number; readonly session: object }> | null
+  addressSpaceBrowser?: OpcUaAddressSpaceBrowserV1
 }
 
 interface EndpointRuntimeDiagnosticsV1 {
@@ -1274,6 +1283,52 @@ export function createOpcUaClientAdapterV1(
     }
   }
 
+  const browsePorts = new WeakMap<ClientSession, OpcUaAddressSpaceBrowseSessionV1>()
+  const browsePort = (session: ClientSession): OpcUaAddressSpaceBrowseSessionV1 => {
+    const existing = browsePorts.get(session)
+    if (existing !== undefined) return existing
+    const normalize = (result: BrowseResult): OpcUaAddressSpaceBrowseResultV1 => Object.freeze({
+      good: result.statusCode.isGood(),
+      continuationPoint: result.continuationPoint ?? null,
+      references: Object.freeze((result.references ?? []).map((reference) => Object.freeze({
+        sessionNodeId: reference.nodeId.toString(),
+        browseName: reference.browseName.name ?? '',
+        displayName: reference.displayName.text ?? reference.browseName.name ?? '',
+        nodeClass: reference.nodeClass,
+        referenceTypeId: reference.referenceTypeId.toString(),
+        typeDefinitionId: reference.typeDefinition?.toString() ?? null,
+      }))),
+    })
+    let browseTail: Promise<void> = Promise.resolve()
+    const queueBrowse = async <Value>(operation: () => Promise<Value>): Promise<Value> => {
+      const result = browseTail.then(operation)
+      browseTail = result.then(() => undefined, () => undefined)
+      return result
+    }
+    const port: OpcUaAddressSpaceBrowseSessionV1 = Object.freeze({
+      async browse(request: Readonly<{ readonly nodeId: string; readonly requestedMaxReferencesPerNode: number }>) {
+        return queueBrowse(async () => {
+          const previousMaximum = session.requestedMaxReferencesPerNode
+          session.requestedMaxReferencesPerNode = request.requestedMaxReferencesPerNode
+          try { return normalize(await session.browse({
+          nodeId: request.nodeId,
+          browseDirection: BrowseDirection.Forward,
+          referenceTypeId: 'i=33',
+          includeSubtypes: true,
+          resultMask: 0x3f,
+          })) } finally { session.requestedMaxReferencesPerNode = previousMaximum }
+        })
+      },
+      async browseNext(continuationPoints: readonly Uint8Array[], releaseContinuationPoints: boolean) {
+        const point = continuationPoints[0]
+        if (point === undefined || continuationPoints.length !== 1) throw new Error('OPC_UA_BROWSE_FAILED')
+        return queueBrowse(async () => normalize(await session.browseNext(Buffer.from(point), releaseContinuationPoints)))
+      },
+      readNamespaceArray: () => session.readNamespaceArray(),
+    })
+    browsePorts.set(session, port)
+    return port
+  }
   const currentSession = (endpointId: string) => {
     const runtime = runtimes.get(endpointId)
     if (runtime === undefined || runtime.stopped || !runtime.connected || runtime.session === null) return null
@@ -1281,6 +1336,12 @@ export function createOpcUaClientAdapterV1(
   }
   const writeService = createOpcUaClientWriteServiceV1(project, { currentSession })
   const nodeAddressResolver = createOpcUaNodeAddressResolverV1({ currentSession })
+  const addressSpaceBrowser = createOpcUaAddressSpaceBrowserV1({
+    currentSession: (endpointId) => {
+      const proof = currentSession(endpointId)
+      return proof === null ? null : Object.freeze({ endpointId, generation: proof.generation, session: browsePort(proof.session) })
+    },
+  })
 
   function enqueue(transition: () => Promise<void>): Promise<void> {
     const requested = lifecycleTail.then(transition)
@@ -1375,6 +1436,7 @@ export function createOpcUaClientAdapterV1(
       lastError: runtime.lastError,
     }))),
     write: (request: OpcUaClientWriteRequestV1) => writeService.write(request),
+    addressSpaceBrowser,
     resolveNodeAddress: (endpointId: string, sessionNodeId: string) => nodeAddressResolver.resolve(endpointId, sessionNodeId),
     readNamespaceSessionProof: (endpointId: string) => currentSession(endpointId),
     async resolveNamespaceIndex(endpointId: string, namespaceUri: string): Promise<number> {

@@ -72,7 +72,7 @@ export function DockerRunGuideDialogV1({
     onClose={close}
     overlayClassName="opcua-settings-overlay"
     titleId="docker-run-guide-title"
-    triggerRef={triggerRef}
+    {...(triggerRef === undefined ? {} : { triggerRef })}
   >
       <div className="opcua-settings-body">
         <section>

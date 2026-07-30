@@ -189,7 +189,7 @@ export function BindingEditorDialogV1({
       overlayClassName="opcua-settings-overlay"
       testId="binding-editor-overlay"
       titleId="binding-editor-v1-title"
-      triggerRef={triggerRef}
+      {...(triggerRef === undefined ? {} : { triggerRef })}
     >
         <form id="binding-editor-v1-form" onSubmit={(event) => {
           event.preventDefault()

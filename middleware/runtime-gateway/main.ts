@@ -68,6 +68,10 @@ import {
 } from '../../src/core/runtime-protocol/project-activation-v1.js'
 import type { RuntimeIntegrationDiagnosticsV1 } from '../../src/core/runtime-protocol/integration-diagnostics-v1.js'
 import { canonicalizeRuntimeGatewayErrorEnvelopeV1 } from '../../src/core/runtime-protocol/gateway-error-envelope-v1.js'
+import {
+  validateOpcUaAddressSpaceBrowseReleaseRequestV1,
+  validateOpcUaAddressSpaceBrowseRequestV1,
+} from '../../src/core/runtime-protocol/opcua-connectivity-v1.js'
 import { createBrowserPublisherLeaseManagerV1, type BrowserPublisherLeaseManagerV1 } from './browser-publisher-lease.js'
 import { createRuntimeIntegrationDiagnosticsV1, type RuntimeIntegrationDiagnosticsBuilderV1 } from './integration-diagnostics.js'
 import { createBrowserCommandDispatchV1, type BrowserCommandDispatchV1 } from './browser-command-dispatch.js'
@@ -1203,6 +1207,49 @@ export function createRuntimeGatewayEntrypointService(
     }
   }
 
+  async function addressSpaceBrowseRequest(request: IncomingMessage): Promise<unknown> {
+    const body = await readJsonBody(request, MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1, incompleteBodyRequests, () => shutdownRequested)
+    let query: ReturnType<typeof validateOpcUaAddressSpaceBrowseRequestV1>
+    try { query = validateOpcUaAddressSpaceBrowseRequestV1(body) } catch {
+      throw new RuntimeGatewayHttpError(400, 'OPC_UA_BROWSE_REQUEST_INVALID', 'Browse request is invalid.')
+    }
+    const browser = await enqueueRuntimeTransition(async () => {
+      const active = activeRuntime
+      if (active === null || !active.project.opcUa.endpoints.some(({ endpointId }) => endpointId === query.endpointId)) {
+        throw new RuntimeGatewayHttpError(409, 'OPC_UA_BROWSE_ENDPOINT_MISMATCH', 'Endpoint is not configured by the active Project.')
+      }
+      const addressSpaceBrowser = active.clientAdapter?.addressSpaceBrowser
+      if (addressSpaceBrowser === undefined) throw new RuntimeGatewayHttpError(409, 'OPC_UA_BROWSE_SESSION_UNAVAILABLE', 'Endpoint has no live OPC UA Browse Session.')
+      return addressSpaceBrowser
+    })
+    try {
+      const result = await browser.browse(query)
+      return Object.freeze({ type: 'opcua-address-space-browse-response-v1' as const, protocolVersion: 1 as const, ...result })
+    } catch (error) {
+      const code = error instanceof Error && /^OPC_UA_(?:BROWSE|NAMESPACE)_[A-Z_]+$/u.test(error.message)
+        ? error.message
+        : 'OPC_UA_BROWSE_FAILED'
+      throw new RuntimeGatewayHttpError(409, code, 'OPC UA Address Space browsing failed.')
+    }
+  }
+
+  async function addressSpaceBrowseReleaseRequest(request: IncomingMessage): Promise<unknown> {
+    const body = await readJsonBody(request, MAX_CONNECTIVITY_DIAGNOSTICS_BODY_BYTES_V1, incompleteBodyRequests, () => shutdownRequested)
+    let query: ReturnType<typeof validateOpcUaAddressSpaceBrowseReleaseRequestV1>
+    try { query = validateOpcUaAddressSpaceBrowseReleaseRequestV1(body) } catch {
+      throw new RuntimeGatewayHttpError(400, 'OPC_UA_BROWSE_REQUEST_INVALID', 'Browse continuation release request is invalid.')
+    }
+    const browser = await enqueueRuntimeTransition(async () => activeRuntime?.clientAdapter?.addressSpaceBrowser ?? null)
+    if (browser === null) throw new RuntimeGatewayHttpError(409, 'OPC_UA_BROWSE_SESSION_UNAVAILABLE', 'No live OPC UA Browse Session is available.')
+    try {
+      await browser.release(query.continuationToken)
+      return Object.freeze({ released: true })
+    } catch (error) {
+      const code = error instanceof Error && /^OPC_UA_BROWSE_[A-Z_]+$/u.test(error.message) ? error.message : 'OPC_UA_BROWSE_FAILED'
+      throw new RuntimeGatewayHttpError(409, code, 'OPC UA browse continuation release failed.')
+    }
+  }
+
   async function publishStateRequest(request: IncomingMessage): Promise<RuntimeGatewayStatusV1> {
     const body = await readJsonBody(
       request,
@@ -1560,6 +1607,16 @@ export function createRuntimeGatewayEntrypointService(
 
     if (request.method === 'POST' && request.url === '/runtime/opcua/resolve-node-address') {
       writeJson(response, 200, await nodeAddressResolutionRequest(request))
+      return
+    }
+
+    if (request.method === 'POST' && request.url === '/runtime/opcua/browse') {
+      writeJson(response, 200, await addressSpaceBrowseRequest(request))
+      return
+    }
+
+    if (request.method === 'POST' && request.url === '/runtime/opcua/browse/release') {
+      writeJson(response, 200, await addressSpaceBrowseReleaseRequest(request))
       return
     }
 

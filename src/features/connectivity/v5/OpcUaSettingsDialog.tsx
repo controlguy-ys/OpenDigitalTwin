@@ -301,7 +301,7 @@ export function OpcUaSettingsDialog({
       overlayClassName="opcua-settings-overlay"
       testId="opcua-settings-overlay"
       titleId="opcua-settings-v1-title"
-      triggerRef={triggerRef}
+      {...(triggerRef === undefined ? {} : { triggerRef })}
     >
         <form id="opcua-settings-v1-form" onSubmit={(event) => { event.preventDefault(); apply() }}>
           <div className="opcua-settings-body">

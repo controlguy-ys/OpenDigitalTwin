@@ -64,7 +64,7 @@ export function BindingOverviewDialogV1({
       overlayClassName="opcua-settings-overlay"
       testId="binding-overview-overlay"
       titleId="binding-overview-v1-title"
-      triggerRef={triggerRef}
+      {...(triggerRef === undefined ? {} : { triggerRef })}
     >
         <div className="opcua-settings-body">
           {activeProject.opcUa.endpoints.map((endpoint) => {

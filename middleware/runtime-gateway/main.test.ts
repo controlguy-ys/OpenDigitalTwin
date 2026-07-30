@@ -2997,8 +2997,35 @@ describe('runtime Gateway entrypoint', () => {
       expect(response.status).toBe(200); expect(await response.json()).toEqual(await diagnostic.mock.results[0]!.value); expect(diagnostic).toHaveBeenCalledOnce()
       expect(gatewayStatus(service.status())).toMatchObject({ project: before.project, opcUa: before.opcUa })
       expect((await requestJson(port, 'POST', '/runtime/opcua/test-connection', { ...request, extra: true })).status).toBe(400)
-      for (const path of ['/runtime/opcua/browse', '/runtime/opcua/read', '/runtime/opcua/write', '/runtime/opcua/security', '/runtime/container']) expect((await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST' })).status).toBe(404)
+      expect((await fetch(`http://127.0.0.1:${port}/runtime/opcua/browse`, { method: 'POST' })).status).toBe(415)
+      for (const path of ['/runtime/opcua/read', '/runtime/opcua/write', '/runtime/opcua/security', '/runtime/container']) expect((await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST' })).status).toBe(404)
       expect(diagnostic).toHaveBeenCalledOnce()
+    } finally { await service.stop() }
+  })
+
+  it('browses only the configured live endpoint with strict request validation and no OPC UA writes', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))
+    const client = connectedClientAdapter(write)
+    const browse = vi.fn(async () => ({
+      endpointId: 'endpoint-1', parentNodeId: 'ns=0;i=85', continuationToken: null,
+      nodes: [{ sessionNodeId: 'ns=1;s=Machine.Temperature', browseName: 'Temperature', displayName: 'Machine temperature', nodeClass: 'Variable', referenceTypeId: 'ns=0;i=47', typeDefinitionId: 'ns=0;i=63', hasChildren: true, nodeAddress: { namespaceUri: 'urn:plant', identifierType: 'string' as const, identifier: 'Machine.Temperature' } }],
+    }))
+    client.adapter.addressSpaceBrowser = { browse, release: vi.fn(async () => undefined) }
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter })
+    await service.start()
+    try {
+      const project = sampleProject('client')
+      await requestJson(port, 'PUT', '/runtime/project', project)
+      const valid = { type: 'opcua-address-space-browse-request-v1', protocolVersion: 1, endpointId: project.opcUa.endpoints[0]!.endpointId, parentNodeId: null, limit: 25, continuationToken: null }
+      const response = await requestJson(port, 'POST', '/runtime/opcua/browse', valid)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ type: 'opcua-address-space-browse-response-v1', endpointId: valid.endpointId, parentNodeId: 'ns=0;i=85' })
+      expect(browse).toHaveBeenCalledWith(expect.objectContaining({ parentNodeId: null, limit: 25 }))
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, limit: 101 })).status).toBe(400)
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, endpointId: 'other' })).status).toBe(409)
+      expect(write).not.toHaveBeenCalled()
     } finally { await service.stop() }
   })
 
