@@ -19,5 +19,10 @@ describe('JobInstructionListV6', () => {
     expect(screen.getByRole('button', { name: 'Return to Current Step' })).toBeVisible()
     fireEvent.keyDown(screen.getByRole('button', { name: 'Drag step 2' }), { key: 'ArrowUp', altKey: true })
     expect(reorder).toHaveBeenCalledWith('delay-1', 'delay-0')
+    const destination = screen.getAllByRole('button', { name: /Delay 100 ms/u })[2]
+    if (destination === undefined) throw new Error('Expected a drop destination.')
+    fireEvent.dragStart(screen.getByRole('button', { name: 'Drag step 1' }))
+    fireEvent.dragOver(destination)
+    fireEvent.drop(destination)
   })
 })

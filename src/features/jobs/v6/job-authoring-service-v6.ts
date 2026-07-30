@@ -78,7 +78,7 @@ export function createJobAuthoringServiceV6(options: JobAuthoringServiceV6Option
         const job = jobFor(project, jobId); const source = job.instructions.find((instruction) => instruction.id === instructionId) ?? fail(`Instruction ${instructionId} was not found.`)
         const used = new Set(project.jobs.flatMap((candidate) => candidate.instructions.map((instruction) => instruction.id)))
         let id = createId(); while (used.has(id)) id = createId()
-        const duplicate = { ...source, id } as RobotJobInstructionV1
+        const duplicate: RobotJobInstructionV1 = { ...source, id }
         return replaceJob(project, jobId, insertBefore(job.instructions, duplicate, job.instructions[job.instructions.indexOf(source) + 1]?.id ?? null))
       })
     },
