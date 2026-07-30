@@ -12,15 +12,10 @@ import { Circle } from 'lucide-react'
 import { useStore } from 'zustand'
 
 import type { OpcUaProjectTargetV5 } from '../../core/project-v5/index.js'
-import { BindingEditorDialogV1 } from '../../features/connectivity/v5/BindingEditorDialog.js'
-import { BindingOverviewDialogV1 } from '../../features/connectivity/v5/BindingOverviewDialog.js'
-import { ConnectionMonitorPanel, type ConnectionMonitorPanelControlV1 } from '../../features/connectivity/v5/ConnectionMonitorPanel.js'
-import { DockerRunGuideDialogV1 } from '../../features/connectivity/v5/DockerRunGuideDialog.js'
-import { OpcUaSettingsDialog } from '../../features/connectivity/v5/OpcUaSettingsDialog.js'
+import type { ConnectionMonitorPanelControlV1 } from '../../features/connectivity/v5/ConnectionMonitorPanel.js'
 import type { V6WorkcellSelection } from '../../features/interaction/v6/workcell-selection-v6.js'
 import { SelectionInspectorV6 } from '../../features/inspector/v6/SelectionInspectorV6.js'
 import { createJobAuthoringServiceV6 } from '../../features/jobs/v6/job-authoring-service-v6.js'
-import { RobotJobEditorDialogV6 } from '../../features/jobs/v6/RobotJobEditorDialogV6.js'
 import { RobotJobMonitorV6 } from '../../features/jobs/v6/RobotJobMonitorV6.js'
 import {
   createBrowserProjectApplicationResourcesV5,
@@ -34,18 +29,24 @@ import { AppMenuBarV6 } from '../../features/ui/v6/AppMenuBarV6.js'
 import { ApplicationShellV6 } from '../../features/ui/v6/ApplicationShellV6.js'
 import { ConnectivityMenuV6 } from '../../features/connectivity/v6/ConnectivityMenuV6.js'
 import { HeaderStatusV6 } from '../../features/ui/v6/HeaderStatusV6.js'
-import { HelpOverlayV6 } from '../../features/ui/v6/HelpOverlayV6.js'
 import { ModelToolboxV6 } from '../../features/ui/v6/ModelToolboxV6.js'
+import type { DialogParentV6 } from '../../features/ui/v6/dialog-request-v6.js'
 import { createWorkspaceLayoutStoreV6 } from '../../features/ui/v6/workspace-layout-store-v6.js'
 import { createCameraControllerV6 } from '../../features/viewport/v6/camera-controller-v6.js'
 import { ViewportOverlayV6 } from '../../features/viewport/v6/ViewportOverlayV6.js'
 import { WorkcellViewportV6 } from '../../features/viewport/v6/WorkcellViewportV6.js'
 import { createInitialProjectBootstrapV5 } from '../v5/initial-project-bootstrap-v5.js'
 import { createAppCommandCompositionV6 } from './app-command-composition-v6.js'
+import { AppV6Dialogs } from './AppV6Dialogs.js'
 import { errorMessageV6, initialJobIdV6, selectedTargetV6, useViewportBoundsV6 } from './app-v6-support.js'
 
 export interface AppV6Props {
   readonly resources?: BrowserProjectApplicationResourcesV5
+}
+
+interface SceneContextRequestV6 {
+  readonly surface: 'explorer' | 'viewport'
+  readonly target: SceneContextTargetV6
 }
 
 export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
@@ -58,7 +59,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   const [jobId, setJobId] = useState<string | null>(() => initialJobIdV6(projectState.activeProject))
   const [operationError, setOperationError] = useState<string | null>(null)
   const [interactionMode, setInteractionMode] = useState<'select' | 'translate' | 'rotate'>('select')
-  const [contextTarget, setContextTarget] = useState<SceneContextTargetV6 | null>(null)
+  const [contextRequest, setContextRequest] = useState<SceneContextRequestV6 | null>(null)
   const [cameraVersion, setCameraVersion] = useState(0)
   const monitorRef = useRef<ConnectionMonitorPanelControlV1>(null)
   const settingsTriggerRef = useRef<HTMLElement>(null)
@@ -129,19 +130,20 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   }), [])
   void cameraVersion
 
-  const openBinding = useCallback((target: OpcUaProjectTargetV5, mappingId?: string) => {
+  const openBinding = useCallback((target: OpcUaProjectTargetV5, mappingId?: string, parent?: DialogParentV6) => {
     if (document.activeElement instanceof HTMLElement) bindingEditorTriggerRef.current = document.activeElement
     layout.getState().requestDialog({
       kind: 'binding-editor',
       target,
       ...(mappingId === undefined ? {} : { mappingId }),
+      ...(parent === undefined ? {} : { parent }),
     })
   }, [layout])
   const browseSessionAvailable = useCallback((endpointId: string) => (
     connectivity.status?.opcUa.clientEndpoints.some((endpoint) => endpoint.endpointId === endpointId && endpoint.sessionActive) ?? false
   ), [connectivity.status])
   const runSceneContextAction = useCallback((action: SceneContextActionIdV6, target: SceneContextTargetV6) => {
-    setContextTarget(null)
+    setContextRequest(null)
     if (workspaceProject === null) return
     if (action === 'open-binding') {
       const bindingTarget = target.kind === 'empty' ? null : selectedTargetV6(workspaceProject, target.selection)
@@ -182,7 +184,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   const requestViewportContext = useCallback((event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault()
     if (workspaceProject === null) return
-    setContextTarget(resolveSceneContextTargetV6(workspaceProject, selection))
+    setContextRequest({ surface: 'viewport', target: resolveSceneContextTargetV6(workspaceProject, selection) })
   }, [selection, workspaceProject])
   const dialog = useSyncExternalStore(layout.subscribe, () => layout.getState().openDialog, () => layout.getState().openDialog)
 
@@ -233,7 +235,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
         runtime={bundle.runtimeGraph.jobs}
       />}
       explorer={workspaceProject === null ? null : <SceneExplorerV6
-        onContextMenu={setContextTarget}
+        onContextMenu={(target) => setContextRequest({ surface: 'explorer', target })}
         onSelectionChange={setSelection}
         onToggleVisibility={(nextSelection, visible) => { void sceneCommands.setVisibility(nextSelection, visible).catch((error: unknown) => setOperationError(errorMessageV6(error))) }}
         project={workspaceProject}
@@ -253,32 +255,23 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
       workspaceHeightPx={viewportBounds.height}
       workspaceWidthPx={viewportBounds.width}
     />
-    {contextTarget !== null && <SceneContextMenuV6 onAction={runSceneContextAction} surface="viewport" target={contextTarget} />}
-    <ConnectionMonitorPanel controlRef={monitorRef} showTrigger={false} store={resources.connectivity} />
-    {workspaceProject !== null && dialog?.kind === 'opcua-settings' && settingsState.open && <OpcUaSettingsDialog
-      activeProject={workspaceProject}
-      connectionTest={resources.connectionTest}
-      controller={resources.settings}
-      onOpenBindingOverview={() => layout.getState().requestDialog({ kind: 'binding-overview' })}
-      onOpenDockerRunGuide={() => layout.getState().requestDialog({ kind: 'docker-guide' })}
-      presentation={connectivity}
-      triggerRef={settingsTriggerRef}
-    />}
-    {workspaceProject !== null && dialog?.kind === 'binding-overview' && <BindingOverviewDialogV1 activeProject={workspaceProject} onClose={() => layout.getState().closeDialog()} onEdit={openBinding} triggerRef={bindingOverviewTriggerRef} />}
-    {workspaceProject !== null && dialog?.kind === 'binding-editor' && <BindingEditorDialogV1
-      activeProject={workspaceProject}
-      addressSpaceBrowsePort={resources.gateway}
+    {contextRequest !== null && <SceneContextMenuV6 onAction={runSceneContextAction} surface={contextRequest.surface} target={contextRequest.target} />}
+    <AppV6Dialogs
+      bindingEditorTriggerRef={bindingEditorTriggerRef}
+      bindingOverviewTriggerRef={bindingOverviewTriggerRef}
       browseSessionAvailable={browseSessionAvailable}
-      {...(dialog.mappingId === undefined ? {} : { mappingId: dialog.mappingId })}
-      mutations={resources.mutations}
-      nodeAddressResolver={resources.nodeAddressResolver}
-      onClose={() => layout.getState().closeDialog()}
-      onSaved={() => layout.getState().closeDialog()}
-      target={dialog.target}
-      triggerRef={bindingEditorTriggerRef}
-    />}
-    {dialog?.kind === 'docker-guide' && <DockerRunGuideDialogV1 onClose={() => layout.getState().closeDialog()} status={connectivity.status} triggerRef={dockerGuideTriggerRef} />}
-    {workspaceProject !== null && dialog?.kind === 'job-editor' && jobAuthoring !== null && bundle !== null && <RobotJobEditorDialogV6 authoring={jobAuthoring} jobId={dialog.jobId} onClose={() => layout.getState().closeDialog()} project={workspaceProject} runtime={bundle.runtimeGraph.jobs} triggerRef={jobEditorTriggerRef} />}
-    <HelpOverlayV6 onClose={() => layout.getState().closeDialog()} request={dialog?.kind === 'help' ? dialog : null} />
+      bundle={bundle}
+      dialog={dialog}
+      dockerGuideTriggerRef={dockerGuideTriggerRef}
+      jobAuthoring={jobAuthoring}
+      jobEditorTriggerRef={jobEditorTriggerRef}
+      layout={layout}
+      monitorRef={monitorRef}
+      openBinding={openBinding}
+      resources={resources}
+      settingsState={settingsState}
+      settingsTriggerRef={settingsTriggerRef}
+      workspaceProject={workspaceProject}
+    />
   </div>
 }

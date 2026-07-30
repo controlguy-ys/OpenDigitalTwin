@@ -109,6 +109,18 @@ describe('RobotInspectorV6', () => {
     expect(screen.getByText('Selected Robot is no longer available.')).toBeInTheDocument()
   })
 
+  it('opens the selected Robot TCP binding target', () => {
+    const project = projectWithSecondRobot()
+    const onOpenBinding = vi.fn()
+    render(<RobotInspectorV6 project={project} robotId="robot-2" onOpenBinding={onOpenBinding} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Binding' }))
+
+    const robot = project.robots.find(({ id }) => id === 'robot-2')
+    expect(robot).toBeDefined()
+    expect(onOpenBinding).toHaveBeenCalledWith({ type: 'robot-frame', robotId: 'robot-2', frameId: robot!.selectedTcpFrameId })
+  })
+
   it('uses a distinct latest publication revision and mutates only its selected Robot', () => {
     const project = projectWithSecondRobot()
     const latest: WorkcellProjectV5 = { ...project, revisionId: 'revision-new', robots: project.robots.map((robot) => robot.id === 'robot-1' ? { ...robot, localBasePose: { ...robot.localBasePose, positionM: [99, 0, 0] } } : robot) }

@@ -198,9 +198,11 @@ describe('ApplicationShellV6', () => {
     expect(screen.getByRole('separator', { name: 'Resize Job Monitor' })).toBeInTheDocument()
 
     const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
+    expect(css).toMatch(/\.v6-application-shell\s*\{[^}]*height:\s*100%/u)
     expect(css).toMatch(/\.v6-dock-resize-handle--vertical\s*\{[^}]*min-width:\s*32px/u)
     expect(css).toMatch(/\.v6-dock-resize-handle--horizontal\s*\{[^}]*min-height:\s*32px/u)
     expect(css).toMatch(/\.v6-shell-main\s*\{[^}]*grid-column:\s*4/u)
+    expect(css).toMatch(/\.v6-shell-main\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)/u)
     expect(css).toMatch(/\.v6-shell-bottom\s*\{[^}]*grid-column:\s*4/u)
     expect(css).toMatch(/\.v6-shell-bottom-resize\s*\{[^}]*grid-column:\s*4/u)
   })

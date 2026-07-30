@@ -1,17 +1,32 @@
-import { expect, test } from '@playwright/test'
+import { expect, loadV6Demo, selectV6DemoRobot, test } from './ui-v6-fixtures.js'
 
-test('V6 Scene Explorer selection and context actions do not turn a right click into a camera pan', async ({ page }) => {
+test('V6 keeps Scene Explorer selection keyboard-operable and routes right clicks to scene actions instead of camera input', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 })
-  await page.goto('/')
+  await loadV6Demo(page)
+
   const tree = page.getByRole('tree', { name: 'Scene Explorer' })
-  const item = tree.getByRole('treeitem', { name: /MCP/u })
-  await item.click()
-  await expect(item).toHaveAttribute('aria-selected', 'true')
-  const canvas = page.getByTestId('v6-canvas-host')
-  const mapping = await canvas.getAttribute('data-camera-mapping')
-  await item.click({ button: 'right' })
-  const actions = page.getByRole('menu', { name: 'Scene actions' })
-  await expect(actions).toBeVisible()
-  await actions.getByRole('menuitem', { name: 'Focus' }).click()
-  expect(await canvas.getAttribute('data-camera-mapping')).toBe(mapping)
+  const canvasHost = page.getByTestId('v6-canvas-host')
+  const robot = await selectV6DemoRobot(page)
+  const inspector = page.getByTestId('v6-inspector')
+  const inspectorBinding = inspector.getByRole('button', { name: 'Open Binding' })
+  await inspectorBinding.click()
+  const editor = page.getByRole('dialog', { name: 'OPC UA Binding' })
+  await editor.getByRole('button', { name: 'Cancel' }).click()
+  await expect(inspectorBinding).toBeFocused()
+
+  await robot.press('Shift+F10')
+  const explorerActions = page.getByRole('menu', { name: 'Scene actions' })
+  await expect(explorerActions).toHaveAttribute('data-surface', 'explorer')
+  await explorerActions.getByRole('menuitem', { name: 'Show/Hide' }).press('Enter')
+  await expect(tree.getByRole('button', { name: 'Show Logical I/O Robot' })).toBeVisible()
+  await robot.click()
+  await expect(robot).toHaveAttribute('aria-selected', 'true')
+
+  await canvasHost.click({ button: 'right' })
+  const viewportActions = page.getByRole('menu', { name: 'Scene actions' })
+  await expect(viewportActions).toHaveAttribute('data-surface', 'viewport')
+  await viewportActions.getByRole('menuitem', { name: 'Show/Hide' }).click()
+  await expect(tree.getByRole('button', { name: 'Hide Logical I/O Robot' })).toBeVisible()
+  await robot.click()
+  await expect(robot).toHaveAttribute('aria-selected', 'true')
 })

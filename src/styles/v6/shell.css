@@ -1,5 +1,6 @@
 .v6-application-shell {
   display: grid;
+  height: 100%;
   grid-template-columns:
     var(--v6-toolbox-width)
     var(--v6-explorer-width)
@@ -37,7 +38,7 @@
 
 .v6-shell-toolbox { grid-column: 1; grid-row: 2; }
 .v6-shell-explorer { grid-column: 2; grid-row: 2; }
-.v6-shell-main { grid-column: 4; grid-row: 2; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.v6-shell-main { grid-column: 4; grid-row: 2; display: grid; grid-template-rows: minmax(0, 1fr); }
 .v6-shell-inspector { grid-column: 6; grid-row: 2; }
 .v6-shell-bottom { grid-column: 4; grid-row: 4; }
 
