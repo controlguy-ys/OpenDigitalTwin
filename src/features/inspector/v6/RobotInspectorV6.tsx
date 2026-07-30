@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 
-import { quaternionToRpyDegreesV5, rpyDegreesToQuaternionV5, type WorkcellProjectV5 } from '../../../core/project-v5/index.js'
+import type { WorkcellProjectV5 } from '../../../core/project-v5/index.js'
 import type { StoreApi } from 'zustand/vanilla'
 import type { RobotJointRuntimeStoreV5 } from '../../robot/v5/robot-joint-runtime-store.js'
 import type { JobRuntimeStoreV5 } from '../../jobs/v5/job-runtime-store.js'
@@ -13,10 +13,10 @@ export interface RobotInspectorV6Props {
   readonly mutations?: InspectorMutationPortV6
 }
 
-type BaseDraft = Readonly<{ x: string; y: string; z: string; rpy: readonly [number, number, number] }>
+type BaseDraft = Readonly<{ x: string; y: string; z: string }>
 
 function baseDraftFor(robot: WorkcellProjectV5['robots'][number]): BaseDraft {
-  return Object.freeze({ x: String(robot.localBasePose.positionM[0]), y: String(robot.localBasePose.positionM[1]), z: String(robot.localBasePose.positionM[2]), rpy: quaternionToRpyDegreesV5(robot.localBasePose.quaternion) })
+  return Object.freeze({ x: String(robot.localBasePose.positionM[0]), y: String(robot.localBasePose.positionM[1]), z: String(robot.localBasePose.positionM[2]) })
 }
 
 function sameBase(robot: WorkcellProjectV5['robots'][number], values: readonly [number, number, number]): boolean {
@@ -58,7 +58,7 @@ function RobotInspectorContent({ project, robotId, runtime, mutations, robot }: 
     if (values.some((value) => !Number.isFinite(value)) || sameBase(robot, values)) return
     const published = mutations.readPublished()
     if (published === null) return
-    void mutations.mutate({ expectedRevisionId: published.revisionId, description: 'Update Robot base transform', recipe: (active) => ({ ...active, robots: active.robots.map((candidate) => candidate.id !== robotId ? candidate : ({ ...candidate, localBasePose: { positionM: [values[0], values[1], values[2]], quaternion: rpyDegreesToQuaternionV5(baseDraft.rpy) } })) }) })
+    void mutations.mutate({ expectedRevisionId: published.revisionId, description: 'Update Robot base transform', recipe: (active) => ({ ...active, robots: active.robots.map((candidate) => candidate.id !== robotId ? candidate : ({ ...candidate, localBasePose: { positionM: [values[0], values[1], values[2]], quaternion: candidate.localBasePose.quaternion } })) }) })
   }
   return <section className="v6-selection-inspector" aria-label={`${robot.name} inspector`}>
     <header><h2>{robot.name}</h2><p>{jointExplanation}</p></header>

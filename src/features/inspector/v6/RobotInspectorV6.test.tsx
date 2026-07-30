@@ -120,4 +120,22 @@ describe('RobotInspectorV6', () => {
     expect(request?.expectedRevisionId).toBe('revision-new')
     expect(request?.recipe(latest).robots.map((robot) => robot.localBasePose.positionM[0])).toEqual([99, 14])
   })
+
+  it('preserves the latest selected Robot quaternion while applying authored XYZ', () => {
+    const project = projectWithSecondRobot()
+    const latest: WorkcellProjectV5 = {
+      ...project,
+      revisionId: 'revision-new',
+      robots: project.robots.map((robot) => robot.id === 'robot-2'
+        ? { ...robot, localBasePose: { positionM: [10, 20, 30], quaternion: [0, 0, 0.5, Math.sqrt(0.75)] } }
+        : robot),
+    }
+    const mutate = vi.fn<(request: MutationRequest) => Promise<void>>(() => Promise.resolve())
+    render(<RobotInspectorV6 mutations={{ readPublished: () => ({ project: latest, revisionId: latest.revisionId }), mutate }} project={project} robotId="robot-2" />)
+    fireEvent.change(screen.getByLabelText('X (m)'), { target: { value: '14' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Base Transform' }))
+    const updated = mutate.mock.calls[0]?.[0].recipe(latest).robots.find((robot) => robot.id === 'robot-2')
+    expect(updated?.localBasePose.positionM).toEqual([14, 20, 30])
+    expect(updated?.localBasePose.quaternion).toEqual([0, 0, 0.5, Math.sqrt(0.75)])
+  })
 })
