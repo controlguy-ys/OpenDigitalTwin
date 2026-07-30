@@ -254,17 +254,5 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
   )
 }
 
-export interface MainViewPaneToolbarCommandV6Props {
-  readonly registry: AppCommandRegistryV6
-}
-
-export function MainViewPaneToolbarCommandV6({ registry }: MainViewPaneToolbarCommandV6Props) {
-  return <div aria-label="Main View pane commands" role="toolbar">
-    <CommandSurfaceControlV6
-      ariaControls="v6-main-view"
-      commandId="view.main.maximize"
-      registry={registry}
-      surface="main-view-pane-toolbar"
-    />
-  </div>
-}
+export { MainViewPaneToolbarCommandV6 } from './MainViewPaneToolbarCommandV6.js'
+export type { MainViewPaneToolbarCommandV6Props } from './MainViewPaneToolbarCommandV6.js'
