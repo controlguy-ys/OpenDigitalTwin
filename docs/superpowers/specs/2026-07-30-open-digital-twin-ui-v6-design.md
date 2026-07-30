@@ -70,6 +70,13 @@ drafts survive exact restoration. Restore uses the toolbar icon or `Escape`;
 maximize command never publishes a Project mutation, runs Home/Fit, restarts
 rendering, or invokes browser fullscreen.
 
+Task 1 enforces that dependency boundary with `MainViewPresentationPortV6`,
+which exposes only the current maximize state and a transient toggle. The
+`view.main.maximize` snapshot is created from that port and cannot receive a
+Project mutation service. Tasks 4 and 6 retain responsibility for proving the
+composed View-menu and mounted pane-toolbar surfaces preserve Project revision,
+runtime, Canvas, and prior layout state.
+
 ## Interaction, ownership, and theme
 
 Right mouse button is reserved for the viewport and Explorer context menu. It
@@ -105,17 +112,25 @@ running. Each completed authoring action is one V5 mutation.
 | Project menu | `project.new`, `project.loadDemo`, `project.save`, `project.export`, `project.import` |
 | Home menu | `tool.select`, `tool.translate`, `tool.rotate`, `view.focusSelection`, `view.fitAll` |
 | Model menu and Toolbox | `model.addBox`, `model.addCylinder` |
-| Job menu and monitor | `job.openEditor`, `job.start`, `job.cancel` |
+| Job menu | `job.openEditor`, `job.start`, `job.cancel` |
+| Job monitor | `job.openEditor`, `job.start`, `job.cancel` |
 | View menu | `view.focusSelection`, `view.fitAll`, `view.main.maximize`, `view.layout.reset`, `view.theme.system`, `view.theme.dark`, `view.theme.light` |
 | Main View pane toolbar | `view.main.maximize` |
-| Explorer/viewport context | `scene.toggleVisibility`, `scene.rename`, `scene.duplicate`, `scene.delete`, `binding.open`, `model.addBox`, `model.addCylinder`, `view.fitAll` |
+| Explorer context | `scene.toggleVisibility`, `scene.rename`, `scene.duplicate`, `scene.delete`, `binding.open` |
+| Viewport context | `scene.toggleVisibility`, `scene.rename`, `scene.duplicate`, `scene.delete`, `binding.open`, `model.addBox`, `model.addCylinder`, `view.fitAll` |
+| Inspector | `binding.open` |
+| Job-instruction context | `job.instruction.edit`, `job.instruction.insertBefore`, `job.instruction.insertAfter`, `job.instruction.duplicate`, `job.instruction.delete`, `job.instruction.moveBefore`, `job.instruction.moveAfter` |
 | Help menu | `help.controls`, `help.about` |
 
 The contextual Toolbox always presents Select, Translate, and Rotate; it adds
 Add Box, Add Cylinder, Focus Selection, and Fit All where applicable. Import
 Robot and Import Object remain absent until V5 authoring ports exist. Context
-actions are typed by Robot, Object, Group, empty viewport, or Job instruction
-as defined by the approved V6 plan.
+actions are typed by Robot, Object, Group, empty viewport, or Job instruction.
+Job-instruction actions use the separate typed
+`JobInstructionContextActionIdV6` inventory because they require a target
+instruction and editor state; they are not parameterless global
+`AppCommandIdV6` commands. Task 8 binds those typed action IDs to its atomic Job
+authoring service.
 
 ## Explicit non-goals
 

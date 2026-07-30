@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  V6_JOB_INSTRUCTION_CONTEXT_ACTIONS,
   V6_COMMAND_PLACEMENTS,
   createAppCommandRegistryV6,
+  createMainViewMaximizeCommandV6,
   type AppCommandIdV6,
   type AppCommandSnapshotV6,
 } from './app-command-v6.js'
@@ -88,18 +90,72 @@ describe('createAppCommandRegistryV6', () => {
     await expect(registry.invoke('job.start')).rejects.toBe(rejected)
   })
 
+  it('places Open Binding on both selection context surfaces and the Inspector', () => {
+    expect(V6_COMMAND_PLACEMENTS.filter(({ commandId }) => commandId === 'binding.open'))
+      .toEqual([
+        { commandId: 'binding.open', surface: 'explorer-context-menu' },
+        { commandId: 'binding.open', surface: 'viewport-context-menu' },
+        { commandId: 'binding.open', surface: 'inspector' },
+      ])
+  })
+
+  it('places the three Job operator commands on both the Job menu and monitor', () => {
+    expect(V6_COMMAND_PLACEMENTS
+      .filter(({ surface }) => surface === 'job-monitor')
+      .map(({ commandId }) => commandId))
+      .toEqual(['job.openEditor', 'job.start', 'job.cancel'])
+  })
+
+  it('keeps instruction-targeted authoring actions in a separate typed context inventory', () => {
+    expect(V6_JOB_INSTRUCTION_CONTEXT_ACTIONS).toEqual([
+      {
+        id: 'job.instruction.edit',
+        label: 'Edit',
+        surface: 'job-instruction-context-menu',
+      },
+      {
+        id: 'job.instruction.insertBefore',
+        label: 'Insert Before',
+        surface: 'job-instruction-context-menu',
+      },
+      {
+        id: 'job.instruction.insertAfter',
+        label: 'Insert After',
+        surface: 'job-instruction-context-menu',
+      },
+      {
+        id: 'job.instruction.duplicate',
+        label: 'Duplicate',
+        surface: 'job-instruction-context-menu',
+      },
+      {
+        id: 'job.instruction.delete',
+        label: 'Delete',
+        surface: 'job-instruction-context-menu',
+      },
+      {
+        id: 'job.instruction.moveBefore',
+        label: 'Move Before',
+        surface: 'job-instruction-context-menu',
+      },
+      {
+        id: 'job.instruction.moveAfter',
+        label: 'Move After',
+        surface: 'job-instruction-context-menu',
+      },
+    ])
+  })
+
   it('defines Main View maximize as a transient presentation command', async () => {
     let maximized = false
-    const projectMutation = vi.fn()
-    const maximize = {
-      id: 'view.main.maximize',
-      get label() { return maximized ? 'Restore Main View' : 'Maximize Main View' },
-      get icon() { return maximized ? 'Minimize2' as const : 'Maximize2' as const },
-      get checked() { return maximized },
-      enabled: true,
-      visible: true,
-      execute: () => { maximized = !maximized },
-    } satisfies AppCommandSnapshotV6
+    const presentationEffects: string[] = []
+    const maximize = createMainViewMaximizeCommandV6({
+      isMainViewMaximized: () => maximized,
+      toggleMainView: () => {
+        presentationEffects.push('toggle-main-view')
+        maximized = !maximized
+      },
+    })
     const registry = createAppCommandRegistryV6([maximize])
 
     expect(registry.get('view.main.maximize')).toMatchObject({
@@ -116,6 +172,6 @@ describe('createAppCommandRegistryV6', () => {
     expect(registry.get('view.main.maximize')).toMatchObject({
       label: 'Restore Main View', icon: 'Minimize2', checked: true,
     })
-    expect(projectMutation).not.toHaveBeenCalled()
+    expect(presentationEffects).toEqual(['toggle-main-view'])
   })
 })

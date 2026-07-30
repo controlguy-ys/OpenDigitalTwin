@@ -26,11 +26,41 @@ export interface AppCommandSnapshotV6 {
   execute(): void | Promise<void>
 }
 
+export interface MainViewPresentationPortV6 {
+  isMainViewMaximized(): boolean
+  toggleMainView(): void
+}
+
+export function createMainViewMaximizeCommandV6(
+  presentation: MainViewPresentationPortV6,
+): AppCommandSnapshotV6 {
+  return {
+    id: 'view.main.maximize',
+    get label() {
+      return presentation.isMainViewMaximized()
+        ? 'Restore Main View'
+        : 'Maximize Main View'
+    },
+    get icon() {
+      return presentation.isMainViewMaximized() ? 'Minimize2' : 'Maximize2'
+    },
+    get checked() {
+      return presentation.isMainViewMaximized()
+    },
+    enabled: true,
+    visible: true,
+    execute() {
+      presentation.toggleMainView()
+    },
+  }
+}
+
 export type AppCommandSurfaceV6 =
   | 'project-menu'
   | 'home-menu'
   | 'model-menu'
   | 'job-menu'
+  | 'job-monitor'
   | 'view-menu'
   | 'help-menu'
   | 'toolbox'
@@ -43,6 +73,59 @@ export interface AppCommandPlacementV6 {
   readonly commandId: AppCommandIdV6
   readonly surface: AppCommandSurfaceV6
 }
+
+export type JobInstructionContextActionIdV6 =
+  | 'job.instruction.edit'
+  | 'job.instruction.insertBefore'
+  | 'job.instruction.insertAfter'
+  | 'job.instruction.duplicate'
+  | 'job.instruction.delete'
+  | 'job.instruction.moveBefore'
+  | 'job.instruction.moveAfter'
+
+export interface JobInstructionContextActionV6 {
+  readonly id: JobInstructionContextActionIdV6
+  readonly label: string
+  readonly surface: 'job-instruction-context-menu'
+}
+
+export const V6_JOB_INSTRUCTION_CONTEXT_ACTIONS: readonly JobInstructionContextActionV6[] = Object.freeze([
+  {
+    id: 'job.instruction.edit',
+    label: 'Edit',
+    surface: 'job-instruction-context-menu',
+  },
+  {
+    id: 'job.instruction.insertBefore',
+    label: 'Insert Before',
+    surface: 'job-instruction-context-menu',
+  },
+  {
+    id: 'job.instruction.insertAfter',
+    label: 'Insert After',
+    surface: 'job-instruction-context-menu',
+  },
+  {
+    id: 'job.instruction.duplicate',
+    label: 'Duplicate',
+    surface: 'job-instruction-context-menu',
+  },
+  {
+    id: 'job.instruction.delete',
+    label: 'Delete',
+    surface: 'job-instruction-context-menu',
+  },
+  {
+    id: 'job.instruction.moveBefore',
+    label: 'Move Before',
+    surface: 'job-instruction-context-menu',
+  },
+  {
+    id: 'job.instruction.moveAfter',
+    label: 'Move After',
+    surface: 'job-instruction-context-menu',
+  },
+])
 
 export const V6_COMMAND_PLACEMENTS: readonly AppCommandPlacementV6[] = Object.freeze([
   { commandId: 'project.new', surface: 'project-menu' },
@@ -67,6 +150,9 @@ export const V6_COMMAND_PLACEMENTS: readonly AppCommandPlacementV6[] = Object.fr
   { commandId: 'job.openEditor', surface: 'job-menu' },
   { commandId: 'job.start', surface: 'job-menu' },
   { commandId: 'job.cancel', surface: 'job-menu' },
+  { commandId: 'job.openEditor', surface: 'job-monitor' },
+  { commandId: 'job.start', surface: 'job-monitor' },
+  { commandId: 'job.cancel', surface: 'job-monitor' },
   { commandId: 'view.focusSelection', surface: 'view-menu' },
   { commandId: 'view.fitAll', surface: 'view-menu' },
   { commandId: 'view.main.maximize', surface: 'view-menu' },
@@ -84,6 +170,7 @@ export const V6_COMMAND_PLACEMENTS: readonly AppCommandPlacementV6[] = Object.fr
   { commandId: 'scene.rename', surface: 'viewport-context-menu' },
   { commandId: 'scene.duplicate', surface: 'viewport-context-menu' },
   { commandId: 'scene.delete', surface: 'viewport-context-menu' },
+  { commandId: 'binding.open', surface: 'viewport-context-menu' },
   { commandId: 'binding.open', surface: 'inspector' },
   { commandId: 'model.addBox', surface: 'viewport-context-menu' },
   { commandId: 'model.addCylinder', surface: 'viewport-context-menu' },

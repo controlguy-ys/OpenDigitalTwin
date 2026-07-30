@@ -1,5 +1,12 @@
 # RobotSim Visual Specification
 
+Sections before `UI V6 Workspace Boundary` describe the retained V4 visual
+reference. For UI V6, the V6 section is authoritative and explicitly
+supersedes the earlier typography, Context Bar command source, Ribbon Lite,
+dock naming, dock sizes, and responsive defaults. V6 reuses the earlier color
+tokens, 6px radius, restrained industrial chrome, workcell composition, and
+anti-decoration rules only where the V6 contract does not replace them.
+
 ## Accepted References
 
 - Desktop: `docs/design/robot-sim-desktop-concept.png` at 1440 x 900
@@ -86,10 +93,25 @@ session state is not restored after reload. The V6 workspace uses wide (at
 least 1200px), compact (960..1199px), and narrow (below 960px) modes while
 keeping the central viewport primary.
 
+V6 uses Pretendard Variable globally, with monospace limited to NodeIds, code,
+and diagnostics; this replaces the earlier Segoe UI / Inter-like typography
+rule. V6 context copy comes from visible `AppCommandSnapshotV6` commands and
+the typed Job-instruction action inventory, not `AppCommandV4` or Context Bar
+composition.
+
+V6 wide defaults are Explorer and Inspector open, Bottom Job Monitor open at
+180px, and Toolbox collapsed. Compact defaults are Explorer docked, Inspector
+drawer closed, Bottom Job Monitor collapsed, and Toolbox collapsed. Narrow
+defaults are Explorer and Inspector drawers closed, Job Monitor bottom sheet
+closed, and Toolbox collapsed. These defaults and the Explorer, Inspector,
+Toolbox, and Job Monitor names replace the earlier Scene and Job Sidebar,
+Ribbon Lite, and 160px closed Bottom Workspace defaults.
+
 The Main View presentation toggle is an application-pane mode, not browser
 fullscreen. It is represented by `view.main.maximize` in both the View menu and
 Main View pane toolbar inventory; it begins with the label `Maximize Main View`
-and never creates a Project mutation. In maximized presentation, workspace
-chrome is masked while the existing Canvas, camera, selection, runtime state,
-and prior dock arrangement survive restoration. Right-click is reserved for
-viewport and Explorer context actions and never pans the camera.
+and Lucide `Maximize2`, then uses `Restore Main View` and `Minimize2` while
+maximized. It never creates a Project mutation. In maximized presentation,
+workspace chrome is masked while the existing Canvas, camera, selection,
+runtime state, and prior dock arrangement survive restoration. Right-click is
+reserved for viewport and Explorer context actions and never pans the camera.
