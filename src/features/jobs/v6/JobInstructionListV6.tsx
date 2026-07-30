@@ -33,8 +33,11 @@ export function JobInstructionListV6({ project, instructions, stepIndex, state, 
   useEffect(() => { if (follow) returnToCurrent() }, [follow, stepIndex])
   const announce = stepIndex === null ? (state === 'FAILED' || state === 'SUCCEEDED' || state === 'CANCELLED' ? state : '') : `Step ${stepIndex + 1}: ${instructions[stepIndex]?.kind ?? ''}${state === 'RUNNING' ? ', running' : `, ${state.toLowerCase()}`}`
   const move = (index: number, delta: number): void => {
-    const target = index + delta; if (target < 0 || target >= instructions.length) return
-    onReorder?.(instructions[index]!.id, instructions[target]!.id)
+    const target = index + delta
+    const instruction = instructions[index]
+    const before = instructions[target]
+    if (target < 0 || target >= instructions.length || instruction === undefined || before === undefined) return
+    onReorder?.(instruction.id, before.id)
   }
   return <section className="v6-job-instruction-list" aria-label="Job instructions">
     <div aria-live="polite" className="v6-sr-only">{announce}</div>
