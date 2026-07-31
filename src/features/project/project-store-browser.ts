@@ -25,10 +25,6 @@ import {
   type AnimationFrameSchedulerV4,
 } from '../jobs/v4/simulation-clock.js'
 import {
-  BUILTIN_CRB_DEFINITION_ID_V4,
-  prepareBuiltinCrbGeometryV4,
-} from '../robot/v4/builtin-crb-definition.js'
-import {
   BUILTIN_NED2_DEFINITION_ID_V4,
   prepareBuiltinNed2GeometryV4,
 } from '../robot/v4/builtin-ned2-definition.js'
@@ -235,10 +231,8 @@ export function createBrowserProjectResourcesV4(
       _project: WorkcellProjectV4,
       definition: RobotDefinitionV4,
     ): Promise<PreparedRobotDefinitionGeometryV4 | null> => (
-      definition.id === BUILTIN_CRB_DEFINITION_ID_V4
-        ? prepareBuiltinCrbGeometryV4(definition)
-        : definition.id === BUILTIN_NED2_DEFINITION_ID_V4
-          ? prepareBuiltinNed2GeometryV4(definition)
+      definition.id === BUILTIN_NED2_DEFINITION_ID_V4
+        ? prepareBuiltinNed2GeometryV4(definition)
         : importedGeometry.resolve(_project, definition)
     ))
 

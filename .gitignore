@@ -8,7 +8,5 @@ coverage/
 artifacts/
 playwright-report/
 test-results/
-CRB15000_10kg-152_OmniCore_rev00_STEP_C/
-CRB15000_12kg-127_OmniCore_rev00_STEP_J.premerge-backup-20260713/
 *.log
 .DS_Store
