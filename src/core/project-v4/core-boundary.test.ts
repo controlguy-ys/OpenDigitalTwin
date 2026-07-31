@@ -7,7 +7,10 @@ import {
   configRevisionForProjectV4,
   validateWorkcellProjectV4,
 } from './index.js'
-import { makeMinimalWorkcellProjectV4 } from './test-support.js'
+import {
+  makeMinimalWorkcellProjectV4,
+  MINIMAL_PROJECT_V4_CONFIG_REVISION,
+} from './test-support.js'
 
 const rawCoreModules = import.meta.glob('../**/*.ts', {
   eager: true,
@@ -372,7 +375,7 @@ function keyedStateBatch(configRevision: string): unknown {
 
 describe('Project V4 shared Core browser boundary', () => {
   it('validates the golden Project and keyed protocol fixture in jsdom', async () => {
-    const goldenConfigRevision = 'e679de7f286e2aa5bd2c3e9ca72c32916d527c9b7a68af7a7639dc16ba519969'
+    const goldenConfigRevision = MINIMAL_PROJECT_V4_CONFIG_REVISION
     const project = validateWorkcellProjectV4(makeMinimalWorkcellProjectV4())
     const canonicalJson = canonicalProjectV4Json(project)
 

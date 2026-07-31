@@ -7,7 +7,10 @@ import {
   configRevisionForProjectV4,
   validateWorkcellProjectV4,
 } from '../../src/core/project-v4/index.js'
-import { makeMinimalWorkcellProjectV4 } from '../../src/core/project-v4/test-support.js'
+import {
+  makeMinimalWorkcellProjectV4,
+  MINIMAL_PROJECT_V4_CONFIG_REVISION,
+} from '../../src/core/project-v4/test-support.js'
 import { validateStateBatchV1 } from '../../src/core/runtime-protocol/v1.js'
 
 function keyedStateBatch(configRevision: string): unknown {
@@ -34,7 +37,7 @@ function keyedStateBatch(configRevision: string): unknown {
 }
 
 it('consumes the golden Project V4 Core and keyed protocol fixture in Node', async () => {
-  const goldenConfigRevision = 'e679de7f286e2aa5bd2c3e9ca72c32916d527c9b7a68af7a7639dc16ba519969'
+  const goldenConfigRevision = MINIMAL_PROJECT_V4_CONFIG_REVISION
   const project = validateWorkcellProjectV4(makeMinimalWorkcellProjectV4())
   const canonicalJson = canonicalProjectV4Json(project)
 
