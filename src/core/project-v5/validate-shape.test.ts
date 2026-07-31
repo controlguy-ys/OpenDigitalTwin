@@ -102,9 +102,9 @@ describe('Project V5 aggregate shape validation', () => {
     const project = makeMinimalWorkcellProjectV5()
 
     expect(project.robotDefinitions[0]!.identification).toMatchObject({
-      manufacturer: 'ABB',
-      model: 'CRB15000-12/1.27',
-      productCode: 'CRB15000-12/1.27',
+      manufacturer: 'Generic',
+      model: 'NED2',
+      productCode: 'NED2',
       serialNumberTemplate: null,
       motionDeviceCategory: 'ARTICULATED_ROBOT',
     })

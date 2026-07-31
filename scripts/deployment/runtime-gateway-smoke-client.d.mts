@@ -5,7 +5,7 @@ export interface DualRobotOpcUaSmokeOptions {
 }
 
 export interface DualRobotOpcUaSmokeResult {
-  readonly crbJ1: number
+  readonly primaryRobotJ1: number
   readonly slideX: number
 }
 

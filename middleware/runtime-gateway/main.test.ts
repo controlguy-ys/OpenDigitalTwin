@@ -2548,7 +2548,7 @@ describe('runtime Gateway entrypoint', () => {
       const stale = await requestJson(port, 'POST', '/runtime/state', {
         projectId: project.projectId,
         revisionId: 'revision-stale',
-        robots: [{ robotId: 'robot-sample-crb', jointValues: { J1: 10 } }],
+        robots: [{ robotId: 'robot-sample-primary', jointValues: { J1: 10 } }],
       })
       expect(stale.status).toBe(409)
       expect(await stale.json()).toMatchObject({ code: 'REVISION_MISMATCH' })
@@ -2557,7 +2557,7 @@ describe('runtime Gateway entrypoint', () => {
         projectId: project.projectId,
         revisionId: project.revisionId,
         robots: [
-          { robotId: 'robot-sample-crb', jointValues: { J1: 10 } },
+          { robotId: 'robot-sample-primary', jointValues: { J1: 10 } },
           {
             robotId: 'robot-sample-linear-slide',
             jointValues: { JOINT_MISSING: 0.5 },

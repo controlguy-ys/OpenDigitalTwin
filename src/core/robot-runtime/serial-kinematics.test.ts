@@ -55,7 +55,7 @@ function definition(
     id: 'custom-definition',
     name: 'Custom definition',
     manufacturer: 'User',
-    model: 'Not CRB',
+    model: 'Custom Six-Axis Robot',
     assetReferenceIds: [],
     sourceConventions: {},
     links,

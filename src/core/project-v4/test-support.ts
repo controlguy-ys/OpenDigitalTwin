@@ -115,7 +115,7 @@ function makeDefinition(
   return {
     id: `definition-${index}`,
     name: `Robot Definition ${index}`,
-    manufacturer: 'ABB',
+    manufacturer: 'Generic',
     model: `Model ${index}`,
     assetReferenceIds,
     sourceConventions: Object.fromEntries(assetReferenceIds.map((assetId) => [assetId, {

@@ -198,7 +198,12 @@ describe('validateWorkcellProjectV5 reference, semantic, and OPC UA budget valid
     ;(unused.controllers as unknown as unknown[]).push({
       id: 'controller-2',
       name: 'Controller 2',
-      identification: { manufacturer: 'ABB', model: 'OmniCore', productCode: 'P2', serialNumber: 'CTRL-2' },
+      identification: {
+        manufacturer: 'Generic',
+        model: 'Robot Controller',
+        productCode: 'CONTROLLER-002',
+        serialNumber: 'CTRL-2',
+      },
     })
     expect(() => validateWorkcellProjectV5(unused)).toThrow('ROBOT_CONTROLLER_UNREFERENCED')
   })
