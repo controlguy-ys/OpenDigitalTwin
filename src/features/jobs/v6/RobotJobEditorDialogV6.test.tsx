@@ -28,12 +28,12 @@ describe('RobotJobEditorDialogV6', () => {
     const job = onlyJob(project)
     const authoring = { reorder: vi.fn(), insert: vi.fn(), replace: vi.fn(() => Promise.resolve()), duplicate: vi.fn(), remove: vi.fn() }
     render(<RobotJobEditorDialogV6 authoring={authoring} jobId={job.id} onClose={vi.fn()} project={project} />)
-    expect(screen.getAllByLabelText(/J[12]/u).map((input) => input.getAttribute('aria-label'))).toEqual(['J1', 'J2'])
+    expect(screen.getAllByLabelText(/J[1-6]/u).map((input) => input.getAttribute('aria-label'))).toEqual(['J1', 'J2', 'J3', 'J4', 'J5', 'J6'])
     fireEvent.change(screen.getByLabelText('J1'), { target: { value: '12' } })
     fireEvent.change(screen.getByLabelText('J2'), { target: { value: '-8' } })
     fireEvent.change(screen.getByLabelText('Speed (%)'), { target: { value: '40' } })
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
-    expect(authoring.replace).toHaveBeenCalledWith(job.id, expect.objectContaining({ kind: 'move-joint', jointValues: { J1: 12, J2: -8 }, speedPercentToNext: 40 }))
+    expect(authoring.replace).toHaveBeenCalledWith(job.id, expect.objectContaining({ kind: 'move-joint', jointValues: { J1: 12, J2: -8, J3: 0, J4: 0, J5: 0, J6: 0 }, speedPercentToNext: 40 }))
   })
 
   it('keeps invalid pose speed local and does not mutate', () => {
