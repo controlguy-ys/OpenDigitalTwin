@@ -567,7 +567,8 @@ function fakeTimeouts() {
     setTimeout,
     clearTimeout,
     runDueAt(nowMs: number) {
-      for (const [timer, scheduled] of [...pending]) {
+      const scheduledTimers = new Map(pending)
+      for (const [timer, scheduled] of scheduledTimers) {
         if (scheduled.dueAt > nowMs) continue
         pending.delete(timer)
         scheduled.callback()
