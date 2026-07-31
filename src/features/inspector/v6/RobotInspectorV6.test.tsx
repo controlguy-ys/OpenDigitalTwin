@@ -28,7 +28,7 @@ function mutationPort(project: WorkcellProjectV5) {
 }
 
 describe('RobotInspectorV6', () => {
-  it('uses the selected second Robot runtime and writes its manual slider with correct joint units', () => {
+  it('rerenders the selected Robot Joint value after a manual slider write', () => {
     const project = projectWithSecondRobot()
     const robots = createRobotJointRuntimeStoreV5(project, CONFIG)
     const write = vi.spyOn(robots.getState(), 'writeJointValues')
@@ -36,8 +36,11 @@ describe('RobotInspectorV6', () => {
 
     expect(screen.getByRole('heading', { name: 'Robot two' })).toBeInTheDocument()
     expect(screen.getByText(/12 deg/u)).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('J1'), { target: { value: '14' } })
-    expect(write).toHaveBeenCalledWith('robot-2', { J1: 14 }, 'manual')
+    fireEvent.change(screen.getByLabelText('J1'), { target: { value: '35' } })
+    expect(write).toHaveBeenCalledWith('robot-2', { J1: 35 }, 'manual')
+    expect(screen.getByLabelText('J1')).toHaveValue('35')
+    expect(screen.getByText('35 deg')).toBeInTheDocument()
+    expect(robots.getState().readRobot('robot-2')?.jointValues.J1).toBe(35)
   })
 
   it('resets base drafts on selected Robot and published revision changes', () => {

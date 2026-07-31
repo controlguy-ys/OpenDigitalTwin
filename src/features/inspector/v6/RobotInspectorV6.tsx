@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import type { OpcUaProjectTargetV5, WorkcellProjectV5 } from '../../../core/project-v5/index.js'
 import type { StoreApi } from 'zustand/vanilla'
@@ -15,6 +15,10 @@ export interface RobotInspectorV6Props {
 }
 
 type BaseDraft = Readonly<{ x: string; y: string; z: string }>
+
+const noRuntimeSubscription = () => () => {}
+const noRobotRuntimeState = (): RobotJointRuntimeStoreV5 | null => null
+const noJobRuntimeState = (): JobRuntimeStoreV5 | null => null
 
 function baseDraftFor(robot: WorkcellProjectV5['robots'][number]): BaseDraft {
   return Object.freeze({ x: String(robot.localBasePose.positionM[0]), y: String(robot.localBasePose.positionM[1]), z: String(robot.localBasePose.positionM[2]) })
@@ -38,8 +42,18 @@ export function RobotInspectorV6(props: RobotInspectorV6Props): ReactNode {
 
 function RobotInspectorContent({ project, robotId, runtime, mutations, onOpenBinding, robot }: RobotInspectorV6Props & { readonly robot: WorkcellProjectV5['robots'][number] }): ReactNode {
   const definition = project.robotDefinitions.find((candidate) => candidate.id === robot.definitionId)
-  const robotRuntime = runtime?.robots.getState().readRobot(robotId) ?? null
-  const job = runtime?.jobs?.getState().byRobotId[robotId]
+  const robotRuntimeState = useSyncExternalStore<RobotJointRuntimeStoreV5 | null>(
+    runtime?.robots.subscribe ?? noRuntimeSubscription,
+    runtime?.robots.getState ?? noRobotRuntimeState,
+    noRobotRuntimeState,
+  )
+  const jobRuntimeState = useSyncExternalStore<JobRuntimeStoreV5 | null>(
+    runtime?.jobs?.subscribe ?? noRuntimeSubscription,
+    runtime?.jobs?.getState ?? noJobRuntimeState,
+    noJobRuntimeState,
+  )
+  const robotRuntime = robotRuntimeState?.readRobot(robotId) ?? null
+  const job = jobRuntimeState?.byRobotId[robotId]
   const running = job?.state === 'RUNNING'
   const baseKey = `${robotId}:${project.revisionId}`
   const [baseDraft, setBaseDraft] = useState<BaseDraft>(() => baseDraftFor(robot))
