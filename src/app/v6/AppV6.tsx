@@ -186,6 +186,8 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     setContextRequest({ surface: 'viewport', target: resolveSceneContextTargetV6(workspaceProject, selection) })
   }, [selection, workspaceProject])
   const dialog = useSyncExternalStore(layout.subscribe, () => layout.getState().openDialog, () => layout.getState().openDialog)
+  const visibleError = operationError
+    ?? (projectState.status === 'error' ? projectState.error : null)
 
   const header = <div className="v6-app-header">
     <strong>OpenDigitalTwin</strong>
@@ -222,7 +224,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     />
 
   return <div className="v6-app-root">
-    {operationError !== null && <div className="v6-operation-error" role="alert">{operationError}</div>}
+    {visibleError !== null && <div className="v6-operation-error" role="alert">{visibleError}</div>}
     <ApplicationShellV6
       bottom={workspaceProject === null || selectedJob === null ? <section aria-label="Job monitor">No Jobs in this Project.</section> : bundle === null ? <RobotJobMonitorV6
         jobId={selectedJob.id}
