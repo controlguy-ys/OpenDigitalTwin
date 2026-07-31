@@ -2,11 +2,16 @@ import {
   validateWorkcellProjectV5,
   type NumericStatusV5,
   type RigidTransformV5,
-  type RobotDefinitionV5,
   type RobotInstanceV5,
   type RobotJobInstructionV1,
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
+import {
+  BUILTIN_NED2_ASSET_REFERENCE_ID_V5,
+  BUILTIN_NED2_DEFINITION_ID_V5,
+  createBuiltinNed2AssetReferencesV5,
+  createBuiltinNed2DefinitionV5,
+} from '../../robot/v5/builtin-ned2-definition-v5.js'
 
 export interface LogicalIoJobSampleV5Options {
   readonly projectId: string
@@ -17,8 +22,8 @@ export interface LogicalIoJobSampleV5Options {
 const NAMESPACE_URI_V5 = 'urn:robot-sim-web:logical-io-job-sample:v5'
 
 export const LOGICAL_IO_JOB_SAMPLE_IDS_V5 = Object.freeze({
-  robotSourceId: 'builtin-logical-io-robot-source',
-  robotDefinitionId: 'definition-logical-io-robot',
+  robotSourceId: BUILTIN_NED2_ASSET_REFERENCE_ID_V5,
+  robotDefinitionId: BUILTIN_NED2_DEFINITION_ID_V5,
   controllerId: 'controller-logical-io-robot',
   robotId: 'robot-logical-io',
   partEntityId: 'entity-part',
@@ -43,89 +48,25 @@ function numericStatus(): NumericStatusV5 {
   }
 }
 
-function createSourceOnlyRobotDefinition(): RobotDefinitionV5 {
-  return {
-    id: LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotDefinitionId,
-    name: 'Source-only Two-Joint Articulated Robot',
-    identification: {
-      manufacturer: 'RobotSimWeb',
-      model: 'Logical 2R',
-      productCode: 'RSW-LOGICAL-2R',
-      serialNumberTemplate: 'LOGICAL-2R-{serial}',
-      motionDeviceCategory: 'ARTICULATED_ROBOT',
-    },
-    mechanics: {
-      schemaVersion: 1,
-      status: 'estimated',
-      sourceKind: 'manual',
-      sourceName: 'logical-io-job-sample-v5',
-      calibrationRevision: 'logical-2r-r1',
-    },
-    assetReferenceIds: [LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotSourceId],
-    sourceConventions: {
-      [LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotSourceId]: {
-        linearUnit: 'meter',
-        sourceToMeters: 1,
-        orientation: { mode: 'up-axis', upAxis: 'z' },
-      },
-    },
-    links: [
-      { id: 'L0', name: 'Base Link', geometryOccurrences: [] },
-      { id: 'L1', name: 'Joint 1 Link', geometryOccurrences: [] },
-      { id: 'L2', name: 'Joint 2 Link', geometryOccurrences: [] },
-    ],
-    joints: [
-      {
-        id: 'J1',
-        type: 'revolute',
-        parentLinkId: 'L0',
-        childLinkId: 'L1',
-        origin: identityPose(),
-        axis: [0, 0, 1],
-        min: -180,
-        max: 180,
-        home: 0,
-        zeroOffset: 0,
-        direction: 1,
-        maximumVelocity: 90,
-      },
-      {
-        id: 'J2',
-        type: 'revolute',
-        parentLinkId: 'L1',
-        childLinkId: 'L2',
-        origin: identityPose(),
-        axis: [0, 0, 1],
-        min: -180,
-        max: 180,
-        home: 0,
-        zeroOffset: 0,
-        direction: 1,
-        maximumVelocity: 90,
-      },
-    ],
-    frames: [
-      { id: 'Base', name: 'Base', parentFrameId: 'L0', localPose: identityPose(), role: 'base' },
-      { id: 'Tool', name: 'Tool', parentFrameId: 'L2', localPose: identityPose(), role: 'tool' },
-      { id: 'TCP', name: 'TCP', parentFrameId: 'Tool', localPose: identityPose(), role: 'tcp' },
-    ],
-    excludedGeometryOccurrenceKeys: [],
-  }
-}
-
-function createRobotInstance(definition: RobotDefinitionV5): RobotInstanceV5 {
+function createRobotInstance(definitionId: string): RobotInstanceV5 {
   return {
     id: LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotId,
-    name: 'Logical I/O Robot',
-    definitionId: definition.id,
-    serialNumber: 'LOGICAL-2R-001',
+    name: 'NED2',
+    definitionId,
+    serialNumber: 'NED2-DEMO-001',
     controllerId: LOGICAL_IO_JOB_SAMPLE_IDS_V5.controllerId,
     visible: true,
     baseParentFrameId: 'mcp',
     localBasePose: identityPose(),
-    initialJointValues: { J1: 0, J2: 0 },
+    initialJointValues: { J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 },
     jointSource: 'simulation',
-    frameSources: { Base: 'simulation', Tool: 'simulation', TCP: 'simulation' },
+    frameSources: {
+      Base: 'simulation',
+      Flange: 'simulation',
+      Tool0: 'simulation',
+      Tool: 'simulation',
+      TCP: 'simulation',
+    },
     selectedToolFrameId: 'Tool',
     selectedTcpFrameId: 'TCP',
     numericStatus: numericStatus(),
@@ -135,17 +76,19 @@ function createRobotInstance(definition: RobotDefinitionV5): RobotInstanceV5 {
 
 function createInstructions(): readonly RobotJobInstructionV1[] {
   const poses = [
-    [0, 0], [10, -10], [20, -20], [30, -30], [40, -20],
-    [50, -10], [40, 0], [30, 10], [20, 20], [10, 10], [0, 0],
+    [0, 0, 0, 0, 0, 0], [10, -10, 10, 0, 5, 0], [20, -20, 20, 10, 10, 5],
+    [30, -30, 30, 20, 15, 10], [40, -20, 20, 30, 20, 15], [50, -10, 10, 40, 25, 20],
+    [40, 0, 0, 30, 20, 15], [30, 10, -10, 20, 15, 10], [20, 20, -20, 10, 10, 5],
+    [10, 10, -10, 0, 5, 0], [0, 0, 0, 0, 0, 0],
   ] as const
   const move = (
     id: string,
-    [J1, J2]: readonly [number, number],
+    [J1, J2, J3, J4, J5, J6]: readonly [number, number, number, number, number, number],
     speedPercentToNext: number,
   ): RobotJobInstructionV1 => ({
     id,
     kind: 'move-joint',
-    jointValues: { J1, J2 },
+    jointValues: { J1, J2, J3, J4, J5, J6 },
     speedPercentToNext,
   })
 
@@ -165,7 +108,7 @@ function createInstructions(): readonly RobotJobInstructionV1[] {
 export function createLogicalIoJobSampleV5(
   options: LogicalIoJobSampleV5Options,
 ): WorkcellProjectV5 {
-  const definition = createSourceOnlyRobotDefinition()
+  const definition = createBuiltinNed2DefinitionV5()
   return validateWorkcellProjectV5({
     schemaVersion: 5,
     projectId: options.projectId,
@@ -175,14 +118,7 @@ export function createLogicalIoJobSampleV5(
       createdAt: options.nowIso,
       updatedAt: options.nowIso,
     },
-    assetReferences: [{
-      id: LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotSourceId,
-      uri: 'builtin://abb/logical-2r@v1',
-      sha256: '0'.repeat(64),
-      byteLength: 1,
-      sourceFileName: 'logical-2r.step',
-      mediaType: 'model/step',
-    }],
+    assetReferences: createBuiltinNed2AssetReferencesV5(),
     scene: {
       frames: [
         { id: 'world', name: 'World', parentFrameId: null, localPose: identityPose(), role: 'world' },
@@ -194,13 +130,13 @@ export function createLogicalIoJobSampleV5(
       id: LOGICAL_IO_JOB_SAMPLE_IDS_V5.controllerId,
       name: 'Logical I/O Controller',
       identification: {
-        manufacturer: 'RobotSimWeb',
-        model: 'Logical Controller',
-        productCode: 'RSW-LOGICAL-CONTROLLER',
-        serialNumber: 'LOGICAL-CONTROLLER-001',
+        manufacturer: 'Niryo',
+        model: 'NED2',
+        productCode: 'NED2',
+        serialNumber: 'NED2-CONTROLLER-DEMO-001',
       },
     }],
-    robots: [createRobotInstance(definition)],
+    robots: [createRobotInstance(definition.id)],
     spatialEntities: [{
       id: LOGICAL_IO_JOB_SAMPLE_IDS_V5.partEntityId,
       name: 'Part',

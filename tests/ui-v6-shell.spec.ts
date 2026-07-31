@@ -30,7 +30,7 @@ test('V6 resizes and restores docks without remounting Main View or losing the a
   const selectedRobotKey = await selectedRobot.getAttribute('data-row-key')
   if (selectedRobotKey === null) throw new Error('Selected Robot did not expose its stable Scene Explorer row key.')
   const mountedSelectedRobot = explorer.locator(`[data-row-key="${selectedRobotKey}"]`)
-  await expect(inspector).toContainText('Logical I/O Robot')
+  await expect(inspector).toContainText('NED2')
   await expect(monitor).toContainText('Logical I/O Pick and Place')
   const mainBefore = await bounds(page.getByTestId('v6-main-view-viewport'))
   expect(mainBefore.width).toBeGreaterThanOrEqual(480)

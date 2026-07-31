@@ -68,8 +68,9 @@ export async function loadV6Demo(page: Page): Promise<void> {
 
 export async function selectV6DemoRobot(page: Page): Promise<Locator> {
   const tree = page.getByRole('tree', { name: 'Scene Explorer' })
-  await tree.getByRole('button', { name: 'Expand Robots' }).click()
-  const robot = tree.getByRole('treeitem', { name: /Logical I\/O Robot/u })
+  const expandRobots = tree.getByRole('button', { name: 'Expand Robots' })
+  if (await expandRobots.isVisible()) await expandRobots.click()
+  const robot = tree.getByRole('treeitem', { name: /^NED2/u })
   await expect(robot).toBeVisible()
   await robot.click()
   await expect(robot).toHaveAttribute('aria-selected', 'true')

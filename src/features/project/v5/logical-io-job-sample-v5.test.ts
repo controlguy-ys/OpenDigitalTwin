@@ -36,13 +36,20 @@ describe('logical I/O Job Project V5 sample', () => {
     expect(project.robotDefinitions[0]).toMatchObject({
       id: LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotDefinitionId,
       assetReferenceIds: [LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotSourceId],
-      joints: [{ id: 'J1' }, { id: 'J2' }],
+      joints: [
+        { id: 'J1' }, { id: 'J2' }, { id: 'J3' },
+        { id: 'J4' }, { id: 'J5' }, { id: 'J6' },
+      ],
     })
-    expect(project.robotDefinitions[0]!.links.every(({ geometryOccurrences }) => geometryOccurrences.length === 0)).toBe(true)
+    expect(project.robotDefinitions[0]!.links.every(({ geometryOccurrences }) => (
+      geometryOccurrences.length === 1
+      && geometryOccurrences[0]!.collisionBoxes.length === 1
+    ))).toBe(true)
     expect(project.robots[0]).toMatchObject({
       id: LOGICAL_IO_JOB_SAMPLE_IDS_V5.robotId,
+      name: 'NED2',
       controllerId: LOGICAL_IO_JOB_SAMPLE_IDS_V5.controllerId,
-      initialJointValues: { J1: 0, J2: 0 },
+      initialJointValues: { J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 },
     })
     expect(project.spatialEntities).toMatchObject([{
       id: LOGICAL_IO_JOB_SAMPLE_IDS_V5.partEntityId,
@@ -59,23 +66,23 @@ describe('logical I/O Job Project V5 sample', () => {
       { namespaceUri: 'urn:robot-sim-web:logical-io-job-sample:v5', identifierType: 'string', identifier: 'Signals.ClampCommand' },
     ])
     expect(job.instructions).toEqual([
-      { id: 'move-1', kind: 'move-joint', jointValues: { J1: 0, J2: 0 }, speedPercentToNext: 30 },
-      { id: 'move-2', kind: 'move-joint', jointValues: { J1: 10, J2: -10 }, speedPercentToNext: 30 },
+      { id: 'move-1', kind: 'move-joint', jointValues: { J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 }, speedPercentToNext: 30 },
+      { id: 'move-2', kind: 'move-joint', jointValues: { J1: 10, J2: -10, J3: 10, J4: 0, J5: 5, J6: 0 }, speedPercentToNext: 30 },
       { id: 'wait-part-present', kind: 'wait-di', signalId: 'signal-part-present', expected: true, timeoutMs: 5_000 },
       { id: 'clamp-on', kind: 'set-do', signalId: 'signal-clamp-command', value: true },
       { id: 'clamp-delay', kind: 'delay', durationMs: 250 },
       { id: 'attach-part', kind: 'attach', objectId: 'entity-part', toolFrameId: 'Tool', objectGraspFrameId: 'part-grasp', maximumDistanceM: 0.05 },
-      { id: 'move-3', kind: 'move-joint', jointValues: { J1: 20, J2: -20 }, speedPercentToNext: 40 },
-      { id: 'move-4', kind: 'move-joint', jointValues: { J1: 30, J2: -30 }, speedPercentToNext: 40 },
-      { id: 'move-5', kind: 'move-joint', jointValues: { J1: 40, J2: -20 }, speedPercentToNext: 40 },
-      { id: 'move-6', kind: 'move-joint', jointValues: { J1: 50, J2: -10 }, speedPercentToNext: 40 },
-      { id: 'move-7', kind: 'move-joint', jointValues: { J1: 40, J2: 0 }, speedPercentToNext: 40 },
-      { id: 'move-8', kind: 'move-joint', jointValues: { J1: 30, J2: 10 }, speedPercentToNext: 40 },
-      { id: 'move-9', kind: 'move-joint', jointValues: { J1: 20, J2: 20 }, speedPercentToNext: 40 },
+      { id: 'move-3', kind: 'move-joint', jointValues: { J1: 20, J2: -20, J3: 20, J4: 10, J5: 10, J6: 5 }, speedPercentToNext: 40 },
+      { id: 'move-4', kind: 'move-joint', jointValues: { J1: 30, J2: -30, J3: 30, J4: 20, J5: 15, J6: 10 }, speedPercentToNext: 40 },
+      { id: 'move-5', kind: 'move-joint', jointValues: { J1: 40, J2: -20, J3: 20, J4: 30, J5: 20, J6: 15 }, speedPercentToNext: 40 },
+      { id: 'move-6', kind: 'move-joint', jointValues: { J1: 50, J2: -10, J3: 10, J4: 40, J5: 25, J6: 20 }, speedPercentToNext: 40 },
+      { id: 'move-7', kind: 'move-joint', jointValues: { J1: 40, J2: 0, J3: 0, J4: 30, J5: 20, J6: 15 }, speedPercentToNext: 40 },
+      { id: 'move-8', kind: 'move-joint', jointValues: { J1: 30, J2: 10, J3: -10, J4: 20, J5: 15, J6: 10 }, speedPercentToNext: 40 },
+      { id: 'move-9', kind: 'move-joint', jointValues: { J1: 20, J2: 20, J3: -20, J4: 10, J5: 10, J6: 5 }, speedPercentToNext: 40 },
       { id: 'detach-part', kind: 'detach', objectId: 'entity-part', targetParentFrameId: 'world' },
       { id: 'clamp-off', kind: 'set-do', signalId: 'signal-clamp-command', value: false },
-      { id: 'move-10', kind: 'move-joint', jointValues: { J1: 10, J2: 10 }, speedPercentToNext: 30 },
-      { id: 'move-11', kind: 'move-joint', jointValues: { J1: 0, J2: 0 }, speedPercentToNext: 30 },
+      { id: 'move-10', kind: 'move-joint', jointValues: { J1: 10, J2: 10, J3: -10, J4: 0, J5: 5, J6: 0 }, speedPercentToNext: 30 },
+      { id: 'move-11', kind: 'move-joint', jointValues: { J1: 0, J2: 0, J3: 0, J4: 0, J5: 0, J6: 0 }, speedPercentToNext: 30 },
     ])
     expect(new Set(job.instructions.map(({ id }) => id)).size).toBe(job.instructions.length)
 

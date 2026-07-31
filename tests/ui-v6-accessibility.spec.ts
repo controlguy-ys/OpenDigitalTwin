@@ -44,7 +44,7 @@ test('V6 supports keyboard dialog flows, themed 200-percent layout, and axe-clea
   const sceneActions = page.getByRole('menu', { name: 'Scene actions' })
   await expect(sceneActions).toBeVisible()
   await sceneActions.getByRole('menuitem', { name: 'Show/Hide' }).press('Enter')
-  await expect(tree.getByRole('button', { name: 'Show Logical I/O Robot' })).toBeVisible()
+  await expect(tree.getByRole('button', { name: 'Show NED2' })).toBeVisible()
   await robot.click()
   await expect(robot).toHaveAttribute('aria-selected', 'true')
 

@@ -36,7 +36,7 @@ test('opens the active Project V5 Settings, modeless Monitor, Binding, and Docke
   await expect(monitor).toBeVisible()
   const robot = await selectV6DemoRobot(page)
   await expect(robot).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByTestId('v6-inspector')).toContainText('Logical I/O Robot')
+  await expect(page.getByTestId('v6-inspector')).toContainText('NED2')
   await expect(monitor).toBeVisible()
   await (await openConnectivityMenu(page)).getByRole('menuitem', { name: 'Binding Overview' }).click()
   await expect(page.getByRole('dialog', { name: 'Binding Overview' })).toBeVisible()

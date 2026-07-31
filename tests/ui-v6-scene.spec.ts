@@ -18,7 +18,7 @@ test('V6 keeps Scene Explorer selection keyboard-operable and routes right click
   const explorerActions = page.getByRole('menu', { name: 'Scene actions' })
   await expect(explorerActions).toHaveAttribute('data-surface', 'explorer')
   await explorerActions.getByRole('menuitem', { name: 'Show/Hide' }).press('Enter')
-  await expect(tree.getByRole('button', { name: 'Show Logical I/O Robot' })).toBeVisible()
+  await expect(tree.getByRole('button', { name: 'Show NED2' })).toBeVisible()
   await robot.click()
   await expect(robot).toHaveAttribute('aria-selected', 'true')
 
@@ -26,7 +26,7 @@ test('V6 keeps Scene Explorer selection keyboard-operable and routes right click
   const viewportActions = page.getByRole('menu', { name: 'Scene actions' })
   await expect(viewportActions).toHaveAttribute('data-surface', 'viewport')
   await viewportActions.getByRole('menuitem', { name: 'Show/Hide' }).click()
-  await expect(tree.getByRole('button', { name: 'Hide Logical I/O Robot' })).toBeVisible()
+  await expect(tree.getByRole('button', { name: 'Hide NED2' })).toBeVisible()
   await robot.click()
   await expect(robot).toHaveAttribute('aria-selected', 'true')
 })
