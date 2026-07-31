@@ -227,9 +227,9 @@ the returned root/child assembly structure. It therefore cannot use one source
 assembly for several Links.
 
 Current imported Link records also use an identity local transform, while the
-built-in ABB loader compensates for Link world origins. Replacing Geometry
+built-in NED2 loader compensates for Link world origins. Replacing Geometry
 without replacing Mechanics can therefore create a Robot with a new shape,
-old CRB15000 dimensions, and an incorrect Zero Pose.
+old NED2 dimensions, and an incorrect Zero Pose.
 
 The current OPC UA path supports six Joint values and one numeric Status value
 per Equipment mapping. It has no six-axis Equipment Transform frame, no
@@ -2061,7 +2061,7 @@ foundation, one shell stage, four feature workstreams, and one release stage.
 ### Integration, Documentation, and Release Gate
 
 1. Run unit, middleware, integration, E2E, CAD, build, and deployment validation.
-2. Verify the real ABB one-file assembly manually and retain a compact synthetic
+2. Verify the real NED2 one-file assembly manually and retain a compact synthetic
    assembly fixture for CI.
 3. Update README, Robot Import operator guidance, OPC UA Connector guidance,
    Simulation Job and Primitive Object guidance, Project format documentation,
@@ -2126,7 +2126,7 @@ foundation, one shell stage, four feature workstreams, and one release stage.
 - Automated real-assembly pipeline validation uses
   `tests/fixtures/robots/fixed-six-axis-test-mechanics.json`. It is explicitly a
   deterministic test Mechanics fixture and makes no vendor-accuracy claim for
-  the CRB15000-10kg/1.52 mechanical dimensions. A production import must select
+  the NED2-10kg/1.52 mechanical dimensions. A production import must select
   a validated Datasheet configuration, Manifest, or operator-entered Mechanics.
 - A fake WebSocket gateway emits deterministic GOOD, BAD, stale, reconnect,
   malformed, jittered, foreground-resume, and out-of-order Equipment Transform
@@ -2136,7 +2136,7 @@ foundation, one shell stage, four feature workstreams, and one release stage.
   tessellated/PMI-only, and fused-body fixtures prove the declared deterministic
   rejection paths. No exporter kinematic metadata supplies Joint Mechanics.
 - Manual verification uses
-  `CRB15000_10kg-152_Omnicore_rev00_ASM_CAD.step` and records its expected
+  `NED2_10kg-152_retired-controller_rev00_ASM_CAD.step` and records its expected
   source/assembly statistics.
 - `tests/robot-assembly-import.spec.ts`, `tests/simulation-jobs.spec.ts`,
   `tests/primitive-object-workflow.spec.ts`, and
@@ -2153,21 +2153,21 @@ foundation, one shell stage, four feature workstreams, and one release stage.
 
 ### 11.1 Robot Import
 
-1. Selecting the actual one-file CRB15000 assembly reports 13,093,130 source
+1. Selecting the actual one-file NED2 assembly reports 13,093,130 source
    bytes, SHA-256
    `4130e05b6287fa47a49d376b6ab3cde3c98306155118d6f6e06751d1067b9ef1`,
    38,299 triangles, nine assembly nodes, seven named Link meshes, and parser
    provenance `occt-import-js 0.0.23`.
 2. Importing that file with the explicitly test-only fixed Mechanics fixture
    creates one source record and exactly seven Link records without labeling the
-   fixture as CRB15000-10kg/1.52 vendor data.
+   fixture as NED2-10kg/1.52 vendor data.
 3. The exported `.wdtwin` contains exactly one STEP entry for that source; raw
    archived STEP bytes equal the unique input bytes rather than seven copies.
 4. At Zero Pose, every rendered Link world AABB matches its parsed source subset
    AABB within 0.5 mm, and compared world matrices match within `1e-6`.
 5. For every `n` from 1 through 6, rotating `Jn` moves exactly the descendant set
    `{LINK0n, ..., LINK06}` and leaves `{LINK00, ..., LINK0(n-1)}` unchanged.
-6. The current seven-file CRB15000 path still produces the built-in Zero Pose,
+6. The current seven-file NED2 path still produces the built-in Zero Pose,
    TCP, Link bounds, and collision proxy bounds within the same tolerances.
 7. A mixed two-through-six source fixture parses each unique source exactly once
    and resolves exactly seven Links.

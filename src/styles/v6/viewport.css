@@ -1,0 +1,29 @@
+.v6-workcell-viewport {
+  background: var(--v6-color-viewport);
+  color: var(--v6-color-text);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.v6-main-view-toolbar {
+  align-items: center;
+  border-bottom: 1px solid var(--v6-color-border);
+  display: flex;
+  justify-content: flex-end;
+  min-height: 40px;
+  padding: 4px;
+}
+
+.v6-main-view-canvas-host { min-height: 0; min-width: 0; position: relative; }
+
+.v6-viewport-overlay { inset: 0; pointer-events: none; position: absolute; }
+.v6-view-cube { align-items: center; background: var(--v6-color-overlay); border: 1px solid var(--v6-color-border); color: var(--v6-color-text); display: flex; height: 40px; justify-content: center; pointer-events: auto; position: absolute; right: 12px; top: 12px; width: 40px; }
+.v6-camera-orientations { display: grid; gap: 4px; grid-template-columns: repeat(3, 32px); pointer-events: auto; position: absolute; right: 60px; top: 12px; }
+.v6-camera-controls { display: grid; gap: 4px; pointer-events: auto; position: absolute; right: 12px; top: 60px; }
+.v6-camera-controls button,
+.v6-camera-orientations button { min-height: 32px; min-width: 32px; }
+.v6-transform-explanation { color: var(--v6-color-muted); font-size: 0.75rem; max-width: 14rem; pointer-events: auto; }
+.v6-tcp-marker { background: var(--v6-color-overlay); border: 1px solid var(--v6-color-selection); color: var(--v6-color-text); left: 12px; padding: 4px 8px; pointer-events: none; position: absolute; top: 12px; }

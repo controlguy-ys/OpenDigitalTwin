@@ -82,8 +82,8 @@ truncated.
 
 ## Limits and safety boundary
 
-This feature is a deterministic geometry query, not physics, RobotWare,
-SafeMove, a controller collision monitor, or safety-rated validation. It does
+This feature is a deterministic geometry query, not physics, vendor controller software,
+vendor safety system, a controller collision monitor, or safety-rated validation. It does
 not calculate mass, gravity, inertia, torque, friction, rebound, stopping
 distance, cable interference, tool deformation, or swept triangle contact.
 Only configured Box/Compound-Box proxies are tested. Always validate the real

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the approved RobotStudio-informed Menu Bar, Ribbon Lite, shared command execution, independent Active Robot and Job context, and persistent resizable Docked Studio workspace without exposing unsupported RobotSim capabilities.
+**Goal:** Deliver the approved vendor desktop software-informed Menu Bar, Ribbon Lite, shared command execution, independent Active Robot and Job context, and persistent resizable Docked Studio workspace without exposing unsupported RobotSim capabilities.
 
 **Architecture:** The interaction store owns Active Robot and Job identity independently from Scene selection. A versioned Shell layout store and pure geometry resolver own browser-local dock state, while a shared command registry/runtime provides one execution and pending/error path to Menu Bar, Ribbon, Context Menu, existing buttons, and keyboard surfaces. App.tsx remains the composition root; feature services retain domain validation.
 
@@ -14,7 +14,7 @@
 - Use Node >=22.15.1 <23 and npm >=11.4.2 <12.
 - Global menu order is Project, Home, Model, Job, Simulation, Connectivity, View, Help.
 - First-stage Quick Access exposes Save, Start Active Job, and Cancel Active Robot Job only.
-- Do not display Undo, Redo, Save As, Recent Projects, STEP Import, Robot Geometry authoring, Coordinate Frames, OPC UA Client or Bridge, RAPID, Add-Ins, Pause, Resume, Simulation Reset, Run From Here, or Pose-step Context Bar commands until their V4 service contracts exist. Scene Copy/Paste/Reset Pose remains supported through the existing transform clipboard and Scene command service. View > Reset Layout remains required.
+- Do not display Undo, Redo, Save As, Recent Projects, STEP Import, Robot Geometry authoring, Coordinate Frames, OPC UA Client or Bridge, vendor programming language, Add-Ins, Pause, Resume, Simulation Reset, Run From Here, or Pose-step Context Bar commands until their V4 service contracts exist. Scene Copy/Paste/Reset Pose remains supported through the existing transform clipboard and Scene command service. View > Reset Layout remains required.
 - Keep Active Robot independent from Scene selection; Object selection never clears or retargets it.
 - Start, Cancel, Robot Home, Gripper, and Save Pose target only the explicit Active Robot and selected Job.
 - Preserve a minimum 480 CSS-pixel central Viewport on wide and compact layouts.

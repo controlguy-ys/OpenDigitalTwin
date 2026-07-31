@@ -29,6 +29,8 @@ interface MinimalProjectOptionsV4 {
   readonly scaledTransforms?: boolean
 }
 
+export const MINIMAL_PROJECT_V4_CONFIG_REVISION = '106a18500c4e699b4c7e02787497ebb5486016eb757c3d6152593a574ff65428' as const
+
 const ZERO_STATISTICS: GeometryStatisticsV4 = {
   vertices: 0,
   triangles: 0,
@@ -115,7 +117,7 @@ function makeDefinition(
   return {
     id: `definition-${index}`,
     name: `Robot Definition ${index}`,
-    manufacturer: 'ABB',
+    manufacturer: 'Generic',
     model: `Model ${index}`,
     assetReferenceIds,
     sourceConventions: Object.fromEntries(assetReferenceIds.map((assetId) => [assetId, {

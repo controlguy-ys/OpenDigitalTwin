@@ -10,9 +10,9 @@ Turn the approved Docked Studio layout into a reusable industrial Web Digital
 Twin workspace with a discoverable Menu Bar, a compact contextual command row,
 and resizable Scene, Inspector, and Timeline areas.
 
-The design borrows RobotStudio's activity-oriented navigation and docked work
-areas without copying its full desktop Ribbon or implying unsupported ABB
-Controller, RAPID, RobotWare, Add-In, or safety functionality.
+The design uses activity-oriented navigation and docked work areas without
+copying a vendor desktop UI or implying unsupported controller, programming,
+extension, or safety functionality.
 
 This stage defines UI information architecture and command ownership. It does
 not implement new Robot, STEP, Job, Collision, or OPC UA capabilities merely
@@ -25,27 +25,21 @@ that documented behavior as already implemented.
 
 ## Research basis
 
-The following official ABB references were used:
-
-- [RobotStudio 2026.1 Operating Manual, revision BA](https://library.e.abb.com/public/e5b8383d22fd40ea9e2510cd23a8e911/3HAC032104-001_en_BA_Operating%20manual%20-%20RobotStudio.pdf)
-- [RobotStudio Developer Center: Ribbon Area](https://developercenter.robotstudio.com/api/robotstudio/articles/Concepts/Appearances/RibbonElements.html)
-- [RobotStudio Developer Center: Dockable Areas](https://developercenter.robotstudio.com/api/robotstudio/articles/Concepts/Appearances/DockableControls.html)
-
-RobotStudio organizes work as Ribbon tabs, groups, and controls. File commands
-use a Backstage-style application area, while Home, Modeling, Simulation,
-Controller, and RAPID separate major activities. Its desktop workspace uses
-dockable Tree, Properties, and horizontal output areas.
+The workspace follows general industrial-desktop conventions: activity-oriented
+commands, a file-oriented application area, and dockable Tree, Properties, and
+horizontal output areas. The implementation retains only the application
+behaviors explicitly specified below.
 
 RobotSim adopts those structural principles but changes the vocabulary where
 the product differs:
 
-- `Project` replaces RobotStudio's desktop `File` Backstage.
+- `Project` replaces vendor desktop software's desktop `File` Backstage.
 - `Connectivity` replaces `Controller` because RobotSim exposes runtime source
-  and OPC UA integration rather than RobotWare Controller administration.
+  and OPC UA integration rather than vendor controller software Controller administration.
 - `Job` remains the project's established term for an ordered Pose sequence.
-  It is not RobotStudio Fleet Management Jobs; UI help describes it as
+  It is not vendor desktop software Fleet Management Jobs; UI help describes it as
   `Job - Pose sequence`.
-- `RAPID` and `Add-Ins` are not shown until real corresponding capabilities
+- `vendor programming language` and `Add-Ins` are not shown until real corresponding capabilities
   exist.
 
 ## Approved decisions
@@ -79,8 +73,8 @@ the product differs:
 
 ## Explicit exclusions
 
-- No full RobotStudio Ribbon clone or Backstage clone.
-- No RAPID editor, RobotWare configuration, Controller authentication,
+- No full vendor desktop software Ribbon clone or Backstage clone.
+- No vendor programming language editor, vendor controller software configuration, Controller authentication,
   Controller installation, Backup/Restore, online deployment, or Add-In store.
 - No Undo/Redo until a shared history contract exists.
 - No Save As or Recent Projects until the Project persistence contract supports
@@ -686,7 +680,7 @@ rules.
 - Menu Bar, Ribbon Lite, Context Menu, existing buttons, and shortcuts share one
   command ID and execution path.
 - Robot, Object, and Job selection exposes only relevant Context Bar commands.
-- Unsupported RobotStudio-like functionality is not implied by visible UI.
+- Unsupported vendor desktop software-like functionality is not implied by visible UI.
 - Left Sidebar, Inspector, Bottom Workspace, and Scene-to-Job split are
   adjustable, persistent, collapsible, and resettable.
 - The layout remains usable without application-level scrolling at all approved

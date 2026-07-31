@@ -1,5 +1,5 @@
 {
-  "name": "crb15000-robot-sim-web",
+  "name": "open-digital-twin",
   "private": true,
   "version": "0.1.0",
   "license": "MIT",
@@ -26,7 +26,7 @@
     "test:gateway": "vitest run middleware/runtime-gateway src/features/runtime-gateway/v4",
     "test:opcua-server-model": "vitest run middleware/runtime-gateway/opcua-nodeset-contract.test.ts middleware/runtime-gateway/opcua-robotics-projection.test.ts middleware/runtime-gateway/opcua-robotics-model.test.ts middleware/runtime-gateway/opcua-openweb-model.test.ts middleware/runtime-gateway/opcua-command-staging.test.ts middleware/runtime-gateway/browser-publisher-lease.test.ts middleware/runtime-gateway/browser-command-dispatch.test.ts middleware/runtime-gateway/integration-diagnostics.test.ts middleware/runtime-gateway/opcua-server-model.integration.test.ts src/core/runtime-protocol/integration-diagnostics-v1.test.ts src/features/runtime-gateway/v5/runtime-gateway-command-owner.test.ts",
     "test:demo:opcua": "vitest run scripts/demo-opcua-server",
-    "test:connectivity-ui": "vitest run src/features/connectivity/v5 src/features/runtime-gateway/runtime-gateway-status-poller.test.ts src/features/runtime-gateway/v5/runtime-integration-diagnostics-client.test.ts src/features/ui/v4/StudioHeaderV4.test.tsx src/app/v5",
+    "test:connectivity-ui": "vitest run src/features/connectivity/v5 src/features/runtime-gateway/runtime-gateway-status-poller.test.ts src/features/runtime-gateway/v5/runtime-integration-diagnostics-client.test.ts src/features/ui/v4/StudioHeaderV4.test.tsx",
     "test:job-io": "vitest run src/core/project-v5 src/core/robot-runtime-v5 src/core/action-runtime-v5 src/core/runtime-protocol/v1.test.ts src/features/project/v5 src/features/signals/v5 src/features/runtime-gateway/v5 src/features/robot/v5 src/features/jobs/v5 src/features/actions/v5 src/features/scene/v5 middleware/runtime-gateway/opcua-client-read-plan.test.ts middleware/runtime-gateway/opcua-client-write-service.test.ts middleware/runtime-gateway/runtime-command-dedupe-registry.test.ts middleware/runtime-gateway/runtime-command-service.test.ts middleware/runtime-gateway/opcua-client-write.integration.test.ts",
     "test:coverage": "vitest run --coverage",
     "benchmark:mechanism-tree-fk": "tsx scripts/performance/mechanism-tree-fk-benchmark.ts",
@@ -35,7 +35,6 @@
     "verify:codex": "node scripts/codex/verify-codex.mjs",
     "verify:p1": "npm run test:run -- src/core src/features/project/v4 middleware/runtime-gateway && npm run lint && npm run build:gateway && node dist-gateway/middleware/runtime-gateway/main.js --check-config && npm run build",
     "verify:v5-core": "npm run test:run -- src/core/project-v5 src/features/project/v5 && npm run lint && npm run build:gateway && npm run build",
-    "cad:convert": "tsx scripts/cad/convert-robot.ts",
     "cad:validate": "tsx scripts/cad/validate-robot-assets.ts",
     "deploy:validate": "node scripts/deployment/validate-deployment.mjs",
     "deploy:build": "docker compose build",
@@ -45,7 +44,8 @@
     "test:e2e:viewport": "playwright test tests/viewport-context-viewcube.spec.ts",
     "test:e2e:layout": "playwright test tests/docked-ribbon-layout.spec.ts",
     "test:e2e:v5": "playwright test tests/project-v5-browser-cutover.spec.ts tests/opcua-settings-monitor.spec.ts tests/mechanism-tree-viewport-fixtures.spec.ts",
-    "test:e2e": "npm run test:e2e:v5",
+    "test:e2e:v6": "playwright test tests/ui-v6-shell.spec.ts tests/ui-v6-scene.spec.ts tests/ui-v6-jobs.spec.ts tests/ui-v6-connectivity.spec.ts tests/ui-v6-accessibility.spec.ts",
+    "test:e2e": "npm run test:e2e:v6",
     "verify": "npm run lint && npm run test:run && npm run cad:validate && npm run deploy:validate && npm run build:gateway && node dist-gateway/middleware/runtime-gateway/main.js --check-config && npm run build && npm run test:e2e"
   },
   "dependencies": {
@@ -58,6 +58,7 @@
     "node-opcua": "2.175.0",
     "node-opcua-nodesets": "2.174.0",
     "occt-import-js": "0.0.23",
+    "pretendard": "1.3.9",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "saxes": "6.0.0",
@@ -66,7 +67,7 @@
     "zustand": "5.0.14"
   },
   "devDependencies": {
-    "@gltf-transform/core": "4.4.1",
+    "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.61.1",
     "@testing-library/dom": "10.4.1",
     "@testing-library/jest-dom": "6.9.1",

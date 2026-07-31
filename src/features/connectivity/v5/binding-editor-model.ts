@@ -38,6 +38,10 @@ export interface BindingMappingDraftV1 {
   readonly leafTemplates: readonly OpcUaMappingLeafV5[]
 }
 
+export interface SaveBindingMappingOptionsV1 {
+  readonly suggestedTagName?: string
+}
+
 function targetKey(target: OpcUaProjectTargetV5): string {
   if (target.type === 'robot-joint') return JSON.stringify([target.type, target.robotId, target.jointId])
   if (target.type === 'robot-frame') return JSON.stringify([target.type, target.robotId, target.frameId])
@@ -358,6 +362,7 @@ function withOwner(
 export function saveBindingMappingV1(
   project: WorkcellProjectV5,
   draft: BindingMappingDraftV1,
+  options: SaveBindingMappingOptionsV1 = {},
 ): WorkcellProjectV5 {
   const mapping = mappingFromBindingDraftV1(draft)
   const index = project.opcUa.mappings.findIndex(({ id }) => id === mapping.id)
@@ -368,10 +373,25 @@ export function saveBindingMappingV1(
     ...project,
     opcUa: { ...project.opcUa, mappings },
   }
-  if (mapping.direction !== 'write') {
-    return withOwner(configured, draft.target, `opcua:${mapping.endpointId}`)
+  const owned = mapping.direction !== 'write'
+    ? withOwner(configured, draft.target, `opcua:${mapping.endpointId}`)
+    : configured
+  if (draft.target.type !== 'entity-frame' && draft.target.type !== 'entity-status') return owned
+  const entityId = draft.target.entityId
+  return {
+    ...owned,
+    spatialEntities: owned.spatialEntities.map((entity) => entity.id === entityId
+      ? {
+          ...entity,
+          enableComms: true,
+          ...(entity.tagName === undefined || entity.tagName.trim().length === 0
+            ? options.suggestedTagName === undefined || options.suggestedTagName.trim().length === 0
+              ? {}
+              : { tagName: options.suggestedTagName }
+            : {}),
+        }
+      : entity),
   }
-  return configured
 }
 
 export function removeBindingMappingV1(

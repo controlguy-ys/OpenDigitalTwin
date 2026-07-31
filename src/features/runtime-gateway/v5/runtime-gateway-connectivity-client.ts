@@ -12,7 +12,17 @@ import {
   type PublishedProjectV5,
 } from '../../project/v5/project-v5-publication.js'
 import type { RuntimeProjectAuthorityV1 } from '../../../core/runtime-protocol/project-activation-v1.js'
-import { validateOpcUaNamespaceIndexResponseV1, validateOpcUaTestConnectionResultV1, type OpcUaNamespaceIndexResponseV1, type OpcUaTestConnectionResultV1 } from '../../../core/runtime-protocol/opcua-connectivity-v1.js'
+import {
+  validateOpcUaAddressSpaceBrowseReleaseRequestV1,
+  validateOpcUaAddressSpaceBrowseRequestV1,
+  validateOpcUaAddressSpaceBrowseResponseV1,
+  validateOpcUaNamespaceIndexResponseV1,
+  validateOpcUaTestConnectionResultV1,
+  type OpcUaAddressSpaceBrowseRequestV1,
+  type OpcUaAddressSpaceBrowseResponseV1,
+  type OpcUaNamespaceIndexResponseV1,
+  type OpcUaTestConnectionResultV1,
+} from '../../../core/runtime-protocol/opcua-connectivity-v1.js'
 import { validateRuntimeGatewayErrorEnvelopeV1 } from '../../../core/runtime-protocol/gateway-error-envelope-v1.js'
 
 const RESPONSE_LIMIT_BYTES = 64 * 1024
@@ -42,6 +52,7 @@ export interface PreparedRuntimeGatewayProjectV1 {
   readonly projectRevisionId: string
   readonly configRevision: string
 }
+export type RuntimeGatewayAddressSpaceBrowseRequestV1 = Omit<OpcUaAddressSpaceBrowseRequestV1, 'type' | 'protocolVersion'>
 
 export interface RuntimeGatewayConnectivityClientV1Options {
   readonly fetch?: (input: string, init: RequestInit) => Promise<Response>
@@ -53,6 +64,8 @@ export interface RuntimeGatewayConnectivityClientV1Options {
 export interface RuntimeGatewayConnectivityClientV1 extends ProjectV5GatewayPublicationPort<PreparedRuntimeGatewayProjectV1> {
   testConnection(endpoint: OpcUaEndpointV5, signal?: AbortSignal): Promise<OpcUaTestConnectionResultV1>
   resolveNamespaceIndex(endpointId: string, namespaceUri: string, signal?: AbortSignal): Promise<OpcUaNamespaceIndexResponseV1>
+  browseAddressSpace(request: RuntimeGatewayAddressSpaceBrowseRequestV1, signal?: AbortSignal): Promise<OpcUaAddressSpaceBrowseResponseV1>
+  releaseAddressSpaceBrowse(continuationToken: string, signal?: AbortSignal): Promise<void>
 }
 
 interface CandidateRecord {
@@ -298,6 +311,24 @@ export function createRuntimeGatewayConnectivityClientV1(
     },
     async resolveNamespaceIndex(endpointId: string, namespaceUri: string, signal?: AbortSignal): Promise<OpcUaNamespaceIndexResponseV1> {
       try { const response = validateOpcUaNamespaceIndexResponseV1(await request('/opcua/namespace-index', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'opcua-namespace-index-request-v1', protocolVersion: 1, endpointId, namespaceUri }) }, signal)); if (response.endpointId !== endpointId || response.namespaceUri !== namespaceUri) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_INVALID', 'Runtime Gateway namespace response does not match the request.'); return response } catch (error) { if (isRuntimeGatewayConnectivityClientV1Error(error) || (error instanceof Error && error.name === 'AbortError')) throw error; throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_INVALID', 'Runtime Gateway returned an invalid namespace diagnostic.', null, error) }
+    },
+    async browseAddressSpace(input: RuntimeGatewayAddressSpaceBrowseRequestV1, signal?: AbortSignal): Promise<OpcUaAddressSpaceBrowseResponseV1> {
+      let browse: OpcUaAddressSpaceBrowseRequestV1
+      try { browse = validateOpcUaAddressSpaceBrowseRequestV1({ type: 'opcua-address-space-browse-request-v1', protocolVersion: 1, ...input }) } catch (error) { throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_REQUEST_INVALID', 'Address Space browse request is invalid.', null, error) }
+      try {
+        const response = validateOpcUaAddressSpaceBrowseResponseV1(await request('/opcua/browse', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(browse) }, signal))
+        if (response.endpointId !== browse.endpointId || response.parentNodeId !== (browse.parentNodeId ?? 'ns=0;i=85')) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_INVALID', 'Runtime Gateway browse response does not match the request.')
+        return response
+      } catch (error) {
+        if (isRuntimeGatewayConnectivityClientV1Error(error) || (error instanceof Error && error.name === 'AbortError')) throw error
+        throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_INVALID', 'Runtime Gateway returned an invalid Address Space browse response.', null, error)
+      }
+    },
+    async releaseAddressSpaceBrowse(continuationToken: string, signal?: AbortSignal): Promise<void> {
+      let release: ReturnType<typeof validateOpcUaAddressSpaceBrowseReleaseRequestV1>
+      try { release = validateOpcUaAddressSpaceBrowseReleaseRequestV1({ type: 'opcua-address-space-browse-release-request-v1', protocolVersion: 1, continuationToken }) } catch (error) { throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_REQUEST_INVALID', 'Address Space continuation token is invalid.', null, error) }
+      const result = await request('/opcua/browse/release', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify(release) }, signal)
+      if (result === null || typeof result !== 'object' || Array.isArray(result) || Object.keys(result).length !== 1 || Object.getOwnPropertyDescriptor(result, 'released')?.value !== true) throw new RuntimeGatewayConnectivityClientV1Error('RUNTIME_GATEWAY_RESPONSE_INVALID', 'Runtime Gateway returned an invalid browse release response.')
     },
   })
 }

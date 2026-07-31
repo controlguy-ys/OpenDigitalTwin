@@ -1163,4 +1163,4 @@ git status --short
 git commit -m "feat: complete explicit pick and place actions"
 ```
 
-Before committing, confirm `git status --short` does not stage `Savvy/`, `CRB15000_10kg-152_OmniCore_rev00_STEP_C/`, or `CRB15000_12kg-127_OmniCore_rev00_STEP_J.premerge-backup-20260713/`.
+Before committing, confirm `git status --short` does not stage `Savvy/`, `NED2_10kg-152_retired-controller_rev00_STEP_C/`, or `NED2_12kg-127_retired-controller_rev00_STEP_J.premerge-backup-20260713/`.

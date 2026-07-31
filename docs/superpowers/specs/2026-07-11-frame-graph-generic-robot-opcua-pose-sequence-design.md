@@ -13,13 +13,13 @@ contracts below unambiguous and executable.
 
 ## 1. Purpose
 
-Extend the current CRB15000 browser simulation so operators can place robots,
+Extend the current NED2 browser simulation so operators can place robots,
 machines, tools, coordinate frames, and equipment at non-fixed poses; import
 other robot mechanisms; apply versioned mechanical-dimension overrides; ingest
 joint positions from OPC UA in addition to Simulation Mode; and reorder poses
 with velocity-limit-aware segment speeds.
 
-The extension preserves the current supplied CRB15000 STEP geometry as the
+The extension preserves the current supplied NED2 STEP geometry as the
 first built-in robot while removing runtime assumptions that every robot has
 exactly six joints named J1 through J6 or seven links named LINK00 through
 LINK06.
@@ -54,8 +54,7 @@ machine systems rather than hard-coding vendor-specific names. References:
 
 - ISO 9787 robot coordinate systems:
   https://www.iso.org/standard/59444.html
-- ABB RobotStudio world, base, task, tool, and workobject frames:
-  https://library.e.abb.com/public/425d1cfdb2ed475eadc6229a1588fb92/3HAC032104%20OM%20RobotStudio-en.pdf
+- A vendor-neutral World, base, task, tool, and workobject frame hierarchy.
 - B&R frame hierarchy for Machine-Centric Robotics:
   https://www.br-automation.com/tr/hakkimizda/basin-odasi/in-sync-with-robots-15-04-2019/
 - Siemens machine and workpiece coordinate systems:
@@ -437,18 +436,18 @@ generated collision approximation, retained palette-only colors, and converted
 source units. A failed transaction leaves the previously active robot and
 assets unchanged.
 
-### 10.4 CRB15000 migration
+### 10.4 NED2 migration
 
-The current CRB15000 joint origins, axes, limits, link assets, world-origin
+The current NED2 joint origins, axes, limits, link assets, world-origin
 localization, flange rotation, and material metadata become a committed built-in
 `RobotDefinitionV1`. Its exact definition ID/revision are
-`crb15000-12kg-127`/`builtin-v1`; the default instance ID is `crb15000-01`.
+`NED2-12kg-127`/`builtin-v1`; the default instance ID is `NED2-01`.
 Migration must prove that:
 
 - zero pose reproduces the current assembled bounds;
 - the six current joint motions produce the same link transforms;
 - the current gripper/TCP and deterministic Cup 01 pick fixture remain valid;
-- any non-empty retiring same-runtime CRB15000 Pose snapshot converts without
+- any non-empty retiring same-runtime NED2 Pose snapshot converts without
   angle changes; a cold upgrade fabricates no legacy Pose row;
 - existing collision bounds remain aligned.
 
@@ -723,7 +722,7 @@ Dexie stores separate versioned records for:
 
 Hydration is single-flight and StrictMode-safe. Corrupt records are isolated per
 row and reported without preventing valid records from loading. Schema
-migrations copy the current CRB15000 state to the built-in definition. The
+migrations copy the current NED2 state to the built-in definition. The
 baseline did not persist legacy fixed-six keyframes, so a cold upgrade has no
 durable Pose row to recover and must not fabricate one. A same-runtime retiring
 memory snapshot, when non-empty, is converted once to joint-ID records through
@@ -760,7 +759,7 @@ remain intact.
 - Multi-geometry pose/scale retention, link-level collision overrides, and
   definition-local to instance-namespaced frame materialization.
 - Mechanical override composition and immutable nominal definitions.
-- CRB15000 zero-pose and known joint-transform parity before and after
+- NED2 zero-pose and known joint-transform parity before and after
   migration.
 - STEP Manifest and resolved URDF adapter fixtures.
 - Import transaction rollback and corrupt-row isolation.
@@ -805,7 +804,7 @@ After this specification is approved as a file, SOL-Ultra planning produces
 four implementation plans in dependency order:
 
 1. Frame Graph and manual coordinates.
-2. Generic RobotDefinition, CRB15000 migration, import, and mechanical editor.
+2. Generic RobotDefinition, NED2 migration, import, and mechanical editor.
 3. Dynamic JointSource and read-only OPC UA gateway.
 4. Velocity-aware Pose Sequence ordering and persistence.
 
@@ -823,7 +822,7 @@ The extension is complete only when:
 2. Robot Base, named TCPs, fixtures, workobjects, sensors, and equipment are
    manually editable relative to selectable frames and persist after reload.
 3. Derived joint/link/flange frames remain consistent with forward kinematics.
-4. The supplied CRB15000 retains its current geometry, zero pose, joint
+4. The supplied NED2 retains its current geometry, zero pose, joint
    behavior, collision behavior, and gripper behavior. Any non-empty retiring
    same-runtime fixed-six Pose snapshot converts exactly from degrees to radians
    without changing its physical joint angles; all

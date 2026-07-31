@@ -539,7 +539,7 @@ Expected: all tests pass for absent pointer, stable restore, valid target, corru
 - src/features/project/v4/browser-project-runtime-v4.test.ts — covers all apply failure points, Geometry generations, triangle limits, UNRESOLVED state, notification ordering, and Job-clock lifecycle.
 - src/features/project/v4/project-v4-mutation-service.ts — serializes hydrate, replacement, and immutable active-Project recipes over the P1 coordinator.
 - src/features/project/v4/project-v4-mutation-service.test.ts — covers target-wins hydrate, exact-token finalize and compensation, recovery latch, recipe CAS, and failure preservation.
-- src/features/project/v4/default-project-v4.ts — builds the one-Robot built-in CRB default Project.
+- src/features/project/v4/default-project-v4.ts — builds the one-Robot built-in NED2 default Project.
 - src/features/project/v4/default-project-v4.test.ts — proves default validity and exact initial ownership.
 - src/features/project/v4/project-store-v4.ts — exposes V4 hydrate, New, Save, Export, and Import state.
 - src/features/project/v4/project-store-v4.test.ts — covers identity creation, canonical JSON, rejection, reload, and status behavior.
@@ -568,7 +568,7 @@ Expected: all tests pass for absent pointer, stable restore, valid target, corru
 - src/features/project/v4/project-v4-repository.ts
 - src/features/project/v4/project-v4-publication.ts
 - src/features/project/v4/project-mutation-port.ts
-- src/features/robot/v4/builtin-crb-definition.ts
+- src/features/robot/v4/builtin-ned2-definition.ts
 - src/features/robot/v4/robot-runtime-registry.ts
 - src/features/scene/v4/scene-runtime-selector.ts
 - src/features/scene/v4/scene-runtime-store.ts
@@ -887,13 +887,13 @@ No unversioned aliases are exported. The raw stores and raw Geometry repository 
 - Test: src/features/project/v4/project-store-v4.test.ts
 
 **Interfaces:**
-- Consumes: WorkcellProjectV4, createBuiltinCrbDefinitionV4, ProjectMutationServiceV4, encodeProjectV4, and decodeProjectV4.
+- Consumes: WorkcellProjectV4, createBuiltinNed2DefinitionV4, ProjectMutationServiceV4, encodeProjectV4, and decodeProjectV4.
 - Produces: createDefaultProjectV4, ProjectStoreStateV4, and createProjectStoreV4.
 
 - [ ] **Step 1: Write the failing default-Project test**
 
 ~~~ts
-it('creates a valid one-Robot CRB Project with independent identities', () => {
+it('creates a valid one-Robot NED2 Project with independent identities', () => {
   const project = createDefaultProjectV4({
     projectId: 'project-default',
     revisionId: 'revision-default',
@@ -927,7 +927,7 @@ Expected: FAIL because default-project-v4.ts does not exist.
 
 - [ ] **Step 3: Implement the smallest valid default factory**
 
-The factory accepts explicit projectId, revisionId, and nowIso values. Reuse the built-in CRB Definition, create one Robot instance, create only the world and MCP Scene entities required by the schema, and create one empty Job owned by that Robot. Do not add the table or any path-bearing imported asset.
+The factory accepts explicit projectId, revisionId, and nowIso values. Reuse the built-in NED2 Definition, create one Robot instance, create only the world and MCP Scene entities required by the schema, and create one empty Job owned by that Robot. Do not add the table or any path-bearing imported asset.
 
 - [ ] **Step 4: Run the default test and confirm GREEN**
 
@@ -1039,7 +1039,7 @@ it('keeps raw stores private and registers unresolved Geometry explicitly', asyn
 })
 ~~~
 
-Also prove that the built-in CRB resolver returns its prepared bundle, each candidate Project receives its own Job executor and playback controller, and no browser export exposes a raw store or an unversioned alias.
+Also prove that the built-in NED2 resolver returns its prepared bundle, each candidate Project receives its own Job executor and playback controller, and no browser export exposes a raw store or an unversioned alias.
 
 - [ ] **Step 2: Run the browser-root test and confirm RED**
 
@@ -1053,7 +1053,7 @@ Expected: FAIL because the browser module still exports the V3 resource graph.
 
 - [ ] **Step 3: Replace the browser singleton atomically**
 
-Construct database, repository, barrier, raw stores, gated facades, Geometry repository, browser runtime, publication coordinator, mutation service, command services, and Project store inside createBrowserProjectResourcesV4. Capture raw stores only in that closure. Resolve builtin://crb15000 through the checked-in CRB geometry bundle; stage every other unavailable logical source as UNRESOLVED. Export only the interfaces in BrowserProjectResourcesV4 and one production singleton.
+Construct database, repository, barrier, raw stores, gated facades, Geometry repository, browser runtime, publication coordinator, mutation service, command services, and Project store inside createBrowserProjectResourcesV4. Capture raw stores only in that closure. Resolve builtin://NED2 through the checked-in NED2 geometry bundle; stage every other unavailable logical source as UNRESOLVED. Export only the interfaces in BrowserProjectResourcesV4 and one production singleton.
 
 - [ ] **Step 4: Run the browser-root test and confirm GREEN**
 
@@ -1300,7 +1300,7 @@ Run:
 git status --short
 git diff --stat
 git diff --name-only
-git status --short --untracked-files=all -- CRB15000_12kg-127_OmniCore_rev00_STEP_J Savvy
+git status --short --untracked-files=all -- NED2_12kg-127_retired-controller_rev00_STEP_J Savvy
 ~~~
 
 Expected: only the Task 1-6 files in this plan are staged for review; the CAD paths print no changes. Stage the exact reviewed source, test, and plan paths, inspect git diff --cached --check and git diff --cached --stat, then commit:

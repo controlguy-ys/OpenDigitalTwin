@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 
 import { createDualRobotSampleV4 } from '../src/features/project/v4/dual-robot-sample-v4.js'
 
-const CRB_NAME = 'ABB CRB15000'
+const PRIMARY_ROBOT_NAME = 'NED2'
 const SLIDE_NAME = 'Logical Linear Slide'
 
 async function importProject(
@@ -95,13 +95,15 @@ test('imports and operates the two-Robot V4 sample independently', async ({ page
   await ensurePanelVisible(page, 'Inspector', 'Inspector drawer')
 
   const sceneTree = page.getByRole('tree', { name: 'Scene Objects' })
-  await expect(sceneTree.getByRole('treeitem', { name: CRB_NAME, exact: true })).toBeVisible()
+  await expect(
+    sceneTree.getByRole('treeitem', { name: PRIMARY_ROBOT_NAME, exact: true }),
+  ).toBeVisible()
   await expect(sceneTree.getByRole('treeitem', { name: SLIDE_NAME, exact: true })).toBeVisible()
 
-  await selectRobot(sceneTree, CRB_NAME)
-  const crbJ1 = jointInput(page, CRB_NAME, 'J1')
-  await expect(crbJ1).toBeVisible()
-  const crbJ1Before = Number(await crbJ1.inputValue())
+  await selectRobot(sceneTree, PRIMARY_ROBOT_NAME)
+  const primaryRobotJ1 = jointInput(page, PRIMARY_ROBOT_NAME, 'J1')
+  await expect(primaryRobotJ1).toBeVisible()
+  const primaryRobotJ1Before = Number(await primaryRobotJ1.inputValue())
 
   await selectRobot(sceneTree, SLIDE_NAME)
   const slideJoint = jointInput(page, SLIDE_NAME, 'SLIDE_X')
@@ -110,12 +112,15 @@ test('imports and operates the two-Robot V4 sample independently', async ({ page
   await slideJoint.press('Enter')
   await expectNumericValue(slideJoint, 0.6)
 
-  await selectRobot(sceneTree, CRB_NAME)
-  await expectNumericValue(jointInput(page, CRB_NAME, 'J1'), crbJ1Before)
+  await selectRobot(sceneTree, PRIMARY_ROBOT_NAME)
+  await expectNumericValue(
+    jointInput(page, PRIMARY_ROBOT_NAME, 'J1'),
+    primaryRobotJ1Before,
+  )
   const technicalDemo = page
     .getByRole('tree', { name: 'Robot Jobs' })
     .getByRole('treeitem', {
-      name: 'CRB 12-Pose Technical Demo, 12 steps, 12 Joint Poses',
+      name: 'NED2 12-Pose Technical Demo, 12 steps, 12 Joint Poses',
       exact: true,
     })
   await expect(technicalDemo).toBeVisible()
@@ -125,26 +130,26 @@ test('imports and operates the two-Robot V4 sample independently', async ({ page
   await expect(page.getByRole('region', { name: 'Bottom Workspace' })).toBeVisible()
   await expect(page.locator('.timeline-track ol[aria-label="Job steps"] > li')).toHaveCount(12)
 
-  const crbStatus = page.getByRole('status', { name: 'Robot Job state' })
-  const crbStart = page
+  const primaryRobotStatus = page.getByRole('status', { name: 'Robot Job state' })
+  const primaryRobotStart = page
     .getByRole('region', { name: 'Robot Jobs' })
     .getByRole('button', { name: 'Start Job' })
-  await expect(crbStart).toBeEnabled()
-  await crbStart.click()
-  await expect(crbStatus).toContainText('RUNNING')
-  await expect.poll(async () => Number(await crbJ1.inputValue()), {
+  await expect(primaryRobotStart).toBeEnabled()
+  await primaryRobotStart.click()
+  await expect(primaryRobotStatus).toContainText('RUNNING')
+  await expect.poll(async () => Number(await primaryRobotJ1.inputValue()), {
     intervals: [50],
     timeout: 5_000,
   }).toBeGreaterThan(50)
-  await expect.poll(async () => Number(await crbJ1.inputValue()), {
+  await expect.poll(async () => Number(await primaryRobotJ1.inputValue()), {
     intervals: [50],
     timeout: 8_000,
   }).toBeLessThan(-50)
-  await expect(crbStatus).toContainText('SUCCEEDED', { timeout: 20_000 })
+  await expect(primaryRobotStatus).toContainText('SUCCEEDED', { timeout: 20_000 })
   await expect(page.getByRole('status', { name: 'Timeline runtime' }))
     .toContainText('SUCCEEDED · Step 12 of 12')
   for (const jointId of ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']) {
-    await expectNumericValue(jointInput(page, CRB_NAME, jointId), 0)
+    await expectNumericValue(jointInput(page, PRIMARY_ROBOT_NAME, jointId), 0)
   }
 
   await selectRobot(sceneTree, SLIDE_NAME)

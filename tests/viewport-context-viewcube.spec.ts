@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 
 import { createDualRobotSampleV4 } from '../src/features/project/v4/dual-robot-sample-v4.js'
 
-const ROBOT_LINK_LABEL = 'ABB CRB15000 / LINK00'
+const ROBOT_LINK_LABEL = 'NED2 / LINK00'
 
 async function importProject(
   page: Page,

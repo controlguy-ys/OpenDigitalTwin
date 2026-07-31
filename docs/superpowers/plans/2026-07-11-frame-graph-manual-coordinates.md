@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a validated, persistent World/MCP/Robot Base/equipment coordinate hierarchy with manual numeric and 3D editing while preserving every current CRB15000, equipment, collision, grasp, and saved-world-pose behavior.
+**Goal:** Add a validated, persistent World/MCP/Robot Base/equipment coordinate hierarchy with manual numeric and 3D editing while preserving every current NED2, equipment, collision, grasp, and saved-world-pose behavior.
 
-**Architecture:** Canonical `Pose3D` math and a pure validated frame graph form the domain boundary; the graph stores only parent-relative position and normalized quaternion, while Three.js objects remain runtime adapters. Dexie v2 migrates each existing equipment world transform into a dedicated equipment frame without a visible jump, and Zustand separates committed persistent frames from derived/runtime robot frames and memory-only previews. The current CRB15000 is mounted through `World -> MCP -> Robot Base`; a pure FK adapter emits read-only namespaced joint/link/flange nodes before render, and equipment rendering, colliders, grasp/release, numeric editing, reparenting, and gizmos all resolve through the same graph.
+**Architecture:** Canonical `Pose3D` math and a pure validated frame graph form the domain boundary; the graph stores only parent-relative position and normalized quaternion, while Three.js objects remain runtime adapters. Dexie v2 migrates each existing equipment world transform into a dedicated equipment frame without a visible jump, and Zustand separates committed persistent frames from derived/runtime robot frames and memory-only previews. The current NED2 is mounted through `World -> MCP -> Robot Base`; a pure FK adapter emits read-only namespaced joint/link/flange nodes before render, and equipment rendering, colliders, grasp/release, numeric editing, reparenting, and gizmos all resolve through the same graph.
 
 **Tech Stack:** Node 22.15.1, npm 11.4.2, React 19.2.7, Vite 8.1.4, TypeScript 6.0.3, Three.js 0.185.1, React Three Fiber 9.6.1, Drei 10.7.7, React Three Rapier 2.2.0, Zustand 5.0.14, Dexie 4.4.4, Vitest 4.1.10, Testing Library 16.3.2, Playwright 1.61.1, Oxlint 1.73.0.
 
@@ -19,8 +19,8 @@
 - Joint, link, and flange frames are derived/read-only. MCP, Robot Base, TCP, fixture, workobject, workpiece, equipment, sensor, camera, moving, and custom frames are editable only when `source === 'manual'` and `editable === true`.
 - A TCP has one owner only: its manual FrameNode is persisted under an allowlisted same-robot derived flange ID, while a pure pre-render adapter derives joint/link/flange frames and never creates a duplicate TCP. Persisted rows may be validated as an incomplete storage projection; the merged runtime graph must contain every parent before it is exposed or edited.
 - Robot Base edits move the mechanism, gripper, collision sensors, grasp sensor, and held object together without changing joint values.
-- Preserve the current CRB15000 mount at world `[0, 0, 1.08]`, its zero-pose link transforms, `toolRotationYRad`, deterministic Cup 01 pick fixture, Rapier collision behavior, gripper behavior, and current keyframe angles.
-- Use exact built-in RobotInstance ID `crb15000-01` and owner ID `robot:crb15000-01` in every persisted/derived frame and active-TCP adapter.
+- Preserve the current NED2 mount at world `[0, 0, 1.08]`, its zero-pose link transforms, `toolRotationYRad`, deterministic Cup 01 pick fixture, Rapier collision behavior, gripper behavior, and current keyframe angles.
+- Use exact built-in RobotInstance ID `NED2-01` and owner ID `robot:NED2-01` in every persisted/derived frame and active-TCP adapter.
 - Existing equipment rows must reopen at the same world position, orientation, and scale after migration; a corrupt row is isolated and cannot prevent valid rows or frames from hydrating.
 - Equipment scale remains an equipment-asset property; frame poses never contain scale. Three.js objects, matrices, and refs never enter Zustand persistence or Dexie records.
 - Held equipment is temporarily rendered under the tool frame, but its committed equipment frame is updated exactly once on release; reparenting or editing a held item is blocked with a clear error.
@@ -63,7 +63,7 @@ src/
       EquipmentScene.tsx                                # render equipment from resolved frame world poses
       EquipmentScene.test.tsx                           # resolver and selection rendering integration
     frames/
-      built-in-frames.ts                                # World/MCP/CRB Base/default TCP seed definitions
+      built-in-frames.ts                                # World/MCP/NED2 Base/default TCP seed definitions
       frame-store.ts                                    # committed/manual/runtime/preview state and persistence
       frame-store.test.ts                               # StrictMode-safe hydration, preview/apply/cancel/reparent
       persisted-frame-validation.ts                    # validate allowlisted derived-parent references at rest
@@ -504,7 +504,7 @@ git commit -m "feat: add validated scene frame graph"
 **Interfaces:**
 - Consumes: validated `FrameNode` records and current v1 equipment transforms.
 - Produces: Dexie v2 `frames` table, `WORLD_FRAME_ID`,
-  `DEFAULT_MCP_FRAME_ID`, `CRB_BASE_FRAME_ID`, globally namespaced CRB
+  `DEFAULT_MCP_FRAME_ID`, `NED2_BASE_FRAME_ID`, globally namespaced NED2
   flange/TCP IDs, persisted-projection validation, `useFrameStore`, and an
   injected `FramePreviewCleanupService` for later source/playback/lifecycle
   transitions.
@@ -539,7 +539,7 @@ it('applies one preview and one transactional equipment+frame commit', async () 
 })
 
 it('retains one manual TCP with an allowlisted same-owner derived flange parent', async () => {
-  await db.frames.put(crbTcpFrame({ parentId: 'robot:crb15000-01:flange:tool0' }))
+  await db.frames.put(ned2TcpFrame({ parentId: 'robot:NED2-01:flange:tool0' }))
   await store.getState().hydrate()
   expect(store.getState().frames.filter(({ role }) => role === 'tcp')).toHaveLength(1)
   expect(store.getState().warnings).not.toContain(FRAME_CORRUPT_ROW_WARNING)
@@ -549,23 +549,23 @@ it.each([
   'missing:arbitrary',
   'robot:another-instance:flange:tool0',
 ])('rejects an unowned deferred parent %s', async (parentId) => {
-  await db.frames.put(crbTcpFrame({ parentId }))
+  await db.frames.put(ned2TcpFrame({ parentId }))
   await store.getState().hydrate()
   expect(store.getState().frames.some(({ role }) => role === 'tcp')).toBe(false)
 })
 
 it('creates two MCPs and TCPs, activates one TCP, then reloads all choices', async () => {
   const mcp2 = await store.getState().createManualFrame(machineFrameDraft('MCP 2'))
-  const tcp1 = await store.getState().createManualFrame(tcpDraft('crb15000-01', 'TCP 1'))
-  const tcp2 = await store.getState().createManualFrame(tcpDraft('crb15000-01', 'TCP 2'))
-  await store.getState().setActiveTcp('robot:crb15000-01', tcp2)
+  const tcp1 = await store.getState().createManualFrame(tcpDraft('NED2-01', 'TCP 1'))
+  const tcp2 = await store.getState().createManualFrame(tcpDraft('NED2-01', 'TCP 2'))
+  await store.getState().setActiveTcp('robot:NED2-01', tcp2)
   await reopenStore()
   expect(store.getState().frames.map(({ id }) => id)).toEqual(expect.arrayContaining([mcp2, tcp1, tcp2]))
-  expect(store.getState().activeTcpByRobotOwnerId['robot:crb15000-01']).toBe(tcp2)
+  expect(store.getState().activeTcpByRobotOwnerId['robot:NED2-01']).toBe(tcp2)
 })
 
 it('persists a tool-mounted sensor as a manual child of its persisted TCP', async () => {
-  const tcp = await store.getState().createManualFrame(tcpDraft('crb15000-01', 'Vision TCP'))
+  const tcp = await store.getState().createManualFrame(tcpDraft('NED2-01', 'Vision TCP'))
   const sensor = await store.getState().createManualFrame(sensorDraft('Camera 1', tcp))
   await reopenStore()
   expect(store.getState().frames.find(({ id }) => id === sensor)).toMatchObject({
@@ -587,7 +587,7 @@ it('rejects subtree deletion across an entity lifecycle root', async () => {
 })
 
 it('persists one monotonic transform revision and emits typed commit events', async () => {
-  const id = await store.getState().createManualFrame(tcpDraft('crb15000-01', 'Revision TCP'))
+  const id = await store.getState().createManualFrame(tcpDraft('NED2-01', 'Revision TCP'))
   expect(store.getState().getCommittedFrameRecord(id)?.revision).toBe(1)
   const commits: FrameCommitEvent[] = []
   const unsubscribe = store.getState().subscribeCommittedFrames((event) => commits.push(event))
@@ -596,8 +596,8 @@ it('persists one monotonic transform revision and emits typed commit events', as
   store.getState().previewFrame(id, poseAt(0, 0, 0.3), 'test:revision')
   store.getState().cancelFrame(id, 'test:revision')
   await store.getState().renameFrame(id, 'Renamed TCP')
-  store.getState().registerRuntimeFrames('robot:crb15000-01', [derivedFlangeFrame('tool1')])
-  await store.getState().reparentFrame(id, 'robot:crb15000-01:flange:tool1')
+  store.getState().registerRuntimeFrames('robot:NED2-01', [derivedFlangeFrame('tool1')])
+  await store.getState().reparentFrame(id, 'robot:NED2-01:flange:tool1')
   unsubscribe()
   expect(commits.map(({ kind, revision }) => [kind, revision])).toEqual([
     ['local-pose', 2], ['parent', 3],
@@ -790,9 +790,9 @@ export interface FrameStoreState {
 }
 ```
 
-Seed immutable World, identity MCP, CRB Base at `[0,0,1.08]`, and one manual
-default TCP named `robot:crb15000-01:tcp:default` whose parent is
-`robot:crb15000-01:flange:tool0`. Merge valid persisted manual/equipment frames
+Seed immutable World, identity MCP, NED2 Base at `[0,0,1.08]`, and one manual
+default TCP named `robot:NED2-01:tcp:default` whose parent is
+`robot:NED2-01:flange:tool0`. Merge valid persisted manual/equipment frames
 over seeds. Keep runtime Three-derived nodes in memory only. Preview records
 survive a slow hydration by the same pending-preview merge pattern proven in
 Task 9. Apply and reparent perform one Dexie transaction after validation.
@@ -870,7 +870,7 @@ equipment/robot lifecycle services perform their own cross-store transactional
 cascade. Ordinary manual TCP/sensor/custom descendants are not entity roots and
 remain eligible for the explicit subtree policy.
 `setActiveTcp()` verifies role/owner/flange attachment and persists the current
-CRB adapter mapping in the existing `scene` record; the Generic Robot plan
+NED2 adapter mapping in the existing `scene` record; the Generic Robot plan
 migrates this field into each `RobotInstanceV1`.
 
 For a brand-new latest-version database, do not rely on a version-upgrade
@@ -907,7 +907,7 @@ git commit -m "feat: persist scene frames and equipment bindings"
 
 ---
 
-### Task 4: Mount the Current CRB and Interaction Runtime Through the Graph
+### Task 4: Mount the Current NED2 and Interaction Runtime Through the Graph
 
 **Files:**
 - Create: `src/features/frames/scene-frame-graph.ts`
@@ -926,16 +926,16 @@ git commit -m "feat: persist scene frames and equipment bindings"
 - Modify: `src/features/interaction/grasp-actions.test.ts`
 
 **Interfaces:**
-- Consumes: committed+preview+runtime frame graph, current CRB rig/joints, and existing `RobotRigRegistration`.
+- Consumes: committed+preview+runtime frame graph, current NED2 rig/joints, and existing `RobotRigRegistration`.
 - Produces: synchronous graph-resolved Three transforms and read-only namespaced joint/link/flange frames before React object registration.
 
-- [ ] **Step 1: Write CRB/equipment/grasp parity RED tests**
+- [ ] **Step 1: Write NED2/equipment/grasp parity RED tests**
 
 ```ts
-it('keeps the current CRB zero-pose world matrices behind identity MCP', () => {
+it('keeps the current NED2 zero-pose world matrices behind identity MCP', () => {
   const graph = createSceneFrameGraph(seedFrames(), equipmentFrames(), derivedZeroPoseFrames())
-  expect(resolveWorldPose(graph, 'robot:crb15000-01:base').position).toEqual([0, 0, 1.08])
-  expectMatrixClose(worldMatrixFor(graph, 'robot:crb15000-01:link:LINK06'), CURRENT_LINK06_WORLD)
+  expect(resolveWorldPose(graph, 'robot:NED2-01:base').position).toEqual([0, 0, 1.08])
+  expectMatrixClose(worldMatrixFor(graph, 'robot:NED2-01:link:LINK06'), CURRENT_LINK06_WORLD)
 })
 
 it('moves robot, sensors, held item, and colliders together without changing joints', () => {
@@ -961,7 +961,7 @@ it('releases a held item into its equipment parent local frame with one commit',
 
 it('materializes each robot-scoped frame ID once and never duplicates a persisted TCP', () => {
   const graph = createSceneFrameGraph(seedFrames(), equipmentFrames(), derivedZeroPoseFrames())
-  expect(graph.filter(({ id }) => id === 'robot:crb15000-01:tcp:default')).toHaveLength(1)
+  expect(graph.filter(({ id }) => id === 'robot:NED2-01:tcp:default')).toHaveLength(1)
   expect(derivedZeroPoseFrames().some(({ role }) => role === 'tcp')).toBe(false)
 })
 ```
@@ -1079,7 +1079,7 @@ it('resets a local draft and rejects its stale Apply after privileged cleanup', 
   const controller = createFrameEditController(frameStore)
   const previewSpy = vi.spyOn(controller, 'preview')
   render(<FrameInspector
-    frameId="robot:crb15000-01:tcp:default"
+    frameId="robot:NED2-01:tcp:default"
     controller={controller}
   />)
   await user.clear(screen.getByLabelText('Z (mm)'))
@@ -1114,7 +1114,7 @@ it('adds and renames an MCP, creates two TCPs, and activates the second TCP', as
   await createTcpThroughUi(user, 'TCP 1')
   await createTcpThroughUi(user, 'TCP 2')
   await user.selectOptions(screen.getByLabelText('Active TCP'), 'TCP 2')
-  expect(setActiveTcp).toHaveBeenCalledWith('robot:crb15000-01', expect.stringMatching(/:tcp:/))
+  expect(setActiveTcp).toHaveBeenCalledWith('robot:NED2-01', expect.stringMatching(/:tcp:/))
 })
 
 it('requires an explicit child policy and replacement before deleting a parent or active TCP', async () => {
@@ -1323,7 +1323,7 @@ test('moves MCP/Base/equipment, preserves reparent world pose, and reloads', asy
   await page.goto('/')
   await addManualFrame(page, { role: 'fixture', name: 'Fixture 01', parent: 'MCP' })
   const relativeBefore = await readRelativePoses(page, 'MCP', [
-    'CRB15000 Base', 'Machine 01', 'Fixture 01', 'Cup 01',
+    'NED2 Base', 'Machine 01', 'Fixture 01', 'Cup 01',
   ])
   await editFrame(page, 'MCP', { xMm: 100, yMm: -50, zMm: 0 })
   const relativeAfter = await readRelativePoses(page, 'MCP', Object.keys(relativeBefore))
@@ -1332,24 +1332,24 @@ test('moves MCP/Base/equipment, preserves reparent world pose, and reloads', asy
   }
 
   const committedCupBeforeGrasp = await readFrameRecord(page, 'equipment:cup-01')
-  await moveIntoFixtureAndCloseGripper(page, 'CRB15000', 'Cup 01')
+  await moveIntoFixtureAndCloseGripper(page, 'NED2', 'Cup 01')
   await expect.poll(() => readHeldEquipmentId(page)).toBe('cup-01')
   const jointsBeforeBaseEdit = await readJointSnapshot(page)
   const movingBefore = await readWorldPoses(page, [
-    'robot:crb15000-01:link:LINK06',
-    'robot:crb15000-01:flange:tool0',
-    await readActiveTcpFrameId(page, 'crb15000-01'),
+    'robot:NED2-01:link:LINK06',
+    'robot:NED2-01:flange:tool0',
+    await readActiveTcpFrameId(page, 'NED2-01'),
   ])
   const renderedCupBefore = await readRenderedEntityWorldPose(page, 'equipment:cup-01')
-  const colliderBefore = await readColliderWorldPose(page, 'robot-link:crb15000-01:LINK06')
-  await editFrame(page, 'CRB15000 Base', { zMm: 1180 })
+  const colliderBefore = await readColliderWorldPose(page, 'robot-link:NED2-01:LINK06')
+  await editFrame(page, 'NED2 Base', { zMm: 1180 })
   expect(await readJointSnapshot(page)).toEqual(jointsBeforeBaseEdit)
   const movingAfter = await readWorldPoses(page, Object.keys(movingBefore))
   for (const id of Object.keys(movingBefore)) {
     expectPoseTranslatedBy(movingAfter[id]!, movingBefore[id]!, [0, 0, 0.1])
   }
   expectPoseTranslatedBy(
-    await readColliderWorldPose(page, 'robot-link:crb15000-01:LINK06'),
+    await readColliderWorldPose(page, 'robot-link:NED2-01:LINK06'),
     colliderBefore,
     [0, 0, 0.1],
   )
@@ -1359,16 +1359,16 @@ test('moves MCP/Base/equipment, preserves reparent world pose, and reloads', asy
     (await readFrameRecord(page, 'equipment:cup-01')).worldPose,
     committedCupBeforeGrasp.worldPose,
   )
-  await openGripperAndRelease(page, 'CRB15000')
+  await openGripperAndRelease(page, 'NED2')
   await expect.poll(() => readHeldEquipmentId(page)).toBeNull()
   const committedCupAfterRelease = await readFrameRecord(page, 'equipment:cup-01')
   expectPoseClose(committedCupAfterRelease.worldPose, renderedCupAfter)
   expect(committedCupAfterRelease.revision).toBe(committedCupBeforeGrasp.revision + 1)
 
-  await addManualFrame(page, { role: 'tcp', name: 'TCP 1', owner: 'crb15000-01' })
-  await addManualFrame(page, { role: 'tcp', name: 'TCP 2', owner: 'crb15000-01' })
-  await selectActiveTcp(page, 'CRB15000', 'TCP 2')
-  await expect.poll(() => readActiveTcp(page, 'crb15000-01')).toMatch(/TCP 2/)
+  await addManualFrame(page, { role: 'tcp', name: 'TCP 1', owner: 'NED2-01' })
+  await addManualFrame(page, { role: 'tcp', name: 'TCP 2', owner: 'NED2-01' })
+  await selectActiveTcp(page, 'NED2', 'TCP 2')
+  await expect.poll(() => readActiveTcp(page, 'NED2-01')).toMatch(/TCP 2/)
   await expect(page.getByRole('treeitem', { name: 'Fixture 01' })).toBeVisible()
   await selectFrame(page, 'Cup 01')
   await page.getByLabel('Reference frame').selectOption({ label: 'Fixture 01' })
@@ -1384,10 +1384,10 @@ test('moves MCP/Base/equipment, preserves reparent world pose, and reloads', asy
   const activeTcpBeforeReload = await readWorldPose(page, 'TCP 2')
   await page.reload()
   expectPoseClose(await readWorldPose(page, 'Cup 01'), beforeReparent)
-  await expect.poll(() => readActiveTcp(page, 'crb15000-01')).toMatch(/TCP 2/)
+  await expect.poll(() => readActiveTcp(page, 'NED2-01')).toMatch(/TCP 2/)
   expectPoseClose(await readWorldPose(page, 'TCP 2'), activeTcpBeforeReload)
   const robotTcpFrames = Object.values((await readFrameSnapshot(page)).framesById)
-    .filter(({ ownerEntityId, role }) => ownerEntityId === 'robot:crb15000-01' && role === 'tcp')
+    .filter(({ ownerEntityId, role }) => ownerEntityId === 'robot:NED2-01' && role === 'tcp')
   expect(robotTcpFrames.map(({ name }) => name)).toEqual(expect.arrayContaining(['TCP 1', 'TCP 2']))
 })
 ```
@@ -1455,7 +1455,7 @@ git commit -m "docs: explain machine coordinate frame workflows"
 ## Completion Gate
 
 A fresh reviewer must confirm graph invariants, exact RPY convention, migration
-idempotence, manual frame lifecycle, MCP/Base/current CRB parity, namespaced
+idempotence, manual frame lifecycle, MCP/Base/current NED2 parity, namespaced
 one-owner TCPs, active-TCP reload, one transform owner, reparent world-pose
 preservation, held-object safety, collision/grasp alignment, accessibility,
 reload persistence, and every automated gate before this plan is complete.

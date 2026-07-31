@@ -39,7 +39,7 @@
 - `src/core/robot-runtime/collision-identity.ts` and test — namespaced IDs and definition-derived adjacency.
 - `src/core/robot-runtime/index.ts` — public P2 Core boundary.
 - `src/features/robot/v4/robot-runtime-registry.ts` and test — keyed Robot live state.
-- `src/features/robot/v4/builtin-crb-definition.ts` and test — checked-in CRB Definition/geometry bridge used before P3 authoring.
+- `src/features/robot/v4/builtin-ned2-definition.ts` and test — checked-in NED2 Definition/geometry bridge used before P3 authoring.
 - `src/features/robot/v4/robot-definition-geometry-repository.ts` and test — reusable Definition geometry bundles.
 - `src/features/robot/v4/RobotInstanceModel.tsx` and test — one articulated Instance renderer.
 - `src/features/robot/v4/RobotFleet.tsx` and test — project Robot iteration and registration.
@@ -51,7 +51,7 @@
 - `src/features/scene/v4/scene-runtime-store.ts` and test — atomic published Scene projection consumed by React.
 - `src/features/scene/v4/MovingFrameInspector.tsx` and test — generic named Moving Frame editing without a dedicated linear-axis model.
 - `src/features/project/v4/project-v4-mutation-service.ts` and test — serialized V4 recipes.
-- `src/features/project/v4/default-project-v4.ts` and test — valid builtin CRB V4 Project.
+- `src/features/project/v4/default-project-v4.ts` and test — valid builtin NED2 V4 Project.
 - `src/features/project/v4/browser-project-runtime-v4.ts` and test — atomic browser resource preparation.
 - `src/features/project/v4/project-store-v4.ts` and test — V4 New/Save/Import/Export state.
 - `tests/project-v4-multi-robot.spec.ts` — browser cutover and independent Robot acceptance.
@@ -100,7 +100,7 @@
 **Delete at the Task 8 cutover:**
 
 - Fixed Robot runtime: `src/domain/robot/joint-frame.ts`, `src/domain/robot/joint-frame.test.ts`, `src/domain/robot/kinematics.ts`, `src/domain/robot/kinematics.test.ts`, `src/features/joints/robot-store.ts`, `src/features/joints/robot-store.test.ts`, `src/features/joints/keyframes.ts`, `src/features/joints/keyframes.test.ts`, `src/features/joints/SimulationJointSource.ts`, `src/features/robot/RobotModel.tsx`, `src/features/robot/RobotModel.test.ts`, and `src/features/robot/RobotGripper.tsx`.
-- Fixed CRB/authoring lane: `src/domain/robot/crb15000.ts`, `src/features/interaction/robot-collision-bounds.ts`, `src/features/robot/default-robot-geometry.ts`, `src/features/robot/default-robot-geometry.test.ts`, `src/features/robot/RobotConfigurationDialog.tsx`, `src/features/robot/RobotConfigurationDialog.test.tsx`, `src/features/robot/robot-configuration-store.ts`, `src/features/robot/robot-configuration-store.test.ts`, `src/features/robot/robot-geometry-db.ts`, `src/features/robot/RobotGeometryDialog.tsx`, `src/features/robot/RobotGeometryDialog.test.tsx`, `src/features/robot/robot-geometry-repository.ts`, `src/features/robot/robot-geometry-repository.test.ts`, `src/features/robot/robot-geometry-store.ts`, `src/features/robot/robot-geometry-store.test.ts`, `src/features/robot/RobotImportDialog.tsx`, `src/features/robot/RobotImportDialog.test.tsx`, `src/features/robot/robot-step-import.ts`, and `src/features/robot/robot-step-import.test.ts`. P3 replaces authoring with Definition-driven Assembly mapping.
+- Fixed NED2/authoring lane: `src/domain/robot/NED2.ts`, `src/features/interaction/robot-collision-bounds.ts`, `src/features/robot/default-robot-geometry.ts`, `src/features/robot/default-robot-geometry.test.ts`, `src/features/robot/RobotConfigurationDialog.tsx`, `src/features/robot/RobotConfigurationDialog.test.tsx`, `src/features/robot/robot-configuration-store.ts`, `src/features/robot/robot-configuration-store.test.ts`, `src/features/robot/robot-geometry-db.ts`, `src/features/robot/RobotGeometryDialog.tsx`, `src/features/robot/RobotGeometryDialog.test.tsx`, `src/features/robot/robot-geometry-repository.ts`, `src/features/robot/robot-geometry-repository.test.ts`, `src/features/robot/robot-geometry-store.ts`, `src/features/robot/robot-geometry-store.test.ts`, `src/features/robot/RobotImportDialog.tsx`, `src/features/robot/RobotImportDialog.test.tsx`, `src/features/robot/robot-step-import.ts`, and `src/features/robot/robot-step-import.test.ts`. P3 replaces authoring with Definition-driven Assembly mapping.
 - Fixed Job/OPC UA source lane: `src/features/jobs/job-command-service.ts`, `src/features/jobs/job-command-service.test.ts`, `src/features/joints/OpcUaJointSource.ts`, `src/features/joints/OpcUaJointSource.test.ts`, `src/features/joints/opcua-gateway-url.ts`, and `src/features/joints/opcua-gateway-url.test.ts`. P4 provides the V4 Runtime Gateway source.
 - Fixed Scene transform/linear-axis lane: `src/domain/scene/scene-transform.ts`, `src/domain/scene/scene-transform.test.ts`, `src/features/scene/scene-runtime-selector.ts`, `src/features/scene/scene-runtime-selector.test.ts`, `src/features/scene/LinearAxisInspector.tsx`, `src/features/scene/LinearAxisInspector.test.tsx`, `src/features/scene/LinearAxisRuntime.tsx`, `src/features/scene/LinearAxisRuntime.test.tsx`, `src/features/scene/linear-axis-source.ts`, and `src/features/scene/linear-axis-source.test.ts`.
 - Automatic grasp: `src/features/interaction/GraspController.tsx`, `src/features/interaction/GraspController.test.tsx`, `src/features/interaction/grasp-actions.ts`, `src/features/interaction/grasp-actions.test.ts`, `src/features/interaction/grasp-participants.ts`, `src/features/interaction/grasp-participants.test.ts`, `src/features/interaction/geometry-grasp-sensor.ts`, and `src/features/interaction/geometry-grasp-sensor.test.ts`.
@@ -707,8 +707,8 @@ git commit -m "feat: namespace multi-robot collision geometry"
 **Files:**
 - Create: `src/features/robot/v4/robot-definition-geometry-repository.ts`
 - Test: `src/features/robot/v4/robot-definition-geometry-repository.test.ts`
-- Create: `src/features/robot/v4/builtin-crb-definition.ts`
-- Test: `src/features/robot/v4/builtin-crb-definition.test.ts`
+- Create: `src/features/robot/v4/builtin-ned2-definition.ts`
+- Test: `src/features/robot/v4/builtin-ned2-definition.test.ts`
 - Create: `src/features/robot/v4/RobotInstanceModel.tsx`
 - Test: `src/features/robot/v4/RobotInstanceModel.test.tsx`
 - Create: `src/features/robot/v4/RobotFleet.tsx`
@@ -721,8 +721,8 @@ git commit -m "feat: namespace multi-robot collision geometry"
 - Test: `src/features/scene/Workcell.test.tsx`
 
 **Interfaces:**
-- Consumes: P1 Project types, `resolveWorldFrameMapV4`, `computeSerialRobotPoseV4`, `RobotRuntimeRegistryV4`, namespaced collision IDs, and current checked-in CRB geometry.
-- Produces: `createBuiltinCrbDefinitionV4`, `prepareBuiltinCrbGeometryV4`, `PreparedRobotDefinitionGeometryV4`, `RobotDefinitionGeometryRepositoryV4`, `RobotInstanceRegistrationV4`, `RobotFleetRegistrationV4`, `SceneRuntimeProjectionV4`, and `SceneRuntimeStoreV4`.
+- Consumes: P1 Project types, `resolveWorldFrameMapV4`, `computeSerialRobotPoseV4`, `RobotRuntimeRegistryV4`, namespaced collision IDs, and current checked-in NED2 geometry.
+- Produces: `createBuiltinNed2DefinitionV4`, `prepareBuiltinNed2GeometryV4`, `PreparedRobotDefinitionGeometryV4`, `RobotDefinitionGeometryRepositoryV4`, `RobotInstanceRegistrationV4`, `RobotFleetRegistrationV4`, `SceneRuntimeProjectionV4`, and `SceneRuntimeStoreV4`.
 - P3 later registers imported Definition geometry through the same repository; P2 does not add a STEP authoring wizard.
 
 - [ ] **Step 1: Write RED sharing and independent-root tests**
@@ -730,15 +730,15 @@ git commit -m "feat: namespace multi-robot collision geometry"
 ```tsx
 it('reuses one prepared Definition bundle but creates distinct Instance roots', () => {
   const repository = createRobotDefinitionGeometryRepositoryV4()
-  const prepared = preparedCrbGeometry()
-  repository.publish('def-crb', prepared)
-  const a = repository.acquire('def-crb', 'robot-a')
-  const b = repository.acquire('def-crb', 'robot-b')
+  const prepared = preparedNed2Geometry()
+  repository.publish('def-ned2', prepared)
+  const a = repository.acquire('def-ned2', 'robot-a')
+  const b = repository.acquire('def-ned2', 'robot-b')
   expect(a.sharedGeometry).toBe(b.sharedGeometry)
   expect(a.instanceRoot).not.toBe(b.instanceRoot)
   a.release()
   expect(prepared.dispose).not.toHaveBeenCalled()
-  repository.revoke('def-crb')
+  repository.revoke('def-ned2')
   expect(prepared.dispose).not.toHaveBeenCalled()
   b.release()
   expect(prepared.dispose).toHaveBeenCalledTimes(1)
@@ -761,11 +761,11 @@ Expected: FAIL because Workcell renders one fixed `RobotModel`.
 
 - [ ] **Step 3: Implement reusable prepared geometry**
 
-Move the checked-in CRB mechanics, Link IDs, Frame ownership, asset URLs, and collision metadata into `builtin-crb-definition.ts` as one valid `RobotDefinitionV4`. Its six Joint values remain keyed by the Definition's stable Joint IDs; the adapter does not expose `RobotLinkId`, `JointAnglesDeg`, or a fixed-tuple API.
+Move the checked-in NED2 mechanics, Link IDs, Frame ownership, asset URLs, and collision metadata into `builtin-ned2-definition.ts` as one valid `RobotDefinitionV4`. Its six Joint values remain keyed by the Definition's stable Joint IDs; the adapter does not expose `RobotLinkId`, `JointAnglesDeg`, or a fixed-tuple API.
 
 ```ts
-export function createBuiltinCrbDefinitionV4(): RobotDefinitionV4
-export async function prepareBuiltinCrbGeometryV4(
+export function createBuiltinNed2DefinitionV4(): RobotDefinitionV4
+export async function prepareBuiltinNed2GeometryV4(
   definition: RobotDefinitionV4,
 ): Promise<PreparedRobotDefinitionGeometryV4>
 
@@ -1209,7 +1209,7 @@ export function createProjectStoreV4(
 ): ProjectStoreV4
 ```
 
-`createDefaultProjectV4` returns one valid CRB Definition/Instance with builtin logical Asset references, World/MCP/Base/Flange/TCP Frames, Simulation ownership, one empty Robot Job, and no Attachments. Switch `App`, `AppShell`, `SceneCanvas`, `Workcell`, selection, inspectors, Job list, and Timeline to the V4 named exports in the same change that switches `ProjectMenu` and initial bootstrap. Remove the V3 Robot Config, Robot Geometry, and Robot STEP Import buttons in this switch; P3 installs the Definition-driven authoring surfaces. `ProjectMenu` imports/exports canonical `.json` only and reports `PROJECT_SCHEMA_UNSUPPORTED` without mutating the active Revision.
+`createDefaultProjectV4` returns one valid NED2 Definition/Instance with builtin logical Asset references, World/MCP/Base/Flange/TCP Frames, Simulation ownership, one empty Robot Job, and no Attachments. Switch `App`, `AppShell`, `SceneCanvas`, `Workcell`, selection, inspectors, Job list, and Timeline to the V4 named exports in the same change that switches `ProjectMenu` and initial bootstrap. Remove the V3 Robot Config, Robot Geometry, and Robot STEP Import buttons in this switch; P3 installs the Definition-driven authoring surfaces. `ProjectMenu` imports/exports canonical `.json` only and reports `PROJECT_SCHEMA_UNSUPPORTED` without mutating the active Revision.
 
 - [ ] **Step 6: Run GREEN and commit**
 
@@ -1321,7 +1321,7 @@ test('V4 renders and controls two independent Robot Instances', async ({ page })
   await loadProjectV4(page, twoRobotBrowserFixture())
   await expect(page.getByText('Robot A')).toBeVisible()
   await expect(page.getByText('Robot B')).toBeVisible()
-  await expectRobotDefinition(page, 'Robot A', 'CRB Test Definition')
+  await expectRobotDefinition(page, 'Robot A', 'NED2 Test Definition')
   await expectRobotDefinition(page, 'Robot B', 'Variable Slide Definition')
   await selectRobot(page, 'Robot B')
   await setJoint(page, 'slide-z', 0.2)
@@ -1366,4 +1366,4 @@ git status --short
 git commit -m "feat: complete project v4 multi-robot cutover"
 ```
 
-Before committing, confirm `git status --short` does not stage `Savvy/`, `CRB15000_10kg-152_OmniCore_rev00_STEP_C/`, or `CRB15000_12kg-127_OmniCore_rev00_STEP_J.premerge-backup-20260713/`.
+Before committing, confirm `git status --short` does not stage `Savvy/`, `NED2_10kg-152_retired-controller_rev00_STEP_C/`, or `NED2_12kg-127_retired-controller_rev00_STEP_J.premerge-backup-20260713/`.

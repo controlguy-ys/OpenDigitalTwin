@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { makeMinimalWorkcellProjectV4 } from '../../../core/project-v4/test-support.js'
 import type { OcctSuccessResult } from '../../../lib/cad/occt-types.js'
 
+import { createBuiltinNed2DefinitionV4 } from './builtin-ned2-definition.js'
 import {
   createRobotImportControllerV4,
   mapRobotStepFilesV4,
@@ -154,5 +155,55 @@ describe('Robot STEP import mapping V4', () => {
       importedRobot.id,
       'imported-robot-job-assembly-test',
     )
+  })
+
+  it('uses the built-in NED2 topology when imported Geometry cannot derive every Link origin', async () => {
+    let project = makeMinimalWorkcellProjectV4()
+    const parsed = sevenLinkAssemblyResult()
+    const controller = createRobotImportControllerV4({
+      mutations: {
+        readPublished: () => ({ project }),
+        replaceFromActive: async ({ mutate }: { mutate: (active: typeof project) => typeof project }) => {
+          project = mutate(project)
+        },
+      },
+      interaction: { getState: () => ({ selectJob: vi.fn() }) },
+      assets: {
+        write: async () => 'created',
+        read: async () => null,
+        delete: async () => true,
+      },
+      geometry: {
+        stage: vi.fn(),
+        discard: () => false,
+        resolve: async () => null,
+      },
+      parser: {
+        import: async () => ({
+          ...parsed,
+          root: {
+            ...parsed.root,
+            children: parsed.root.children.slice(0, 1),
+          },
+          meshes: parsed.meshes.slice(0, 1),
+        }),
+        cancel: vi.fn(),
+      },
+      hash: { sha256: async () => 'b'.repeat(64) },
+      createId: () => 'ned2-template-test',
+    } as unknown as Parameters<typeof createRobotImportControllerV4>[0])
+
+    await controller.importRobot([step('base.step')], {
+      name: 'Partial Robot',
+      manufacturer: 'Test',
+      model: 'Partial Geometry',
+      sourceUpAxis: 'z',
+    })
+
+    expect(project.robotDefinitions.at(-1)?.joints.map(({ origin }) => (
+      origin.positionM
+    ))).toEqual(createBuiltinNed2DefinitionV4().joints.map(({ origin }) => (
+      origin.positionM
+    )))
   })
 })

@@ -53,7 +53,7 @@ These documents are not execution queues. Their unchecked boxes do not override 
 ### Plans superseded for the current stage
 
 - `2026-07-11-pose-sequence-speed-ordering.md` is superseded by WS3 Simulation Jobs. Reuse only its interpolation, locking, and keyboard-test invariants.
-- Tasks 10 through 12 of `2026-07-10-crb15000-web-simulation.md` are superseded by WS6 Mode Workspace and the consolidated release gate.
+- Tasks 10 through 12 of the superseded initial simulator plan are superseded by WS6 Mode Workspace and the consolidated release gate.
 
 ### Future-only plans that must not be executed in this stage
 
@@ -246,7 +246,7 @@ Cross-workstream ownership rules:
 - Each source is read, hashed, parsed, and stored once. Reused source references do not duplicate bytes.
 - Two byte-identical independent flat single-part Files collapse to one ordinary occurrence and cannot manufacture two Link placements; duplicate ownership rejects as `ROBOT_LINK_PART_CONFLICT` with explicit distinct-Geometry/component-assembly guidance. One assembly may assign repeated identical raw Geometry to different Links only through distinct node paths.
 - Every source `id` equals its exact lowercase 64-hex SHA-256. New Import emits only non-negative integer node paths; exact WS1 reserved legacy refs restore only through the isolated adapter. A declared/manual Mechanics count other than six fails with `ROBOT_JOINT_COUNT_UNSUPPORTED`, reports declared/required counts, and mutates nothing.
-- New one-source local acceptance fixture: 13,093,130 bytes, SHA-256 `4130e05b6287fa47a49d376b6ab3cde3c98306155118d6f6e06751d1067b9ef1`, 38,299 triangles, seven named Link meshes, and occt-import-js 0.0.23. Keep that new assembly local; preserve the repository's existing tracked seven-Link ABB production baseline, while new CI coverage uses generated self-contained fixtures.
+- New one-source local acceptance fixture: 13,093,130 bytes, SHA-256 `4130e05b6287fa47a49d376b6ab3cde3c98306155118d6f6e06751d1067b9ef1`, 38,299 triangles, seven named Link meshes, and occt-import-js 0.0.23. Keep that new assembly local; preserve the repository's existing tracked seven-Link NED2 production baseline, while new CI coverage uses generated self-contained fixtures.
 - At Zero Pose, each localized Link source-subset AABB differs by at most 0.5 mm and each expected world-matrix element by at most `1e-6`.
 - Moving Jn changes only `LINK0n` and descendants through `LINK06`.
 - Self-contained separable AP203/AP214/AP242 Geometry is supported when OCCT exposes seven finite triangulatable occurrences. Unresolved external references, unsupported tessellated/PMI-only input, and fused bodies fail deterministically; AP242 kinematic metadata never supplies Mechanics.

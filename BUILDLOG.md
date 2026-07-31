@@ -46,8 +46,8 @@
   six-Joint assumptions, and invalid OPC UA batches.
 - Result: The browser now has one V4 authority and instance-keyed Robot/Job
   state; the old V1-V3/fixed-singleton paths and automatic nearest grasp were
-  removed. The **Dual-Robot Technical Demo** provides an executable CRB Job with
-  12 Joint Poses, the original CRB sweep, and an independent logical-slide Job.
+  removed. The **Dual-Robot Technical Demo** provides an executable NED2 Job with
+  12 Joint Poses, the original NED2 sweep, and an independent logical-slide Job.
   The Gateway validates exact Project/Revision payloads and publishes read-only
   Actual Joint nodes. Current verification evidence is recorded below.
 - Next human decision: Confirm the official Build Week track, make the repository
@@ -94,16 +94,16 @@
 ## Verification
 
 - Historical baseline (before Object OPC UA binding documentation): the current serialized `npm run verify` passed `116` Vitest
-  files and `1305` tests; CRB CAD validation reported `7 link assets valid; 0
+  files and `1305` tests; NED2 CAD validation reported `7 link assets valid; 0
   errors; 0 warnings`; deployment contracts, Runtime Gateway configuration, and
   production builds passed. Chromium acceptance passed the two-Robot V4 flow
   `2/2`, responsive viewport flow `1/1`, and docked workspace matrix `11/11`.
-  Live browser verification additionally observed the 12-Pose CRB Job traverse
+  Live browser verification additionally observed the 12-Pose NED2 Job traverse
   both positive and negative J1 ranges, finish `SUCCEEDED · Step 12 of 12`,
   auto-scroll the active Timeline card into view, and return J1-J6 to Home.
 - Working user flow: Open **Project → Samples → Dual-Robot Technical
-  Demo**, select **CRB 12-Pose Technical Demo**, open Timeline, and start the
-  Job. Observe all 12 Pose cards, positive and negative CRB motion, terminal
+  Demo**, select **NED2 12-Pose Technical Demo**, open Timeline, and start the
+  Job. Observe all 12 Pose cards, positive and negative NED2 motion, terminal
   `SUCCEEDED · Step 12 of 12`, and the final Home pose. Then select the
   logical-slide Robot to confirm its independent Job. Switch OPC UA from
   **Off** to **Server** when the optional Runtime Gateway is running, and use

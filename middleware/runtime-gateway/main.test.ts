@@ -567,7 +567,8 @@ function fakeTimeouts() {
     setTimeout,
     clearTimeout,
     runDueAt(nowMs: number) {
-      for (const [timer, scheduled] of [...pending]) {
+      const scheduledTimers = new Map(pending)
+      for (const [timer, scheduled] of scheduledTimers) {
         if (scheduled.dueAt > nowMs) continue
         pending.delete(timer)
         scheduled.callback()
@@ -2548,7 +2549,7 @@ describe('runtime Gateway entrypoint', () => {
       const stale = await requestJson(port, 'POST', '/runtime/state', {
         projectId: project.projectId,
         revisionId: 'revision-stale',
-        robots: [{ robotId: 'robot-sample-crb', jointValues: { J1: 10 } }],
+        robots: [{ robotId: 'robot-sample-primary', jointValues: { J1: 10 } }],
       })
       expect(stale.status).toBe(409)
       expect(await stale.json()).toMatchObject({ code: 'REVISION_MISMATCH' })
@@ -2557,7 +2558,7 @@ describe('runtime Gateway entrypoint', () => {
         projectId: project.projectId,
         revisionId: project.revisionId,
         robots: [
-          { robotId: 'robot-sample-crb', jointValues: { J1: 10 } },
+          { robotId: 'robot-sample-primary', jointValues: { J1: 10 } },
           {
             robotId: 'robot-sample-linear-slide',
             jointValues: { JOINT_MISSING: 0.5 },
@@ -2997,8 +2998,43 @@ describe('runtime Gateway entrypoint', () => {
       expect(response.status).toBe(200); expect(await response.json()).toEqual(await diagnostic.mock.results[0]!.value); expect(diagnostic).toHaveBeenCalledOnce()
       expect(gatewayStatus(service.status())).toMatchObject({ project: before.project, opcUa: before.opcUa })
       expect((await requestJson(port, 'POST', '/runtime/opcua/test-connection', { ...request, extra: true })).status).toBe(400)
-      for (const path of ['/runtime/opcua/browse', '/runtime/opcua/read', '/runtime/opcua/write', '/runtime/opcua/security', '/runtime/container']) expect((await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST' })).status).toBe(404)
+      expect((await fetch(`http://127.0.0.1:${port}/runtime/opcua/browse`, { method: 'POST' })).status).toBe(415)
+      for (const path of ['/runtime/opcua/read', '/runtime/opcua/write', '/runtime/opcua/security', '/runtime/container']) expect((await fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST' })).status).toBe(404)
       expect(diagnostic).toHaveBeenCalledOnce()
+    } finally { await service.stop() }
+  })
+
+  it('browses only the configured live endpoint with strict request validation and no OPC UA writes', async () => {
+    const { createRuntimeGatewayEntrypointService } = await importMain()
+    const port = await findAvailablePort()
+    const write = vi.fn(async () => ({ ok: true as const, statusCode: 'Good' as const }))
+    const client = connectedClientAdapter(write)
+    const { createOpcUaAddressSpaceBrowserV1 } = await import('./opcua-address-space-browser.js')
+    const session = {
+      browse: vi.fn(async () => ({ good: true, continuationPoint: Buffer.from('page-2'), references: [{ sessionNodeId: 'ns=1;s=Machine.Temperature', browseName: 'Temperature', displayName: 'Machine temperature', nodeClass: 2, referenceTypeId: 'ns=0;i=47', typeDefinitionId: null }] })),
+      browseNext: vi.fn(async () => ({ good: true, continuationPoint: null, references: [] })),
+      readNamespaceArray: vi.fn(async () => ['http://opcfoundation.org/UA/', 'urn:plant']),
+    }
+    client.adapter.addressSpaceBrowser = createOpcUaAddressSpaceBrowserV1({ currentSession: (endpointId) => endpointId === 'endpoint-1' ? { endpointId, generation: 1, session } : null, createToken: () => 'page_token' })
+    const service = createRuntimeGatewayEntrypointService(createTestConfig(port), { createOpcUaClientAdapter: () => client.adapter })
+    await service.start()
+    try {
+      const project = sampleProject('client')
+      await requestJson(port, 'PUT', '/runtime/project', project)
+      const valid = { type: 'opcua-address-space-browse-request-v1', protocolVersion: 1, endpointId: project.opcUa.endpoints[0]!.endpointId, parentNodeId: null, limit: 25, continuationToken: null }
+      const response = await requestJson(port, 'POST', '/runtime/opcua/browse', valid)
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ type: 'opcua-address-space-browse-response-v1', endpointId: valid.endpointId, parentNodeId: 'ns=0;i=85' })
+      expect(session.browse).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 'ns=0;i=85', requestedMaxReferencesPerNode: 25 }))
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse/release', { type: 'opcua-address-space-browse-release-request-v1', protocolVersion: 1, continuationToken: 'page_token' })).status).toBe(200)
+      expect(session.browseNext).toHaveBeenCalledWith([Buffer.from('page-2')], true)
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse/release', { type: 'opcua-address-space-browse-release-request-v1', protocolVersion: 1, continuationToken: 'unknown_token' })).status).toBe(409)
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, limit: 101 })).status).toBe(400)
+      for (const parentNodeId of ['ns=0;i=01', 'ns=0;s=', 'ns=0;g=12345678-1234-1234-1234-123456789ABC', 'ns=0;b=AQI']) {
+        expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, parentNodeId })).status).toBe(400)
+      }
+      expect((await requestJson(port, 'POST', '/runtime/opcua/browse', { ...valid, endpointId: 'other' })).status).toBe(409)
+      expect(write).not.toHaveBeenCalled()
     } finally { await service.stop() }
   })
 

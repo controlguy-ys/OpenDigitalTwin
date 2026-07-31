@@ -1,0 +1,175 @@
+.v6-application-shell {
+  display: grid;
+  height: 100%;
+  grid-template-columns:
+    var(--v6-toolbox-width)
+    var(--v6-explorer-width)
+    var(--v6-explorer-resize-width)
+    minmax(0, 1fr)
+    var(--v6-inspector-resize-width)
+    var(--v6-inspector-width);
+  grid-template-rows:
+    auto
+    minmax(0, 1fr)
+    var(--v6-bottom-resize-height)
+    var(--v6-bottom-height);
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.v6-shell-header {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.v6-shell-toolbox,
+.v6-shell-explorer,
+.v6-shell-inspector,
+.v6-shell-bottom,
+.v6-shell-main {
+  background: var(--v6-color-panel);
+  color: var(--v6-color-text);
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+.v6-shell-toolbox { grid-column: 1; grid-row: 2; }
+.v6-shell-explorer { grid-column: 2; grid-row: 2; }
+.v6-shell-main { grid-column: 4; grid-row: 2; display: grid; grid-template-rows: minmax(0, 1fr); }
+.v6-shell-inspector { grid-column: 6; grid-row: 2; }
+.v6-shell-bottom { grid-column: 4; grid-row: 4; }
+
+.v6-shell-toolbox[data-visible='false'],
+.v6-shell-explorer[data-visible='false'],
+.v6-shell-inspector[data-visible='false'],
+.v6-shell-bottom[data-visible='false'] {
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.v6-dock-resize-handle {
+  background: transparent;
+  min-height: 0;
+  min-width: 0;
+  outline-offset: -2px;
+  position: relative;
+  touch-action: none;
+}
+
+.v6-dock-resize-handle::before {
+  background: var(--v6-color-border);
+  content: '';
+  inset: 0;
+  margin: auto;
+  position: absolute;
+}
+
+.v6-dock-resize-handle--vertical {
+  min-width: 32px;
+  width: 32px;
+}
+
+.v6-dock-resize-handle--vertical::before {
+  height: 100%;
+  width: 2px;
+}
+
+.v6-dock-resize-handle--horizontal {
+  height: 32px;
+  min-height: 32px;
+}
+
+.v6-dock-resize-handle--horizontal::before {
+  height: 2px;
+  width: 100%;
+}
+
+.v6-shell-explorer-resize { grid-column: 3; grid-row: 2; }
+.v6-shell-inspector-resize { grid-column: 5; grid-row: 2; }
+.v6-shell-bottom-resize { grid-column: 4; grid-row: 3; }
+
+.v6-main-view-viewport {
+  min-height: 0;
+  min-width: 0;
+  padding: var(--v6-viewport-safe-top) var(--v6-viewport-safe-right) var(--v6-viewport-safe-bottom) var(--v6-viewport-safe-left);
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-shell-inspector[data-presentation='drawer'],
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-explorer[data-presentation='drawer'],
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-inspector[data-presentation='drawer'] {
+  bottom: 0;
+  max-width: calc(100% - var(--v6-toolbox-width));
+  position: absolute;
+  top: 0;
+  z-index: 4;
+}
+
+.v6-shell-explorer[data-presentation='drawer'] {
+  left: var(--v6-toolbox-width);
+  width: var(--v6-explorer-overlay-width);
+}
+
+.v6-shell-inspector[data-presentation='drawer'] {
+  right: 0;
+  width: var(--v6-inspector-overlay-width);
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom[data-presentation='sheet'] {
+  bottom: 0;
+  height: var(--v6-bottom-overlay-height);
+  left: var(--v6-toolbox-width);
+  max-height: 45%;
+  position: absolute;
+  right: 0;
+  z-index: 5;
+}
+
+.v6-application-shell[data-main-view-presentation='maximized'] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.v6-application-shell[data-main-view-presentation='maximized'] > :not(.v6-shell-main):not(.v6-viewport-safe-area) {
+  display: none;
+}
+
+.v6-application-shell[data-main-view-presentation='maximized'] .v6-shell-main {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.v6-viewport-safe-area { display: none; }
+
+.v6-workspace-dock-toggles {
+  position: absolute;
+  z-index: 6;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.v6-application-shell[data-workspace-mode='compact'] {
+  grid-template-columns:
+    var(--v6-toolbox-width)
+    var(--v6-explorer-width)
+    var(--v6-explorer-resize-width)
+    minmax(0, 1fr)
+    0
+    0;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] {
+  grid-template-columns:
+    var(--v6-toolbox-width)
+    0
+    0
+    minmax(0, 1fr)
+    0
+    0;
+  grid-template-rows: auto minmax(0, 1fr) 0 0;
+}

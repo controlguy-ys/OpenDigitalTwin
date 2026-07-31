@@ -27,6 +27,54 @@ body {
   overflow: hidden;
 }
 
+.v6-app-root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.v6-app-header {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  overflow: visible;
+  background: var(--v6-color-panel);
+  border-bottom: 1px solid var(--v6-color-border);
+}
+
+.v6-app-header > .v6-header-status { margin-left: auto; }
+
+.v6-operation-error {
+  position: fixed;
+  z-index: 50;
+  top: 8px;
+  left: 50%;
+  max-width: min(42rem, calc(100vw - 2rem));
+  padding: 8px 12px;
+  color: var(--v6-color-text);
+  background: var(--v6-color-overlay);
+  border: 1px solid var(--v6-color-fault);
+  transform: translateX(-50%);
+}
+
+.v6-main-view-canvas-host .v5-scene-canvas,
+.v6-main-view-canvas-host .v5-scene-canvas > div {
+  width: 100%;
+  height: 100%;
+}
+
+.v6-main-view-canvas-host .v5-scene-canvas { position: absolute; inset: 0; }
+
+@media (max-width: 900px) {
+  .v6-app-header { gap: 6px; padding-inline: 8px; }
+  .v6-app-header > strong { font-size: 0.875rem; }
+  .v6-header-status-project { display: none; }
+}
+
 button {
   color: inherit;
   font: inherit;
@@ -2264,52 +2312,7 @@ button {
   grid-row: auto;
 }
 
-/* Project V5 production shell */
-.v5-app-shell {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  min-height: 100vh;
-  background: #08111b;
-  color: #d9e2ec;
-}
-
-.v5-app-header {
-  z-index: 10;
-  display: flex;
-  min-height: 48px;
-  align-items: center;
-  gap: 14px;
-  padding: 6px 12px;
-  border-bottom: 1px solid #23384a;
-  background: #0d1924;
-}
-
-.v5-brand {
-  display: flex;
-  min-width: max-content;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.v5-brand strong {
-  color: #f1f5f9;
-  font-size: 15px;
-}
-
-.v5-brand span {
-  color: #38bdf8;
-  font-size: 11px;
-}
-
-.v5-app-header nav {
-  display: flex;
-  gap: 4px;
-}
-
-.v5-app-header button,
-.v5-scene-toolbar button,
-.v5-inspector button,
-.v5-job-actions button {
+.v5-scene-toolbar button {
   min-height: 30px;
   padding: 5px 9px;
   border: 1px solid #2b455a;
@@ -2319,147 +2322,14 @@ button {
   cursor: pointer;
 }
 
-.v5-app-header button:hover:not(:disabled),
-.v5-scene-toolbar button:hover:not(:disabled),
-.v5-inspector button:hover:not(:disabled),
-.v5-job-actions button:hover:not(:disabled) {
+.v5-scene-toolbar button:hover:not(:disabled) {
   border-color: #38bdf8;
   background: #142b3b;
 }
 
-.v5-app-header button:disabled,
-.v5-scene-toolbar button:disabled,
-.v5-inspector button:disabled,
-.v5-job-actions button:disabled {
+.v5-scene-toolbar button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.v5-connectivity-status {
-  display: flex;
-  margin-left: auto;
-  gap: 6px;
-}
-
-.v5-connectivity-status span {
-  padding: 3px 7px;
-  border: 1px solid #334155;
-  border-radius: 999px;
-  color: #94a3b8;
-  font-size: 11px;
-}
-
-.v5-connectivity-status span[data-state="online"],
-.v5-connectivity-status span[data-state="client-connected"],
-.v5-connectivity-status span[data-state="server-listening"],
-.v5-connectivity-status span[data-state="bridge-connected"] {
-  border-color: #166534;
-  color: #86efac;
-}
-
-.v5-connectivity-status span[data-state="error"],
-.v5-connectivity-status span[data-state="offline"] {
-  border-color: #7f1d1d;
-  color: #fca5a5;
-}
-
-.v5-error-banner {
-  padding: 7px 12px;
-  border-bottom: 1px solid #7f1d1d;
-  background: #3f1118;
-  color: #fecaca;
-  font-size: 12px;
-}
-
-.v5-layout {
-  display: grid;
-  min-height: 0;
-  grid-template-columns: minmax(190px, 250px) minmax(420px, 1fr) minmax(230px, 300px);
-  grid-template-rows: minmax(420px, 1fr) minmax(190px, 30vh);
-}
-
-.v5-explorer,
-.v5-inspector,
-.v5-jobs {
-  min-width: 0;
-  overflow: auto;
-  background: #0d1924;
-}
-
-.v5-explorer {
-  grid-row: 1 / 3;
-  padding: 10px;
-  border-right: 1px solid #23384a;
-}
-
-.v5-explorer header,
-.v5-jobs header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.v5-explorer h2,
-.v5-inspector h2,
-.v5-jobs h2 {
-  margin: 0 0 10px;
-  font-size: 13px;
-}
-
-.v5-explorer details {
-  margin: 8px 0;
-}
-
-.v5-explorer summary {
-  padding: 6px 3px;
-  color: #aebdca;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.v5-explorer summary span {
-  float: right;
-}
-
-.v5-explorer ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.v5-explorer li {
-  min-width: 0;
-  margin: 3px 0;
-  font-size: 11px;
-}
-
-.v5-explorer li > button {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-}
-
-.v5-explorer li > button:hover,
-.v5-explorer li > button.is-selected {
-  border-color: #2d5870;
-  background: #102635;
-}
-
-.v5-explorer small {
-  overflow: hidden;
-  color: #718496;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .v5-workcell {
@@ -2507,155 +2377,6 @@ button {
   pointer-events: none;
 }
 
-.v5-inspector {
-  grid-row: 1 / 3;
-  padding: 12px;
-  border-left: 1px solid #23384a;
-}
-
-.v5-inspector dl,
-.v5-job-status {
-  margin: 0 0 12px;
-}
-
-.v5-inspector dl div,
-.v5-job-status div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 5px 0;
-  border-bottom: 1px solid #1d3040;
-  font-size: 11px;
-}
-
-.v5-inspector dt,
-.v5-job-status dt {
-  color: #7f93a5;
-}
-
-.v5-inspector dd,
-.v5-job-status dd {
-  margin: 0;
-  text-align: right;
-}
-
-.v5-joint-list {
-  display: grid;
-  gap: 8px;
-  margin: 12px 0;
-}
-
-.v5-joint-list label {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 54px;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-}
-
-.v5-joint-list output {
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.v5-pose-form {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
-  margin: 12px 0;
-}
-
-.v5-pose-form label {
-  display: grid;
-  gap: 3px;
-  color: #8ea2b3;
-  font-size: 10px;
-}
-
-.v5-pose-form input {
-  width: 100%;
-  min-width: 0;
-  padding: 5px 6px;
-  border: 1px solid #2b455a;
-  border-radius: 4px;
-  background: #091521;
-  color: #d9e2ec;
-}
-
-.v5-pose-form button {
-  grid-column: 1 / -1;
-}
-
-.v5-inspector-actions {
-  display: flex;
-  gap: 5px;
-  margin-bottom: 8px;
-}
-
-.v5-jobs {
-  padding: 10px 12px;
-  border-top: 1px solid #23384a;
-}
-
-.v5-jobs > label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-}
-
-.v5-jobs select {
-  min-width: 220px;
-  padding: 5px;
-  border: 1px solid #2b455a;
-  border-radius: 4px;
-  background: #101f2c;
-  color: inherit;
-}
-
-.v5-job-actions {
-  display: inline-flex;
-  gap: 4px;
-  margin: 8px 0;
-}
-
-.v5-job-instructions {
-  display: flex;
-  gap: 6px;
-  margin: 8px 0 0;
-  padding: 0 0 5px;
-  overflow-x: auto;
-  list-style: none;
-}
-
-.v5-job-instructions li {
-  display: flex;
-  min-width: 110px;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 8px;
-  border: 1px solid #284158;
-  border-radius: 4px;
-  color: #9fb2c1;
-  font-size: 11px;
-}
-
-.v5-job-instructions li.is-current {
-  border-color: #38bdf8;
-  background: #102b3c;
-  color: #e0f2fe;
-}
-
-.v5-job-instructions li span {
-  display: grid;
-  width: 20px;
-  height: 20px;
-  place-items: center;
-  border-radius: 50%;
-  background: #1c3446;
-}
-
-.v5-loading,
 .v5-empty-state {
   display: grid;
   min-height: 0;
@@ -2663,35 +2384,6 @@ button {
   padding: 24px;
   color: #8ca0b2;
   text-align: center;
-}
-
-.v5-loading h1 {
-  margin: 0 0 8px;
-  color: #e2e8f0;
-  font-size: 20px;
-}
-
-.v5-empty-copy {
-  color: #788b9b;
-  font-size: 12px;
-}
-
-@media (max-width: 1050px) {
-  .v5-app-header {
-    flex-wrap: wrap;
-  }
-
-  .v5-connectivity-status {
-    margin-left: 0;
-  }
-
-  .v5-layout {
-    grid-template-columns: minmax(170px, 220px) minmax(360px, 1fr);
-  }
-
-  .v5-inspector {
-    display: none;
-  }
 }
 
 /* Modeless V5 connectivity monitor: it occupies a bounded edge panel and

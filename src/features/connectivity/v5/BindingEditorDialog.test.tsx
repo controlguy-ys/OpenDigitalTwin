@@ -6,12 +6,14 @@ import {
   validateWorkcellProjectV5,
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
+import type { OpcUaAddressSpaceBrowseResponseV1 } from '../../../core/runtime-protocol/opcua-connectivity-v1.js'
 import {
   cloneWorkcellProjectV5,
   makeMinimalWorkcellProjectV5,
 } from '../../../core/project-v5/test-support.js'
 import type { PublishedProjectV5 } from '../../project/v5/project-v5-publication.js'
 import type { ProjectV5AtomicMutationPort } from '../../project/v5/project-v5-mutation-service.js'
+import type { OpcUaAddressSpaceBrowsePortV1 } from './OpcUaAddressSpaceBrowserDialog.js'
 import { BindingEditorDialogV1 } from './BindingEditorDialog.js'
 
 function projectWithBox(): WorkcellProjectV5 {
@@ -71,6 +73,7 @@ describe('BindingEditorDialogV1', () => {
     expect(screen.queryByLabelText('Reconnect delay (ms)')).not.toBeInTheDocument()
     expect(screen.getByText('Project V5 / Z-up / metres / quaternion XYZW')).toBeVisible()
     expect(screen.getByLabelText('Paste session NodeId')).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Browse Address Space' })).not.toBeInTheDocument()
 
     await user.clear(screen.getByLabelText('Namespace URI'))
     await user.type(screen.getByLabelText('Namespace URI'), 'urn:virtual-plc')
@@ -111,6 +114,49 @@ describe('BindingEditorDialogV1', () => {
     await waitFor(() => expect(resolver.resolve).toHaveBeenCalledWith('endpoint-1', 'ns=2;s=ObjectPos', undefined))
     expect(screen.getByLabelText('Namespace URI')).toHaveValue('urn:virtual-plc')
     expect(screen.getByLabelText('Identifier')).toHaveValue('ObjectPos')
+    expect(screen.queryByRole('button', { name: 'Browse Address Space' })).not.toBeInTheDocument()
+  })
+
+  it('opens a nested read-only Address Space browser only for a live session and applies its stable node address without mutating', async () => {
+    const user = userEvent.setup()
+    const project = projectWithBox()
+    const mutation = mutationHarness(project)
+    const browsePort: OpcUaAddressSpaceBrowsePortV1 = {
+      browseAddressSpace: vi.fn(async (): Promise<OpcUaAddressSpaceBrowseResponseV1> => ({
+        type: 'opcua-address-space-browse-response-v1',
+        protocolVersion: 1,
+        endpointId: 'endpoint-1',
+        parentNodeId: 'ns=0;i=85',
+        continuationToken: null,
+        nodes: [{
+          sessionNodeId: 'ns=2;s=Machine.Temperature', browseName: 'Temperature', displayName: 'Temperature', nodeClass: 'Variable', referenceTypeId: 'ns=0;i=47', typeDefinitionId: null, hasChildren: false,
+          nodeAddress: { namespaceUri: 'urn:machine', identifierType: 'string', identifier: 'Machine.Temperature' },
+        }],
+      })),
+      releaseAddressSpaceBrowse: vi.fn(async () => undefined),
+    }
+    render(<BindingEditorDialogV1
+      activeProject={project}
+      addressSpaceBrowsePort={browsePort}
+      browseSessionAvailable={() => true}
+      createMappingId={() => 'mapping-box-pose'}
+      mutations={mutation.port}
+      nodeAddressResolver={{ resolve: vi.fn() }}
+      onClose={vi.fn()}
+      target={{ type: 'entity-frame', entityId: 'box', frameId: 'box-motion' }}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'Browse Address Space' }))
+    expect(screen.getAllByRole('dialog')).toHaveLength(2)
+    const temperature = await screen.findByRole('treeitem', { name: /Temperature/ })
+    await user.click(temperature)
+    await user.click(screen.getByRole('button', { name: 'Select Node' }))
+    expect(screen.getByRole('dialog', { name: 'OPC UA Binding' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'OPC UA Address Space' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Browse Address Space' })).toHaveFocus()
+    expect(screen.getByLabelText('Namespace URI')).toHaveValue('urn:machine')
+    expect(screen.getByLabelText('Identifier')).toHaveValue('Machine.Temperature')
+    expect(mutation.mutate).not.toHaveBeenCalled()
   })
 
   it('uses the same editor for Robot Joint binding and keeps an atomic failure open', async () => {

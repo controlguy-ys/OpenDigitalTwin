@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Keep exactly one active six-axis Robot and `LINK00` through `LINK06`.
-- `Import New Robot` requires seven mapped STEP links; partial replacement is a separate operation and never silently fills missing links with CRB geometry.
+- `Import New Robot` requires seven mapped STEP links; partial replacement is a separate operation and never silently fills missing links with NED2 geometry.
 - The seven-file limit applies only to Robot Import.
 - One Object STEP file creates one whole reusable Object Asset; Object Instances reference that Asset.
 - Robot STEP limits remain 25 MiB per link and 100 MiB total.

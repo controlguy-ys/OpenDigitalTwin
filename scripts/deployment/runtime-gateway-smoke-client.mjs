@@ -37,8 +37,8 @@ async function readDualRobotJointValues(session) {
 
   const targets = [
     {
-      key: 'crbJ1',
-      nodeId: actualJointNodeId(namespaceIndex, 'robot-sample-crb', 'J1'),
+      key: 'primaryRobotJ1',
+      nodeId: actualJointNodeId(namespaceIndex, 'robot-sample-primary', 'J1'),
     },
     {
       key: 'slideX',
@@ -146,7 +146,7 @@ export async function probeDualRobotOpcUaServer({
       try {
         const values = await readDualRobotJointValues(session)
         process.stdout.write(
-          `[deploy] OPC UA Actual values: CRB J1=${values.crbJ1}, Slide X=${values.slideX}\n`,
+          `[deploy] OPC UA Actual values: Primary Robot J1=${values.primaryRobotJ1}, Slide X=${values.slideX}\n`,
         )
         return values
       } finally {

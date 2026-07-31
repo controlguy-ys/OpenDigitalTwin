@@ -51,7 +51,7 @@
 | `2026-07-11-generic-robot-import-mechanical-configuration.md` | Superseded for this milestone | Variable DOF and URDF conflict with the approved fixed six-axis scope. |
 | `2026-07-11-opcua-joint-source-gateway.md` | Partially realized; do not execute wholesale | The short-term read-only Joint gateway exists; v3 adds only the contracts required by later Transform work. |
 | `2026-07-11-pose-sequence-speed-ordering.md` | Superseded by Simulation Jobs | Reuse its velocity, locking, ordering, and accessibility invariants; do not create a second Sequence store. |
-| Baseline Tasks 10-12 in `2026-07-10-crb15000-web-simulation.md` | Superseded by the Mode Workspace release plan | Responsive shell work is partial and the old single-screen information architecture is obsolete. |
+| Baseline Tasks 10-12 in the superseded initial simulator plan | Superseded by the Mode Workspace release plan | Responsive shell work is partial and the old single-screen information architecture is obsolete. |
 
 ## Locked File Map
 

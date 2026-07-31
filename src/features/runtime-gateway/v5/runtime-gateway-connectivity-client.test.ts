@@ -238,4 +238,35 @@ describe('Runtime Gateway Connectivity Client V1 prepared candidates', () => {
     await client.prepare(project, 'b'.repeat(64), undefined as never)
     await expect(client.activate(older)).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_CANDIDATE_STALE' })
   })
+
+  it('browses through the read-only Address Space route and rejects a mismatched response', async () => {
+    const response = {
+      type: 'opcua-address-space-browse-response-v1', protocolVersion: 1, endpointId: 'plc', parentNodeId: 'ns=0;i=85', continuationToken: null,
+      nodes: [{ sessionNodeId: 'ns=1;s=Machine.Temperature', browseName: 'Temperature', displayName: 'Machine temperature', nodeClass: 'Variable', referenceTypeId: 'ns=0;i=47', typeDefinitionId: 'ns=0;i=63', hasChildren: true, nodeAddress: { namespaceUri: 'urn:plant', identifierType: 'string', identifier: 'Machine.Temperature' } }],
+    }
+    const fetch = vi.fn(async () => new Response(JSON.stringify(response)))
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch })
+
+    await expect(client.browseAddressSpace({ endpointId: 'plc', parentNodeId: null, limit: 25, continuationToken: null })).resolves.toEqual(response)
+    expect(fetch).toHaveBeenCalledWith('/runtime/opcua/browse', expect.objectContaining({ method: 'POST' }))
+    const mismatched = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response(JSON.stringify({ ...response, endpointId: 'other' })) })
+    await expect(mismatched.browseAddressSpace({ endpointId: 'plc', parentNodeId: null, limit: 25, continuationToken: null })).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_RESPONSE_INVALID' })
+  })
+  it.each([
+    { continuationToken: 'not a token' },
+    { nodes: [{ sessionNodeId: 'ns=65536;i=1', browseName: 'Bad', displayName: 'Bad', nodeClass: 'Variable', referenceTypeId: 'ns=0;i=47', typeDefinitionId: null, hasChildren: false, nodeAddress: null }] },
+  ])('maps malformed browse continuation output to a client protocol failure', async (override) => {
+    const valid = { type: 'opcua-address-space-browse-response-v1', protocolVersion: 1, endpointId: 'plc', parentNodeId: 'ns=0;i=85', continuationToken: null, nodes: [] }
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch: async () => new Response(JSON.stringify({ ...valid, ...override })) })
+    await expect(client.browseAddressSpace({ endpointId: 'plc', parentNodeId: null, limit: 1, continuationToken: null })).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_RESPONSE_INVALID' })
+  })
+  it('rejects malformed browse inputs and a malformed release acknowledgement before treating either as successful', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ released: true, extra: true })))
+    const client = createRuntimeGatewayConnectivityClientV1({ fetch })
+    await expect(client.browseAddressSpace({ endpointId: 'plc', parentNodeId: 'ns=65536;i=1', limit: 1, continuationToken: null })).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_REQUEST_INVALID' })
+    await expect(client.releaseAddressSpaceBrowse('not a token')).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_REQUEST_INVALID' })
+    expect(fetch).not.toHaveBeenCalled()
+    await expect(client.releaseAddressSpaceBrowse('valid_token')).rejects.toMatchObject({ code: 'RUNTIME_GATEWAY_RESPONSE_INVALID' })
+    expect(fetch).toHaveBeenCalledWith('/runtime/opcua/browse/release', expect.objectContaining({ method: 'POST' }))
+  })
 })

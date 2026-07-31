@@ -41,7 +41,7 @@
 
 | Existing plan | Disposition |
 |---|---|
-| Baseline Tasks 10-12 in `2026-07-10-crb15000-web-simulation.md` | Superseded by this plan; retain its responsive, keyboard, visual, E2E, license, and audit requirements as regression criteria. |
+| Baseline Tasks 10-12 in the superseded initial simulator plan | Superseded by this plan; retain its responsive, keyboard, visual, E2E, license, and audit requirements as regression criteria. |
 | `2026-07-11-pose-sequence-speed-ordering.md` | Superseded by Simulation Jobs; consume Job interfaces only. |
 | `2026-07-11-frame-graph-manual-coordinates.md` | Future generic Frame phase; do not expose its unavailable actions. |
 | `2026-07-11-generic-robot-import-mechanical-configuration.md` | Future Generic Robot phase; Stage B consumes only the fixed assembly Wizard. |

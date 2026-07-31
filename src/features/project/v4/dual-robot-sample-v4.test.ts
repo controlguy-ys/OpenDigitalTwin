@@ -4,7 +4,7 @@ import {
   transitionDurationMsV4,
   validateWorkcellProjectV4,
 } from '../../../core/project-v4/index.js'
-import { BUILTIN_CRB_DEFINITION_ID_V4 } from '../../robot/v4/builtin-crb-definition.js'
+import { BUILTIN_NED2_DEFINITION_ID_V4 } from '../../robot/v4/builtin-ned2-definition.js'
 import {
   createDualRobotSampleV4,
   DUAL_ROBOT_SAMPLE_IDS_V4,
@@ -38,13 +38,15 @@ describe('dual-Robot Project V4 sample', () => {
     expect(project.robots).toHaveLength(2)
     expect(project.jobs).toHaveLength(3)
 
-    const crbDefinition = project.robotDefinitions.find(
-      ({ id }) => id === BUILTIN_CRB_DEFINITION_ID_V4,
+    const primaryRobotDefinition = project.robotDefinitions.find(
+      ({ id }) => id === BUILTIN_NED2_DEFINITION_ID_V4,
     )!
     const sourceOnlyDefinition = project.robotDefinitions.find(
-      ({ id }) => id !== BUILTIN_CRB_DEFINITION_ID_V4,
+      ({ id }) => id !== BUILTIN_NED2_DEFINITION_ID_V4,
     )!
-    expect(crbDefinition.assetReferenceIds).toHaveLength(7)
+    expect(primaryRobotDefinition.assetReferenceIds).toEqual([
+      'builtin-niryo-ned2-assembly-v1',
+    ])
     expect(sourceOnlyDefinition).toMatchObject({
       assetReferenceIds: ['builtin-sample-linear-slide-source'],
       joints: [{ type: 'prismatic', axis: [1, 0, 0] }],
@@ -67,7 +69,10 @@ describe('dual-Robot Project V4 sample', () => {
     )).toBeGreaterThanOrEqual(2)
 
     for (const [robotId, jobId] of [
-      [DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId, DUAL_ROBOT_SAMPLE_IDS_V4.crbJobId],
+      [
+        DUAL_ROBOT_SAMPLE_IDS_V4.primaryRobotId,
+        DUAL_ROBOT_SAMPLE_IDS_V4.primaryRobotJobId,
+      ],
       [DUAL_ROBOT_SAMPLE_IDS_V4.slideRobotId, DUAL_ROBOT_SAMPLE_IDS_V4.slideJobId],
     ] as const) {
       const robot = project.robots.find(({ id }) => id === robotId)!
@@ -89,21 +94,21 @@ describe('dual-Robot Project V4 sample', () => {
     }
   })
 
-  it('includes a paced 12-Pose CRB Technical Demo that returns every Joint home', () => {
+  it('includes a paced 12-Pose NED2 Technical Demo that returns every Joint home', () => {
     const project = createDualRobotSampleV4(IDENTITY)
     const robot = project.robots.find(
-      ({ id }) => id === DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId,
+      ({ id }) => id === DUAL_ROBOT_SAMPLE_IDS_V4.primaryRobotId,
     )!
     const definition = project.robotDefinitions.find(
       ({ id }) => id === robot.definitionId,
     )!
     const job = project.jobs.find(
-      ({ id }) => id === DUAL_ROBOT_SAMPLE_IDS_V4.crbTechnicalDemoJobId,
+      ({ id }) => id === DUAL_ROBOT_SAMPLE_IDS_V4.primaryRobotTechnicalDemoJobId,
     )!
 
     expect(job).toMatchObject({
-      name: 'CRB 12-Pose Technical Demo',
-      robotId: DUAL_ROBOT_SAMPLE_IDS_V4.crbRobotId,
+      name: 'NED2 12-Pose Technical Demo',
+      robotId: DUAL_ROBOT_SAMPLE_IDS_V4.primaryRobotId,
     })
     expect(job.steps).toHaveLength(12)
     expect(job.steps.every((step) => step.kind === 'joint-pose')).toBe(true)
@@ -153,7 +158,7 @@ describe('dual-Robot Project V4 sample', () => {
     expect(new Set(project.opcUa.mappings.flatMap(({ leaves }) => (
       leaves.map(({ nodeId }) => nodeId)
     )))).toEqual(new Set([
-      DUAL_ROBOT_SAMPLE_IDS_V4.crbJointNodeId,
+      DUAL_ROBOT_SAMPLE_IDS_V4.primaryRobotJointNodeId,
       DUAL_ROBOT_SAMPLE_IDS_V4.slideJointNodeId,
     ]))
     expect(project.opcUa.mappings.every(

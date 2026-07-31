@@ -33,7 +33,7 @@ import {
   type ImportedThreeAsset,
 } from '../../import/occt-to-three.js'
 import type { ProjectMutationServiceV4 } from '../../project/v4/project-v4-mutation-service.js'
-import { createBuiltinCrbDefinitionV4 } from './builtin-crb-definition.js'
+import { createBuiltinNed2DefinitionV4 } from './builtin-ned2-definition.js'
 import {
   createPreparedRobotDefinitionGeometryV4,
   type PreparedRobotDefinitionGeometryV4,
@@ -552,7 +552,7 @@ function buildImportedRobotProjectV4(
     throw new Error('Robot name, manufacturer, and model are required.')
   }
 
-  const template = createBuiltinCrbDefinitionV4()
+  const template = createBuiltinNed2DefinitionV4()
   const token = portableIdSegmentV4(identity)
   const definitionId = `imported-robot-definition-${token}`
   const robotId = `imported-robot-${token}`

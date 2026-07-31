@@ -71,7 +71,7 @@ signal.
 
 ## Stabilization decisions
 
-- The default new Project uses the bundled NED2 instead of ABB CRB15000.
+- The default new Project uses the bundled NED2 instead of NED2.
 - Open left/right Drawer controls sit at their dock edge so they do not cover the
   panel title or first Tree row.
 - A newly imported Robot receives an empty selected Job. For an older Project

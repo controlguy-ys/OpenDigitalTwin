@@ -194,7 +194,7 @@ it.each([1, 2, 3, 4])('rejects schema V%i without conversion', (schemaVersion) =
 it('requires separate Robot and Controller identification', () => {
   const project = makeMinimalWorkcellProjectV5()
   expect(project.robotDefinitions[0]!.identification).toMatchObject({
-    manufacturer: 'ABB', model: 'CRB15000-12/1.27', productCode: 'CRB15000-12/1.27',
+    manufacturer: 'NED2', model: 'NED2-12/1.27', productCode: 'NED2-12/1.27',
     serialNumberTemplate: null, motionDeviceCategory: 'ARTICULATED_ROBOT',
   })
   expect(project.controllers[0]!.identification.serialNumber).toBe('CTRL-SAMPLE-001')

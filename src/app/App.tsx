@@ -1,1 +1,1 @@
-export { AppV5 as App } from './v5/AppV5.js'
+export { AppV6 as App } from './v6/AppV6.js'

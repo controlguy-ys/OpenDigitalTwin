@@ -5,6 +5,22 @@ import { cloneWorkcellProjectV5, makeMinimalWorkcellProjectV5 } from '../../../c
 import { encodeProjectV5, decodeProjectV5, ProjectV5CodecError } from './project-v5-codec'
 
 describe('Project V5 file codec', () => {
+  it('round-trips explicit and legacy-omitted Object communications metadata', async () => {
+    const project = cloneWorkcellProjectV5(makeMinimalWorkcellProjectV5())
+    ;(project.spatialEntities as unknown as Array<Record<string, unknown>>).push({
+      id: 'box', name: 'Box', geometry: { kind: 'box', dimensionsM: [0.1, 0.1, 0.1], color: '#808080' },
+      parentFrameId: 'world', localPose: { positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] },
+      visible: true, groupId: null, removable: true, transformOwner: 'manual',
+      numericStatus: { value: 0, sourceOwnership: 'manual', overlay: { visible: false, frameId: null } },
+      graspable: false, graspFrames: [], movingFrames: [], enableComms: true, tagName: 'Box tag',
+    })
+    await expect(decodeProjectV5(encodeProjectV5(project))).resolves.toEqual(project)
+
+    delete (project.spatialEntities[0] as unknown as Record<string, unknown>).enableComms
+    delete (project.spatialEntities[0] as unknown as Record<string, unknown>).tagName
+    await expect(decodeProjectV5(encodeProjectV5(project))).resolves.toEqual(project)
+  })
+
   it('round-trips a canonical V5 Blob', async () => {
     const project = makeMinimalWorkcellProjectV5()
     const encoded = encodeProjectV5(project)

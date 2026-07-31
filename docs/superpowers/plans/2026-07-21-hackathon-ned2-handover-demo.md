@@ -18,7 +18,7 @@
 - Direct Handover must preserve the Workpiece World pose while ownership changes atomically.
 - The only fault is `GRIP_CONFIRM_TIMEOUT`, with a deterministic 2,000 ms timeout.
 - Fault injection is runtime-only, applies to the next run, and clears on completion or Reset.
-- Preserve existing ABB assets and existing Project samples; the Hackathon sample uses only NED2.
+- Preserve existing NED2 assets and existing Project samples; the Hackathon sample uses only NED2.
 - Do not add Legacy Adoption, manufacturer code generation, Project V5 UI promotion, or a generic multi-Robot scheduler.
 - Preserve unrelated user files and do not stage `.pnpm-store/`, external STEP folders, backups, or `artifacts/`.
 

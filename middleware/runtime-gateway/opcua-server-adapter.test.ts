@@ -29,7 +29,7 @@ import {
   type ServerActualSnapshotV1,
 } from './opcua-openweb-model.js'
 
-const CRB_ROBOT_ID = 'robot-1'
+const PRIMARY_ROBOT_ID = 'robot-1'
 const OPC_UA_ROBOTICS_INSTANCES_NAMESPACE_URI_V1 =
   'urn:open-web-digital-twin:instances:v1'
 const TEST_PKI_ROOT = join(tmpdir(), `robot-sim-opcua-adapter-${process.pid}`)
@@ -72,7 +72,7 @@ function openWebSnapshot(project: WorkcellProjectV5): ServerActualSnapshotV1 {
     projectId: project.projectId,
     revisionId: project.revisionId,
     configRevision: CONFIG_REVISION,
-    robots: { [CRB_ROBOT_ID]: { J1: 21.5 } },
+    robots: { [PRIMARY_ROBOT_ID]: { J1: 21.5 } },
     sceneObjects: {
       box: {
         pose: { positionM: [0.4, 0.5, 0.6], quaternion: [0, 0, 0, 1] },
@@ -217,7 +217,7 @@ describe('OPC UA server adapter V1', () => {
       productRootNodeId: null,
       activeSessionCount: 0,
     })
-    await expect(adapter.publishRobotJointState(CRB_ROBOT_ID, { J1: 5 }))
+    await expect(adapter.publishRobotJointState(PRIMARY_ROBOT_ID, { J1: 5 }))
       .rejects.toThrow('OPC_UA_SERVER_MODE_OFF')
     await adapter.stop()
     await adapter.stop()
@@ -309,11 +309,13 @@ describe('OPC UA server adapter V1', () => {
 
     const namespaceIndex = status.namespaceIndex
     expect(namespaceIndex).not.toBeNull()
-    const crbNodeId = status.nodeIds[CRB_ROBOT_ID]?.J1
-    if (crbNodeId === undefined) throw new Error('CRB J1 ActualPosition is missing')
-    expect(crbNodeId).toMatch(new RegExp(`^ns=${namespaceIndex};s=Robotics/`, 'u'))
+    const primaryRobotNodeId = status.nodeIds[PRIMARY_ROBOT_ID]?.J1
+    if (primaryRobotNodeId === undefined) {
+      throw new Error('Primary Robot J1 ActualPosition is missing')
+    }
+    expect(primaryRobotNodeId).toMatch(new RegExp(`^ns=${namespaceIndex};s=Robotics/`, 'u'))
     expect(status.nodeIds).toEqual({
-      [CRB_ROBOT_ID]: expect.objectContaining({ J1: crbNodeId }),
+      [PRIMARY_ROBOT_ID]: expect.objectContaining({ J1: primaryRobotNodeId }),
     })
 
     const endpointUrl = status.endpointUrl
@@ -333,20 +335,26 @@ describe('OPC UA server adapter V1', () => {
           && tokens[0]?.tokenType === UserTokenType.Anonymous
       })).toBe(true)
 
-      const initialValue = await session.read({ nodeId: crbNodeId, attributeId: AttributeIds.Value })
+      const initialValue = await session.read({
+        nodeId: primaryRobotNodeId,
+        attributeId: AttributeIds.Value,
+      })
       expect(initialValue.statusCode.isGood()).toBe(true)
       expect(initialValue.value.dataType).toBe(DataType.Double)
       expect(initialValue.value.value).toBe(0)
       const writeStatus = await session.write({
-        nodeId: crbNodeId,
+        nodeId: primaryRobotNodeId,
         attributeId: AttributeIds.Value,
         value: { value: new Variant({ dataType: DataType.Double, value: 99 }) },
       })
       expect(writeStatus).toBe(StatusCodes.BadNotWritable)
 
-      await adapter.publishRobotJointState(CRB_ROBOT_ID, { J1: 12.5 })
+      await adapter.publishRobotJointState(PRIMARY_ROBOT_ID, { J1: 12.5 })
 
-      const publishedValue = await session.read({ nodeId: crbNodeId, attributeId: AttributeIds.Value })
+      const publishedValue = await session.read({
+        nodeId: primaryRobotNodeId,
+        attributeId: AttributeIds.Value,
+      })
       expect(publishedValue.value.value).toBe(12.5)
     } finally {
       await session.close()
@@ -381,7 +389,7 @@ describe('OPC UA server adapter V1', () => {
     const { client, session } = await openAnonymousSession(status.endpointUrl!)
     try {
       const objectX = `ns=${status.namespaceIndex};s=OpenWebDigitalTwin/Projects/${project.projectId}/Actual/SceneObjects/box/Pose/X`
-      const robotJ1 = status.nodeIds[CRB_ROBOT_ID]!.J1!
+      const robotJ1 = status.nodeIds[PRIMARY_ROBOT_ID]!.J1!
       const configRevision = `ns=${status.namespaceIndex};s=OpenWebDigitalTwin/Projects/${project.projectId}/Diagnostics/ConfigRevision`
       const values = await session.read([
         { nodeId: objectX, attributeId: AttributeIds.Value },
@@ -412,7 +420,7 @@ describe('OPC UA server adapter V1', () => {
     await adapter.publishActualSnapshot(initial)
     const rejected: ServerActualSnapshotV1 = {
       ...initial,
-      robots: { [CRB_ROBOT_ID]: { J1: 99 } },
+      robots: { [PRIMARY_ROBOT_ID]: { J1: 99 } },
       sceneObjects: {
         box: {
           ...initial.sceneObjects.box!,
@@ -441,7 +449,10 @@ describe('OPC UA server adapter V1', () => {
         { nodeId: `${path}/Actual/LogicalSignals/PartPresent/Value`, attributeId: AttributeIds.Value },
         { nodeId: `${path}/Actual/Jobs/job-1/StepIndex`, attributeId: AttributeIds.Value },
         { nodeId: `${path}/Actual/Attachments/box/State`, attributeId: AttributeIds.Value },
-        { nodeId: status.nodeIds[CRB_ROBOT_ID]!.J1!, attributeId: AttributeIds.Value },
+        {
+          nodeId: status.nodeIds[PRIMARY_ROBOT_ID]!.J1!,
+          attributeId: AttributeIds.Value,
+        },
       ])
       expect(values.map(({ value }) => value.value)).toEqual([0.4, 3, true, 2, 'attached', 21.5])
     } finally {
@@ -464,9 +475,9 @@ describe('OPC UA server adapter V1', () => {
 
     await expect(adapter.publishRobotJointState('robot-missing', { J1: 1 }))
       .rejects.toThrow('OPC_UA_ROBOT_NOT_FOUND')
-    await expect(adapter.publishRobotJointState(CRB_ROBOT_ID, { JOINT_MISSING: 1 }))
+    await expect(adapter.publishRobotJointState(PRIMARY_ROBOT_ID, { JOINT_MISSING: 1 }))
       .rejects.toThrow('OPC_UA_JOINT_NOT_FOUND')
-    await expect(adapter.publishRobotJointState(CRB_ROBOT_ID, { J1: Number.NaN }))
+    await expect(adapter.publishRobotJointState(PRIMARY_ROBOT_ID, { J1: Number.NaN }))
       .rejects.toThrow('OPC_UA_JOINT_VALUE_INVALID')
   }, 30_000)
 

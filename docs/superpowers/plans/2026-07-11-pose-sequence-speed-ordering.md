@@ -25,7 +25,7 @@
 - Collision and BAD/STALE quality pause at the current elapsed position.
 - Reordering, speed edits, and sequence mutations persist atomically and survive reload.
 - Each sequence belongs to one RobotInstance plus one definition/configuration revision; it is never ambiguously shared by every instance of a definition.
-- Any CRB15000 Poses present in the retiring same-runtime memory store convert by stable joint IDs with exact degree-to-radian conversion, preserving physical joint angles rather than raw numeric units.
+- Any NED2 Poses present in the retiring same-runtime memory store convert by stable joint IDs with exact degree-to-radian conversion, preserving physical joint angles rather than raw numeric units.
 - Every bounded commanded joint position is validated against the active effective lower/upper limits during migration, hydration, capture, edit, and the final Play snapshot; playback never relies on downstream clamping.
 - The current v1/v2 `scene` table contains selection only and no persisted keyframes. Therefore a cold upgrade has no durable legacy Pose data to recover. The only compatibility source is the retiring same-runtime `useRobotStore.keyframes`; the bridge uses an explicit injected snapshot and marker instead of inventing a nonexistent scene row, and documentation states this baseline limitation.
 
@@ -132,18 +132,18 @@ it('preserves an unwrapped continuous-joint turn', () => {
   expect(sample.C1).toBeCloseTo(Math.PI * 2)
 })
 
-it('converts legacy CRB degrees to radians without changing the physical angle', () => {
+it('converts legacy NED2 degrees to radians without changing the physical angle', () => {
   const converted = legacyKeyframesToPoseSequence(
     [legacyKeyframe({ jointsDeg: [180, -90, 0, 45, 360, -180] })],
-    crbContext,
+    ned2Context,
     1_000,
   )
   expect(converted.steps[0]!.jointPositions).toMatchObject({
     J1: Math.PI, J2: -Math.PI / 2, J3: 0, J4: Math.PI / 4,
     J5: Math.PI * 2, J6: -Math.PI,
   })
-  expect(crbForwardKinematics(converted.steps[0]!.jointPositions))
-    .toEqual(crbForwardKinematicsFromLegacyDegrees([180, -90, 0, 45, 360, -180]))
+  expect(ned2ForwardKinematics(converted.steps[0]!.jointPositions))
+    .toEqual(ned2ForwardKinematicsFromLegacyDegrees([180, -90, 0, 45, 360, -180]))
 })
 
 it.each([0, 101, 1.5, Number.NaN])('rejects invalid speed %s', (speed) => {
@@ -348,7 +348,7 @@ export function legacyKeyframesToPoseSequence(
 ): PoseSequenceV1
 ```
 
-Map the CRB ordered IDs J1–J6 to existing degree values converted to radians.
+Map the NED2 ordered IDs J1–J6 to existing degree values converted to radians.
 Use `speedPercentToNext=100`; do not infer speed from `durationMs`. Preserve IDs,
 names, order, and easing.
 
@@ -367,7 +367,7 @@ git diff --cached --check
 git commit -m "feat: calculate velocity-safe pose segments"
 ```
 
-## Task 2: Persist Ordered Pose Sequences and Bridge Legacy CRB Poses
+## Task 2: Persist Ordered Pose Sequences and Bridge Legacy NED2 Poses
 
 **Files:**
 - Create: `src/features/sequences/pose-sequence-store.ts`
@@ -482,7 +482,7 @@ it('migrates the retiring in-memory fixed-six snapshot once across two reopen cy
   const reopened = reopenDatabase(db.name)
   await createPoseSequenceStore(reopened, definitions, legacySource).getState().hydrate()
   expect(await reopened.poseSequences.toArray()).toHaveLength(1)
-  expect(await reopened.migrationMarkers.get('legacy-pose-memory-v1:crb15000-01')).toMatchObject({
+  expect(await reopened.migrationMarkers.get('legacy-pose-memory-v1:NED2-01')).toMatchObject({
     sourceKind: 'robot-store-memory-v1', sourceCount: legacyKeyframes.length,
   })
   expect(legacySource.read).toHaveBeenCalledOnce()
@@ -558,13 +558,13 @@ plan's later active-TCP adapter.
 Use these exact bridge contracts in `pose-sequence-store.ts`:
 
 ```ts
-export const LEGACY_POSE_MIGRATION_ID = 'legacy-pose-memory-v1:crb15000-01'
-export const LEGACY_POSE_SEQUENCE_ID = 'legacy-crb15000-sequence-v1'
+export const LEGACY_POSE_MIGRATION_ID = 'legacy-pose-memory-v1:NED2-01'
+export const LEGACY_POSE_SEQUENCE_ID = 'legacy-NED2-sequence-v1'
 
 export interface MigrationMarkerRecord {
   readonly id: string
   readonly sourceKind: 'robot-store-memory-v1'
-  readonly robotInstanceId: 'crb15000-01'
+  readonly robotInstanceId: 'NED2-01'
   readonly sourceCount: number
   readonly completedAtMs: number
 }
@@ -582,7 +582,7 @@ export interface LegacyPoseSnapshotSource {
 
 The App constructs this adapter from the retiring
 `useRobotStore.getState().keyframes` before routing Save Pose to the new store.
-On first hydration, after definitions and the CRB instance are ready, run one
+On first hydration, after definitions and the NED2 instance are ready, run one
 Dexie transaction over `poseSequences` and `migrationMarkers`: if the marker is
 absent, read exactly one immutable snapshot; validate and convert a non-empty
 snapshot to the deterministic sequence ID; then write the marker with the exact
@@ -1260,7 +1260,7 @@ git commit -m "feat: edit and reorder robot pose sequences"
 - Modify: `README.md`
 
 **Interfaces:**
-- Consumes: built app, read-only E2E debug snapshot, CRB15000 and one prismatic fixture definition.
+- Consumes: built app, read-only E2E debug snapshot, NED2 and one prismatic fixture definition.
 - Produces: deterministic Simulation Mode acceptance and format/operator documentation.
 
 - [ ] **Step 1: Write failing browser acceptance**
@@ -1340,7 +1340,7 @@ test('locks Pose mutation and Play while OPC UA owns the robot', async ({ page }
   await resetBrowserStorageBeforeAppLoad(page)
   await page.goto('/')
   await createThreePoseSequence(page)
-  await assignMockOpcUaProfileAndSwitch(page, 'crb-profile')
+  await assignMockOpcUaProfileAndSwitch(page, 'ned2-profile')
   await expect(page.getByRole('status')).toContainText('GOOD')
   await expect(page.getByRole('button', { name: 'Save current Pose' })).toBeDisabled()
   await expect(page.getByLabel('Pose A speed to next')).toBeDisabled()
