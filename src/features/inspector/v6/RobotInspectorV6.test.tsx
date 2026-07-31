@@ -43,6 +43,21 @@ describe('RobotInspectorV6', () => {
     expect(robots.getState().readRobot('robot-2')?.jointValues.J1).toBe(35)
   })
 
+  it('writes simulation-owned Joints with the active owner and rerenders their full value', () => {
+    const project = makeMinimalWorkcellProjectV5()
+    const robots = createRobotJointRuntimeStoreV5(project, CONFIG)
+    const write = vi.spyOn(robots.getState(), 'writeJointValues')
+    render(<RobotInspectorV6 project={project} robotId="robot-1" runtime={{ robots }} />)
+
+    expect(screen.getAllByText('Simulation Joint control is active.')).not.toHaveLength(0)
+    fireEvent.change(screen.getByLabelText('J1'), { target: { value: '35' } })
+
+    expect(write).toHaveBeenCalledWith('robot-1', { J1: 35 }, 'simulation')
+    expect(screen.getByLabelText('J1')).toHaveValue('35')
+    expect(screen.getByText('35 deg')).toBeInTheDocument()
+    expect(robots.getState().readRobot('robot-1')?.jointValues.J1).toBe(35)
+  })
+
   it('resets base drafts on selected Robot and published revision changes', () => {
     const project = projectWithSecondRobot()
     const { rerender } = render(<RobotInspectorV6 project={project} robotId="robot-1" />)

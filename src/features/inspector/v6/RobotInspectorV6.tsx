@@ -63,8 +63,15 @@ function RobotInspectorContent({ project, robotId, runtime, mutations, onOpenBin
     setBaseDraft(baseDraftFor(robot))
   }
   const jointOwner = robotRuntime?.jointSource ?? robot.jointSource
-  const jointDisabled = runtime === undefined || jointOwner.startsWith('opcua:')
-  const jointExplanation = runtime === undefined ? 'Joint controls require an active Runtime Bundle.' : jointOwner.startsWith('opcua:') ? `OPC UA (${jointOwner.slice('opcua:'.length)}) owns Joint controls.` : 'Manual Joint control is active.'
+  const jointControlOwner = jointOwner === 'simulation' || jointOwner === 'manual' ? jointOwner : null
+  const jointDisabled = runtime === undefined || jointControlOwner === null
+  const jointExplanation = runtime === undefined
+    ? 'Joint controls require an active Runtime Bundle.'
+    : jointControlOwner === 'simulation'
+      ? 'Simulation Joint control is active.'
+      : jointControlOwner === 'manual'
+        ? 'Manual Joint control is active.'
+        : `OPC UA (${jointOwner.slice('opcua:'.length)}) owns Joint controls.`
   const applyBase = (): void => {
     if (running || mutations === undefined) return
     const rawValues = [baseDraft.x, baseDraft.y, baseDraft.z]
@@ -79,7 +86,7 @@ function RobotInspectorContent({ project, robotId, runtime, mutations, onOpenBin
     <header><h2>{robot.name}</h2><p>{jointExplanation}</p></header>
     <Section title="Runtime"><dl><div><dt>Joint owner</dt><dd>{jointOwner}</dd></div><div><dt>Quality</dt><dd>{robotRuntime?.quality ?? 'Unavailable'}</dd></div><div><dt>Job</dt><dd>{job?.state ?? 'IDLE'}</dd></div></dl></Section>
     <Section title="Base Transform"><p>{running ? 'A running Job owns Robot motion; base authoring is read-only.' : 'Base Transform is authored from the selected Robot only.'}</p><div className="v6-inspector-grid">{(['x', 'y', 'z'] as const).map((axis) => <label key={axis}>{axis.toUpperCase()} (m)<input aria-label={`${axis.toUpperCase()} (m)`} disabled={running} onChange={(event) => setBaseDraft((draft) => Object.freeze({ ...draft, [axis]: event.currentTarget.value }))} type="number" value={baseDraft[axis]} /></label>)}</div><div className="v6-inspector-actions"><button disabled={running} onClick={applyBase} type="button">Apply Base Transform</button><button onClick={() => setBaseDraft(baseDraftFor(robot))} type="button">Reset</button></div></Section>
-    <Section title="Joints"><p>{jointExplanation}</p><div className="v6-robot-joints">{definition?.joints.map((joint) => { const value = robotRuntime?.jointValues[joint.id] ?? robot.initialJointValues[joint.id] ?? joint.home; const unit = joint.type === 'revolute' ? 'deg' : 'm'; return <label key={joint.id}>{joint.id}<input aria-label={joint.id} disabled={jointDisabled} max={joint.max} min={joint.min} onChange={(event) => runtime?.robots.getState().writeJointValues(robotId, { [joint.id]: Number(event.currentTarget.value) }, 'manual')} step={joint.type === 'revolute' ? 1 : 0.001} type="range" value={value} /><output>{value} {unit}</output></label> })}</div></Section>
+    <Section title="Joints"><p>{jointExplanation}</p><div className="v6-robot-joints">{definition?.joints.map((joint) => { const value = robotRuntime?.jointValues[joint.id] ?? robot.initialJointValues[joint.id] ?? joint.home; const unit = joint.type === 'revolute' ? 'deg' : 'm'; return <label key={joint.id}>{joint.id}<input aria-label={joint.id} disabled={jointDisabled} max={joint.max} min={joint.min} onChange={(event) => { if (jointControlOwner !== null) runtime?.robots.getState().writeJointValues(robotId, { [joint.id]: Number(event.currentTarget.value) }, jointControlOwner) }} step={joint.type === 'revolute' ? 1 : 0.001} type="range" value={value} /><output>{value} {unit}</output></label> })}</div></Section>
     <Section title="Tool/TCP"><dl><div><dt>Tool frame</dt><dd>{robot.selectedToolFrameId}</dd></div><div><dt>TCP frame</dt><dd>{robot.selectedTcpFrameId}</dd></div></dl></Section>
     <Section title="Status"><dl><div><dt>Value</dt><dd>{robot.numericStatus.value}</dd></div><div><dt>Owner</dt><dd>{robot.numericStatus.sourceOwnership}</dd></div></dl></Section>
     <Section title="Communications"><p>Robot bindings are read-only in this Inspector.</p><dl><div><dt>Joint source</dt><dd>{robot.jointSource}</dd></div></dl><button onClick={() => onOpenBinding?.({ type: 'robot-frame', robotId, frameId: robot.selectedTcpFrameId })} type="button">Open Binding</button></Section>
