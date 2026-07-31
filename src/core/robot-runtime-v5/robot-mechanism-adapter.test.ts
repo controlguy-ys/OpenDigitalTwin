@@ -58,8 +58,8 @@ describe('V5 Robot-to-Mechanism adapter', () => {
       motionGroups: [{ motionGroupId: 'primary', name: 'Primary', coordinateJointIds: ['J1'], endFrameIds: ['Base', 'Nested', 'TCP', 'Tool'] }],
       geometryBindings: [{ geometryBindingId: 'robot-occurrence', occurrenceKey: 'robot-occurrence', bodyId: 'L0', assetReferenceId: 'asset-robot' }],
       sourceProvenance: {
-        sourceKind: 'project-v5-robot', sourceDetail: 'manifest', sourceName: 'crb15000.robot.json',
-        sourceRevision: 'crb15000-r1', adapterKey: 'open-digital-twin/project-v5-robot', adapterVersion: '1',
+        sourceKind: 'project-v5-robot', sourceDetail: 'manifest', sourceName: 'ned2.robot.json',
+        sourceRevision: 'ned2-r1', adapterKey: 'open-digital-twin/project-v5-robot', adapterVersion: '1',
       },
     })
     expect(projected.geometryBindings[0]!.bodyLocalPose).toEqual({ positionM: [0, 0, 0], quaternion: [0, 0, 0, 1] })

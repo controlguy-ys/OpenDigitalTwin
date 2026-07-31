@@ -14,13 +14,13 @@ function readStyle(fileName: string): string {
 }
 
 describe('V6 style contract', () => {
-  it('loads the packaged Pretendard variable font through the V6 stylesheet entry', () => {
+  it('loads the packaged Pretendard web font through the V6 stylesheet entry', () => {
     const index = readStyle('index.css')
     const base = readStyle('base.css')
 
     expect(index).toContain("@import './base.css'")
-    expect(base).toContain('@import "pretendard/dist/web/variable/pretendardvariable.css"')
-    expect(base).toContain('font-family: "Pretendard Variable", Pretendard, system-ui, sans-serif')
+    expect(base).toContain('@import "pretendard/dist/web/static/pretendard.css"')
+    expect(base).toContain('font-family: Pretendard, system-ui, sans-serif')
   })
 
   it.each([':root', '[data-theme="dark"]', '[data-theme="light"]'])(

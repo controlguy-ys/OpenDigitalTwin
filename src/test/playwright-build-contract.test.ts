@@ -25,7 +25,7 @@ it('runs every approved browser acceptance through the default E2E and verify ga
   expect(packageJson.scripts['test:e2e:v5'])
     .toBe('playwright test tests/project-v5-browser-cutover.spec.ts tests/opcua-settings-monitor.spec.ts tests/mechanism-tree-viewport-fixtures.spec.ts')
   expect(packageJson.scripts['test:e2e:v6'])
-    .toBe('playwright test tests/ui-v6-shell.spec.ts tests/ui-v6-scene.spec.ts tests/ui-v6-jobs.spec.ts tests/ui-v6-connectivity.spec.ts tests/ui-v6-accessibility.spec.ts')
+    .toBe('playwright test tests/ui-v6-shell.spec.ts tests/ui-v6-scene.spec.ts tests/ui-v6-jobs.spec.ts tests/ui-v6-connectivity.spec.ts tests/ui-v6-accessibility.spec.ts tests/mechanism-tree-viewport-fixtures.spec.ts')
   expect(packageJson.scripts['test:e2e'])
     .toBe('npm run test:e2e:v6')
   expect(packageJson.scripts.verify)

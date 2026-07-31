@@ -1,7 +1,7 @@
-@import "pretendard/dist/web/variable/pretendardvariable.css";
+@import "pretendard/dist/web/static/pretendard.css";
 
 :root {
-  font-family: "Pretendard Variable", Pretendard, system-ui, sans-serif;
+  font-family: Pretendard, system-ui, sans-serif;
   background: var(--v6-color-canvas);
   color: var(--v6-color-text);
 }
