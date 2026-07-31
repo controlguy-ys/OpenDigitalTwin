@@ -8,8 +8,8 @@
   Object Instances. Existing legacy Equipment records remain readable.
 - Restricted a new custom Robot to exactly seven `LINK00–LINK06` STEP files.
   Single-Link replacement is a separate mode and never silently fills missing
-  custom links with CRB geometry.
-- Removed CRB-specific world-origin subtraction from generic Robot import.
+  custom links with NED2 geometry.
+- Removed NED2-specific world-origin subtraction from generic Robot import.
 - Persisted per-Link raw STEP, CAD-local transform, visibility, Box collision,
   and statistics independently from joint Mechanical configuration.
 - Added the Robot Geometry editor and restored custom Geometry after reload.
@@ -19,7 +19,7 @@
 - Added a staged active Project Store with rollback to the previous central
   snapshot on decode, conversion, or commit failure.
 - Added New, Save, Export, and Import controls to the top bar.
-- Bundled the seven authoritative CRB STEP sources so the default workcell can
+- Bundled the seven authoritative NED2 STEP sources so the default workcell can
   also be exported as a complete portable project.
 - Added the fixed `World → MCP → Robot Base → Joints → Flange → TCP`
   hierarchy. MCP, Robot Base, and TCP are manually editable and persisted;
@@ -42,7 +42,7 @@
   capped at seven.
 - Geometry configuration and Mechanical configuration are separate surfaces.
 - A complete custom Robot requires seven Links. Partial Link replacement is an
-  explicit operation, not a fallback to built-in CRB links.
+  explicit operation, not a fallback to built-in NED2 links.
 - Security features remain excluded only for the short-term trusted-LAN target;
   this does not authorize public-internet exposure.
 

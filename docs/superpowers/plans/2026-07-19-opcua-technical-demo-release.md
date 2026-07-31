@@ -12,7 +12,7 @@
 
 - Implement this plan only after Milestones 1 through 5 are green; consume Project V5, logical Signals, Job I/O, standard Robotics Server, product exchange, OPC UA Settings, and Connection Monitor contracts without reopening them.
 - Project V5 is the only demo persistence format. Do not add V4 conversion, migration, aliases, Compatibility Mode, Legacy Adoption, or deprecated sample paths.
-- Use two visible `RobotInstanceV5` records sharing one checked-in CRB15000 Robot Definition and at least two generic primitive Scene Objects; do not add multi-Robot synchronized scheduling.
+- Use two visible `RobotInstanceV5` records sharing one checked-in NED2 Robot Definition and at least two generic primitive Scene Objects; do not add multi-Robot synchronized scheduling.
 - Robot A is Simulation-owned and runs the Job; Robot B is OPC UA Client-owned from the virtual PLC Joint array and remains locally non-editable until explicit takeover.
 - The primary Job contains at least ten `move-joint` instructions and contains `set-do`, `wait-di`, `delay`, `attach`, and `detach` in one deterministic authored sequence.
 - Run the deterministic virtual PLC OPC UA Server at exactly `opc.tcp://127.0.0.1:4840`; fail on a port conflict instead of selecting another port silently.
@@ -33,7 +33,7 @@
 
 **Create:**
 
-- `src/features/robot/v5/builtin-crb-definition-v5.ts` — Project V5 metadata wrapper for the checked-in seven-link CRB15000 geometry; no copied standard OPC UA types.
+- `src/features/robot/v5/builtin-ned2-definition-v5.ts` — Project V5 metadata wrapper for the checked-in seven-link NED2 geometry; no copied standard OPC UA types.
 - `src/features/project/v5/opcua-technical-demo-v5.ts` — canonical two-Robot, generic-Object, Bridge-mode technical demo factory.
 - `src/features/project/v5/opcua-technical-demo-v5.test.ts` — exact Robot/Object/Signal/Mapping/Job and round-trip assertions.
 - `examples/opcua-technical-demo/project-v5.json` — canonical exported fixture generated from the factory and checked against it byte-for-byte.
@@ -78,7 +78,7 @@
 ### Task 1: Create the Canonical Two-Robot Project V5 Demo
 
 **Files:**
-- Create: `src/features/robot/v5/builtin-crb-definition-v5.ts`
+- Create: `src/features/robot/v5/builtin-ned2-definition-v5.ts`
 - Create: `src/features/project/v5/opcua-technical-demo-v5.ts`
 - Test: `src/features/project/v5/opcua-technical-demo-v5.test.ts`
 - Create: `examples/opcua-technical-demo/project-v5.json`
@@ -92,7 +92,7 @@
 - [ ] **Step 1: Write the failing sample contract tests**
 
 ```ts
-it('contains two visible CRB Robots, generic Objects, and the complete Job path', async () => {
+it('contains two visible NED2 Robots, generic Objects, and the complete Job path', async () => {
   const project = createOpcUaTechnicalDemoV5({
     projectId: 'opcua-technical-demo-v5',
     revisionId: 'opcua-technical-demo-v5-r1',
@@ -185,7 +185,7 @@ Run:
 npm run test:run -- src/features/project/v5/opcua-technical-demo-v5.test.ts src/app/App.test.tsx
 ```
 
-Expected: FAIL because the V5 CRB wrapper, demo factory, fixture, and Samples command do not exist.
+Expected: FAIL because the V5 NED2 wrapper, demo factory, fixture, and Samples command do not exist.
 
 - [ ] **Step 3: Add the exact public factory and IDs**
 
@@ -199,7 +199,7 @@ export interface OpcUaTechnicalDemoV5Options {
 }
 
 export const OPCUA_TECHNICAL_DEMO_IDS_V5 = Object.freeze({
-  robotDefinitionId: 'definition-demo-crb15000',
+  robotDefinitionId: 'definition-demo-NED2',
   controllerAId: 'controller-demo-a',
   controllerBId: 'controller-demo-b',
   robotAId: 'robot-demo-a',
@@ -224,7 +224,7 @@ export function createOpcUaTechnicalDemoV5(
 ): WorkcellProjectV5
 ```
 
-Port the checked-in CRB link facts and kinematics under V5 types in `builtin-crb-definition-v5.ts`; keep seven STEP asset references and `/models/robot/LINK00.glb` through `LINK06.glb` render preparation. Create two instances at `[-1.1, -0.45, 0]` and `[1.1, 0.45, 0]`, each with its own Controller and serial number. Both instances share the immutable Definition and geometry resources.
+Port the checked-in NED2 link facts and kinematics under V5 types in `builtin-ned2-definition-v5.ts`; keep seven STEP asset references and `/models/robot/LINK00.glb` through `LINK06.glb` render preparation. Create two instances at `[-1.1, -0.45, 0]` and `[1.1, 0.45, 0]`, each with its own Controller and serial number. Both instances share the immutable Definition and geometry resources.
 
 Create one graspable cyan Box part and one gray Cylinder fixture. The Box uses parent Frame `mcp`, an identity `part-grasp` local Frame, and a Simulation-owned transform. After creating Robot A and the exact pose list below, call `computeSerialRobotPoseV5(definition, poseRecord(poses[1]), robotA.localBasePose)` and set the Box `localPose` so `part-grasp` equals the resulting `Tool` world pose; do not hand-enter an approximate location or increase the 0.05 m attach tolerance to hide a geometry mismatch. The Cylinder declares Moving Frame `frame-demo-fixture-live`, parented to `mcp`, with `sourceOwnership: 'opcua:endpoint-demo-plc'`; the Entity uses that Frame as `parentFrameId`, identity `localPose`, and the same OPC UA `transformOwner`. Configure `PartPresent` as Boolean input and `ClampCommand` as Boolean output. Persist the exact String identifiers `VirtualPLC/Signals/PartPresent`, `VirtualPLC/Signals/ClampCommand`, `VirtualPLC/ObjectPos`, `VirtualPLC/ObjectStatus`, and `VirtualPLC/RobotB/Joints` with Namespace URI `urn:open-web-digital-twin:virtual-plc:v1`; map the fixed `ObjectPos` Double array to the Cylinder's `frame-demo-fixture-live` target with OPC UA source `leafPath` values `[0]` through `[5]` and Project destination `projectPath` values `positionM[0..2]` then `rpyDegrees[0..2]`, map `ObjectStatus` to that fixture through its own Int32 root with both paths empty, and never persist an `ns=` value. Map the six-element Robot B Joint array through six scalar Mapping roots sharing the same Node address, each with source `leafPath: [jointIndex]`, `projectPath: []`, and one stable Robot/Joint target. Robot B's `jointSource` and the fixture transform/status owners are `opcua:endpoint-demo-plc`; Robot A and the graspable Box remain Simulation-owned so the authored Job and Attach/Detach path succeed without silent ownership takeover.
 
@@ -298,7 +298,7 @@ Expected: focused tests PASS, the fixture is byte-identical to canonical V5 enco
 - [ ] **Step 6: Commit the demo contract**
 
 ```powershell
-git add src/features/robot/v5/builtin-crb-definition-v5.ts src/features/project/v5/opcua-technical-demo-v5.ts src/features/project/v5/opcua-technical-demo-v5.test.ts examples/opcua-technical-demo/project-v5.json src/app/App.tsx src/app/App.test.tsx
+git add src/features/robot/v5/builtin-ned2-definition-v5.ts src/features/project/v5/opcua-technical-demo-v5.ts src/features/project/v5/opcua-technical-demo-v5.test.ts examples/opcua-technical-demo/project-v5.json src/app/App.tsx src/app/App.test.tsx
 git diff --cached --check
 git commit -m "feat: add opc ua technical demo project"
 ```
@@ -1117,7 +1117,7 @@ If it passes, mark Criterion 19 Docker smoke PASS with the command output and Co
 
 ```powershell
 npm run test:run -- src/app/v5-production-import-graph.test.ts src/features/ui/v4/app-menu-model.test.ts src/features/help/v4
-rg -n -g "!*.test.*" -g "!*.spec.*" "Legacy Adoption|Compatibility Mode|automatic migration|manufacturer (Robot )?code generator|Generate (ABB|KUKA|FANUC)|Security Settings|Physics Engine|safety-rated|Robotics conformant|Robotics certified" src/app/v5 src/features/connectivity/v5 src/features/jobs/v5 src/features/ui/v4 src/features/help/v4 middleware/runtime-gateway
+rg -n -g "!*.test.*" -g "!*.spec.*" "Legacy Adoption|Compatibility Mode|automatic migration|manufacturer (Robot )?code generator|Generate (NED2|KUKA|FANUC)|Security Settings|Physics Engine|safety-rated|Robotics conformant|Robotics certified" src/app/v5 src/features/connectivity/v5 src/features/jobs/v5 src/features/ui/v4 src/features/help/v4 middleware/runtime-gateway
 rg -n "conformant|certified|safety-rated|production security|manufacturer code generator|Legacy Adoption|automatic migration" README.md docs/operator/opcua-technical-demo.md docs/verification/opcua-technical-demo-verification.md docs/progress/2026-07-19-opcua-technical-demo-build-log.md
 git diff --check
 ```
@@ -1134,7 +1134,7 @@ git commit -m "docs: publish opc ua technical demo evidence"
 
 ## Completion Checklist
 
-- [ ] Two visible CRB Robot instances and at least two generic primitive Objects load from one Project V5 sample.
+- [ ] Two visible NED2 Robot instances and at least two generic primitive Objects load from one Project V5 sample.
 - [ ] Virtual PLC `RobotB/Joints` drives OPC UA-owned Robot B while local Joint inputs stay disabled; Robot A remains Simulation-owned for the Job.
 - [ ] The primary Job contains exactly 12 MoveJoint instructions plus SetDO, WaitDI, Delay, Attach, and Detach in authored order.
 - [ ] The host virtual PLC binds 127.0.0.1:4840; native and Docker Gateway Clients use the correct host forms.

@@ -941,6 +941,60 @@ git add src/app/v5/AppV5.tsx src/app/v5/AppV5.test.tsx src/styles/global.css src
 git commit -m "refactor(ui): remove superseded V5 composition"
 ```
 
+---
+
+### Task 12: Remove Retired Licensed Assets and Keep NED2 as the Default
+
+Run this task only after the V6 production UI and full verification are green.
+This task removes retired licensed robot material from the resulting Git tree; rewriting
+already-published Git history remains a separate destructive operation that
+requires explicit approval.
+
+**Scope:**
+- Delete tracked retired STEP and GLB assets, conversion scripts, built-in
+  definitions, samples, fixtures, and asset reports.
+- Replace retired defaults, test fixtures, logical namespaces, package copy,
+  and operator documentation with vendor-neutral or NED2 equivalents.
+- Preserve generic identifiers such as AABB collision math and unrelated
+  substrings that are not retired robot content.
+
+- [ ] **Step 1: Prove the removal inventory**
+
+```powershell
+git ls-files | rg -i "retired-vendor|retired-robot"
+rg -n -i "retired-vendor|retired-robot" src public scripts docs tests package.json package-lock.json .gitattributes
+```
+
+Review every match before deleting it. Do not remove a generic collision AABB
+symbol or other false positive. The approved prohibited-term list is maintained
+outside this repository so the completed tree does not retain the retired names.
+
+- [ ] **Step 2: Delete assets and migrate code/tests**
+
+Delete the proven retired asset and implementation files. Update Project V5
+fixtures, demos, robot import tests, package metadata, and documentation so
+NED2 is the default built-in Robot and no runtime path requests a retired asset.
+
+- [ ] **Step 3: Verify the current tree and NED2 flow**
+
+```powershell
+git ls-files | rg -i "retired-vendor|retired-robot"
+rg -n -i "retired-vendor|retired-robot" src public scripts docs tests package.json package-lock.json .gitattributes
+npm run verify
+```
+
+Expected: the two searches return no retired product content, `npm run verify`
+exits 0, and the manual V6 browser flow loads and moves the NED2 demo without
+a retired asset request.
+
+- [ ] **Step 4: Commit**
+
+```powershell
+git add -u
+git add <only the reviewed NED2 or vendor-neutral replacements>
+git commit -m "chore(assets): remove retired robot content"
+```
+
 ## Completion Gate
 
 UI V6 is complete only when all conditions hold:
@@ -959,3 +1013,4 @@ UI V6 is complete only when all conditions hold:
 12. Keyboard-only, 200% zoom, High Contrast, reduced-motion, NVDA, and axe acceptance gates pass with no serious or critical automated accessibility violations.
 13. Existing Project, Load Demo, Save, Export, Import, OPC UA Settings, Connection Monitor, Binding, Address Space Browse, Job Start/Cancel, and Runtime Epoch flows pass.
 14. Targeted tests, lint, typecheck, build, E2E, full verify, and manual in-app browser acceptance are recorded at the same commit.
+15. The current Git tree contains no retired robot assets or product-specific runtime references, and the NED2 default demo remains verified.

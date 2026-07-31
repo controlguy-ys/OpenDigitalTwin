@@ -33,7 +33,7 @@ that every later section is already available.
   Robot, Job, Scene, interaction, coordinate-display, and resource registrations
   match the same revision. Candidate Geometry and Job resources roll back as one
   runtime bundle on failure.
-- The V4 Scene renders the built-in CRB Definition, general Spatial Entities and
+- The V4 Scene renders the built-in NED2 Definition, general Spatial Entities and
   primitives, named Frames, and Robot-qualified geometric collision proxies.
 - The short-term Runtime Gateway implements only Project modes `off` and
   `server`. Its bounded HTTP surface is `GET /healthz`, `GET /readyz`,
@@ -54,7 +54,7 @@ that every later section is already available.
 
 The checked-in two-Robot sample uses:
 
-1. the rendered built-in ABB CRB15000 with a two-Pose Job; and
+1. the rendered built-in NED2 with a two-Pose Job; and
 2. a source-only logical one-axis prismatic `RobotDefinition` with a `SLIDE_X`
    Joint, empty Geometry occurrences, its own two-Pose Job, and its own OPC UA
    Actual value.
@@ -104,7 +104,7 @@ OPC UA Client connection into a reusable, lightweight Web Digital Twin that can:
   independent Sample Jobs, and one complete Pick/Place sequence.
 
 The target remains a visualization and engineering Digital Twin. It is not a
-Robot safety controller, RobotWare replacement, motion planner, or physics
+Robot safety controller, vendor controller software replacement, motion planner, or physics
 simulator.
 
 ## 2. Approved Decision Summary
@@ -140,8 +140,7 @@ simulator.
     same Action Executor.
 15. Verify the finished system through the browser with a two-Robot sample and
     a real OPC UA Server read/write smoke client.
-16. Use heterogeneous Robot Definitions in the final sample: the built-in ABB
-    CRB15000 and a Savvy MRb05 created from one external Assembly STEP source.
+16. Use heterogeneous Robot Definitions in the final sample: the built-in NED2 and a Savvy MRb05 created from one external Assembly STEP source.
 
 ## 3. Former Baseline and Breaking Boundary
 
@@ -556,7 +555,7 @@ Project V4 permits:
 
 ```text
 asset://<mount-alias>/<normalized-relative-path>
-builtin://abb/<asset-id>@<version>
+builtin://niryo/<asset-id>@<version>
 ```
 
 Projects, XML, and XLSX never contain physical Windows, Linux, or Docker paths.
@@ -922,8 +921,8 @@ The final integrated fixture is named
 
 ### 14.1 Scene
 
-- `Robot_A_CRB15000` references the built-in or checked-in
-  `CRB15000_12kg-127_OmniCore_rev00_STEP_J` Robot Definition.
+- `Robot_A_NED2` references the built-in or checked-in
+  `NED2_12kg-127_retired-controller_rev00_STEP_J` Robot Definition.
 - `Robot_B_MRb05` references a separate Savvy MRb05 Robot Definition created
   from exactly one external Assembly STEP source.
 - Their Base Frames are positioned independently on one workcell.
@@ -999,7 +998,7 @@ proxies.
 
 ### 14.3 Jobs and OPC UA Bindings
 
-- `Job_A_CRB_PickPlace` belongs to `Robot_A_CRB15000` and performs Joint Pose
+- `Job_A_NED2_PickPlace` belongs to `Robot_A_NED2` and performs Joint Pose
   movement, Close, Attach `Cup_01`, transport, Open, and Detach at
   `Place_Table`.
 - `Job_B_MRb05_Inspection` belongs to `Robot_B_MRb05` and performs an
@@ -1009,10 +1008,10 @@ proxies.
 - `Action_A_CloseGripper` is one reusable `set-gripper-state` Action invoked
   directly from UI and through the `Execute_Action_A_CloseGripper`
   `action-execute` Binding to prove both routes use one Action Executor.
-- `Start_Robot_A_CRB_PickPlace` is an OPC UA Action Binding that starts the
+- `Start_Robot_A_NED2_PickPlace` is an OPC UA Action Binding that starts the
   preconfigured Pick/Place Job.
 - `Set_Robot_B_MRb05_J1` is an explicit OPC UA Command Mapping used to prove
-  that variable Robot/Joint IDs are not tied to the CRB runtime. It is a
+  that variable Robot/Joint IDs are not tied to the NED2 runtime. It is a
   one-shot command and leaves MRb05 Joint source ownership as `simulation`.
 - A repeated identical Command ID cannot re-execute any command.
 
@@ -1028,7 +1027,7 @@ proxies.
 6. Load and Apply the Heterogeneous Dual Robot Demo Project, resolve the MRb05
    Asset, and acquire the Runtime Publisher Lease.
 7. Wait for `/readyz` to report the applied Revision ready.
-8. Confirm the CRB15000 and MRb05 are simultaneously visible, have different
+8. Confirm the NED2 and MRb05 are simultaneously visible, have different
    Definitions, and are independently selectable.
 9. Confirm each selected Robot displays its own Joint IDs, Mechanics, Jobs, and
    controls.
@@ -1038,7 +1037,7 @@ proxies.
     `false -> true`. Verify `ACCEPTED`, terminal success, only the intended MRb05
     child subtree moves, Joint ownership remains `simulation`, and MRb05 can
     return Home.
-12. Invoke `Action_A_CloseGripper` from the UI, verify the CRB Gripper closes,
+12. Invoke `Action_A_CloseGripper` from the UI, verify the NED2 Gripper closes,
     then restore it to Open.
 13. With a new Command ID and valid expiry, write Trigger `false -> true` to
     `Execute_Action_A_CloseGripper`; verify `ACCEPTED`, `RUNNING -> SUCCEEDED`,
@@ -1047,8 +1046,8 @@ proxies.
     `RUNNING`; do not use an arbitrary delay.
 15. While that Job is `RUNNING`, write a new Command ID, valid expiry, and
     Trigger `false -> true` to
-    `Start_Robot_A_CRB_PickPlace`.
-16. Observe in the browser that the CRB moves, `Cup_01` Attach/Detach pose
+    `Start_Robot_A_NED2_PickPlace`.
+16. Observe in the browser that the NED2 moves, `Cup_01` Attach/Detach pose
     discontinuity stays within 0.5 mm and 0.1 degree, the Object follows the
     Tool, and MRb05 state remains independent.
 17. Verify the Pick/Place acknowledgement is `ACCEPTED`, its Action Result stays
@@ -1098,7 +1097,7 @@ counted as final completion.
   `local-samples` mount and fails preflight on missing bytes, digest mismatch,
   parser drift, or import-option drift; ordinary CI reports this suite's skip
   separately.
-- Heterogeneous CRB15000 and MRb05 Instances with independent RobotDefinition,
+- Heterogeneous NED2 and MRb05 Instances with independent RobotDefinition,
   Joint, Job, selection, collision, and OPC UA state.
 - Namespaced multi-Robot collision proxies, per-Robot adjacency exclusions,
   intentional mount contact, and attached Tool/Object contact exclusion.
@@ -1158,7 +1157,7 @@ The work is complete only when all of the following are true:
    Save/Reload, and Reset without becoming a rigid Object.
 4. Two Robots sharing one Definition render and execute independent Jobs without
    state, selection, or OPC UA crosstalk.
-5. The heterogeneous CRB15000 and MRb05 final fixture renders and executes
+5. The heterogeneous NED2 and MRb05 final fixture renders and executes
    independent Jobs without Definition, Joint, selection, collision, or OPC UA
    crosstalk.
 6. A Robot Base mounted to a Moving Frame follows that Frame and maintains one
@@ -1213,7 +1212,7 @@ This is one approved target architecture, delivered through bounded milestones:
 6. **Interchange:** XML and XLSX adapters with preview and atomic apply.
 7. **Pick/Place:** shared Action Executor, Attachment constraints, Job actions,
    OPC UA triggers, and Reset behavior.
-8. **Release Demo:** heterogeneous CRB15000/MRb05 Sample Project, MRb05
+8. **Release Demo:** heterogeneous NED2/MRb05 Sample Project, MRb05
    single-Assembly Asset fixture, Docker profiles, OPC UA test client, in-app
    browser verification, `test:release:mrb05`, performance run, and operator
    docs.

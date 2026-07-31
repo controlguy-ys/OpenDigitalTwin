@@ -1,4 +1,4 @@
-# CRB 12-Pose Technical Demo
+# NED2 12-Pose Technical Demo
 
 This deterministic browser demo proves that one Robot-owned Simulation Job can
 execute more than ten ordered Joint Poses with independent transition speeds.
@@ -6,12 +6,12 @@ execute more than ten ordered Joint Poses with independent transition speeds.
 ## Run the demo
 
 1. Start the Web application and open **Project → Samples → Dual-Robot Technical Demo**.
-2. Select **ABB CRB15000** in Scene Objects.
-3. Select **CRB 12-Pose Technical Demo** in Robot Jobs.
+2. Select **NED2** in Scene Objects.
+3. Select **NED2 12-Pose Technical Demo** in Robot Jobs.
 4. Open the Timeline and confirm `12 steps` and `12 Joint Poses`.
 5. Press **Start Job** and observe `RUNNING → SUCCEEDED`.
 
-The sequence takes approximately 5.2 seconds with the built-in CRB joint
+The sequence takes approximately 5.2 seconds with the built-in NED2 joint
 velocity limits. It starts and ends at Home, so it is repeatable.
 
 | Pose | J1 | J2 | J3 | J4 | J5 | J6 | Speed to next |

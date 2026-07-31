@@ -1,7 +1,7 @@
 # Geometry Proxy Collision Verification
 
 This verification covers the deterministic geometry-query implementation. It
-does not certify RobotWare, SafeMove, PLC logic, stopping distance, or any
+does not certify vendor controller software, vendor safety system, PLC logic, stopping distance, or any
 safety function.
 
 ## Automated coverage

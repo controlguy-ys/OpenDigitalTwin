@@ -1,8 +1,8 @@
-# Heterogeneous CRB15000 and MRb05 Release Demo Implementation Plan
+# Heterogeneous NED2 and MRb05 Release Demo Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Produce and prove the non-skippable Docker/browser release fixture containing one CRB15000, one operator-confirmed MRb05 single-Assembly Robot, Sample Jobs, explicit Pick/Place, and an actual OPC UA Server Read/Write flow.
+**Goal:** Produce and prove the non-skippable Docker/browser release fixture containing one NED2, one operator-confirmed MRb05 single-Assembly Robot, Sample Jobs, explicit Pick/Place, and an actual OPC UA Server Read/Write flow.
 
 **Architecture:** Treat the MRb05 STEP as a pinned external `asset://local-samples` dependency and verify its bytes/hierarchy before any semantic use. Require a human operator to create and explicitly approve the seven-Link/six-Joint Definition through the P3 Wizard; no script derives ownership or Mechanics. Generate one canonical heterogeneous V4 Project from that approved Definition, run Web plus the compiled TypeScript Runtime Gateway in Server mode, drive both the browser and a real `node-opcua` Client, and fail release completion on any skipped external fixture, missing Docker gate, performance miss, or absent in-app browser evidence.
 
@@ -21,7 +21,7 @@
 - The approved MRb05 Definition uses seven rigid Links and six revolute Joints `J1..J6`. J1/J2 ranges are -360..360 degrees at 180 degrees/second; J3 is -158..158 degrees at 180 degrees/second; J4/J5/J6 are -360..360 degrees at 360 degrees/second. Origins, axes, order, Frames, and zero pose still require operator mechanical evidence.
 - Persist the pinned source convention as Y-up normalized once to the Z-up Robot domain. Do not also apply an equivalent custom root rotation.
 - Joint preview must prove that Jn moves only its configured child subtree. Included source Zero Pose Geometry must reconstruct within 0.5 mm; excluded hardware is outside this comparison.
-- The release Project contains `Robot_A_CRB15000`, `Robot_B_MRb05`, `Cup_01`, `Pick_Table`, `Place_Table`, `Job_A_CRB_PickPlace`, `Job_B_MRb05_Inspection`, `Action_A_CloseGripper`, `Execute_Action_A_CloseGripper`, `Start_Robot_A_CRB_PickPlace`, and `Set_Robot_B_MRb05_J1`.
+- The release Project contains `Robot_A_NED2`, `Robot_B_MRb05`, `Cup_01`, `Pick_Table`, `Place_Table`, `Job_A_NED2_PickPlace`, `Job_B_MRb05_Inspection`, `Action_A_CloseGripper`, `Execute_Action_A_CloseGripper`, `Start_Robot_A_NED2_PickPlace`, and `Set_Robot_B_MRb05_J1`.
 - OPC UA tests use a real `node-opcua` Client against the Gateway Server, one Session for each staged command, Boolean `false -> true` Trigger edges, a unique Command ID, and an expiry no more than 60 seconds in the future.
 - Replaying an active identical Command ID returns the stored result and never executes again. Changed payload or expiry with the same active ID fails `COMMAND_ID_CONFLICT`.
 - `test:release:mrb05` is a strict release command. A missing Asset, missing operator-confirmation artifact, skipped Playwright test, unavailable Docker Engine, unhealthy service, missing OPC UA assertion, or missing 15-minute performance run is a failure, not a skip or static substitute.
@@ -337,7 +337,7 @@ Expected: the committed JSON contains no STEP bytes or physical path and matches
 - Modify: `README.md`
 
 **Interfaces:**
-- Consumes: Task 2 approved MRb05 Definition, P2 CRB15000 built-in Definition, P1 canonical JSON/Revision contracts, P6 ordinary decode-preview-apply path, and P7 Action contracts.
+- Consumes: Task 2 approved MRb05 Definition, P2 NED2 built-in Definition, P1 canonical JSON/Revision contracts, P6 ordinary decode-preview-apply path, and P7 Action contracts.
 - Produces: `createHeterogeneousDemoProjectV4`, one checked-in canonical sample, and a Project Menu loader.
 
 - [ ] **Step 1: Write RED fixture-content and determinism tests**
@@ -346,11 +346,11 @@ Expected: the committed JSON contains no STEP bytes or physical path and matches
 it('builds the exact heterogeneous Scene, Jobs, Actions, and mappings', () => {
   const project = createHeterogeneousDemoProjectV4(approvedMRb05())
   expect(project.robots.map(({ id }) => id)).toEqual([
-    'Robot_A_CRB15000',
+    'Robot_A_NED2',
     'Robot_B_MRb05',
   ])
   expect(project.jobs.map(({ id }) => id)).toEqual([
-    'Job_A_CRB_PickPlace',
+    'Job_A_NED2_PickPlace',
     'Job_B_MRb05_Inspection',
   ])
   expect(project.assetReferences.find(({ id }) => id === 'asset-mrb05')?.uri)
@@ -384,7 +384,7 @@ export function buildHeterogeneousDemoBytes(
 ): Uint8Array
 ```
 
-Use stable IDs named in the Global Constraints. `Job_B_MRb05_Inspection` starts at confirmed Home, uses `[J1:10,J2:-10,J3:5,J4:10,J5:-10,J6:10]` degrees only after validating those values against the approved limits, applies different 20/60/30 percent segment speeds, and returns Home. `Job_A_CRB_PickPlace` closes, attaches `Cup_01`, transports, opens, and detaches to `Place_Table` through P7 Action references. Generate timestamps from fixed fixture metadata so canonical bytes do not vary by wall clock.
+Use stable IDs named in the Global Constraints. `Job_B_MRb05_Inspection` starts at confirmed Home, uses `[J1:10,J2:-10,J3:5,J4:10,J5:-10,J6:10]` degrees only after validating those values against the approved limits, applies different 20/60/30 percent segment speeds, and returns Home. `Job_A_NED2_PickPlace` closes, attaches `Cup_01`, transports, opens, and detaches to `Place_Table` through P7 Action references. Generate timestamps from fixed fixture metadata so canonical bytes do not vary by wall clock.
 
 - [ ] **Step 4: Add the production sample loader**
 
@@ -524,7 +524,7 @@ git commit -m "test: orchestrate the mrb05 docker release"
 ```ts
 it('resolves dynamic Robot and Joint nodes by BrowseName rather than fixed NodeId', async () => {
   const handles = await client.resolveDemoNodes('demo-project')
-  expect(handles.actualJoint('Robot_A_CRB15000', 'J1')).toBeDefined()
+  expect(handles.actualJoint('Robot_A_NED2', 'J1')).toBeDefined()
   expect(handles.actualJoint('Robot_B_MRb05', 'J1')).toBeDefined()
 })
 
@@ -577,7 +577,7 @@ The test must perform these ordered assertions without arbitrary sleeps:
 3. Load `Heterogeneous Dual Robot Demo` through Project Menu.
 4. Resolve the MRb05 Asset and acquire the Runtime Publisher Lease.
 5. Wait for `/readyz` to identify the applied Revision.
-6. Assert CRB15000 and MRb05 are visible, different Definitions, and independently selectable.
+6. Assert NED2 and MRb05 are visible, different Definitions, and independently selectable.
 7. Assert each Robot exposes its own Joint IDs, Mechanics, Jobs, and controls.
 8. Read both Robots' Actual J1 through the real OPC UA Client.
 9. Stage and execute `Set_Robot_B_MRb05_J1` with a new ID and valid expiry.
@@ -585,8 +585,8 @@ The test must perform these ordered assertions without arbitrary sleeps:
 11. Invoke `Action_A_CloseGripper` from UI and restore Open.
 12. Invoke `Execute_Action_A_CloseGripper` through OPC UA and assert `ACCEPTED`, `RUNNING`, `SUCCEEDED`; restore Open.
 13. Start `Job_B_MRb05_Inspection` and wait for `RUNNING`.
-14. While MRb05 runs, trigger `Start_Robot_A_CRB_PickPlace` through OPC UA.
-15. Assert CRB Attach discontinuity <=0.5 mm and <=0.1 degree.
+14. While MRb05 runs, trigger `Start_Robot_A_NED2_PickPlace` through OPC UA.
+15. Assert NED2 Attach discontinuity <=0.5 mm and <=0.1 degree.
 16. Assert `Cup_01` follows the Tool and detaches at `Place_Table` while MRb state remains independent.
 17. Assert Pick/Place remains `RUNNING` until Job end, then `SUCCEEDED`.
 18. Replay the identical Mapping and both Action IDs with fresh Trigger edges; assert stored results and zero re-execution.
@@ -766,7 +766,7 @@ Expected: all commands exit 0; `test:release:mrb05` reports zero skipped tests, 
 
 - [ ] **Step 3: Repeat the visible acceptance in the Codex in-app browser**
 
-Start the already-built release Compose stack in Server mode, open `http://127.0.0.1:8080/` in the Codex in-app browser, and repeat the Task 5 sequence through visible controls. Use the release OPC UA Client for Read/Write evidence. Capture screenshots or equivalent visible evidence showing both Robots, each Robot's Job/Joint selection, MRb05 commanded J1 subtree, CRB holding `Cup_01`, successful results, Save/Reload, and Reset.
+Start the already-built release Compose stack in Server mode, open `http://127.0.0.1:8080/` in the Codex in-app browser, and repeat the Task 5 sequence through visible controls. Use the release OPC UA Client for Read/Write evidence. Capture screenshots or equivalent visible evidence showing both Robots, each Robot's Job/Joint selection, MRb05 commanded J1 subtree, NED2 holding `Cup_01`, successful results, Save/Reload, and Reset.
 
 If the in-app browser, Docker Engine, external Asset, operator-confirmation artifact, or OPC UA Client is unavailable, stop and report that exact blocker. Do not mark the plan complete from headless or static-only evidence.
 

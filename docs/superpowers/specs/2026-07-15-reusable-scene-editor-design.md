@@ -26,7 +26,7 @@ Robot mounting contact.
 - Bound imported STEP Assets and Object Instances independently of existing
   byte, mesh, material, and triangle budgets.
 - Model intentional Robot mounting contact explicitly instead of hard-coding an
-  ABB-specific collision exception.
+  NED2-specific collision exception.
 
 ## Explicit exclusions
 

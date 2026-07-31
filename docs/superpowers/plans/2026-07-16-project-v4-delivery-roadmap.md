@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver the approved Project V4 as eight reviewable, independently gated workstreams ending in the heterogeneous CRB15000/MRb05 OPC UA Pick/Place browser demonstration.
+**Goal:** Deliver the approved Project V4 as eight reviewable, independently gated workstreams ending in the heterogeneous NED2/MRb05 OPC UA Pick/Place browser demonstration.
 
 **Architecture:** Build the dependency-free deterministic Core first, cut the browser over to keyed multi-Robot V4 runtime second, and then add Asset authoring, Runtime Gateway transports, interchange, explicit Pick/Place, and the final release fixture. The browser remains the Project author and Simulation owner; one compiled TypeScript Runtime Gateway owns filesystem Asset resolution and all `node-opcua` Client/Server/Bridge behavior.
 
@@ -52,7 +52,7 @@ The current product is a stable Project V3 single-Robot application. The V4 work
 | `src/domain/project/project-v3.ts` | 4,324 lines | replace with focused `src/core/project-v4/*` contracts; delete after V4 cutover |
 | `src/features/project/browser-project-runtime.ts` | 832 lines | replace with V4 repository/runtime coordinators and feature adapters |
 | `src/features/scene/Workcell.tsx` | 660 lines | retain viewport composition; move Robot iteration and bounds to focused components/selectors |
-| `src/features/robot/RobotModel.tsx` | 444 lines | replace fixed CRB component with definition-driven `RobotInstanceModel` |
+| `src/features/robot/RobotModel.tsx` | 444 lines | replace fixed NED2 component with definition-driven `RobotInstanceModel` |
 | `src/features/interaction/GraspController.tsx` | 392 lines | remove automatic-nearest behavior; replace with explicit Action Executor |
 | `middleware/opcua-connector.mjs` | 160 lines | replace polling script with compiled TypeScript Runtime Gateway modules |
 
@@ -97,7 +97,7 @@ P6 Tasks 1-3 may begin after P1 because they own isolated document codecs, but P
 | 5 | [Runtime Gateway Server and Bridge](./2026-07-16-runtime-gateway-server-bridge.md) | Off/Client/Server/Bridge, Lease, namespace, Session staging, dedup, no echo |
 | 6 | [Project V4 Interchange](./2026-07-16-project-v4-interchange.md) | canonical JSON, lossless XML, bounded XLSX preview and atomic apply |
 | 7 | [Explicit Pick and Place](./2026-07-16-explicit-pick-place.md) | shared UI/Job/OPC UA Action Executor and deterministic Attachment constraints |
-| 8 | [Heterogeneous Release Demo](./2026-07-16-heterogeneous-release-demo.md) | CRB15000 + MRb05, OPC UA TCP assertions, Docker/performance/browser evidence |
+| 8 | [Heterogeneous Release Demo](./2026-07-16-heterogeneous-release-demo.md) | NED2 + MRb05, OPC UA TCP assertions, Docker/performance/browser evidence |
 
 ## 4. File Ownership and Merge Serialization
 

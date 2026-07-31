@@ -36,7 +36,7 @@
 - Supported Robot Geometry is a self-contained AP203/AP214/AP242 STEP that the checked-in OCCT Worker exposes as finite, non-empty, separately selectable triangulatable occurrences. Unresolved external references fail as `ROBOT_STEP_EXTERNAL_REFERENCE_UNSUPPORTED`; tessellated/PMI-only or otherwise non-triangulatable sources fail as `ROBOT_STEP_UNSUPPORTED`. AP242 Joint/mate metadata, PMI, colors, and names never supply Mechanics.
 - Cancel and every pre-publication failure leave Project DB, active runtime, selection, collision state, repositories, and current Robot unchanged, with staged resources disposed exactly once. A post-publication finalization or post-finalization token-consumption/handle-activation failure keeps the coherent new publishing/stable pointer plus new runtime locked in `recovery-required`; old-runtime disposal failure is a successful new commit with a bounded cleanup warning. No terminal path exposes a mixed revision.
 - Preserve the seven-independent-file workflow and explicit one-Link Geometry replacement. One-Link replacement cannot accept a multi-Link assembly or bypass full-Robot validation.
-- Preserve the repository's already tracked seven-Link ABB baseline and its production imports. Do not add the new proprietary/full one-source ABB assembly or any additional vendor CAD; new CI coverage uses compact generated/redistributable fixtures, and the one-source real ABB assembly remains opt-in local evidence only.
+- Preserve the repository's already tracked seven-Link NED2 baseline and its production imports. Do not add the new proprietary/full one-source NED2 assembly or any additional vendor CAD; new CI coverage uses compact generated/redistributable fixtures, and the one-source real NED2 assembly remains opt-in local evidence only.
 - No PLC, OPC UA write, Robot command, IK, dynamics, or safety-rated behavior is in scope.
 - Preserve unrelated user changes; use failure-first tests and one focused commit per task.
 
@@ -61,7 +61,7 @@
 - Consumes: frozen WS1 `ProjectSourceStagingService`, `PreparedProjectSourceV1`, `RobotStepSourceAssetV3`, `RobotAssemblyPartRefV3`, and Robot budget exports from `src/domain/project/project-v3.ts`.
 - Produces: `RobotImportError` including stable `ROBOT_JOINT_COUNT_UNSUPPORTED` details `{ declaredJointCount, requiredJointCount: 6 }`, `RobotImportDiagnostic`, `preflightRobotSourceSelection()`, `deduplicatePreparedRobotSources()`, `RobotSourceAnalysis`, `RobotPartOccurrence`, and `RobotAssemblyAnalysisClient.analyzeSources()/cancel()/dispose()`.
 
-- [ ] **Step 1: Write failing pure tests** for assembly source identity through the frozen WS1 staging service, case-insensitive `.step`/`.stp` validation (`.step`, `.stp`, `.STEP`, `.STP` pass; `.iges`, `.zip`, and missing suffix fail as `ROBOT_STEP_FILENAME_INVALID` before read), exact selected-file/byte limits, and single-copy owned buffers. Prove 1 and 7 selected Files pass preflight; 0 and 8 fail as `ROBOT_STEP_SOURCE_COUNT` before `arrayBuffer`, staging/hash, or Worker calls; eight duplicate Files still fail; a zero-byte `.step` fails as `ROBOT_STEP_PARSE_FAILED` with `reason: 'empty-source'` before staging/Worker; exact 25 MiB/file and 100 MiB selected-size sum pass while plus one fails as `ROBOT_STEP_BUDGET_EXCEEDED`. Use `TextEncoder` multibyte names to prove a STEP `File.name` at exactly 255 UTF-8 bytes passes and 256 rejects as `ROBOT_STEP_FILENAME_INVALID` before read/copy/hash/Worker allocation, with no truncation. Default tests may use the already tracked seven-Link production baseline but must not reference the new local one-file ABB assembly; redistributable one-file parseable fixtures are introduced in Task 6.
+- [ ] **Step 1: Write failing pure tests** for assembly source identity through the frozen WS1 staging service, case-insensitive `.step`/`.stp` validation (`.step`, `.stp`, `.STEP`, `.STP` pass; `.iges`, `.zip`, and missing suffix fail as `ROBOT_STEP_FILENAME_INVALID` before read), exact selected-file/byte limits, and single-copy owned buffers. Prove 1 and 7 selected Files pass preflight; 0 and 8 fail as `ROBOT_STEP_SOURCE_COUNT` before `arrayBuffer`, staging/hash, or Worker calls; eight duplicate Files still fail; a zero-byte `.step` fails as `ROBOT_STEP_PARSE_FAILED` with `reason: 'empty-source'` before staging/Worker; exact 25 MiB/file and 100 MiB selected-size sum pass while plus one fails as `ROBOT_STEP_BUDGET_EXCEEDED`. Use `TextEncoder` multibyte names to prove a STEP `File.name` at exactly 255 UTF-8 bytes passes and 256 rejects as `ROBOT_STEP_FILENAME_INVALID` before read/copy/hash/Worker allocation, with no truncation. Default tests may use the already tracked seven-Link production baseline but must not reference the new local one-file NED2 assembly; redistributable one-file parseable fixtures are introduced in Task 6.
 
 ```ts
 it('uses one frozen WS1 staged digest as exact Robot source identity', async () => {
@@ -339,7 +339,7 @@ git commit -m "feat: add confirmed robot assembly wizard"
 
 ---
 
-### Task 6: Redistributable Fixtures, WS6 Browser Handoff, and Local ABB Evidence
+### Task 6: Redistributable Fixtures, WS6 Browser Handoff, and Local NED2 Evidence
 
 **Files:**
 - Create: `tests/fixtures/robots/fixed-six-axis-test-mechanics.json`
@@ -351,7 +351,7 @@ git commit -m "feat: add confirmed robot assembly wizard"
 - Create: `tests/fixtures/robots/generated-unsupported-tessellated.step`
 - Create: `tests/fixtures/robots/generated-fused-body.step`
 - Create: `src/features/robot/assembly/robot-assembly-fixtures.test.ts`
-- Create: `scripts/cad/verify-local-abb-assembly.ts`
+- Create: `scripts/cad/verify-local-niryo-assembly.ts`
 - Create: `docs/integration/robot-assembly-ws6-handoff.md`
 - Create: `docs/operator/robot-assembly-import.md`
 - Create: `docs/verification/robot-assembly-import-verification.md`
@@ -360,7 +360,7 @@ git commit -m "feat: add confirmed robot assembly wizard"
 - Modify: `package.json`
 
 **Interfaces:**
-- Produces: compact generated CI fixtures with provenance, fixture-level analyzer/mapping evidence, an exact WS6 production-UI browser handoff, an explicitly opt-in local ABB verifier, operator guidance, and dated feature evidence.
+- Produces: compact generated CI fixtures with provenance, fixture-level analyzer/mapping evidence, an exact WS6 production-UI browser handoff, an explicitly opt-in local NED2 verifier, operator guidance, and dated feature evidence.
 - Consumes: all earlier Tasks. WS6 Stage B owns creation and execution of `tests/robot-assembly-import.spec.ts` after mounting the controlled Wizard.
 
 - [ ] **Step 1: Write failing fixture/analyzer tests and the browser handoff.** The focused tests parse self-contained generated AP203/AP214/AP242-style one-source assemblies into seven deterministic selectable occurrences, pair them with six-Joint test Mechanics, and prove AP242 kinematic/PMI/name metadata is ignored as Mechanics. Reject the same Geometry paired with a seven-Joint Manifest as `ROBOT_JOINT_COUNT_UNSUPPORTED`, unresolved external references as `ROBOT_STEP_EXTERNAL_REFERENCE_UNSUPPORTED`, tessellated/PMI-only input as `ROBOT_STEP_UNSUPPORTED`, and the fused-body fixture as `ROBOT_STEP_FUSED_BODY`, all with zero mutation. Exercise the seven-source regression and assert fixture headers/provenance state that STEP data is generated and redistributable. `docs/integration/robot-assembly-ws6-handoff.md` must specify the exact controlled Wizard props/commands and the later production-UI scenarios: one-source/seven-Link/six-Joint import, seven-Joint Manifest rejection, explicit confirmation, test Mechanics, commit, Joint descendants, Save/reload/Export/Import, one source entry, duplicate collapse, Cancel, fused/external-reference/unsupported failures, and seven-file regression.
@@ -374,14 +374,14 @@ it('analyzes one generated assembly as seven deterministic Link candidates', asy
 ```
 
 - [ ] **Step 2: Verify RED** with `npm run test:run -- src/features/robot/assembly/robot-assembly-fixtures.test.ts`; expect missing generated fixtures and analyzer results.
-- [ ] **Step 3: Add the opt-in local verifier and documentation.** Add package script `"verify:robot-assembly:local": "tsx scripts/cad/verify-local-abb-assembly.ts"`. The command `npm run verify:robot-assembly:local -- --file "<absolute-path-to-ABB-step>"` must fail clearly if the explicit file is missing, and must not be called by `test:run`, `verify`, or CI. With no `--file`, it prints `SKIP: local ABB assembly path was not supplied` and exits 0. Never copy or stage the local ABB file.
+- [ ] **Step 3: Add the opt-in local verifier and documentation.** Add package script `"verify:robot-assembly:local": "tsx scripts/cad/verify-local-niryo-assembly.ts"`. The command `npm run verify:robot-assembly:local -- --file "<absolute-path-to-NED2-step>"` must fail clearly if the explicit file is missing, and must not be called by `test:run`, `verify`, or CI. With no `--file`, it prints `SKIP: local NED2 assembly path was not supplied` and exits 0. Never copy or stage the local NED2 file.
 
 ```ts
 if (filePath === undefined) {
-  console.log('SKIP: local ABB assembly path was not supplied')
+  console.log('SKIP: local NED2 assembly path was not supplied')
   process.exitCode = 0
 } else if (!existsSync(filePath)) {
-  throw new Error(`Local ABB assembly not found: ${filePath}`)
+  throw new Error(`Local NED2 assembly not found: ${filePath}`)
 }
 ```
 
@@ -398,7 +398,7 @@ npm run deploy:validate
 npm run deploy:build
 npm run deploy:smoke
 npm run deploy:smoke:opcua
-git add tests/fixtures/robots src/features/robot/assembly/robot-assembly-fixtures.test.ts scripts/cad/verify-local-abb-assembly.ts docs/integration/robot-assembly-ws6-handoff.md docs/operator/robot-assembly-import.md docs/verification/robot-assembly-import-verification.md README.md docs/progress/2026-07-13-project-status.md package.json
+git add tests/fixtures/robots src/features/robot/assembly/robot-assembly-fixtures.test.ts scripts/cad/verify-local-niryo-assembly.ts docs/integration/robot-assembly-ws6-handoff.md docs/operator/robot-assembly-import.md docs/verification/robot-assembly-import-verification.md README.md docs/progress/2026-07-13-project-status.md package.json
 git diff --cached --check
 git commit -m "test: verify robot assembly fixtures and handoff"
 ```
@@ -422,15 +422,15 @@ git commit -m "test: verify robot assembly fixtures and handoff"
 - An optional Mechanics Manifest at exactly 1,048,576 bytes passes pre-read validation; plus one fails before read/hash/decode/parse. STEP/Manifest filenames accept 255 UTF-8 bytes and reject 256 before reading, and Robot name accepts 128 bytes and rejects 129 without truncation. Accepted original bytes are hashed once, malformed UTF-8/JSON/closed-schema inputs fail with stable Manifest errors, canceled late work is inert, normalized filename/digest provenance survives round-trip, and raw Manifest bytes never persist. Manual canonical provenance is deterministic.
 - Every Manual Mechanics field is independently editable through the declared mm/deg adapters; untouched rounded fields retain full stored precision. Apply is atomic, pre-commit Cancel revokes work within 250 ms, and Cancel/double-submit cannot race the serialized Project mutation after its point of no return.
 - The legacy seven-file path preserves Zero Pose, TCP, Link bounds, and proxy bounds within the same tolerances.
-- Default CI/test commands preserve the already tracked seven-Link ABB production baseline but never read or require the new proprietary one-file ABB assembly. Its one-file statistics are proven only by the explicit local verifier.
+- Default CI/test commands preserve the already tracked seven-Link NED2 production baseline but never read or require the new proprietary one-file NED2 assembly. Its one-file statistics are proven only by the explicit local verifier.
 
 ## Self-Review
 
-- **Spec coverage:** Tasks 1-6 cover unique-source identity, duplicate collapse, bounded parsing, deterministic mapping, fixed Mechanics, localization, atomic replacement, frozen V3 runtime integration, compatibility, controlled UI, CI fixtures, local ABB evidence, feature verification, and the WS6 browser handoff.
+- **Spec coverage:** Tasks 1-6 cover unique-source identity, duplicate collapse, bounded parsing, deterministic mapping, fixed Mechanics, localization, atomic replacement, frozen V3 runtime integration, compatibility, controlled UI, CI fixtures, local NED2 evidence, feature verification, and the WS6 browser handoff.
 - **WS1 ownership:** No task edits Project schema, migration, or codec. Task 4 consumes the frozen WS1 types and transaction.
 - **SHA ownership:** WS1 owns `sha256.ts` and its known-vector/fallback behavior. Task 1 consumes that implementation and adds only an assembly-specific regression to the existing test file.
 - **No-AI audit:** No interface permits AI-produced ownership or Mechanics; suggestions remain unconfirmed until operator action.
-- **Fixture audit:** No additional vendor CAD is staged: the existing tracked seven-Link ABB baseline remains, newly added files are generated/redistributable, and the new one-file ABB assembly appears only as explicit local verifier input.
+- **Fixture audit:** No additional vendor CAD is staged: the existing tracked seven-Link NED2 baseline remains, newly added files are generated/redistributable, and the new one-file NED2 assembly appears only as explicit local verifier input.
 - **Type consistency:** WS1 owns V3 types; this plan imports them unchanged. Feature-owned `RobotSourceAnalysis`, `ConfirmedRobotLinkMapping`, and `RobotReplacementService` have one definition each.
 - **Placeholder scan:** Run `rg -n "T[B]D|T[O]DO|F[I]XME|f[i]ll in|impl[e]ment later|appropr[i]ate error handling|sim[i]lar to Task" docs/superpowers/plans/2026-07-13-deterministic-assembly-robot-import.md`; expect exit code 1.
 - **Scope scan:** Run `git status --short -- docs/superpowers/plans/2026-07-13-deterministic-assembly-robot-import.md`; during planning it must list only this document as new/modified.

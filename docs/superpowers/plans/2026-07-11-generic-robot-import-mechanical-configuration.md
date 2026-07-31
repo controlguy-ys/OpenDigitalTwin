@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace CRB15000-specific runtime assumptions with a validated variable-DOF robot model, preserve the supplied CRB15000 exactly as the first built-in definition, import additional robots from STEP plus Manifest or resolved URDF, and apply versioned mechanical-dimension overrides without deforming CAD topology.
+**Goal:** Replace NED2-specific runtime assumptions with a validated variable-DOF robot model, preserve the supplied NED2 exactly as the first built-in definition, import additional robots from STEP plus Manifest or resolved URDF, and apply versioned mechanical-dimension overrides without deforming CAD topology.
 
 **Architecture:** Immutable `RobotDefinitionV1` records describe normalized links, joints, frames, and content-addressed assets. `MechanicalConfigurationV1` records contain versioned overrides; their validated composition produces an in-memory `EffectiveRobotDefinition`. `RobotInstanceV1` attaches that definition/configuration to the Frame Graph. A generic rig, renderer, collision system, and gripper runtime consume the effective definition, while a transactional import service converts STEP assets to metre-based GLB, validates complete topology, and persists assets only after all stages succeed.
 
@@ -37,8 +37,8 @@
 - Mechanical collision overrides are link-level (including the root link),
   never joint-level. This keeps collision ownership independent of kinematic
   parentage and supports fixed/root geometry.
-- Preserve the current CRB15000 zero pose, seven supplied GLBs, six joint behavior, 1.08 m base placement, flange/TCP, deterministic Cup 01 pick fixture, collision bounds, stack-light/equipment interactions, and saved Pose values.
-- Use exact built-in definition ID `crb15000-12kg-127`, definition revision `builtin-v1`, instance ID `crb15000-01`, and owner ID `robot:crb15000-01` so the Frame, OPC UA, and Pose plans migrate the same entity.
+- Preserve the current NED2 zero pose, seven supplied GLBs, six joint behavior, 1.08 m base placement, flange/TCP, deterministic Cup 01 pick fixture, collision bounds, stack-light/equipment interactions, and saved Pose values.
+- Use exact built-in definition ID `NED2-12kg-127`, definition revision `builtin-v1`, instance ID `NED2-01`, and owner ID `robot:NED2-01` so the Frame, OPC UA, and Pose plans migrate the same entity.
 - Keep content bytes private to repositories/Dexie. Never put `ArrayBuffer`, Three objects, Blob URLs, workers, refs, Rapier objects, or DOM nodes in Zustand serializable state.
 - Every import uses aggregate resource limits, cancellation cleanup, immutable buffer ownership, SHA-256 addressing, and one final Dexie transaction.
 - Do not modify or deploy any PLC or Automation Studio project.
@@ -53,8 +53,8 @@ src/domain/robot/robot-definition.ts
 src/domain/robot/robot-definition.test.ts
 src/domain/robot/mechanical-configuration.ts
 src/domain/robot/mechanical-configuration.test.ts
-src/domain/robot/builtins/crb15000-definition.ts
-src/domain/robot/builtins/crb15000-parity.test.ts
+src/domain/robot/builtins/NED2-definition.ts
+src/domain/robot/builtins/NED2-parity.test.ts
 src/domain/robot/kinematics.ts
 src/domain/robot/kinematics.test.ts
 src/state/scene-db.ts
@@ -383,19 +383,19 @@ git diff --cached --check
 git commit -m "feat: define configurable robot mechanisms"
 ```
 
-## Task 2: Migrate CRB15000 to the First Built-In Definition With Exact Parity
+## Task 2: Migrate NED2 to the First Built-In Definition With Exact Parity
 
 **Files:**
-- Create: `src/domain/robot/builtins/crb15000-definition.ts`
-- Create: `src/domain/robot/builtins/crb15000-parity.test.ts`
-- Modify: `src/domain/robot/crb15000.ts`
+- Create: `src/domain/robot/builtins/NED2-definition.ts`
+- Create: `src/domain/robot/builtins/NED2-parity.test.ts`
+- Modify: `src/domain/robot/NED2.ts`
 - Modify: `src/domain/robot/kinematics.ts`
 - Modify: `src/domain/robot/kinematics.test.ts`
 - Modify: `src/features/interaction/robot-collision-bounds.ts`
 
 **Interfaces:**
-- Consumes: current CRB constants, seven GLBs, `asset-report.json`, Task 9 deterministic pick fixture.
-- Produces: `CRB15000_ROBOT_DEFINITION` with exact ID `crb15000-12kg-127` and revision `builtin-v1`, generic `createRobotRig`, and matrix-parity evidence.
+- Consumes: current NED2 constants, seven GLBs, `asset-report.json`, Task 9 deterministic pick fixture.
+- Produces: `NED2_ROBOT_DEFINITION` with exact ID `NED2-12kg-127` and revision `builtin-v1`, generic `createRobotRig`, and matrix-parity evidence.
 
 - [ ] **Step 1: Capture immutable legacy parity fixtures before refactoring**
 
@@ -422,7 +422,7 @@ function expectMatrixMapsClose(
 
 it.each(SAMPLE_POSES)('matches every legacy link and tool matrix at %j', (degrees) => {
   const legacy = snapshotLegacyMatrices(degrees)
-  const generic = snapshotDefinitionMatrices(CRB15000_ROBOT_DEFINITION, degrees.map(MathUtils.degToRad))
+  const generic = snapshotDefinitionMatrices(NED2_ROBOT_DEFINITION, degrees.map(MathUtils.degToRad))
   expectMatrixMapsClose(generic, legacy)
 })
 
@@ -466,16 +466,16 @@ it('propagates a prismatic displacement through a rotated revolute parent to fla
 })
 
 it('retains GLB bounds, collision bounds, and deterministic Cup 01 sensor entry', () => {
-  expect(readDefinitionBounds(CRB15000_ROBOT_DEFINITION)).toEqual(readAssetReportBounds())
-  expect(sensorIntersectsCup(CRB15000_ROBOT_DEFINITION, CUP01_PICK_ANGLES_DEG)).toBe(true)
+  expect(readDefinitionBounds(NED2_ROBOT_DEFINITION)).toEqual(readAssetReportBounds())
+  expect(sensorIntersectsCup(NED2_ROBOT_DEFINITION, CUP01_PICK_ANGLES_DEG)).toBe(true)
 })
 ```
 
 - [ ] **Step 2: Run the parity test on the legacy implementation**
 
-Run: `npm run test:run -- src/domain/robot/builtins/crb15000-parity.test.ts`
+Run: `npm run test:run -- src/domain/robot/builtins/NED2-parity.test.ts`
 
-Expected: FAIL because `CRB15000_ROBOT_DEFINITION` does not exist; the legacy
+Expected: FAIL because `NED2_ROBOT_DEFINITION` does not exist; the legacy
 snapshot side must already pass independently.
 
 - [ ] **Step 3: Encode the built-in definition**
@@ -518,7 +518,7 @@ export function setRigJointPositions(
 
 Fixed joints create a child slot without a movable value. Revolute/continuous
 apply axis-angle; prismatic applies `origin + axis*value`. Build slots in the
-validator's deterministic topological order. Keep a deprecated CRB tuple adapter
+validator's deterministic topological order. Keep a deprecated NED2 tuple adapter
 only until the named-joint source plan migrates callers.
 
 - [ ] **Step 5: Run parity, CAD, and commit**
@@ -529,7 +529,7 @@ Run each command separately and stop on the first nonzero exit:
 2. `npm run cad:validate`
 3. `git diff --check`
 
-Expected: every command exits 0; all three CRB sample poses match every
+Expected: every command exits 0; all three NED2 sample poses match every
 link/tool matrix; the mixed revolute/prismatic rig moves its slider, flange,
 and TCP exactly 0.2 m along the revolute-transformed axis; fixed pick enters;
 CAD 7/7, 0 errors, 0 warnings.
@@ -537,7 +537,7 @@ CAD 7/7, 0 errors, 0 warnings.
 ```powershell
 git add src/domain/robot src/features/interaction/robot-collision-bounds.ts public/models/robot/asset-report.json scripts/cad
 git diff --cached --check
-git commit -m "refactor: migrate CRB15000 to a robot definition"
+git commit -m "refactor: migrate NED2 to a robot definition"
 ```
 
 ## Task 3: Render and Interact With Variable-DOF Robot Instances
@@ -663,7 +663,7 @@ it.each([
   expect(() => requireLocalId(value)).toThrow(/local ID/i)
 })
 
-it.each(['crb15000-01', 'joint_1', 'tool.0', 'camera-a'])('accepts stable ASCII local ID %s', (value) => {
+it.each(['NED2-01', 'joint_1', 'tool.0', 'camera-a'])('accepts stable ASCII local ID %s', (value) => {
   expect(requireLocalId(value)).toBe(value)
 })
 ```
@@ -672,7 +672,7 @@ it.each(['crb15000-01', 'joint_1', 'tool.0', 'camera-a'])('accepts stable ASCII 
 
 Run: `npm run test:run -- src/features/robots/robot-instance-store.test.ts src/features/frames/frame-store.test.ts src/features/frames/FrameTree.test.tsx src/features/frames/scene-frame-graph.test.ts src/features/robot/RobotModel.test.ts src/features/interaction`
 
-Expected: FAIL because stores, selections, and collision IDs are CRB-singleton types.
+Expected: FAIL because stores, selections, and collision IDs are NED2-singleton types.
 
 - [ ] **Step 3: Implement instance ownership**
 
@@ -773,7 +773,7 @@ returns the Base separately and every `instance-manual` TCP/sensor/camera in
 overrides. A TCP's persisted parent is the
 namespaced same-owner derived flange ID; each sensor/camera parent is an already
 persisted namespaced same-owner TCP. Reject a second node with the same
-namespaced ID or any owner/parent mismatch. For the existing CRB adapter,
+namespaced ID or any owner/parent mismatch. For the existing NED2 adapter,
 migrate its current persisted active TCP to this exact ID and put
 `activeTcpFrameId` on the RobotInstance; do not
 leave the Frame store as a second active-TCP owner.
@@ -829,7 +829,7 @@ Run each command separately and stop on the first nonzero exit:
 2. `npm run build`
 3. `git diff --check`
 
-Expected: every command exits 0. CRB and two-link/prismatic fixtures render and
+Expected: every command exits 0. NED2 and two-link/prismatic fixtures render and
 move; multiple geometry transforms remain independent; instance frame IDs do
 not collide; each TCP appears exactly once as a persisted manual frame and each
 editable sensor/camera remains a persisted child of its TCP; Task 9 tests remain
@@ -887,25 +887,25 @@ it('opens a v2 scene as v3 without duplicating equipment or frames', async () =>
     activeTcpByRobotOwnerId: {},
   })
   expect(await db.robotDefinitions.count()).toBe(1)
-  expect((await db.robotInstances.get('crb15000-01'))!.activeTcpFrameId)
-    .toBe(v2SceneRecord.activeTcpByRobotOwnerId['robot:crb15000-01'])
+  expect((await db.robotInstances.get('NED2-01'))!.activeTcpFrameId)
+    .toBe(v2SceneRecord.activeTcpByRobotOwnerId['robot:NED2-01'])
   await db.close()
   await db.open()
   expect(await db.robotInstances.count()).toBe(1)
   expect(await db.frames.where('role').equals('tcp').count()).toBe(1)
 })
 
-it('populates a brand-new latest database with one complete CRB instance exactly once', async () => {
+it('populates a brand-new latest database with one complete NED2 instance exactly once', async () => {
   const db = new SceneDatabase(uniqueDatabaseName())
   await db.open()
-  expect(await db.robotDefinitions.get(['crb15000-12kg-127', 'builtin-v1'])).toBeDefined()
-  expect(await db.mechanicalConfigurations.get(['crb15000-default', 'builtin-v1'])).toBeDefined()
-  expect(await db.robotInstances.get('crb15000-01')).toMatchObject({
-    baseFrameId: 'robot:crb15000-01:base',
-    activeTcpFrameId: 'robot:crb15000-01:tcp:default',
+  expect(await db.robotDefinitions.get(['NED2-12kg-127', 'builtin-v1'])).toBeDefined()
+  expect(await db.mechanicalConfigurations.get(['NED2-default', 'builtin-v1'])).toBeDefined()
+  expect(await db.robotInstances.get('NED2-01')).toMatchObject({
+    baseFrameId: 'robot:NED2-01:base',
+    activeTcpFrameId: 'robot:NED2-01:tcp:default',
   })
-  expect(await db.frames.get('robot:crb15000-01:base')).toBeDefined()
-  expect(await db.frames.get('robot:crb15000-01:tcp:default')).toMatchObject({ revision: 1 })
+  expect(await db.frames.get('robot:NED2-01:base')).toBeDefined()
+  expect(await db.frames.get('robot:NED2-01:tcp:default')).toMatchObject({ revision: 1 })
   const counts = await sceneTableCounts(db)
   db.close()
   await db.open()
@@ -1087,7 +1087,7 @@ export const sceneDb = new SceneDatabase(SCENE_DB_NAME)
 
 Version 3 retains the exact v2 equipment/scene/frames stores and adds compound
 indexes `[id+revision]` for definitions/configurations. Its upgrade migrates the
-Frame-plan CRB active-TCP adapter to
+Frame-plan NED2 active-TCP adapter to
 `RobotInstanceV1.activeTcpFrameId` without creating a second TCP row. In the
 same Dexie upgrade transaction, write and validate the instance first, then
 remove only that successfully migrated owner key from
@@ -1101,8 +1101,8 @@ imports and tests keep one physical database.
 
 Override `SceneDatabase.open()` to await Dexie open/migrations and then call one
 exported `ensureBuiltInSceneSeeds(db)` transaction. That idempotent function
-checks exact compound/instance/frame keys and creates the complete CRB
-definition, default configuration, `crb15000-01`, namespaced Base, revision-1
+checks exact compound/instance/frame keys and creates the complete NED2
+definition, default configuration, `NED2-01`, namespaced Base, revision-1
 manual TCP, and active TCP only when absent; it validates an existing partial
 or conflicting set rather than duplicating/overwriting it. This post-open path
 runs for both a brand-new latest-version database (where no upgrade callback
@@ -2147,7 +2147,7 @@ git commit -m "feat: edit robot mechanical dimensions"
 
 **Interfaces:**
 - Consumes: production app, Task 11/Frame-plan read-only E2E bridge, supplied
-  CRB sources, two-link STEP, and three-link resolved URDF fixtures.
+  NED2 sources, two-link STEP, and three-link resolved URDF fixtures.
 - Produces: dynamic instance/link/frame snapshot fields, reproducible browser
   proof, and operator/developer/verification documentation.
 
@@ -2397,7 +2397,7 @@ Mechanical Editor, mismatch, revisions, RobotInstance deletion (held release,
 source/selection/collision cleanup, foreign-child block), rollback, asset GC,
 and recovery. State plainly that reload persists instance/config/Base/manual
 frames but initializes live joints from Home; Pose Sequence is the persistence
-surface for commanded poses. Verification records CRB parity matrices, CAD 7/7, every fixture
+surface for commanded poses. Verification records NED2 parity matrices, CAD 7/7, every fixture
 hash, multi-geometry transforms/scales, deletion ordering/rollback evidence,
 browser captures, commands, and any upstream-only warnings.
 
@@ -2447,7 +2447,7 @@ git commit -m "docs: document generic robot configuration"
 
 ## Completion Gate
 
-A fresh reviewer must confirm schema/topology validation, CRB matrix/collision/
+A fresh reviewer must confirm schema/topology validation, NED2 matrix/collision/
 grasp parity, multi-instance identity, buffer and Three resource ownership,
 content-addressed persistence, transactional rollback, actual STEP conversion,
 resolved URDF multi-geometry semantics, definition-local frame namespacing,

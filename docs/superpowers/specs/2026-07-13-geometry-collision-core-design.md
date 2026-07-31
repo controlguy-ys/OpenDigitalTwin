@@ -11,7 +11,7 @@ distance.
 
 ## 2. Product Boundary
 
-This slice implements RobotStudio-style Collision Set validation in a lightweight
+This slice implements vendor desktop software-style Collision Set validation in a lightweight
 form:
 
 - one rendered Robot;
@@ -31,7 +31,7 @@ This slice explicitly excludes:
 - Cartesian Target, IK, MoveL, automatic collision avoidance, swept-volume mesh,
   convex decomposition, and triangle-BVH exact validation;
 - Robot self-collision except for explicitly configured non-adjacent Link pairs;
-- safety certification or claims of RobotStudio/RobotWare-equivalent accuracy.
+- safety certification or claims of vendor desktop software/vendor controller software-equivalent accuracy.
 
 Triangle BVH and convex validation remain a later `Detailed Validation` slice.
 
@@ -310,8 +310,8 @@ stores clone, replace, capture, and restore the full canonical array.
 
 20. UI and reports identify results as `Geometry Proxy Collision` and
     `Approximate Clearance`.
-21. Documentation explicitly states that results are not physics, RobotWare,
-    SafeMove, or safety-rated validation.
+21. Documentation explicitly states that results are not physics, vendor controller software,
+    vendor safety system, or safety-rated validation.
 
 ## 12. Deferred Detailed Validation
 

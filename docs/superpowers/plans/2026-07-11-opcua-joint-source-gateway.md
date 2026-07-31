@@ -12,7 +12,7 @@
 
 - This plan starts only after the Frame Graph and Generic Robot plans are complete and reviewed.
 - Consume `RobotDefinitionV1`, `RobotInstanceV1`, `orderedMovableJoints()`, `useRobotInstanceStore`, and `sceneDb` from those plans; do not recreate parallel owners.
-- The checked-in CRB profile uses the Generic Robot plan's exact definition ID `crb15000-12kg-127` and revision `builtin-v1`; validation rejects any drift.
+- The checked-in NED2 profile uses the Generic Robot plan's exact definition ID `NED2-12kg-127` and revision `builtin-v1`; validation rejects any drift.
 - Joint identity is `robotInstanceId + jointId`; array position alone is never an external contract.
 - Internal revolute values use radians and prismatic values use metres.
 - Simulation and OPC UA ownership are mutually exclusive for a RobotInstance.
@@ -321,7 +321,7 @@ applyJointFrameFromCoordinator: (capability, frame, nowMs = Date.now()) => set((
 })
 ```
 
-Keep the old CRB tuple selector as a temporary compatibility selector that
+Keep the old NED2 tuple selector as a temporary compatibility selector that
 reads `J1` through `J6` from the named map. No second writable joint state is
 allowed. `reduceNamedJointFrame()` consumes and returns the Generic Robot plan's
 memory-only `RobotInstanceRuntimeState`; `RobotInstanceV1` persists source mode
@@ -1151,7 +1151,7 @@ named-joint map through `setPositions()`; Home publishes the effective Home map
 the same way. The coordinator's private capability applies the resulting frame.
 OPC ownership, disconnected/not-ready Simulation, active/pending transition,
 playing/paused session, wrong instance/generation, or a stale source object all
-reject before runtime mutation. JointInspector and legacy CRB controls call
+reject before runtime mutation. JointInspector and legacy NED2 controls call
 this service and never the Zustand store directly.
 
 - [ ] **Step 4: Refactor Simulation source and inspector**
@@ -1621,9 +1621,9 @@ six-joint test profile with no credentials.
 [
   {
     "schemaVersion": 1,
-    "id": "crb-profile",
-    "name": "CRB15000 read-only joints",
-    "robotDefinitionId": "crb15000-12kg-127",
+    "id": "ned2-profile",
+    "name": "NED2 read-only joints",
+    "robotDefinitionId": "NED2-12kg-127",
     "robotDefinitionRevision": "builtin-v1",
     "samplingIntervalMs": 20,
     "bindings": [
@@ -1750,10 +1750,10 @@ it.each([
 
 it('uses only the server mapping and carries RobotInstance ID into the frame', async () => {
   const socket = await openAllowedSocket(loopbackConfig)
-  socket.send(JSON.stringify(validSubscribeFor('robot-b', 'crb-profile')))
+  socket.send(JSON.stringify(validSubscribeFor('robot-b', 'ned2-profile')))
   expect(opcua.subscribe).toHaveBeenCalledWith(
     'robot-b',
-    loopbackConfig.allowedProfiles.get('crb-profile'),
+    loopbackConfig.allowedProfiles.get('ned2-profile'),
     expect.objectContaining({ onFrame: expect.any(Function), onStatus: expect.any(Function) }),
   )
   opcua.emitFrame()
@@ -2207,8 +2207,8 @@ it('subscribes by allowlisted profile ID and never sends NodeIds or bindings', a
   expect(sent).toEqual({
     type: 'subscribe',
     robotInstanceId: 'robot-a',
-    profileId: 'crb-profile',
-    robotDefinitionId: 'crb15000',
+    profileId: 'ned2-profile',
+    robotDefinitionId: 'NED2',
     robotDefinitionRevision: 'rev-1',
   })
   expect(JSON.stringify(sent)).not.toMatch(/nodeId|bindings|token/i)
@@ -2482,7 +2482,7 @@ git commit -m "feat: stream OPC UA joints into the browser"
 it('requires confirmation, locks manual controls, and shows every binding', async () => {
   render(<OpcUaInspector robotInstanceId="robot-1" />)
   await user.type(screen.getByLabelText('Profile selection name'), 'Robot 1 profile')
-  await user.type(screen.getByLabelText('Gateway profile ID'), 'crb-profile')
+  await user.type(screen.getByLabelText('Gateway profile ID'), 'ned2-profile')
   await user.click(screen.getByRole('button', { name: 'Save and Assign' }))
   expect(assignToRobot).toHaveBeenCalledWith('robot-1', expect.any(String))
   await user.click(screen.getByRole('button', { name: 'Use OPC UA' }))
@@ -2644,7 +2644,7 @@ git commit -m "feat: select allowed OPC UA joint profiles"
 
 Create one process with a WebSocket server on `127.0.0.1:8766` and an HTTP
 control server on `127.0.0.1:8767`. Each WebSocket validates exactly one
-subscribe message, resolves only checked-in `crb-profile` and
+subscribe message, resolves only checked-in `ned2-profile` and
 `resolved-urdf-profile` fixtures, asserts the message has
 profile/definition/instance identity but no NodeId, binding, credential, or
 authorization field, sends `profile-accepted`, and records one subscription
@@ -2765,83 +2765,83 @@ exposes no source object or mutation function, remains absent outside
 test('switches ownership and holds the last good OPC UA pose', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('tab', { name: 'OPC UA' }).click()
-  await page.getByLabel('Profile selection name').fill('Local CRB profile')
-  await page.getByLabel('Gateway profile ID').fill('crb-profile')
+  await page.getByLabel('Profile selection name').fill('Local NED2 profile')
+  await page.getByLabel('Gateway profile ID').fill('ned2-profile')
   await page.getByRole('button', { name: 'Save and Assign' }).click()
-  await expect(page.getByLabel('OPC UA profile selection')).toHaveValue(/crb-profile/)
+  await expect(page.getByLabel('OPC UA profile selection')).toHaveValue(/ned2-profile/)
   await page.getByRole('button', { name: 'Use OPC UA' }).click()
   await page.getByRole('button', { name: 'Confirm OPC UA mode' }).click()
   await expect(page.getByLabel('J1 NodeId')).toHaveAttribute('readonly')
-  await expectRobotSource(page, 'crb15000-01', {
+  await expectRobotSource(page, 'NED2-01', {
     sourceMode: 'opcua', sourceReady: true, sourceQuality: 'GOOD',
   })
   const health = await mockGateway.health()
   expect(health.lastSubscribe).toEqual({
-    robotInstanceId: 'crb15000-01',
-    profileId: 'crb-profile',
-    robotDefinitionId: 'crb15000-12kg-127',
+    robotInstanceId: 'NED2-01',
+    profileId: 'ned2-profile',
+    robotDefinitionId: 'NED2-12kg-127',
     robotDefinitionRevision: 'builtin-v1',
   })
   expect(Object.keys(health.lastSubscribe!).sort()).toEqual([
     'profileId', 'robotDefinitionId', 'robotDefinitionRevision', 'robotInstanceId',
   ])
 
-  const initial = await readRobotDebugRecord(page, 'crb15000-01')
-  await mockGateway.emit('crb15000-01', 'GOOD', { J1: 0.35, J2: -0.1 })
+  const initial = await readRobotDebugRecord(page, 'NED2-01')
+  await mockGateway.emit('NED2-01', 'GOOD', { J1: 0.35, J2: -0.1 })
   await expect.poll(async () => (
-    await readRobotDebugRecord(page, 'crb15000-01')
+    await readRobotDebugRecord(page, 'NED2-01')
   ).lastAcceptedSequence).toBeGreaterThan(initial.lastAcceptedSequence)
-  const good = await readRobotDebugRecord(page, 'crb15000-01')
+  const good = await readRobotDebugRecord(page, 'NED2-01')
   expect(good.jointPositions).toMatchObject({ J1: 0.35, J2: -0.1 })
   expect(good).toMatchObject({ sourceReady: true, sourceQuality: 'GOOD' })
 
-  await mockGateway.emit('crb15000-01', 'BAD', { J1: 1.2, J2: 0.8 })
-  await expectRobotSource(page, 'crb15000-01', {
+  await mockGateway.emit('NED2-01', 'BAD', { J1: 1.2, J2: 0.8 })
+  await expectRobotSource(page, 'NED2-01', {
     sourceReady: false, sourceQuality: 'BAD',
   })
-  expect((await readRobotDebugRecord(page, 'crb15000-01')).jointPositions)
+  expect((await readRobotDebugRecord(page, 'NED2-01')).jointPositions)
     .toEqual(good.jointPositions)
 
-  await mockGateway.emit('crb15000-01', 'GOOD', { J1: 0.4, J2: -0.2 })
-  await expectRobotJointPositions(page, 'crb15000-01', { J1: 0.4, J2: -0.2 })
-  const beforeStale = await readRobotDebugRecord(page, 'crb15000-01')
-  await mockGateway.control({ command: 'stale', robotInstanceId: 'crb15000-01' })
-  await expectRobotSource(page, 'crb15000-01', {
+  await mockGateway.emit('NED2-01', 'GOOD', { J1: 0.4, J2: -0.2 })
+  await expectRobotJointPositions(page, 'NED2-01', { J1: 0.4, J2: -0.2 })
+  const beforeStale = await readRobotDebugRecord(page, 'NED2-01')
+  await mockGateway.control({ command: 'stale', robotInstanceId: 'NED2-01' })
+  await expectRobotSource(page, 'NED2-01', {
     sourceReady: false, sourceQuality: 'STALE',
   })
-  expect((await readRobotDebugRecord(page, 'crb15000-01')).jointPositions)
+  expect((await readRobotDebugRecord(page, 'NED2-01')).jointPositions)
     .toEqual(beforeStale.jointPositions)
 
-  await mockGateway.emit('crb15000-01', 'GOOD')
-  await expectRobotSource(page, 'crb15000-01', {
+  await mockGateway.emit('NED2-01', 'GOOD')
+  await expectRobotSource(page, 'NED2-01', {
     sourceReady: true, sourceQuality: 'GOOD',
   })
-  const beforeWrongRevision = await readRobotDebugRecord(page, 'crb15000-01')
-  await mockGateway.control({ command: 'wrong-revision', robotInstanceId: 'crb15000-01' })
+  const beforeWrongRevision = await readRobotDebugRecord(page, 'NED2-01')
+  await mockGateway.control({ command: 'wrong-revision', robotInstanceId: 'NED2-01' })
   await expect.poll(async () => (
-    await readRobotDebugRecord(page, 'crb15000-01')
+    await readRobotDebugRecord(page, 'NED2-01')
   ).lastRejectedReason).toBe('wrong-revision')
-  const afterWrongRevision = await readRobotDebugRecord(page, 'crb15000-01')
+  const afterWrongRevision = await readRobotDebugRecord(page, 'NED2-01')
   expect(afterWrongRevision.jointPositions).toEqual(beforeWrongRevision.jointPositions)
   expect(afterWrongRevision.lastAcceptedSequence).toBe(beforeWrongRevision.lastAcceptedSequence)
 
   const beforeDisconnect = afterWrongRevision
-  await mockGateway.control({ command: 'disconnect', robotInstanceId: 'crb15000-01' })
-  await expectRobotSourceStatusSequence(page, 'crb15000-01', [
+  await mockGateway.control({ command: 'disconnect', robotInstanceId: 'NED2-01' })
+  await expectRobotSourceStatusSequence(page, 'NED2-01', [
     'DISCONNECTED', 'CONNECTING', 'GOOD',
   ])
-  const reconnected = await readRobotDebugRecord(page, 'crb15000-01')
+  const reconnected = await readRobotDebugRecord(page, 'NED2-01')
   expect(reconnected.sourceReady).toBe(true)
   expect(reconnected.lastAcceptedSequence).toBeGreaterThan(beforeDisconnect.lastAcceptedSequence)
 
   await page.reload()
-  await expect(page.getByLabel('OPC UA profile selection')).toHaveValue(/crb-profile/)
-  await expectRobotSource(page, 'crb15000-01', {
+  await expect(page.getByLabel('OPC UA profile selection')).toHaveValue(/ned2-profile/)
+  await expectRobotSource(page, 'NED2-01', {
     sourceMode: 'opcua', sourceReady: true, sourceQuality: 'GOOD',
   })
   await expect(page.getByRole('button', { name: 'Play' })).toBeDisabled()
   await page.getByRole('button', { name: 'Use Simulation' }).click()
-  await expectRobotSource(page, 'crb15000-01', {
+  await expectRobotSource(page, 'NED2-01', {
     sourceMode: 'simulation', sourceReady: true, sourceQuality: 'GOOD',
   })
   await expect(page.getByLabel('J1 angle')).toBeEnabled()
@@ -2850,11 +2850,11 @@ test('switches ownership and holds the last good OPC UA pose', async ({ page }) 
 test('rejects an unknown gateway profile and rolls the source transition back', async ({ page }) => {
   await page.goto('/')
   await saveAndAssignProfile(page, 'Rejected profile', 'not-allowlisted')
-  await requestOpcUaMode(page, 'CRB15000')
+  await requestOpcUaMode(page, 'NED2')
   await expect(page.getByRole('alert')).toContainText(
     'PROFILE_NOT_ALLOWED: Unknown profile not-allowlisted',
   )
-  await expectRobotSource(page, 'crb15000-01', {
+  await expectRobotSource(page, 'NED2-01', {
     sourceMode: 'simulation', sourceReady: true, sourceQuality: 'GOOD',
   })
   await expect(page.getByLabel('J1 angle')).toBeEnabled()
@@ -2866,36 +2866,36 @@ test('isolates source ownership and targeted frames for two robot instances', as
     requestedInstanceId: 'urdf-1', flangeParentLinkId: 'slider',
     flangeLocalId: 'tool0', tcpLocalId: 'default',
   })
-  await saveAndAssignProfile(page, 'Local CRB profile', 'crb-profile', 'crb15000-01')
+  await saveAndAssignProfile(page, 'Local NED2 profile', 'ned2-profile', 'NED2-01')
   await saveAndAssignProfile(page, 'Local URDF profile', 'resolved-urdf-profile', 'urdf-1')
 
-  await requestOpcUaMode(page, 'CRB15000')
-  await expectJointControl(page, 'crb15000-01', 'J1', { enabled: false })
+  await requestOpcUaMode(page, 'NED2')
+  await expectJointControl(page, 'NED2-01', 'J1', { enabled: false })
   await expectJointControl(page, 'urdf-1', 'arm-revolute', { enabled: true })
   await setJointPosition(page, 'arm-revolute', { displayValue: 10, unit: 'deg' })
   await expectRobotSource(page, 'urdf-1', { sourceMode: 'simulation', sourceReady: true })
 
   await requestOpcUaMode(page, 'URDF Test Robot')
   await expect.poll(async () => (await mockGateway.health()).activeRobotInstanceIds.sort())
-    .toEqual(['crb15000-01', 'urdf-1'])
-  const beforeCrbFrame = await readRobotDebugRecord(page, 'urdf-1')
-  await mockGateway.emit('crb15000-01', 'GOOD', { J1: 0.6 })
-  await expectRobotJointPositions(page, 'crb15000-01', { J1: 0.6 })
+    .toEqual(['NED2-01', 'urdf-1'])
+  const beforeNed2Frame = await readRobotDebugRecord(page, 'urdf-1')
+  await mockGateway.emit('NED2-01', 'GOOD', { J1: 0.6 })
+  await expectRobotJointPositions(page, 'NED2-01', { J1: 0.6 })
   expect((await readRobotDebugRecord(page, 'urdf-1')).jointPositions)
-    .toEqual(beforeCrbFrame.jointPositions)
+    .toEqual(beforeNed2Frame.jointPositions)
 
-  const beforeUrdfFrame = await readRobotDebugRecord(page, 'crb15000-01')
+  const beforeUrdfFrame = await readRobotDebugRecord(page, 'NED2-01')
   await mockGateway.emit('urdf-1', 'GOOD', {
     'arm-revolute': 0.25, 'slider-prismatic': 0.15,
   })
   await expectRobotJointPositions(page, 'urdf-1', {
     'arm-revolute': 0.25, 'slider-prismatic': 0.15,
   })
-  expect((await readRobotDebugRecord(page, 'crb15000-01')).jointPositions)
+  expect((await readRobotDebugRecord(page, 'NED2-01')).jointPositions)
     .toEqual(beforeUrdfFrame.jointPositions)
 
-  await useSimulationMode(page, 'CRB15000')
-  await expectJointControl(page, 'crb15000-01', 'J1', { enabled: true })
+  await useSimulationMode(page, 'NED2')
+  await expectJointControl(page, 'NED2-01', 'J1', { enabled: true })
   await expectJointControl(page, 'urdf-1', 'arm-revolute', { enabled: false })
   await expectRobotSource(page, 'urdf-1', { sourceMode: 'opcua', sourceReady: true })
 })

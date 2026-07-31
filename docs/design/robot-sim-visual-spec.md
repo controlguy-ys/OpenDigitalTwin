@@ -82,7 +82,7 @@ All icons use the same 1.75px outline weight and 16px optical size.
 
 - Use compact Segoe UI / Inter-like typography, 6px radii, restrained shadows, precise dense chrome, and readable controls.
 - Keep controls and text code-native in the implementation.
-- Use the approved workcell composition: a gray, white, and red ABB GoFa-like six-axis robot, clean industrial workbench, two cups, one machine cabinet, grid floor, one selected-object outline, and a realistic red/yellow/green three-lens stack light.
+- Use the approved workcell composition: a gray, white, and red NED2 six-axis robot, clean industrial workbench, two cups, one machine cabinet, grid floor, one selected-object outline, and a realistic red/yellow/green three-lens stack light.
 - Do not add decorative gradients, pills, badges, hero copy, card grids, fake metrics, new component families, or unapproved visible copy.
 
 ## UI V6 Workspace Boundary

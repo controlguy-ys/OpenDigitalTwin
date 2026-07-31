@@ -1273,7 +1273,7 @@ Tree Solver v1 does not prove FreeBody or Parallel support. The common contract 
 
 ### 23.3 External asset references
 
-Reference-based Projects remain smaller and more RobotStudio-like, but local file access may require Relink and Browser permission. The UI must make portability explicit.
+Reference-based Projects remain smaller and more vendor desktop software-like, but local file access may require Relink and Browser permission. The UI must make portability explicit.
 
 ### 23.4 Browser-owned authority
 

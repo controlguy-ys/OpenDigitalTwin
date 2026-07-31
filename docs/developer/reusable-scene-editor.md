@@ -1,7 +1,7 @@
 # Reusable Scene Editor
 
 This guide defines the durable boundaries of the lightweight Project V3 Scene
-Editor. It describes current behavior, not future RobotStudio parity.
+Editor. It describes current behavior, not future vendor desktop software parity.
 
 ## Scene Entity hierarchy
 
@@ -202,4 +202,4 @@ write a parallel durable transform or visibility store.
   exposure.
 
 Geometry Proxy Collision is a deterministic geometric planning aid. It is not a
-physics engine, RobotWare/SafeMove replacement, or safety function.
+physics engine, vendor controller software/vendor safety system replacement, or safety function.
