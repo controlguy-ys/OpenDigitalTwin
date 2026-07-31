@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  assertNed2MeshEvidence,
   validateNed2Glb,
   validateNed2Manifest,
   validateRobotAssets,
@@ -73,9 +74,90 @@ function padded(bytes: Buffer, paddingByte: number): Buffer {
     : Buffer.concat([bytes, Buffer.alloc(padding, paddingByte)])
 }
 
-function glbFromJsonBytes(jsonSource: Buffer): Buffer {
-  const json = padded(jsonSource, 0x20)
+function validBinary(): Buffer {
   const binary = Buffer.alloc(80)
+  const positions = [
+    0, 0, 0,
+    1, 0, 0,
+    0, 1, 0,
+  ]
+  const normals = [
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+  ]
+  positions.forEach((value, index) => binary.writeFloatLE(value, index * 4))
+  normals.forEach((value, index) => binary.writeFloatLE(value, 36 + (index * 4)))
+  binary.writeUInt16LE(0, 72)
+  binary.writeUInt16LE(1, 74)
+  binary.writeUInt16LE(2, 76)
+  return binary
+}
+
+function stridedNormalizedDocument() {
+  return {
+    asset: { version: '2.0' },
+    buffers: [{ byteLength: 66 }],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: 36 },
+      {
+        buffer: 0,
+        byteOffset: 36,
+        byteLength: 22,
+        byteStride: 8,
+      },
+      { buffer: 0, byteOffset: 60, byteLength: 6 },
+    ],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' },
+      {
+        bufferView: 1,
+        componentType: 5122,
+        count: 3,
+        type: 'VEC3',
+        normalized: true,
+      },
+      { bufferView: 2, componentType: 5123, count: 3, type: 'SCALAR' },
+    ],
+    materials: [{}],
+    meshes: [{
+      primitives: [{
+        attributes: { POSITION: 0, NORMAL: 1 },
+        indices: 2,
+        material: 0,
+      }],
+    }],
+    nodes: [{ mesh: 0 }],
+    scenes: [{ nodes: [0] }],
+    scene: 0,
+  }
+}
+
+function stridedNormalizedBinary(): Buffer {
+  const binary = Buffer.alloc(68)
+  const positions = [
+    0, 0, 0,
+    1, 0, 0,
+    0, 1, 0,
+  ]
+  positions.forEach((value, index) => binary.writeFloatLE(value, index * 4))
+  for (let index = 0; index < 3; index += 1) {
+    const offset = 36 + (index * 8)
+    binary.writeInt16LE(0, offset)
+    binary.writeInt16LE(0, offset + 2)
+    binary.writeInt16LE(32767, offset + 4)
+  }
+  binary.writeUInt16LE(0, 60)
+  binary.writeUInt16LE(1, 62)
+  binary.writeUInt16LE(2, 64)
+  return binary
+}
+
+function glbFromJsonBytes(
+  jsonSource: Buffer,
+  binary = validBinary(),
+): Buffer {
+  const json = padded(jsonSource, 0x20)
   const jsonHeader = Buffer.alloc(8)
   jsonHeader.writeUInt32LE(json.byteLength, 0)
   jsonHeader.writeUInt32LE(JSON_CHUNK_TYPE, 4)
@@ -91,8 +173,11 @@ function glbFromJsonBytes(jsonSource: Buffer): Buffer {
   return Buffer.concat([header, jsonHeader, json, binaryHeader, binary])
 }
 
-function glb(document: unknown): Buffer {
-  return glbFromJsonBytes(Buffer.from(JSON.stringify(document), 'utf8'))
+function glb(document: unknown, binary = validBinary()): Buffer {
+  return glbFromJsonBytes(
+    Buffer.from(JSON.stringify(document), 'utf8'),
+    binary,
+  )
 }
 
 afterEach(async () => {
@@ -147,6 +232,67 @@ describe('NED2 asset validation', () => {
     expect(() => validateNed2Glb(glb(document), 'LINK02')).toThrow(
       /POSITION accessor references missing index 99/,
     )
+  })
+
+  it('rejects an out-of-range triangle index decoded from a valid BIN chunk', () => {
+    const binary = validBinary()
+    binary.writeUInt16LE(3, 76)
+
+    expect(() => validateNed2Glb(
+      glb(validGlbDocument(), binary),
+      'LINK02',
+    )).toThrow(/triangle contains an out-of-range index/)
+  })
+
+  it('rejects a non-finite POSITION decoded from a valid BIN chunk', () => {
+    const binary = validBinary()
+    binary.writeFloatLE(Number.NaN, 0)
+
+    expect(() => validateNed2Glb(
+      glb(validGlbDocument(), binary),
+      'LINK03',
+    )).toThrow(/POSITION accessor contains a non-finite value/)
+  })
+
+  it('decodes normalized components through a strided accessor', () => {
+    const evidence = validateNed2Glb(
+      glb(stridedNormalizedDocument(), stridedNormalizedBinary()),
+      'LINK03',
+    )
+
+    expect(evidence).toMatchObject({
+      triangleCount: 1,
+      bounds: { min: [0, 0, 0], max: [1, 1, 0] },
+    })
+  })
+
+  it('rejects a repeated-index degenerate triangle decoded from BIN', () => {
+    const binary = validBinary()
+    binary.writeUInt16LE(1, 76)
+
+    expect(() => validateNed2Glb(
+      glb(validGlbDocument(), binary),
+      'LINK04',
+    )).toThrow(/triangle contains repeated indices/)
+  })
+
+  it('rejects mesh triangle and bounds evidence that differs from the manifest', () => {
+    const evidence = validateNed2Glb(glb(validGlbDocument()), 'LINK05')
+    const matchingBounds = evidence.bounds
+
+    expect(() => assertNed2MeshEvidence({
+      linkId: 'LINK05',
+      expectedTriangles: 2,
+      expectedBounds: matchingBounds,
+    }, evidence)).toThrow(/has 1 triangles; manifest requires 2/)
+    expect(() => assertNed2MeshEvidence({
+      linkId: 'LINK05',
+      expectedTriangles: 1,
+      expectedBounds: {
+        min: matchingBounds.min,
+        max: [matchingBounds.max[0] + 0.01, matchingBounds.max[1], matchingBounds.max[2]],
+      },
+    }, evidence)).toThrow(/differs from manifest bounds/)
   })
 
   it('rejects orphan render GLBs that are not bound by the manifest', async () => {
