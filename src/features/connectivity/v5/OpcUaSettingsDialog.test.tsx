@@ -118,6 +118,41 @@ function Harness({
 }
 
 describe('OpcUaSettingsDialog', () => {
+  it('does not apply an unchanged draft submitted directly', async () => {
+    const user = userEvent.setup()
+    const active = project()
+    const applyAndActivate = vi.fn()
+    const baseController = createOpcUaSettingsControllerV1(service(active))
+    const controller: OpcUaSettingsControllerV1 = { ...baseController, applyAndActivate }
+    render(<Harness active={active} controller={controller} />)
+    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+
+    const apply = screen.getByRole('button', { name: 'Apply & Activate' })
+    const helper = screen.getByText('No changes to apply.')
+    expect(screen.getByText('Changed sections').nextElementSibling).toHaveTextContent('0')
+    expect(apply).toBeDisabled()
+    expect(helper).toBeVisible()
+    expect(apply).toHaveAttribute('aria-describedby', helper.id)
+
+    fireEvent.submit(screen.getByRole('dialog').querySelector('form')!)
+    expect(applyAndActivate).not.toHaveBeenCalled()
+  })
+
+  it('enables Apply for one changed section and disables it again when reverted', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+
+    const role = screen.getByLabelText('OPC UA role')
+    const apply = screen.getByRole('button', { name: 'Apply & Activate' })
+    await user.selectOptions(role, 'bridge')
+    expect(screen.getByText('Changed sections').nextElementSibling).toHaveTextContent('1')
+    expect(apply).toBeEnabled()
+    await user.selectOptions(role, 'client')
+    expect(screen.getByText('Changed sections').nextElementSibling).toHaveTextContent('0')
+    expect(apply).toBeDisabled()
+  })
+
   it('cancels the disposable Draft without mutation and restores trigger focus', async () => {
     const user = userEvent.setup()
     render(<Harness />)
@@ -212,13 +247,16 @@ describe('OpcUaSettingsDialog', () => {
     const connectionTest: OpcUaConnectionTestPortV1 = { testEndpoint: vi.fn(async () => ({ phase: 'connected' as const, namespaceUris: ['urn:controller'], elapsedMs: 5, error: null })) }
     render(<Harness connectionTest={connectionTest} presentationState={presentation('docker')} />)
     await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await user.click(screen.getByRole('button', { name: 'Test Connection' }))
+    await waitFor(() => expect(connectionTest.testEndpoint).toHaveBeenCalledOnce())
+    expect(screen.getByRole('button', { name: 'Apply & Activate' })).toBeDisabled()
     const url = screen.getByLabelText('Endpoint URL')
     await user.clear(url); await user.type(url, 'opc.tcp://127.0.0.1:4840')
     expect(screen.getByText(/host\.docker\.internal/i)).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Use host.docker.internal' }))
     expect(url).toHaveValue('opc.tcp://host.docker.internal:4840')
     await user.click(screen.getByRole('button', { name: 'Test Connection' }))
-    await waitFor(() => expect(connectionTest.testEndpoint).toHaveBeenCalledOnce())
+    await waitFor(() => expect(connectionTest.testEndpoint).toHaveBeenCalledTimes(2))
     expect(screen.getByRole('status')).toHaveTextContent('Connected in 5 ms')
     expect(screen.getByRole('button', { name: 'Apply & Activate' })).toBeEnabled()
   })
@@ -270,6 +308,7 @@ describe('OpcUaSettingsDialog', () => {
     expect(screen.getByRole('button', { name: 'Test Connection' })).toBeEnabled()
 
     await test()
+    await user.selectOptions(screen.getByLabelText('OPC UA role'), 'bridge')
     await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(calls[4]!.signal?.aborted).toBe(true)
@@ -297,6 +336,7 @@ describe('OpcUaSettingsDialog', () => {
     await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
     await user.click(screen.getByRole('button', { name: 'Add Bridge Route' }))
     expect(screen.getByText(/Bridge route cannot echo a Mapping to itself\./)).toBeVisible()
+    await user.selectOptions(screen.getByLabelText('OPC UA role'), 'bridge')
     await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Bridge route cannot echo'))
     const routeTarget = screen.getByLabelText('Source mapping bridge-route-1').closest<HTMLElement>('[data-validation-path="$.opcUa.bridgeRoutes[0]"]')
@@ -322,6 +362,7 @@ describe('OpcUaSettingsDialog', () => {
     }
     render(<Harness active={active} activation={activation} />)
     await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await user.selectOptions(screen.getByLabelText('OPC UA role'), 'bridge')
     await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
     const alert = await screen.findByRole('alert')
     const expected = target === 'endpoint-root'
@@ -339,6 +380,7 @@ describe('OpcUaSettingsDialog', () => {
     }
     render(<Harness active={active} activation={activation} />)
     await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await user.selectOptions(screen.getByLabelText('OPC UA role'), 'bridge')
     const add = screen.getByRole('button', { name: 'Add Endpoint' })
     for (let count = 1; count < 8; count += 1) await user.click(add)
     expect(add).toBeDisabled()
@@ -355,6 +397,7 @@ describe('OpcUaSettingsDialog', () => {
     render(<Harness active={active} activation={activation} />)
     const trigger = screen.getByRole('button', { name: 'OPC UA Settings' })
     await user.click(trigger)
+    await user.selectOptions(screen.getByLabelText('OPC UA role'), 'bridge')
     await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
     expect(screen.getByLabelText('OPC UA role')).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
@@ -370,6 +413,7 @@ describe('OpcUaSettingsDialog', () => {
     const pending = deferred<PublishedProjectV5>()
     render(<Harness active={active} activation={service(active, { pending: pending.promise })} />)
     await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await user.selectOptions(screen.getByLabelText('OPC UA role'), 'bridge')
     const dialog = screen.getByRole('dialog')
     const apply = screen.getByRole('button', { name: 'Apply & Activate' })
     const setAttribute = Element.prototype.setAttribute
@@ -433,6 +477,7 @@ describe('OpcUaSettingsDialog', () => {
     document.addEventListener('keydown', busyPropagated)
     render(<Harness active={active} activation={service(active, { pending: pending.promise })} />)
     await user.click(screen.getAllByRole('button', { name: 'OPC UA Settings' }).at(-1)!)
+    await user.selectOptions(screen.getAllByLabelText('OPC UA role').at(-1)!, 'bridge')
     await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
     const busyEscape = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' })
     act(() => screen.getByRole('dialog').dispatchEvent(busyEscape))
@@ -477,6 +522,7 @@ describe('OpcUaSettingsDialog', () => {
     const controller: OpcUaSettingsControllerV1 = { ...baseController, applyAndActivate }
     render(<Harness active={active} controller={controller} />)
     await userEvent.setup().click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await userEvent.setup().selectOptions(screen.getByLabelText('OPC UA role'), 'bridge')
     const apply = screen.getByRole('button', { name: 'Apply & Activate' })
     act(() => {
       fireEvent.click(apply)
@@ -502,6 +548,7 @@ describe('OpcUaSettingsDialog', () => {
     const controller: OpcUaSettingsControllerV1 = { ...baseController, applyAndActivate }
     render(<Harness active={active} controller={controller} />)
     await user.click(screen.getByRole('button', { name: 'OPC UA Settings' }))
+    await user.selectOptions(screen.getByLabelText('OPC UA role'), 'bridge')
 
     await user.click(screen.getByRole('button', { name: 'Apply & Activate' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Gateway activation rejected')

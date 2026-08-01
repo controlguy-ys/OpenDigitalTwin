@@ -231,6 +231,8 @@ export function OpcUaSettingsDialog({
   const server = presentation.status?.opcUa.server
   const diagnostics = presentation.integrationDiagnostics
   const loopback = selectedEndpoint === null ? null : dockerLoopbackWarningV1(runtimeKind, selectedEndpoint.endpointUrl)
+  const changedSections = changedSectionCount(draft, activeProject)
+  const canApply = !busy && changedSections > 0
   const disabled = busy
 
   const update = (recipe: (current: OpcUaSettingsDraftV1) => OpcUaSettingsDraftV1): void => {
@@ -247,7 +249,7 @@ export function OpcUaSettingsDialog({
     controller.cancel()
   }
   const apply = (): void => {
-    if (busy || applyInFlightRef.current !== null) return
+    if (!canApply || applyInFlightRef.current !== null) return
     applyInFlightRef.current = true
     invalidateDiagnostic()
     setInteractionIssue(null)
@@ -288,7 +290,7 @@ export function OpcUaSettingsDialog({
       busy={busy}
       className="opcua-settings-dialog"
       dialogRef={dialogRef}
-      footer={<footer className="opcua-settings-footer"><button disabled={disabled} onClick={close} type="button">Cancel</button><button disabled={disabled} form="opcua-settings-v1-form" type="submit">Apply &amp; Activate</button></footer>}
+      footer={<footer className="opcua-settings-footer"><button disabled={disabled} onClick={close} type="button">Cancel</button><button aria-describedby="opcua-settings-apply-help" disabled={!canApply} form="opcua-settings-v1-form" type="submit">Apply &amp; Activate</button><p id="opcua-settings-apply-help">{changedSections === 0 ? 'No changes to apply.' : `${changedSections} changed section${changedSections === 1 ? '' : 's'} ready to apply.`}</p></footer>}
       header={<header className="opcua-settings-header">
           <div>
             <p>Connectivity</p>
@@ -310,7 +312,7 @@ export function OpcUaSettingsDialog({
               <dl className="opcua-settings-summary">
                 <div><dt>Active revision</dt><dd>{activeProject.revisionId}</dd></div>
                 <div><dt>Draft revision</dt><dd>{draft.baseProjectRevisionId}</dd></div>
-                <div><dt>Changed sections</dt><dd>{changedSectionCount(draft, activeProject)}</dd></div>
+                <div><dt>Changed sections</dt><dd>{changedSections}</dd></div>
               </dl>
               <label>
                 <span>OPC UA role</span>
