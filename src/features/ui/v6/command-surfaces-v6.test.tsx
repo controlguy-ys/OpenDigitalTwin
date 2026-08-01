@@ -107,6 +107,8 @@ describe('V6 command surfaces', () => {
       integrationDiagnostics: null,
       transportError: null,
       lastObservedAtMs: null,
+      statusFreshness: 'unavailable',
+      transportErrorOccurredAtMs: null,
     }
     render(<HeaderStatusV6
       connectivity={connectivity}

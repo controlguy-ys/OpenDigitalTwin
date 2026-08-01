@@ -86,15 +86,19 @@ function errorOrNull(error: RuntimeGatewayDiagnosticErrorV1 | null): RuntimeGate
 function proxyRow(presentation: ConnectivityPresentationStateV1): ConnectionMonitorRowV1 {
   if (presentation.transportError !== null) {
     return Object.freeze({
-    id: 'web-proxy',
-    component: 'Web proxy',
+      id: 'web-proxy',
+      component: 'Web proxy',
       freshness: 'current',
       state: 'Error',
       endpoint: null,
       lastUpdateAtMs: null,
       quality: null,
-      error: Object.freeze({ code: 'RUNTIME_GATEWAY_TRANSPORT_ERROR', message: presentation.transportError, occurredAtMs: null }),
-      details: Object.freeze([detail('Freshness', 'Current transport error')]),
+      error: Object.freeze({ code: 'RUNTIME_GATEWAY_TRANSPORT_ERROR', message: presentation.transportError, occurredAtMs: presentation.transportErrorOccurredAtMs ?? null }),
+      details: Object.freeze([
+        detail('Freshness', 'Current transport error'),
+        detail('Error code', 'RUNTIME_GATEWAY_TRANSPORT_ERROR'),
+        timestampDetail('Failure time', presentation.transportErrorOccurredAtMs ?? null),
+      ]),
     })
   }
   if (presentation.status === null) return unavailable('web-proxy', 'Web proxy', 'No decoded Runtime Gateway status.')

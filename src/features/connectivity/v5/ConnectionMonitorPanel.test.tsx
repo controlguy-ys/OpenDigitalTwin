@@ -20,6 +20,8 @@ function state() {
     integrationDiagnostics: null,
     transportError: 'Gateway unavailable.',
     lastObservedAtMs: null,
+    statusFreshness: 'unavailable' as const,
+    transportErrorOccurredAtMs: 42_000,
   }
 }
 
@@ -59,6 +61,24 @@ describe('ConnectionMonitorPanel', () => {
     expect(presentationStore.refresh).toHaveBeenCalledOnce()
   })
 
+  it('keeps the readable transport message primary while exposing error code and failure time in details', async () => {
+    const user = userEvent.setup()
+    const presentationStore = store({
+      ...state(),
+      statusFreshness: 'last-known',
+      transportErrorOccurredAtMs: 42_000,
+    })
+    render(<ConnectionMonitorPanel formatTimestamp={(value) => `T:${value}`} store={presentationStore} />)
+
+    await user.click(screen.getByRole('button', { name: 'Connection Monitor' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('Gateway unavailable.')
+    const detailsSummary = screen.getByLabelText('Details for Web proxy table row')
+    await user.click(detailsSummary)
+    const details = detailsSummary.closest('details')!
+    expect(details).toHaveTextContent('RUNTIME_GATEWAY_TRANSPORT_ERROR')
+    expect(details).toHaveTextContent('T:42000')
+  })
+
   it('is modeless, keeps the viewport interactive, and finalizes poll demand on close and unmount', async () => {
     const user = userEvent.setup()
     const presentationStore = store()
@@ -70,7 +90,7 @@ describe('ConnectionMonitorPanel', () => {
     expect(screen.getByLabelText('3D viewport')).not.toHaveAttribute('aria-hidden')
     expect(presentationStore.poller().status().demand).toBe('monitor')
     expect(screen.getByRole('status')).toHaveTextContent('Gateway unavailable.')
-    expect(screen.getAllByText('T:null')[0]).toBeVisible()
+    expect(within(panel).getByRole('table')).toHaveTextContent('—')
     expect(within(panel).getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
       'Component', 'State', 'Endpoint', 'Last update', 'Quality', 'Error',
     ])
@@ -95,7 +115,7 @@ describe('ConnectionMonitorPanel', () => {
     await user.click(opener)
     focus.mockClear()
     expect(screen.getAllByText('Component')[0]).toBeVisible()
-    expect(screen.getByText('Gateway unavailable.')).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent('Gateway unavailable.')
     await user.click(screen.getByRole('button', { name: 'Close Connection Monitor' }))
     expect(focus).toHaveBeenCalled()
 
@@ -122,6 +142,8 @@ describe('ConnectionMonitorPanel', () => {
       opcUa: { state: 'client-degraded', label: 'Degraded', detail: 'Retrying' },
       transportError: null,
       lastObservedAtMs: 100,
+      statusFreshness: 'current',
+      transportErrorOccurredAtMs: null,
       integrationDiagnostics: null,
       status: {
         type: 'runtime-gateway-status-v1', protocolVersion: 1, observedAtMs: 100,

@@ -70,6 +70,8 @@ describe('StudioHeaderV4', () => {
       integrationDiagnostics: null,
       transportError: null,
       lastObservedAtMs: 1_000,
+      statusFreshness: 'unavailable' as const,
+      transportErrorOccurredAtMs: null,
     }
     const layout = controller(1440)
     const view = render(<StudioHeaderV4 status={status} connectivity={connectivity} onConnectionMonitorOpen={onConnectionMonitorOpen} menuModel={model} commandBindings={bindings()} quickActionIds={['project.save', 'job.start', 'job.cancel']} ribbonContext={{ selection: null, activeRobotId: null, activeJobId: null }} shellLayoutController={layout} {...gatewayDetailsProps} />)

@@ -40,6 +40,8 @@ function formattedDetail(detail: ConnectionMonitorDetailV1, formatTimestamp: (ti
 function formattedError(row: ConnectionMonitorRowV1, formatTimestamp: (timestampMs: number | null) => string): string {
   return row.error === null
     ? '—'
+    : row.id === 'web-proxy'
+      ? row.error.message
     : `${row.error.code}: ${row.error.message} @ ${formatTimestamp(row.error.occurredAtMs)}`
 }
 

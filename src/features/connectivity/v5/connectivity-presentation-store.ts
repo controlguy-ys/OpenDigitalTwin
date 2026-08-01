@@ -20,8 +20,8 @@ export interface ConnectivityPresentationStateV1 {
   readonly integrationDiagnostics: RuntimeIntegrationDiagnosticsV1 | null
   readonly transportError: string | null
   readonly lastObservedAtMs: number | null
-  readonly statusFreshness?: 'current' | 'last-known' | 'unavailable'
-  readonly transportErrorOccurredAtMs?: number | null
+  readonly statusFreshness: 'current' | 'last-known' | 'unavailable'
+  readonly transportErrorOccurredAtMs: number | null
 }
 
 export interface ConnectivityPresentationStoreV1 {

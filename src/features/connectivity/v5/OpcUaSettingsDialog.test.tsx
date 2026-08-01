@@ -76,6 +76,7 @@ function presentation(kind: 'native' | 'docker' = 'native'): ConnectivityPresent
     gateway: { state: 'online', label: 'Online', detail: 'Runtime Gateway responded.' },
     opcUa: { state: 'client-connected', label: 'Connected', detail: 'Project: READY' },
     status: status(kind), integrationDiagnostics: diagnostics(), transportError: null, lastObservedAtMs: 1,
+    statusFreshness: 'current', transportErrorOccurredAtMs: null,
   }
 }
 

@@ -100,6 +100,23 @@ describe('connectionMonitorRowsV1', () => {
     expect(rows.find((row) => row.id === 'gateway')?.details).toContainEqual({ kind: 'text', label: 'Freshness', value: 'Last known' })
   })
 
+  it('retains the transport failure timestamp on the current web-proxy error row', () => {
+    const rows = connectionMonitorRowsV1(presentation({
+      transportError: 'Gateway disconnected.',
+      transportErrorOccurredAtMs: 42_000,
+      statusFreshness: 'last-known',
+    }))
+
+    expect(rows[0]).toMatchObject({
+      id: 'web-proxy',
+      error: {
+        code: 'RUNTIME_GATEWAY_TRANSPORT_ERROR',
+        message: 'Gateway disconnected.',
+        occurredAtMs: 42_000,
+      },
+    })
+  })
+
   it('labels current and unavailable rows with their explicit freshness', () => {
     const currentRows = connectionMonitorRowsV1(presentation())
     expect(currentRows.every((row) => row.freshness === 'current')).toBe(true)

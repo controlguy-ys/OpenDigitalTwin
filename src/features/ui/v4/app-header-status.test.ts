@@ -35,6 +35,8 @@ describe('composeAppHeaderStatusV4', () => {
       integrationDiagnostics: null,
       transportError: null,
       lastObservedAtMs: 1_000,
+      statusFreshness: 'unavailable' as const,
+      transportErrorOccurredAtMs: null,
     }
     const result = composeAppHeaderStatusV4({ projectState: projectState('ready'), jobRuntime: { byRobotId: {} }, robotRuntime: runtime(), activeRobotId: null, gateway, connectivity })
     expect(result.connectivity).toEqual(connectivity)
