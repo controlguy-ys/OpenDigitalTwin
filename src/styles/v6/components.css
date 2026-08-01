@@ -63,8 +63,6 @@
   text-overflow: ellipsis;
 }
 
-.v6-header-status-save { overflow: hidden; text-overflow: ellipsis; }
-
 .v6-header-status-save,
 .v6-header-status .v6-status-badge {
   flex: 0 0 auto;
