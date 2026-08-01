@@ -16,8 +16,9 @@ import {
 import type { BrowserRuntimeBundleStateV5 } from '../../project/v5/browser-runtime-bundle-store-v5.js'
 import { V5WorkcellCanvas, V5WorkcellWorkspace } from './V5WorkcellWorkspace.js'
 
-const { cameraProbe } = vi.hoisted(() => ({
+const { cameraProbe, frameMode } = vi.hoisted(() => ({
   cameraProbe: { current: null as object | null },
+  frameMode: { enabled: true },
 }))
 const controlsProbe = {
   target: { values: [0, 0, 0] as [number, number, number], set(...values: [number, number, number]) { this.values = values } },
@@ -26,7 +27,7 @@ const controlsProbe = {
 
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children }: { readonly children: ReactNode }) => children,
-  useFrame: (callback: () => void) => { callback() },
+  useFrame: (callback: () => void) => { if (frameMode.enabled) callback() },
   useThree: <T,>(selector: (state: { readonly camera: object | null }) => T) => selector({ camera: cameraProbe.current }),
 }))
 
@@ -112,7 +113,7 @@ function projectWithAssetEntity(): WorkcellProjectV5 {
   })
 }
 
-function bundleWithWorld(readRobotLinkWorldPose: ReturnType<typeof vi.fn>): BrowserRuntimeBundleStateV5 {
+function bundleWithWorld(readRobotLinkWorldPose: ReturnType<typeof vi.fn>, readObjectWorldPose: () => RigidTransformV5 | null = () => null): BrowserRuntimeBundleStateV5 {
   const robots = createStore(() => ({ byRobotId: { 'robot-1': {} } }))
   return {
     runtimeEpoch: 1,
@@ -126,7 +127,7 @@ function bundleWithWorld(readRobotLinkWorldPose: ReturnType<typeof vi.fn>): Brow
         readRobotLinkWorldPose,
         readRobotFrameWorldPose: () => null,
         readSceneFrameWorldPose: () => null,
-        readObjectWorldPose: () => null,
+        readObjectWorldPose,
       },
     },
   } as unknown as BrowserRuntimeBundleStateV5
@@ -212,5 +213,22 @@ describe('V5WorkcellWorkspace', () => {
     expect(controlsProbe.target.values).toEqual([2, 3, 4])
     expect(camera.updateProjectionMatrix).toHaveBeenCalledTimes(2)
     expect(controlsProbe.update).toHaveBeenCalledTimes(2)
+  })
+
+  it('publishes finite presentation bounds on mount even before the R3F frame loop runs', () => {
+    frameMode.enabled = false
+    const onPresentationChange = vi.fn()
+    const activeBundle = bundleWithWorld(vi.fn(() => SHARED_LINK_POSE), () => SHARED_LINK_POSE)
+    render(<V5WorkcellCanvas
+      bundle={activeBundle}
+      onPresentationChange={onPresentationChange}
+      onSelect={vi.fn()}
+      project={project()}
+      selection={null}
+    />)
+    const latest = onPresentationChange.mock.calls.at(-1)?.[0]
+    expect(latest?.state).toBe('ready')
+    expect(latest?.visibleBounds?.radius).toBeGreaterThan(0)
+    frameMode.enabled = true
   })
 })

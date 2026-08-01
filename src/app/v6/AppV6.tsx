@@ -16,7 +16,7 @@ import type { ConnectionMonitorPanelControlV1 } from '../../features/connectivit
 import type { V6WorkcellSelection } from '../../features/interaction/v6/workcell-selection-v6.js'
 import { SelectionInspectorV6 } from '../../features/inspector/v6/SelectionInspectorV6.js'
 import { createJobAuthoringServiceV6 } from '../../features/jobs/v6/job-authoring-service-v6.js'
-import { RobotJobMonitorV6 } from '../../features/jobs/v6/RobotJobMonitorV6.js'
+import { RobotJobCompactStatusV6, RobotJobMonitorV6 } from '../../features/jobs/v6/RobotJobMonitorV6.js'
 import {
   createBrowserProjectApplicationResourcesV5,
   type BrowserProjectApplicationResourcesV5,
@@ -24,7 +24,8 @@ import {
 import { createSceneCommandServiceV6 } from '../../features/scene/v6/scene-command-service-v6.js'
 import { SceneContextMenuV6, resolveSceneContextTargetV6, type SceneContextActionIdV6, type SceneContextTargetV6 } from '../../features/scene/v6/SceneContextMenuV6.js'
 import { SceneExplorerV6 } from '../../features/scene/v6/SceneExplorerV6.js'
-import { V5WorkcellCanvas } from '../../features/scene/v5/V5WorkcellWorkspace.js'
+import { V5WorkcellCanvas, type WorkcellCameraPoseV5 } from '../../features/scene/v5/V5WorkcellWorkspace.js'
+import type { WorkcellScenePresentationV5 } from '../../features/scene/v5/workcell-scene-presentation-v5.js'
 import { AppMenuBarV6 } from '../../features/ui/v6/AppMenuBarV6.js'
 import { ApplicationShellV6 } from '../../features/ui/v6/ApplicationShellV6.js'
 import { HeaderStatusV6 } from '../../features/ui/v6/HeaderStatusV6.js'
@@ -59,7 +60,14 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   const [operationError, setOperationError] = useState<string | null>(null)
   const [interactionMode, setInteractionMode] = useState<'select' | 'translate' | 'rotate'>('select')
   const [contextRequest, setContextRequest] = useState<SceneContextRequestV6 | null>(null)
+  const [scenePresentation, setScenePresentation] = useState<WorkcellScenePresentationV5 | null>(null)
   const [cameraVersion, setCameraVersion] = useState(0)
+  const cameraPointsRef = useRef({
+    camera: { position: [3.2, -4.2, 2.8] as [number, number, number], target: [0, 0, 0] as [number, number, number] },
+    home: { position: [3.2, -4.2, 2.8] as [number, number, number], target: [0, 0, 0] as [number, number, number] },
+  })
+  const latestScenePresentationRef = useRef<WorkcellScenePresentationV5 | null>(null)
+  const fittedSceneIdentityRef = useRef<string | null>(null)
   const monitorRef = useRef<ConnectionMonitorPanelControlV1>(null)
   const settingsTriggerRef = useRef<HTMLElement>(null)
   const bindingOverviewTriggerRef = useRef<HTMLElement>(null)
@@ -121,13 +129,30 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     setInteractionMode,
   }), [layout, resources, selection])
   const camera = useMemo(() => createCameraControllerV6({
-    camera: { position: [3.2, -4.2, 2.8], target: [0, 0, 0] },
-    home: { position: [3.2, -4.2, 2.8], target: [0, 0, 0] },
-    visibleBounds: () => null,
-    selectionBounds: () => null,
+    camera: cameraPointsRef.current.camera,
+    home: cameraPointsRef.current.home,
+    visibleBounds: () => latestScenePresentationRef.current?.visibleBounds ?? null,
+    selectionBounds: () => latestScenePresentationRef.current?.selectionBounds ?? null,
     update: () => setCameraVersion((version) => version + 1),
-  }), [])
-  void cameraVersion
+  }), [cameraPointsRef])
+  const cameraPose = useMemo<WorkcellCameraPoseV5>(() => ({
+    position: [...cameraPointsRef.current.camera.position] as [number, number, number],
+    target: [...cameraPointsRef.current.camera.target] as [number, number, number],
+  }), [cameraVersion])
+  const sceneIdentity = workspaceProject === null
+    ? null
+    : `${workspaceProject.revisionId}:${bundle?.runtimeEpoch ?? 'inactive'}`
+  const onPresentationChange = useCallback((next: WorkcellScenePresentationV5) => {
+    latestScenePresentationRef.current = next
+    setScenePresentation(next)
+  }, [])
+  useEffect(() => {
+    if (sceneIdentity === null || fittedSceneIdentityRef.current === sceneIdentity) return
+    const bounds = scenePresentation?.visibleBounds
+    if (bounds === null || bounds === undefined || !Number.isFinite(bounds.radius) || !bounds.center.every(Number.isFinite)) return
+    camera.fitAll()
+    fittedSceneIdentityRef.current = sceneIdentity
+  }, [camera, sceneIdentity, scenePresentation])
 
   const openBinding = useCallback((target: OpcUaProjectTargetV5, mappingId?: string, parent?: DialogParentV6) => {
     if (document.activeElement instanceof HTMLElement) bindingEditorTriggerRef.current = document.activeElement
@@ -185,6 +210,14 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     if (workspaceProject === null) return
     setContextRequest({ surface: 'viewport', target: resolveSceneContextTargetV6(workspaceProject, selection) })
   }, [selection, workspaceProject])
+  const openJobEditor = useCallback((instructionId?: string) => {
+    if (document.activeElement instanceof HTMLElement) jobEditorTriggerRef.current = document.activeElement
+    layout.getState().requestDialog({
+      kind: 'job-editor',
+      jobId: selectedJob?.id ?? '',
+      ...(instructionId === undefined ? {} : { instructionId }),
+    })
+  }, [layout, selectedJob?.id])
   const dialog = useSyncExternalStore(layout.subscribe, () => layout.getState().openDialog, () => layout.getState().openDialog)
   const visibleError = operationError
     ?? (projectState.status === 'error' ? projectState.error : null)
@@ -216,7 +249,15 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   const viewport = workspaceProject === null
     ? <div className="v6-loading" role="status">{projectState.error ?? 'Preparing Project V5 runtime.'}</div>
     : <WorkcellViewportV6
-      canvas={<V5WorkcellCanvas bundle={bundle} onSelect={setSelection} project={workspaceProject} selection={selection?.kind === 'robot' || selection?.kind === 'entity' ? selection : null} />}
+      canvas={<V5WorkcellCanvas
+        bundle={bundle}
+        cameraPose={cameraPose}
+        cameraVersion={cameraVersion}
+        onPresentationChange={onPresentationChange}
+        onSelect={setSelection}
+        project={workspaceProject}
+        selection={selection?.kind === 'robot' || selection?.kind === 'entity' ? selection : null}
+      />}
       layoutStore={layout}
       onContextMenu={requestViewportContext}
       overlay={<ViewportOverlayV6 camera={camera} />}
@@ -228,14 +269,19 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     <ApplicationShellV6
       bottom={workspaceProject === null || selectedJob === null ? <section aria-label="Job monitor">No Jobs in this Project.</section> : bundle === null ? <RobotJobMonitorV6
         jobId={selectedJob.id}
-        onOpenEditor={() => { if (document.activeElement instanceof HTMLElement) jobEditorTriggerRef.current = document.activeElement; layout.getState().requestDialog({ kind: 'job-editor', jobId: selectedJob.id }) }}
+        onOpenEditor={openJobEditor}
         project={workspaceProject}
       /> : <RobotJobMonitorV6
         jobId={selectedJob.id}
-        onOpenEditor={() => { if (document.activeElement instanceof HTMLElement) jobEditorTriggerRef.current = document.activeElement; layout.getState().requestDialog({ kind: 'job-editor', jobId: selectedJob.id }) }}
+        onOpenEditor={openJobEditor}
         playback={bundle.runtimeGraph.playback}
         project={workspaceProject}
         runtime={bundle.runtimeGraph.jobs}
+      />}
+      bottomStatus={workspaceProject === null || selectedJob === null ? null : <RobotJobCompactStatusV6
+        jobId={selectedJob.id}
+        project={workspaceProject}
+        {...(bundle === null ? {} : { runtime: bundle.runtimeGraph.jobs })}
       />}
       explorer={workspaceProject === null ? null : <SceneExplorerV6
         onContextMenu={(target) => setContextRequest({ surface: 'explorer', target })}

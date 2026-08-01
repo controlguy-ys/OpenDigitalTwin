@@ -115,17 +115,23 @@ function WorldPoseGroup({ readPose, children, geometryKey, selectionKey = null, 
 }): ReactNode {
   const groupRef = useRef<Group>(null)
   const initialPose = readPose()
-  useFrame(() => {
+  const publishGeometrySample = useCallback(() => {
+    if (geometryKey === undefined || onGeometrySample === undefined) return
     const pose = readPose()
-    if (geometryKey !== undefined && onGeometrySample !== undefined) {
-      onGeometrySample({
-        key: geometryKey,
-        selectionKey,
-        worldCenter: pose === null ? null : worldCenter(pose, localCenter),
-        radius,
-        issue: pose === null ? 'unresolved-world-pose' : null,
-      })
-    }
+    onGeometrySample({
+      key: geometryKey,
+      selectionKey,
+      worldCenter: pose === null ? null : worldCenter(pose, localCenter),
+      radius,
+      issue: pose === null ? 'unresolved-world-pose' : null,
+    })
+  }, [geometryKey, localCenter, onGeometrySample, radius, readPose, selectionKey])
+  useEffect(() => {
+    publishGeometrySample()
+  }, [publishGeometrySample])
+  useFrame(() => {
+    publishGeometrySample()
+    const pose = readPose()
     const group = groupRef.current
     if (group === null) return
     group.visible = pose !== null
@@ -333,6 +339,16 @@ export function V5WorkcellCanvas({
   const initialPresentation = useMemo(() => reduceWorkcellScenePresentationV5([], expectedCount, selectedKey), [expectedCount, selectedKey])
   const presentationRef = useRef(initialPresentation)
   const [presentation, setPresentation] = useState(initialPresentation)
+  const sceneIdentity = `${bundle?.runtimeEpoch ?? 'inactive'}:${project.revisionId}:${expectedCount}:${selectedKey ?? 'none'}`
+  if (sceneIdentityRef.current === null) {
+    sceneIdentityRef.current = sceneIdentity
+  } else if (sceneIdentityRef.current !== sceneIdentity) {
+    sceneIdentityRef.current = sceneIdentity
+    samplesRef.current.clear()
+    const next = reduceWorkcellScenePresentationV5([], expectedCount, selectedKey)
+    presentationRef.current = next
+    setPresentation(next)
+  }
   const publishPresentation = useCallback((sample: WorkcellSceneGeometrySampleV5): void => {
     samplesRef.current.set(sample.key, sample)
     const next = reduceWorkcellScenePresentationV5([...samplesRef.current.values()], expectedCount, selectedKey)
@@ -341,22 +357,6 @@ export function V5WorkcellCanvas({
     setPresentation(next)
     onPresentationChange?.(next)
   }, [expectedCount, onPresentationChange, selectedKey])
-  useEffect(() => {
-    const identity = `${bundle?.runtimeEpoch ?? 'inactive'}:${project.revisionId}:${expectedCount}:${selectedKey ?? 'none'}`
-    if (sceneIdentityRef.current === null) {
-      sceneIdentityRef.current = identity
-      onPresentationChange?.(presentationRef.current)
-      return
-    }
-    if (sceneIdentityRef.current === identity) return
-    sceneIdentityRef.current = identity
-    samplesRef.current.clear()
-    const next = reduceWorkcellScenePresentationV5([], expectedCount, selectedKey)
-    if (presentationEqual(presentationRef.current, next)) return
-    presentationRef.current = next
-    setPresentation(next)
-    onPresentationChange?.(next)
-  }, [bundle, expectedCount, onPresentationChange, project, selectedKey])
   const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null)
   const appliedPose = cameraPose ?? { position: [3.2, -4.2, 2.8] as const, target: [0, 0, 0] as const }
   const positionText = JSON.stringify(appliedPose.position)

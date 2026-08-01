@@ -85,3 +85,35 @@ test('V6 resizes and restores docks without remounting Main View or losing the a
   await expect(canvas).toHaveAttribute('data-v6-canvas-identity', canvasId)
   await expect(mountedSelectedRobot).toHaveAttribute('aria-selected', 'true')
 })
+
+test('V6 keeps the floating Project menu anchored and all primary controls at target size on desktop and compact widths', async ({ page }) => {
+  const viewports = [{ width: 1712, height: 1368 }, { width: 1024, height: 768 }]
+  await page.setViewportSize(viewports[0])
+  await loadV6Demo(page)
+  for (const [index, viewport] of viewports.entries()) {
+    await page.setViewportSize(viewport)
+    if (index > 0) await expect(page.getByTestId('v6-main-view-viewport')).toBeVisible()
+    const header = page.getByTestId('v6-header')
+    const headerBefore = await bounds(header)
+    await page.getByRole('menuitem', { name: 'Project' }).click()
+    const projectMenu = page.getByRole('menu', { name: 'Project menu' })
+    await expect(projectMenu).toBeVisible()
+    const headerAfter = await bounds(header)
+    expect(headerAfter.height).toBe(headerBefore.height)
+    for (const control of [
+      page.getByRole('menuitem', { name: 'Project', exact: true }),
+      page.getByRole('menuitem', { name: 'Home', exact: true }),
+      page.getByRole('menuitem', { name: 'Model', exact: true }),
+      page.getByRole('menuitem', { name: 'Job', exact: true }),
+      page.getByRole('menuitem', { name: 'Connectivity', exact: true }),
+      page.getByRole('menuitem', { name: 'View', exact: true }),
+      page.getByRole('menuitem', { name: 'Help', exact: true }),
+      page.getByRole('button', { name: /Scene Explorer|Inspector|Job Monitor/u }).first(),
+    ]) {
+      const box = await control.boundingBox()
+      expect(box?.width ?? 0).toBeGreaterThanOrEqual(32)
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(32)
+    }
+    await page.keyboard.press('Escape')
+  }
+})

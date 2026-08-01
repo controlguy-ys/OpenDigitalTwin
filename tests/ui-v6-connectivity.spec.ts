@@ -119,3 +119,53 @@ test('V6 opens a real Binding Editor, deterministically browses nested OPC UA ad
   await expect(page.getByRole('menu', { name: 'Scene actions' })).toHaveAttribute('data-surface', 'viewport')
   await expect(monitor).toBeVisible()
 })
+
+test('V6 leaves an unchanged Settings draft disabled and enables Apply only after a real field change', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 })
+  await loadV6Demo(page)
+  const menu = await openConnectivityMenu(page)
+  await menu.getByRole('menuitem', { name: 'OPC UA Settings' }).click()
+  const settings = page.getByRole('dialog', { name: 'OPC UA Settings' })
+  const apply = settings.getByRole('button', { name: 'Apply & Activate' })
+  await expect(apply).toBeDisabled()
+  await settings.getByRole('button', { name: 'Add Endpoint' }).click()
+  const publishing = settings.getByLabel('Publishing interval (ms)')
+  await publishing.fill('250')
+  await expect(apply).toBeEnabled()
+  await settings.getByRole('button', { name: 'Cancel' }).click()
+  await expect(settings).toBeHidden()
+})
+
+test('V6 labels retained runtime state offline and Retry now performs GET-only refreshes with Escape focus restoration', async ({ page }) => {
+  let offline = false
+  const retryRequests: Array<{ method: string; url: string }> = []
+  await page.route('**/runtime/status', async (route) => {
+    if (offline) {
+      retryRequests.push({ method: route.request().method(), url: route.request().url() })
+      await route.abort('failed')
+      return
+    }
+    await route.continue()
+  })
+  await page.route('**/runtime/integration-diagnostics', async (route) => {
+    if (offline) {
+      retryRequests.push({ method: route.request().method(), url: route.request().url() })
+      await route.abort('failed')
+      return
+    }
+    await route.continue()
+  })
+  await loadV6Demo(page)
+  const trigger = page.getByRole('menuitem', { name: 'Connectivity' })
+  const menu = await openConnectivityMenu(page)
+  await menu.getByRole('menuitem', { name: 'Connection Monitor' }).click()
+  const monitor = page.getByRole('complementary', { name: 'Connection Monitor' })
+  await expect(monitor).toBeVisible()
+  offline = true
+  await monitor.getByRole('button', { name: 'Retry now' }).click()
+  await expect(monitor).toContainText('Offline')
+  await expect(monitor).toContainText('Last known')
+  expect(retryRequests.every(({ method, url }) => method === 'GET' && (url.endsWith('/runtime/status') || url.endsWith('/runtime/integration-diagnostics')))).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(trigger).toBeFocused()
+})

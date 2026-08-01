@@ -30,3 +30,23 @@ test('V6 keeps Scene Explorer selection keyboard-operable and routes right click
   await robot.click()
   await expect(robot).toHaveAttribute('aria-selected', 'true')
 })
+
+test('V6 presents finite scene geometry and changes the real camera snapshot when Fit All is requested', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 })
+  await loadV6Demo(page)
+
+  const presentation = page.getByTestId('v5-scene-presentation')
+  await expect(presentation).toContainText(/visible geometry/u)
+  const expandObjects = page.getByRole('button', { name: 'Expand Objects' })
+  if (await expandObjects.isVisible()) await expandObjects.click()
+  await expect(page.getByRole('treeitem', { name: /Part/u })).toBeVisible()
+  await page.getByRole('menuitem', { name: 'Model', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Add Box', exact: true }).click()
+  await expect.poll(async () => presentation.textContent()).toMatch(/1 visible geometry|2 visible geometry/u)
+
+  const canvas = page.locator('.v5-scene-canvas')
+  await page.getByRole('button', { name: 'Home view' }).click()
+  const before = await canvas.getAttribute('data-camera-position')
+  await page.getByRole('button', { name: 'Fit all visible geometry' }).click()
+  await expect.poll(async () => canvas.getAttribute('data-camera-position')).not.toBe(before)
+})

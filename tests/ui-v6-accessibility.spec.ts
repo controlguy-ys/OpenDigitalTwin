@@ -71,3 +71,26 @@ test('V6 supports keyboard dialog flows, themed 200-percent layout, and axe-clea
   await page.evaluate(() => { document.body.style.zoom = '2' })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
+
+test('V6 keeps keyboard recovery, target semantics, live Job failure, and zoom overflow accessible at 200 percent', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await loadV6Demo(page)
+  const project = page.getByRole('menuitem', { name: 'Project' })
+  const connectivity = page.getByRole('menuitem', { name: 'Connectivity' })
+  for (const control of [project, connectivity, page.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u }).first()]) {
+    const box = await control.boundingBox()
+    expect(box?.width ?? 0).toBeGreaterThanOrEqual(32)
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(32)
+  }
+  await connectivity.press('Enter')
+  const menu = page.getByRole('menu', { name: 'Connectivity menu' })
+  await expect(menu).toBeVisible()
+  await menu.getByRole('menuitem', { name: 'Connection Monitor' }).press('Enter')
+  const monitor = page.getByRole('complementary', { name: 'Connection Monitor' })
+  await expect(monitor).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(connectivity).toBeFocused()
+  await page.evaluate(() => { document.body.style.zoom = '2' })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await expectNoSeriousOrCritical(page)
+})

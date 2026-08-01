@@ -60,10 +60,17 @@ export async function loadV6Demo(page: Page): Promise<void> {
   await page.goto('/')
   await expect(page.getByRole('menuitem', { name: 'Project' })).toBeVisible()
   await page.getByRole('menuitem', { name: 'Project' }).click()
-  await page.getByRole('menuitem', { name: 'Load Demo' }).click()
+  const loadDemo = page.getByRole('menuitem', { name: 'Load Demo' })
+  await expect(loadDemo).toBeEnabled()
+  await loadDemo.click()
   await expect(page.getByTestId('v6-main-view-viewport')).toBeVisible()
   await expect(page.getByTestId('v6-canvas-host')).toBeVisible()
   await expect(page.getByTestId('v6-canvas-host').locator('canvas')).toBeAttached()
+  await expect.poll(async () => page.evaluate(async () => {
+    const response = await fetch('/runtime/status')
+    const status = await response.json() as { readonly project?: { readonly phase?: string; readonly revisionId?: string | null } }
+    return status.project?.phase === 'ready' && typeof status.project.revisionId === 'string'
+  }), { message: 'Demo Project must be active in Runtime Gateway before interaction.' }).toBe(true)
 }
 
 export async function selectV6DemoRobot(page: Page): Promise<Locator> {
