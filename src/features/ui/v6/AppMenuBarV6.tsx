@@ -20,6 +20,7 @@ import {
   CommandSurfaceControlV6,
   invokeCommandSurfaceV6,
 } from './CommandSurfaceControlV6.js'
+import { ButtonV6 } from './ButtonV6.js'
 
 export interface V6TransientUiPort {
   hasActiveTransient(): boolean
@@ -169,10 +170,11 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
           const open = openMenu === menu
           const triggerId = `v6-menu-trigger-${menu.toLowerCase()}`
           const surface = MENU_SURFACES_V6[menu]
-          return <span key={menu}>
-            <button
+          return <span className="v6-menu-anchor" key={menu}>
+            <ButtonV6
               aria-expanded={open}
               aria-haspopup="menu"
+              className="v6-menu-trigger"
               id={triggerId}
               onClick={() => {
                 setActiveMenuIndex(index)
@@ -182,9 +184,10 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
               onKeyDown={(event) => onTopLevelKeyDown(event, menu, index)}
               role="menuitem"
               tabIndex={activeMenuIndex === index ? 0 : -1}
-              type="button"
-            >{menu}</button>
-            {open && <div aria-label={`${menu} menu`} id={`v6-menu-${menu.toLowerCase()}`} role="menu">
+              size="compact"
+              variant="ghost"
+            >{menu}</ButtonV6>
+            {open && <div aria-label={`${menu} menu`} className="v6-menu-surface" id={`v6-menu-${menu.toLowerCase()}`} role="menu">
               {menu === 'Connectivity' && connectivity !== undefined
                 ? <ConnectivityMenuV6
                     {...connectivity}

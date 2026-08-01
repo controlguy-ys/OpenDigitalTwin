@@ -55,6 +55,20 @@ describe('V6 command surfaces', () => {
     await vi.waitFor(() => expect(addBox.execute).toHaveBeenCalledTimes(3))
   })
 
+  it('uses floating menu anchors, triggers, and surfaces for top-level menus', () => {
+    const registry = createAppCommandRegistryV6([command('model.addBox', 'Add Box')])
+    render(<AppMenuBarV6 registry={registry} />)
+
+    const trigger = screen.getByRole('menuitem', { name: 'Model' })
+    expect(trigger).toHaveClass('v6-menu-trigger')
+    const anchor = trigger.parentElement
+    expect(anchor).toHaveClass('v6-menu-anchor')
+    fireEvent.click(trigger)
+    const menu = screen.getByRole('menu', { name: 'Model menu' })
+    expect(menu).toHaveClass('v6-menu-surface')
+    expect(menu.parentElement).toBe(anchor)
+  })
+
   it('shares checked Main View state and returns focus to the View menu trigger', async () => {
     let maximized = false
     const registry = createAppCommandRegistryV6([createMainViewMaximizeCommandV6({

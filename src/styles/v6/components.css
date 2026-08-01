@@ -63,6 +63,8 @@
   text-overflow: ellipsis;
 }
 
+.v6-header-status-save { overflow: hidden; text-overflow: ellipsis; }
+
 .v6-header-status-save,
 .v6-header-status .v6-status-badge {
   flex: 0 0 auto;
@@ -204,3 +206,45 @@
   .v6-modal-dialog--editor { max-height: calc(100dvh - 16px); }
   .opcua-address-browser-body { grid-template-columns: 1fr; }
 }
+.v6-button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--v6-color-border);
+  border-radius: 4px;
+  color: var(--v6-color-text);
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.v6-button--compact { min-height: 32px; padding: 4px 10px; }
+.v6-button--default { min-height: 40px; padding: 8px 14px; }
+.v6-button--primary { background: var(--v6-color-accent); color: var(--v6-color-canvas); }
+.v6-button--secondary { background: var(--v6-color-panel); }
+.v6-button--ghost { background: transparent; }
+.v6-button--danger { background: var(--v6-color-fault); color: var(--v6-color-canvas); }
+.v6-button:hover:not(:disabled) { border-color: var(--v6-color-accent); }
+.v6-button:focus-visible { outline: 2px solid var(--v6-color-focus); outline-offset: 2px; }
+.v6-button:disabled { color: var(--v6-color-muted); cursor: not-allowed; opacity: 0.65; }
+
+.v6-menu-anchor { position: relative; display: inline-flex; }
+.v6-menu-trigger { border-color: transparent; }
+.v6-menu-surface {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 6;
+  display: grid;
+  min-width: 180px;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--v6-color-border);
+  border-radius: 4px;
+  background: var(--v6-color-panel);
+  box-shadow: 0 8px 20px color-mix(in srgb, #000 32%, transparent);
+}
+
+.v6-command-surface-control { width: 100%; justify-content: flex-start; text-align: left; }

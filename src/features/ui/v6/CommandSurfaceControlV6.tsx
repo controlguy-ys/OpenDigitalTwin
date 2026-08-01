@@ -8,6 +8,7 @@ import type {
   AppCommandRegistryV6,
   AppCommandSurfaceV6,
 } from '../../commands/v6/app-command-v6.js'
+import { ButtonV6 } from './ButtonV6.js'
 
 interface CommandSurfaceControllerV6 {
   getVersion(): number
@@ -84,11 +85,11 @@ export function CommandSurfaceControlV6({
   const role = menuItemRole(command.id, command.checked, surface)
   const checkable = role === 'menuitemcheckbox' || role === 'menuitemradio'
   const toolbarButton = surface === 'main-view-pane-toolbar'
-  return <button
+  return <ButtonV6
     aria-checked={checkable ? Boolean(command.checked) : undefined}
     aria-controls={ariaControls}
     aria-pressed={toolbarButton ? Boolean(command.checked) : undefined}
-    className={className}
+    className={['v6-command-surface-control', className].filter(Boolean).join(' ')}
     data-command-id={command.id}
     data-command-surface={surface}
     disabled={!command.enabled}
@@ -98,7 +99,8 @@ export function CommandSurfaceControlV6({
     }}
     onKeyDown={onKeyDown}
     role={role}
+    size="compact"
     tabIndex={tabIndex}
-    type="button"
-  >{command.label}</button>
+    variant={toolbarButton ? 'secondary' : 'ghost'}
+  >{command.label}</ButtonV6>
 }

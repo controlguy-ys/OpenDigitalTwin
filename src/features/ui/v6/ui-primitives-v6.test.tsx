@@ -1,3 +1,4 @@
+import { createRef } from 'react'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Check, Save, TriangleAlert } from 'lucide-react'
@@ -5,6 +6,24 @@ import { expect, it, vi } from 'vitest'
 import { IconButtonV6 } from './IconButtonV6.js'
 import { StatusBadgeV6 } from './StatusBadgeV6.js'
 import { SwitchFieldV6 } from './SwitchFieldV6.js'
+import { ButtonV6 } from './ButtonV6.js'
+
+it('renders shared buttons with token variants, native state, ref forwarding, and an accessible name', () => {
+  const ref = createRef<HTMLButtonElement>()
+  render(<>
+    <ButtonV6 ref={ref} aria-label="Run simulation" disabled size="compact" variant="primary">Run</ButtonV6>
+    <ButtonV6 size="default" variant="secondary">Settings</ButtonV6>
+  </>)
+
+  const compact = screen.getByRole('button', { name: 'Run simulation' })
+  const standard = screen.getByRole('button', { name: 'Settings' })
+  expect(compact).toHaveAttribute('data-variant', 'primary')
+  expect(compact).toHaveAttribute('data-size', 'compact')
+  expect(compact).toBeDisabled()
+  expect(ref.current).toBe(compact)
+  expect(standard).toHaveAttribute('data-variant', 'secondary')
+  expect(standard).toHaveAttribute('data-size', 'default')
+})
 
 it('shows the icon button label in a tooltip when keyboard focus reaches it', async () => {
   const user = userEvent.setup()

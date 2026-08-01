@@ -42,8 +42,8 @@ export function HeaderStatusV6({ projectName, saveState, simulation, connectivit
     data-testid="v6-header-status"
     role="group"
   >
-    <span className="v6-header-status-project" title={projectName}>{projectName}</span>
-    <span aria-label={`Project ${saveState}`} className="v6-header-status-save">{saveState}</span>
+    <span aria-label={`Project ${projectName}`} className="v6-header-status-project" title={projectName}>{projectName}</span>
+    <span aria-label={`Project ${saveState}`} className="v6-header-status-save" title={`Project ${saveState}`}>{saveState}</span>
     <StatusBadgeV6 {...simulation} />
     <StatusBadgeV6 {...gatewayBadge(connectivity)} />
     <StatusBadgeV6 {...opcUaBadge(connectivity)} />

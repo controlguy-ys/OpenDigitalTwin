@@ -8,6 +8,7 @@ import {
   resolveWorkspaceLayoutV6,
 } from './workspace-layout-geometry-v6.js'
 import type { WorkspaceLayoutStoreV6 } from './workspace-layout-store-v6.js'
+import { ButtonV6 } from './ButtonV6.js'
 
 export interface ApplicationShellV6Props {
   readonly store: WorkspaceLayoutStoreV6
@@ -18,6 +19,7 @@ export interface ApplicationShellV6Props {
   readonly explorer: ReactNode
   readonly inspector: ReactNode
   readonly bottom: ReactNode
+  readonly bottomStatus?: ReactNode
   readonly viewport: ReactNode
 }
 
@@ -36,6 +38,7 @@ export function ApplicationShellV6({
   explorer,
   inspector,
   bottom,
+  bottomStatus,
   viewport,
 }: ApplicationShellV6Props) {
   const state = useSyncExternalStore(store.subscribe, store.getState, store.getState)
@@ -207,15 +210,33 @@ export function ApplicationShellV6({
         {bottom}
       </section>
       {!maximized && <nav aria-label="Workspace docks" className="v6-workspace-dock-toggles">
-        <button onClick={() => explorerPresentation === 'dock'
+        <ButtonV6
+          aria-pressed={explorerVisible}
+          onClick={() => explorerPresentation === 'dock'
           ? store.getState().setDockVisible(state.mode, 'explorer', !explorerVisible)
-          : store.getState().setDrawerOpen('explorer', !explorerVisible)} type="button">{explorerVisible ? 'Hide' : 'Show'} Scene Explorer</button>
-        <button onClick={() => inspectorPresentation === 'dock'
+          : store.getState().setDrawerOpen('explorer', !explorerVisible)}
+          size="compact"
+          variant="ghost"
+        >{explorerVisible ? 'Hide' : 'Show'} Scene Explorer</ButtonV6>
+        <ButtonV6
+          aria-pressed={inspectorVisible}
+          onClick={() => inspectorPresentation === 'dock'
           ? store.getState().setDockVisible(state.mode, 'inspector', !inspectorVisible)
-          : store.getState().setDrawerOpen('inspector', !inspectorVisible)} type="button">{inspectorVisible ? 'Hide' : 'Show'} Inspector</button>
-        <button onClick={() => bottomPresentation === 'dock'
+          : store.getState().setDrawerOpen('inspector', !inspectorVisible)}
+          size="compact"
+          variant="ghost"
+        >{inspectorVisible ? 'Hide' : 'Show'} Inspector</ButtonV6>
+        <ButtonV6
+          aria-pressed={bottomVisible}
+          onClick={() => bottomPresentation === 'dock'
           ? store.getState().setDockVisible(state.mode, 'bottom', !bottomVisible)
-          : store.getState().setDrawerOpen('bottom', !bottomVisible)} type="button">{bottomVisible ? 'Hide' : 'Show'} Job Monitor</button>
+          : store.getState().setDrawerOpen('bottom', !bottomVisible)}
+          size="compact"
+          variant="ghost"
+        >
+          {bottomVisible ? 'Hide' : 'Show'} Job Monitor
+          {bottomStatus !== undefined && <span className="v6-dock-toggle-status">{bottomStatus}</span>}
+        </ButtonV6>
       </nav>}
       <div className="v6-viewport-safe-area" data-safe-area={`${safeArea.top},${safeArea.right},${safeArea.bottom},${safeArea.left}`} />
     </section>

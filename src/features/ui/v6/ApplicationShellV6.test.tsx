@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { useEffect, type ReactNode } from 'react'
@@ -15,6 +15,7 @@ interface RenderShellOptions {
   readonly inspector?: ReactNode
   readonly bottom?: ReactNode
   readonly toolbox?: ReactNode
+  readonly bottomStatus?: ReactNode
 }
 
 function renderShell(options: RenderShellOptions = {}) {
@@ -35,12 +36,27 @@ function renderShell(options: RenderShellOptions = {}) {
       bottom={options.bottom ?? <div>Bottom</div>}
       toolbox={options.toolbox ?? <div>Toolbox</div>}
       viewport={<Viewport />}
+      bottomStatus={options.bottomStatus}
     />,
   )
   return { store, get mounts() { return mounts } }
 }
 
 describe('ApplicationShellV6', () => {
+  it('uses shared pressed dock controls and keeps bottomStatus visible when Job Monitor is collapsed', () => {
+    const view = renderShell({ bottomStatus: <span>Queue: idle</span> })
+    const toggles = screen.getByRole('navigation', { name: 'Workspace docks' })
+    const buttons = within(toggles).getAllByRole('button')
+    expect(buttons).toHaveLength(3)
+    for (const button of buttons) {
+      expect(button).toHaveClass('v6-button')
+      expect(button).toHaveAttribute('aria-pressed')
+      expect(button).toHaveAttribute('data-size', 'compact')
+    }
+    expect(screen.getByText('Queue: idle')).toBeVisible()
+    act(() => view.store.getState().setDockVisible('wide', 'bottom', false))
+    expect(screen.getByText('Queue: idle')).toBeVisible()
+  })
   it('keeps the same viewport node mounted through resizing, dock changes, maximize, restore, and Escape', () => {
     const view = renderShell()
     const viewport = screen.getByTestId('viewport')

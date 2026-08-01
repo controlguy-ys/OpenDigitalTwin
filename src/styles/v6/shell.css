@@ -153,6 +153,11 @@
   gap: 4px;
 }
 
+.v6-dock-toggle-status {
+  color: var(--v6-color-muted);
+  font-size: 0.75rem;
+}
+
 .v6-application-shell[data-workspace-mode='compact'] {
   grid-template-columns:
     var(--v6-toolbox-width)
