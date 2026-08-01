@@ -114,7 +114,7 @@ export function AppV6Dialogs({
       triggerRef={bindingEditorTriggerRef}
     />}
     {dialog?.kind === 'docker-guide' && <DockerRunGuideDialogV1 onClose={() => closeToParent(layout, dialog.parent)} status={resources.connectivity.getState().status} triggerRef={dockerGuideTriggerRef} />}
-    {workspaceProject !== null && dialog?.kind === 'job-editor' && jobAuthoring !== null && bundle !== null && <RobotJobEditorDialogV6 authoring={jobAuthoring} jobId={dialog.jobId} onClose={() => layout.getState().closeDialog()} project={workspaceProject} runtime={bundle.runtimeGraph.jobs} triggerRef={jobEditorTriggerRef} />}
+    {workspaceProject !== null && dialog?.kind === 'job-editor' && jobAuthoring !== null && bundle !== null && <RobotJobEditorDialogV6 authoring={jobAuthoring} {...(dialog.instructionId === undefined ? {} : { instructionId: dialog.instructionId })} jobId={dialog.jobId} onClose={() => layout.getState().closeDialog()} project={workspaceProject} runtime={bundle.runtimeGraph.jobs} triggerRef={jobEditorTriggerRef} />}
     <HelpOverlayV6 onClose={() => layout.getState().closeDialog()} request={dialog?.kind === 'help' ? dialog : null} />
   </>
 }

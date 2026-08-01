@@ -23,6 +23,26 @@ describe('RobotJobEditorDialogV6', () => {
     for (const name of ['Edit', 'Insert Before', 'Insert After', 'Duplicate', 'Delete', 'Move Before', 'Move After', 'Drag step 1']) expect(screen.getByRole('button', { name })).toBeDisabled()
   })
 
+  it('opens the requested instruction and falls back when the id is invalid', () => {
+    const project = createLogicalIoJobSampleV5({ projectId: 'instruction-selection-project', revisionId: 'instruction-selection-revision', nowIso: '2026-07-30T00:00:00.000Z' })
+    const job = onlyJob(project)
+    const authoring = { reorder: vi.fn(), insert: vi.fn(), replace: vi.fn(), duplicate: vi.fn(), remove: vi.fn() }
+    render(<RobotJobEditorDialogV6 authoring={authoring} instructionId="wait-part-present" jobId={job.id} onClose={vi.fn()} project={project} />)
+    expect(screen.getByRole('button', { name: /wait-di/i })).toHaveAttribute('data-instruction-id', 'wait-part-present')
+    expect(screen.getByLabelText('Instruction kind')).toHaveValue('wait-di')
+  })
+
+  it('uses the first instruction and exposes semantic fieldsets and Step actions for an invalid id', () => {
+    const project = createLogicalIoJobSampleV5({ projectId: 'instruction-fallback-project', revisionId: 'instruction-fallback-revision', nowIso: '2026-07-30T00:00:00.000Z' })
+    const job = onlyJob(project)
+    const authoring = { reorder: vi.fn(), insert: vi.fn(), replace: vi.fn(), duplicate: vi.fn(), remove: vi.fn() }
+    render(<RobotJobEditorDialogV6 authoring={authoring} instructionId="missing-instruction" jobId={job.id} onClose={vi.fn()} project={project} />)
+    expect(document.querySelector(`button[data-instruction-id="${job.instructions[0]?.id}"]`)).not.toBeNull()
+    expect(screen.getByRole('group', { name: 'Instruction kind' })).toBeVisible()
+    expect(screen.getByRole('group', { name: 'Pose' })).toBeVisible()
+    expect(screen.getByRole('group', { name: 'Step actions' })).toBeVisible()
+  })
+
   it('edits an ordered move pose from operator values instead of generated defaults', () => {
     const project = createLogicalIoJobSampleV5({ projectId: 'pose-project', revisionId: 'pose-revision', nowIso: '2026-07-30T00:00:00.000Z' })
     const job = onlyJob(project)
