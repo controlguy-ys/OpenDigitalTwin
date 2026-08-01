@@ -3,9 +3,14 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { ViewportOverlayV6, selectedTcpMarkerV6 } from './ViewportOverlayV6.js'
 
+const cameraControllerPort = () => ({
+  home: vi.fn(), fitAll: vi.fn(), focusSelection: vi.fn(), setOrientation: vi.fn(),
+  snapshot: vi.fn(() => ({ position: [0, 0, 0] as const, target: [0, 0, 0] as const })),
+})
+
 describe('ViewportOverlayV6', () => {
   it('keeps camera controls below the interactive View Cube and exposes all standard orientations', () => {
-    const camera = { home: vi.fn(), fitAll: vi.fn(), focusSelection: vi.fn(), setOrientation: vi.fn() }
+    const camera = cameraControllerPort()
     render(<ViewportOverlayV6 camera={camera} />)
     fireEvent.click(screen.getByRole('button', { name: 'Home view' }))
     fireEvent.click(screen.getByRole('button', { name: 'Fit all visible geometry' }))
@@ -29,7 +34,7 @@ describe('ViewportOverlayV6', () => {
   it('renders an eligible TCP marker and makes Translate functional only through an enabled manual port', () => {
     const translate = vi.fn()
     const markerInput = { projectRevisionId: 'r1', runtimeRevisionId: 'r1', selection: { kind: 'robot', id: 'robot' }, robot: { id: 'robot', selectedTcpFrameId: 'tcp' }, tcp: { robotId: 'robot', frameId: 'tcp', role: 'tcp' } } as const
-    const camera = { home: vi.fn(), fitAll: vi.fn(), focusSelection: vi.fn(), setOrientation: vi.fn() }
+    const camera = cameraControllerPort()
     const { rerender } = render(<ViewportOverlayV6 camera={camera} tcpMarker={markerInput} transformControl={{ enabled: false, explanation: 'OPC UA owns this transform.', translate }} />)
 
     expect(screen.getByTestId('v6-tcp-marker')).toHaveTextContent('robot / tcp')
@@ -49,7 +54,7 @@ describe('ViewportOverlayV6', () => {
     ['non-TCP role', { tcp: { robotId: 'robot', frameId: 'tcp', role: 'tool' } }],
     ['runtime revision mismatch', { runtimeRevisionId: 'r2' }],
   ])('does not render a TCP marker for %s', (_reason, override) => {
-    const camera = { home: vi.fn(), fitAll: vi.fn(), focusSelection: vi.fn(), setOrientation: vi.fn() }
+    const camera = cameraControllerPort()
     const markerInput = {
       projectRevisionId: 'r1', runtimeRevisionId: 'r1',
       selection: { kind: 'robot', id: 'robot' },

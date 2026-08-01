@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { forwardRef, type ReactNode } from 'react'
+import { PerspectiveCamera } from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { createStore } from 'zustand/vanilla'
 
@@ -15,10 +16,18 @@ import {
 import type { BrowserRuntimeBundleStateV5 } from '../../project/v5/browser-runtime-bundle-store-v5.js'
 import { V5WorkcellCanvas, V5WorkcellWorkspace } from './V5WorkcellWorkspace.js'
 
+const { cameraProbe } = vi.hoisted(() => ({
+  cameraProbe: { current: null as object | null },
+}))
+const controlsProbe = {
+  target: { values: [0, 0, 0] as [number, number, number], set(...values: [number, number, number]) { this.values = values } },
+  update: vi.fn(),
+}
+
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children }: { readonly children: ReactNode }) => children,
   useFrame: (callback: () => void) => { callback() },
-  useThree: <T,>(selector: (state: { readonly camera: object }) => T) => selector({ camera: {} }),
+  useThree: <T,>(selector: (state: { readonly camera: object | null }) => T) => selector({ camera: cameraProbe.current }),
 }))
 
 vi.mock('@react-three/drei', () => ({
@@ -26,7 +35,10 @@ vi.mock('@react-three/drei', () => ({
   GizmoViewcube: () => null,
   Grid: () => null,
   Html: ({ children }: { readonly children: ReactNode }) => children,
-  OrbitControls: () => null,
+  OrbitControls: forwardRef((_, ref) => {
+    if (typeof ref !== 'function' && ref !== null) ref.current = controlsProbe
+    return null
+  }),
   PerspectiveCamera: () => null,
 }))
 
@@ -67,6 +79,37 @@ function projectWithRepeatedLinkGeometry(): WorkcellProjectV5 {
     occurrenceKey: 'robot-occurrence-duplicate',
   })
   return validateWorkcellProjectV5(next)
+}
+
+function projectWithAssetEntity(): WorkcellProjectV5 {
+  const base = project()
+  const next = cloneWorkcellProjectV5(base)
+  const occurrence = next.robotDefinitions[0]!.links[0]!.geometryOccurrences[0]!
+  ;(occurrence.collisionBoxes as unknown as Array<typeof occurrence.collisionBoxes[number]>).push({
+    id: 'collision-box-1',
+    centerM: [0, 0, 0],
+    halfExtentsM: [0.1, 0.1, 0.1],
+    quaternion: [0, 0, 0, 1],
+  })
+  const baseWithCollision = validateWorkcellProjectV5(next)
+  const entity = baseWithCollision.spatialEntities[0]!
+  return validateWorkcellProjectV5({
+    ...baseWithCollision,
+    spatialEntities: [{
+      ...entity,
+      id: 'asset-object',
+      name: 'Asset without collision boxes',
+      geometry: {
+        kind: 'asset',
+        assetReferenceId: baseWithCollision.assetReferences[0]!.id,
+        occurrenceKey: 'asset-occurrence',
+        sourceConvention: { linearUnit: 'meter', sourceToMeters: 1, orientation: { mode: 'up-axis', upAxis: 'z' } },
+        originMode: 'source',
+        statistics: { vertices: 0, triangles: 0, meshes: 0, materials: 0 },
+        collisionBoxes: [],
+      },
+    }],
+  })
 }
 
 function bundleWithWorld(readRobotLinkWorldPose: ReturnType<typeof vi.fn>): BrowserRuntimeBundleStateV5 {
@@ -134,5 +177,40 @@ describe('V5WorkcellWorkspace', () => {
     />)
     expect(screen.getByTestId('scene-canvas-surface')).toHaveAttribute('data-camera-position', '[7,8,9]')
     expect(screen.getByTestId('scene-canvas-surface')).toHaveAttribute('data-camera-target', '[1,2,3]')
+  })
+
+  it('synchronizes the supplied camera version and exposes collision and diagnostic proxy surfaces', () => {
+    const camera = new PerspectiveCamera()
+    vi.spyOn(camera, 'updateProjectionMatrix')
+    cameraProbe.current = camera
+    controlsProbe.target.values = [0, 0, 0]
+    controlsProbe.update.mockClear()
+    const { rerender } = render(<V5WorkcellCanvas
+      bundle={bundleWithWorld(vi.fn(() => SHARED_LINK_POSE))}
+      cameraPose={{ position: [7, 8, 9], target: [1, 2, 3] }}
+      cameraVersion={5}
+      onSelect={vi.fn()}
+      project={projectWithAssetEntity()}
+      selection={null}
+    />)
+    expect(camera.position.toArray()).toEqual([7, 8, 9])
+    expect(camera.up.toArray()).toEqual([0, 0, 1])
+    expect(controlsProbe.target.values).toEqual([1, 2, 3])
+    expect(camera.updateProjectionMatrix).toHaveBeenCalledOnce()
+    expect(controlsProbe.update).toHaveBeenCalledOnce()
+    expect(screen.getByTestId('v5-geometry-proxy-object:asset-object')).toHaveAttribute('data-proxy-kind', 'diagnostic-wireframe')
+    expect(screen.getByTestId('v5-geometry-proxy-robot:robot-1:link:L0:geometry:robot-occurrence')).toHaveAttribute('data-proxy-kind', 'collision-box')
+    rerender(<V5WorkcellCanvas
+      bundle={bundleWithWorld(vi.fn(() => SHARED_LINK_POSE))}
+      cameraPose={{ position: [8, 9, 10], target: [2, 3, 4] }}
+      cameraVersion={6}
+      onSelect={vi.fn()}
+      project={projectWithAssetEntity()}
+      selection={null}
+    />)
+    expect(camera.position.toArray()).toEqual([8, 9, 10])
+    expect(controlsProbe.target.values).toEqual([2, 3, 4])
+    expect(camera.updateProjectionMatrix).toHaveBeenCalledTimes(2)
+    expect(controlsProbe.update).toHaveBeenCalledTimes(2)
   })
 })

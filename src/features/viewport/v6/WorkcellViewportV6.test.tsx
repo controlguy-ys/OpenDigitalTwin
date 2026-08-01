@@ -157,6 +157,7 @@ describe('WorkcellViewportV6', () => {
       fitAll: vi.fn(() => controller.fitAll()),
       focusSelection: () => controller.focusSelection(),
       setOrientation: (value: Parameters<typeof controller.setOrientation>[0]) => controller.setOrientation(value),
+      snapshot: () => controller.snapshot(),
     }
     const runtimeStore = createRuntimeProbeStore({
       selection: { kind: 'robot', id: 'robot-1' },

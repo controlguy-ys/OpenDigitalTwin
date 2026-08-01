@@ -20,7 +20,7 @@ export interface CameraControllerV6 {
   fitAll(): void
   focusSelection(): void
   setOrientation(value: CameraOrientationV6): void
-  snapshot?(): CameraSnapshotV6
+  snapshot(): CameraSnapshotV6
 }
 
 export const V6_CAMERA_MOUSE_MAPPING = Object.freeze({
@@ -56,7 +56,7 @@ function frameBounds(options: CameraControllerV6Options, bounds: CameraBoundsV6 
   options.update()
 }
 
-export function createCameraControllerV6(options: CameraControllerV6Options): CameraControllerV6 & { snapshot(): CameraSnapshotV6 } {
+export function createCameraControllerV6(options: CameraControllerV6Options): CameraControllerV6 {
   return Object.freeze({
     home() {
       copyPoint(options.camera.position, options.home.position)

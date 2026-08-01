@@ -103,7 +103,7 @@ const IDENTITY_POSE: RigidTransformV5 = {
   quaternion: [0, 0, 0, 1],
 }
 
-function WorldPoseGroup({ readPose, children, geometryKey, selectionKey = null, localCenter = [0, 0, 0], radius = 0.06, onGeometrySample }: {
+function WorldPoseGroup({ readPose, children, geometryKey, selectionKey = null, localCenter = [0, 0, 0], radius = 0.06, onGeometrySample, proxyKind }: {
   readonly readPose: () => RigidTransformV5 | null
   readonly children: ReactNode
   readonly geometryKey?: string
@@ -111,6 +111,7 @@ function WorldPoseGroup({ readPose, children, geometryKey, selectionKey = null, 
   readonly localCenter?: readonly [number, number, number]
   readonly radius?: number
   readonly onGeometrySample?: (sample: WorkcellSceneGeometrySampleV5) => void
+  readonly proxyKind?: 'collision-box' | 'diagnostic-wireframe' | 'logical-part'
 }): ReactNode {
   const groupRef = useRef<Group>(null)
   const initialPose = readPose()
@@ -133,7 +134,13 @@ function WorldPoseGroup({ readPose, children, geometryKey, selectionKey = null, 
     group.position.set(...pose.positionM)
     group.quaternion.set(...pose.quaternion)
   })
-  return <group ref={groupRef} visible={initialPose !== null} {...transformProps(initialPose ?? IDENTITY_POSE)}>{children}</group>
+  return <group
+    data-proxy-kind={proxyKind}
+    data-testid={geometryKey === undefined ? undefined : `v5-geometry-proxy-${geometryKey}`}
+    ref={groupRef}
+    visible={initialPose !== null}
+    {...transformProps(initialPose ?? IDENTITY_POSE)}
+  >{children}</group>
 }
 
 function CameraPoseSynchronizer({ pose, version, controlsRef }: {
@@ -197,7 +204,7 @@ function ObjectGeometry({ bundle, entity, selected, onSelect, onGeometrySample }
         ? Math.hypot(entity.geometry.radiusM, entity.geometry.heightM / 2)
         : 0.06
   if (entity.geometry.kind === 'cylinder') {
-    return <WorldPoseGroup geometryKey={geometryKey} localCenter={[0, 0, 0]} onGeometrySample={onGeometrySample} radius={radius} readPose={() => bundle.runtimeGraph.world.readObjectWorldPose(entity.id)} selectionKey={selectionKey}>
+    return <WorldPoseGroup geometryKey={geometryKey} localCenter={[0, 0, 0]} onGeometrySample={onGeometrySample} proxyKind="logical-part" radius={radius} readPose={() => bundle.runtimeGraph.world.readObjectWorldPose(entity.id)} selectionKey={selectionKey}>
       <mesh onClick={(event) => { event.stopPropagation(); onSelect() }}>
         <cylinderGeometry args={[entity.geometry.radiusM, entity.geometry.radiusM, entity.geometry.heightM, entity.geometry.radialSegments]} />
         <meshStandardMaterial color={color} />
@@ -205,14 +212,14 @@ function ObjectGeometry({ bundle, entity, selected, onSelect, onGeometrySample }
     </WorldPoseGroup>
   }
   if (entity.geometry.kind === 'box') {
-    return <WorldPoseGroup geometryKey={geometryKey} localCenter={[0, 0, 0]} onGeometrySample={onGeometrySample} radius={radius} readPose={() => bundle.runtimeGraph.world.readObjectWorldPose(entity.id)} selectionKey={selectionKey}>
+    return <WorldPoseGroup geometryKey={geometryKey} localCenter={[0, 0, 0]} onGeometrySample={onGeometrySample} proxyKind="logical-part" radius={radius} readPose={() => bundle.runtimeGraph.world.readObjectWorldPose(entity.id)} selectionKey={selectionKey}>
       <mesh onClick={(event) => { event.stopPropagation(); onSelect() }}>
         <boxGeometry args={[...entity.geometry.dimensionsM]} />
         <meshStandardMaterial color={color} />
       </mesh>
     </WorldPoseGroup>
   }
-  return <WorldPoseGroup geometryKey={geometryKey} localCenter={[0, 0, 0]} onGeometrySample={onGeometrySample} radius={radius} readPose={() => bundle.runtimeGraph.world.readObjectWorldPose(entity.id)} selectionKey={selectionKey}>
+  return <WorldPoseGroup geometryKey={geometryKey} localCenter={[0, 0, 0]} onGeometrySample={onGeometrySample} proxyKind={entity.geometry.collisionBoxes.length === 0 ? 'diagnostic-wireframe' : 'collision-box'} radius={radius} readPose={() => bundle.runtimeGraph.world.readObjectWorldPose(entity.id)} selectionKey={selectionKey}>
     <group onClick={(event) => { event.stopPropagation(); onSelect() }}>
       {entity.geometry.collisionBoxes.length === 0
         ? <><mesh><boxGeometry args={[0.12, 0.12, 0.12]} /><meshStandardMaterial color={color} wireframe /></mesh><Html center><span aria-label={`Geometry proxy for ${entity.name}`} role="img">Geometry proxy</span></Html></>
@@ -241,7 +248,7 @@ function RobotGeometry({ project, bundle, robotId, selected, onSelect, onGeometr
     {definition.links.flatMap((link) => {
       if (link.geometryOccurrences.length === 0) {
         const geometryKey = `robot:${robotId}:link:${link.id}:geometry:${link.id}-fallback`
-        return [<WorldPoseGroup geometryKey={geometryKey} key={link.id} onGeometrySample={onGeometrySample} radius={0.06} readPose={() => bundle.runtimeGraph.world.readRobotLinkWorldPose(robotId, link.id)} selectionKey={`robot:${robotId}`}>
+        return [<WorldPoseGroup geometryKey={geometryKey} key={link.id} onGeometrySample={onGeometrySample} proxyKind="diagnostic-wireframe" radius={0.06} readPose={() => bundle.runtimeGraph.world.readRobotLinkWorldPose(robotId, link.id)} selectionKey={`robot:${robotId}`}>
           <mesh><boxGeometry args={[0.12, 0.12, 0.12]} /><meshStandardMaterial color={linkColor} wireframe /></mesh>
           <Html center><span aria-label={`Geometry proxy for ${link.name}`} role="img">Geometry proxy</span></Html>
         </WorldPoseGroup>]
@@ -250,7 +257,7 @@ function RobotGeometry({ project, bundle, robotId, selected, onSelect, onGeometr
         const geometryKey = `robot:${robotId}:link:${link.id}:geometry:${occurrence.occurrenceKey}`
         const radius = geometryRadiusFromCollisionBoxes(occurrence.collisionBoxes)
         if (occurrence.collisionBoxes.length === 0) {
-          return [<WorldPoseGroup geometryKey={geometryKey} key={`${link.id}:${occurrence.occurrenceKey}`} localCenter={occurrence.linkLocalPose.positionM} onGeometrySample={onGeometrySample} radius={radius} readPose={() => bundle.runtimeGraph.world.readRobotLinkWorldPose(robotId, link.id)} selectionKey={`robot:${robotId}`}>
+          return [<WorldPoseGroup geometryKey={geometryKey} key={`${link.id}:${occurrence.occurrenceKey}`} localCenter={occurrence.linkLocalPose.positionM} onGeometrySample={onGeometrySample} proxyKind="diagnostic-wireframe" radius={radius} readPose={() => bundle.runtimeGraph.world.readRobotLinkWorldPose(robotId, link.id)} selectionKey={`robot:${robotId}`}>
             <group {...transformProps(occurrence.linkLocalPose)}>
               <mesh><boxGeometry args={[0.12, 0.12, 0.12]} /><meshStandardMaterial color={linkColor} wireframe /></mesh>
               <Html center><span aria-label={`Geometry proxy for ${occurrence.occurrenceKey}`} role="img">Geometry proxy</span></Html>
@@ -262,6 +269,7 @@ function RobotGeometry({ project, bundle, robotId, selected, onSelect, onGeometr
           key={`${link.id}:${occurrence.occurrenceKey}`}
           localCenter={occurrence.linkLocalPose.positionM}
           onGeometrySample={onGeometrySample}
+          proxyKind="collision-box"
           radius={radius}
           readPose={() => bundle.runtimeGraph.world.readRobotLinkWorldPose(robotId, link.id)}
           selectionKey={`robot:${robotId}`}
