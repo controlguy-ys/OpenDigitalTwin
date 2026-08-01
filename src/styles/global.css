@@ -2436,6 +2436,13 @@ button {
   justify-content: space-between;
   gap: 12px;
 }
+.connection-monitor-header-actions { display: flex; gap: 8px; align-items: center; }
+.connection-monitor-panel h2:focus { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.connection-monitor-live-region { margin-top: 10px !important; color: var(--color-muted); }
+.connection-monitor-freshness { display: inline-block; margin-right: 4px; padding: 2px 5px; border-radius: 999px; font-size: 0.7rem; font-weight: 600; white-space: nowrap; }
+.connection-monitor-freshness.is-current { color: var(--color-running); background: color-mix(in srgb, var(--color-running) 15%, transparent); }
+.connection-monitor-freshness.is-last-known { color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 18%, transparent); }
+.connection-monitor-freshness.is-unavailable { color: var(--color-muted); background: color-mix(in srgb, var(--color-muted) 15%, transparent); }
 
 .connection-monitor-panel h2,
 .connection-monitor-panel p { margin: 0; }

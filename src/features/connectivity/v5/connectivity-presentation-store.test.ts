@@ -36,6 +36,21 @@ describe('Connectivity presentation store V1', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('refreshes through the active read-only poller and does nothing while stopped', () => {
+    const readConnectivitySnapshot = vi.fn().mockResolvedValue(snapshot())
+    const store = createConnectivityPresentationStoreV1({ readConnectivitySnapshot })
+
+    store.refresh()
+    expect(readConnectivitySnapshot).not.toHaveBeenCalled()
+    store.startHeader()
+    expect(readConnectivitySnapshot).toHaveBeenCalledTimes(1)
+    store.refresh()
+    expect(readConnectivitySnapshot).toHaveBeenCalledTimes(1)
+    store.dispose()
+    store.refresh()
+    expect(readConnectivitySnapshot).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     ['off', 'disabled', [], 'Off'],
     ['server', 'listening', [], 'Listening'],
@@ -84,15 +99,17 @@ describe('Connectivity presentation store V1', () => {
   it('retains decoded details but marks Gateway Offline on a transport failure and rejects a cross-revision pair', async () => {
     vi.useFakeTimers()
     try {
-      const readConnectivitySnapshot = vi.fn().mockResolvedValueOnce(snapshot()).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(snapshot({ integrationDiagnostics: { configRevision: 'b'.repeat(64) } }))
-      const store = createConnectivityPresentationStoreV1({ readConnectivitySnapshot })
+      const readConnectivitySnapshot = vi.fn().mockResolvedValueOnce(snapshot()).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(snapshot({ integrationDiagnostics: { configRevision: 'b'.repeat(64) } }))
+      const store = createConnectivityPresentationStoreV1({ readConnectivitySnapshot, nowMs: () => 42_000 })
       store.startHeader()
       await vi.advanceTimersByTimeAsync(0)
       expect(store.getState().gateway.label).toBe('Online')
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(store.getState()).toMatchObject({ gateway: { label: 'Offline' }, opcUa: { state: 'error', label: 'Unavailable' }, transportError: 'offline', status: { project: { configRevision: revision } } })
+      expect(store.getState()).toMatchObject({ gateway: { label: 'Offline' }, opcUa: { state: 'error', label: 'Unavailable' }, transportError: 'offline', status: { project: { configRevision: revision } }, statusFreshness: 'last-known', transportErrorOccurredAtMs: 42_000 })
       await vi.advanceTimersByTimeAsync(10_000)
-      expect(store.getState()).toMatchObject({ gateway: { label: 'Offline' }, transportError: expect.stringContaining('configRevision') })
+      expect(store.getState()).toMatchObject({ gateway: { label: 'Online' }, transportError: null, statusFreshness: 'current', transportErrorOccurredAtMs: null })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(store.getState()).toMatchObject({ gateway: { label: 'Offline' }, statusFreshness: 'last-known', transportError: expect.stringContaining('configRevision') })
       store.dispose()
     } finally { vi.useRealTimers() }
   })

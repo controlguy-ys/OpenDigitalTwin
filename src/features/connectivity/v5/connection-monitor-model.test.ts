@@ -94,7 +94,20 @@ describe('connectionMonitorRowsV1', () => {
     expect(rows[0]).toMatchObject({ state: 'Error', error: { code: 'RUNTIME_GATEWAY_TRANSPORT_ERROR', message: 'Gateway disconnected.' } })
     expect(rows[0]).toMatchObject({ lastUpdateAtMs: null, error: { occurredAtMs: null } })
     expect(rows[0]!.details).toContainEqual({ kind: 'text', label: 'Freshness', value: 'Current transport error' })
-    expect(rows.slice(1).every((row) => row.details.some((detail) => detail.kind === 'text' && detail.label === 'Freshness' && detail.value === 'Stale retained data'))).toBe(true)
+    expect(rows.slice(1).every((row) => row.details.some((detail) => detail.kind === 'text' && detail.label === 'Freshness' && detail.value === 'Last known'))).toBe(true)
+    expect(rows.slice(1).every((row) => row.freshness === 'last-known')).toBe(true)
+    expect(rows.find((row) => row.id === 'gateway')).toMatchObject({ state: 'Last known: Online', quality: 'Last known: GOOD' })
+    expect(rows.find((row) => row.id === 'gateway')?.details).toContainEqual({ kind: 'text', label: 'Freshness', value: 'Last known' })
+  })
+
+  it('labels current and unavailable rows with their explicit freshness', () => {
+    const currentRows = connectionMonitorRowsV1(presentation())
+    expect(currentRows.every((row) => row.freshness === 'current')).toBe(true)
+    expect(currentRows.find((row) => row.id === 'gateway')).toMatchObject({ state: 'Online', quality: 'GOOD' })
+
+    const unavailableRows = connectionMonitorRowsV1(presentation({ status: null, integrationDiagnostics: null, transportError: null, lastObservedAtMs: null }))
+    expect(unavailableRows.every((row) => row.freshness === 'unavailable')).toBe(true)
+    expect(unavailableRows.every((row) => row.state === 'Unavailable')).toBe(true)
   })
 
   it('reports the aggregate server model as faulted when any model surface faults', () => {

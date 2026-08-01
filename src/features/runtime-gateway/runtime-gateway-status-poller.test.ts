@@ -159,4 +159,33 @@ describe('Runtime Gateway status poller V1', () => {
       vi.useRealTimers()
     }
   })
+
+  it('starts an immediate demand poll, clears a scheduled poll, and never overlaps an in-flight request', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolve!: (value: RuntimeConnectivitySnapshotV1) => void
+      const readConnectivitySnapshot = vi.fn(() => new Promise<RuntimeConnectivitySnapshotV1>((done) => { resolve = done }))
+      const poller = createRuntimeGatewayStatusPollerV1({
+        readConnectivitySnapshot,
+        onSnapshot: vi.fn(),
+        onError: vi.fn(),
+      })
+
+      poller.setDemand('header')
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(1)
+      poller.pollNow()
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(1)
+      resolve(snapshotFixtureV1())
+      await vi.advanceTimersByTimeAsync(0)
+      expect(poller.status().nextPollAtMs).not.toBeNull()
+
+      poller.pollNow()
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(2)
+      poller.stop()
+      poller.pollNow()
+      expect(readConnectivitySnapshot).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -29,13 +29,36 @@ function store(initial: ConnectivityPresentationStateV1 = state()): Connectivity
   const listeners = new Set<() => void>()
   const setMonitorOpen = vi.fn((open: boolean) => { demand = open ? 'monitor' : 'header'; current = { ...current, transportError: open ? 'Gateway unavailable.' : current.transportError }; listeners.forEach((listener) => listener()) })
   return {
-    startHeader: vi.fn(), setMonitorOpen, setPublicationPhase: vi.fn(), getState: () => current,
+    startHeader: vi.fn(), setMonitorOpen, setPublicationPhase: vi.fn(), refresh: vi.fn(), getState: () => current,
     subscribe: (listener) => { listeners.add(listener); return () => listeners.delete(listener) },
-    dispose: vi.fn(), poller: () => ({ setDemand: vi.fn(), stop: vi.fn(), status: () => ({ demand, inFlight: false, nextPollAtMs: null }) }),
+    dispose: vi.fn(), poller: () => ({ setDemand: vi.fn(), pollNow: vi.fn(), stop: vi.fn(), status: () => ({ demand, inFlight: false, nextPollAtMs: null }) }),
   }
 }
 
 describe('ConnectionMonitorPanel', () => {
+  it('focuses the heading on open, closes on Escape, and restores the connected opener', async () => {
+    const user = userEvent.setup()
+    const presentationStore = store()
+    render(<ConnectionMonitorPanel store={presentationStore} />)
+    const opener = screen.getByRole('button', { name: 'Connection Monitor' })
+    const focus = vi.spyOn(opener, 'focus')
+
+    await user.click(opener)
+    expect(screen.getByRole('heading', { name: 'Connection Monitor' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('complementary', { name: 'Connection Monitor' })).not.toBeInTheDocument()
+    expect(focus).toHaveBeenCalled()
+  })
+
+  it('provides a read-only Retry now action through the presentation store', async () => {
+    const user = userEvent.setup()
+    const presentationStore = store()
+    render(<ConnectionMonitorPanel store={presentationStore} />)
+    await user.click(screen.getByRole('button', { name: 'Connection Monitor' }))
+    await user.click(screen.getByRole('button', { name: 'Retry now' }))
+    expect(presentationStore.refresh).toHaveBeenCalledOnce()
+  })
+
   it('is modeless, keeps the viewport interactive, and finalizes poll demand on close and unmount', async () => {
     const user = userEvent.setup()
     const presentationStore = store()

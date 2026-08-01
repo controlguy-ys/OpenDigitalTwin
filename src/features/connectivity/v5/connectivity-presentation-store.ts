@@ -20,11 +20,14 @@ export interface ConnectivityPresentationStateV1 {
   readonly integrationDiagnostics: RuntimeIntegrationDiagnosticsV1 | null
   readonly transportError: string | null
   readonly lastObservedAtMs: number | null
+  readonly statusFreshness?: 'current' | 'last-known' | 'unavailable'
+  readonly transportErrorOccurredAtMs?: number | null
 }
 
 export interface ConnectivityPresentationStoreV1 {
   startHeader(): void
   setMonitorOpen(open: boolean): void
+  refresh(): void
   setPublicationPhase(phase: LocalPublicationPhaseV1): void
   getState(): ConnectivityPresentationStateV1
   subscribe(listener: () => void): () => void
@@ -88,6 +91,7 @@ export function deriveConnectivityPresentationV1(
   snapshot: RuntimeConnectivitySnapshotV1 | null,
   publicationPhase: LocalPublicationPhaseV1 = 'idle',
   transportError: string | null = null,
+  transportErrorOccurredAtMs: number | null = null,
 ): ConnectivityPresentationStateV1 {
   const status = snapshot?.status ?? null
   const integrationDiagnostics = snapshot?.integrationDiagnostics ?? null
@@ -109,6 +113,8 @@ export function deriveConnectivityPresentationV1(
     integrationDiagnostics,
     transportError,
     lastObservedAtMs: status?.observedAtMs ?? null,
+    statusFreshness: transportError !== null ? status === null ? 'unavailable' : 'last-known' : status === null ? 'unavailable' : 'current',
+    transportErrorOccurredAtMs: transportError === null ? null : transportErrorOccurredAtMs,
   })
 }
 
@@ -117,11 +123,12 @@ export function createConnectivityPresentationStoreV1(
 ): ConnectivityPresentationStoreV1 {
   let latestSnapshot: RuntimeConnectivitySnapshotV1 | null = null
   let transportError: string | null = null
+  let transportErrorOccurredAtMs: number | null = null
   let publicationPhase: LocalPublicationPhaseV1 = 'idle'
   let state = deriveConnectivityPresentationV1(latestSnapshot, publicationPhase, transportError)
   const listeners = new Set<() => void>()
   const publish = (): void => {
-    state = deriveConnectivityPresentationV1(latestSnapshot, publicationPhase, transportError)
+    state = deriveConnectivityPresentationV1(latestSnapshot, publicationPhase, transportError, transportErrorOccurredAtMs)
     listeners.forEach((listener) => listener())
   }
   const pollerOptions = {
@@ -132,10 +139,12 @@ export function createConnectivityPresentationStoreV1(
     onSnapshot: (snapshot: RuntimeConnectivitySnapshotV1) => {
       latestSnapshot = snapshot
       transportError = null
+      transportErrorOccurredAtMs = null
       publish()
     },
     onError: (error: unknown) => {
       transportError = message(error)
+      transportErrorOccurredAtMs = (options.nowMs ?? Date.now)()
       publish()
     },
     ...(options.nowMs === undefined ? {} : { nowMs: options.nowMs }),
@@ -144,6 +153,7 @@ export function createConnectivityPresentationStoreV1(
   return Object.freeze({
     startHeader: () => poller.setDemand('header'),
     setMonitorOpen: (open: boolean) => poller.setDemand(open ? 'monitor' : 'header'),
+    refresh: () => poller.pollNow(),
     setPublicationPhase: (next: LocalPublicationPhaseV1) => { publicationPhase = next; publish() },
     getState: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },

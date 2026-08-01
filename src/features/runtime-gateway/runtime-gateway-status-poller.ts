@@ -13,6 +13,7 @@ export interface RuntimeConnectivitySnapshotV1 {
 
 export interface RuntimeGatewayStatusPollerV1 {
   setDemand(demand: RuntimeGatewayStatusPollDemandV1): void
+  pollNow(): void
   stop(): void
   status(): Readonly<{
     demand: RuntimeGatewayStatusPollDemandV1
@@ -117,8 +118,15 @@ export function createRuntimeGatewayStatusPollerV1(
     }
   }
 
+  const pollNow = (): void => {
+    if (demand === 'stopped' || inFlight) return
+    clearScheduledPoll()
+    poll()
+  }
+
   return Object.freeze({
     setDemand,
+    pollNow,
     stop,
     status: () => Object.freeze({ demand, inFlight, nextPollAtMs }),
   })

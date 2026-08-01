@@ -3,9 +3,12 @@ import type { RuntimeIntegrationDiagnosticsV1 } from '../../../core/runtime-prot
 
 import type { ConnectivityPresentationStateV1 } from './connectivity-presentation-store.js'
 
+export type ConnectionMonitorFreshnessV1 = 'current' | 'last-known' | 'unavailable'
+
 export interface ConnectionMonitorRowV1 {
   readonly id: string
   readonly component: string
+  readonly freshness: ConnectionMonitorFreshnessV1
   readonly state: string
   readonly endpoint: string | null
   readonly lastUpdateAtMs: number | null
@@ -36,6 +39,7 @@ function unavailable(id: string, component: string, reason: string): ConnectionM
   return Object.freeze({
     id,
     component,
+    freshness: 'unavailable',
     state: 'Unavailable',
     endpoint: null,
     lastUpdateAtMs: null,
@@ -45,8 +49,12 @@ function unavailable(id: string, component: string, reason: string): ConnectionM
   })
 }
 
-function statusFreshness(stale: boolean): DetailV1 {
-  return detail('Freshness', stale ? 'Stale retained data' : 'Current decoded data')
+function statusFreshness(freshness: Exclude<ConnectionMonitorFreshnessV1, 'unavailable'>): DetailV1 {
+  return detail('Freshness', freshness === 'last-known' ? 'Last known' : 'Current')
+}
+
+function retainedValue(raw: string | null, freshness: Exclude<ConnectionMonitorFreshnessV1, 'unavailable'>): string | null {
+  return raw === null || freshness === 'current' ? raw : `Last known: ${raw}`
 }
 
 function humanize(value: string): string {
@@ -78,8 +86,9 @@ function errorOrNull(error: RuntimeGatewayDiagnosticErrorV1 | null): RuntimeGate
 function proxyRow(presentation: ConnectivityPresentationStateV1): ConnectionMonitorRowV1 {
   if (presentation.transportError !== null) {
     return Object.freeze({
-      id: 'web-proxy',
-      component: 'Web proxy',
+    id: 'web-proxy',
+    component: 'Web proxy',
+      freshness: 'current',
       state: 'Error',
       endpoint: null,
       lastUpdateAtMs: null,
@@ -91,17 +100,19 @@ function proxyRow(presentation: ConnectivityPresentationStateV1): ConnectionMoni
   if (presentation.status === null) return unavailable('web-proxy', 'Web proxy', 'No decoded Runtime Gateway status.')
   return Object.freeze({
     id: 'web-proxy', component: 'Web proxy', state: 'Online', endpoint: null,
+    freshness: 'current',
     lastUpdateAtMs: presentation.lastObservedAtMs, quality: 'GOOD', error: null,
     details: Object.freeze([detail('Freshness', 'Current decoded data')]),
   })
 }
 
-function statusRows(status: RuntimeGatewayStatusV1, stale: boolean): readonly ConnectionMonitorRowV1[] {
-  const freshness = statusFreshness(stale)
+function statusRows(status: RuntimeGatewayStatusV1, rowFreshness: Exclude<ConnectionMonitorFreshnessV1, 'unavailable'>): readonly ConnectionMonitorRowV1[] {
+  const freshness = statusFreshness(rowFreshness)
   const httpBinding = `${status.deployment.http.bindHost}:${status.deployment.http.port}`
   const gateway = Object.freeze({
-    id: 'gateway', component: 'Runtime Gateway', state: 'Online', endpoint: httpBinding,
-    lastUpdateAtMs: status.observedAtMs, quality: 'GOOD', error: null,
+    id: 'gateway', component: 'Runtime Gateway', state: retainedValue('Online', rowFreshness)!, endpoint: httpBinding,
+    freshness: rowFreshness,
+    lastUpdateAtMs: status.observedAtMs, quality: retainedValue('GOOD', rowFreshness), error: null,
     details: Object.freeze([
       detail('Gateway ID', status.gateway.gatewayId),
       detail('Runtime kind', status.gateway.runtimeKind),
@@ -111,8 +122,9 @@ function statusRows(status: RuntimeGatewayStatusV1, stale: boolean): readonly Co
     ]),
   })
   const project = Object.freeze({
-    id: 'project', component: 'Project', state: humanize(status.project.phase), endpoint: null,
-    lastUpdateAtMs: status.observedAtMs, quality: status.project.readinessCode, error: null,
+    id: 'project', component: 'Project', state: retainedValue(humanize(status.project.phase), rowFreshness)!, endpoint: null,
+    freshness: rowFreshness,
+    lastUpdateAtMs: status.observedAtMs, quality: retainedValue(status.project.readinessCode, rowFreshness), error: null,
     details: Object.freeze([
       detail('Authority', status.project.authorityPhase),
       detail('Project ID', status.project.projectId ?? 'None'),
@@ -124,9 +136,10 @@ function statusRows(status: RuntimeGatewayStatusV1, stale: boolean): readonly Co
     ]),
   })
   const server = Object.freeze({
-    id: 'opcua-server', component: 'OPC UA Server', state: humanize(status.opcUa.server.phase),
+    id: 'opcua-server', component: 'OPC UA Server', state: retainedValue(humanize(status.opcUa.server.phase), rowFreshness)!,
+    freshness: rowFreshness,
     endpoint: status.opcUa.server.endpointUrl, lastUpdateAtMs: status.observedAtMs,
-    quality: status.opcUa.server.phase === 'listening' ? 'GOOD' : null,
+    quality: retainedValue(status.opcUa.server.phase === 'listening' ? 'GOOD' : null, rowFreshness),
     error: errorOrNull(status.opcUa.server.lastError),
     details: Object.freeze([
       detail('Mode', status.opcUa.mode),
@@ -136,9 +149,10 @@ function statusRows(status: RuntimeGatewayStatusV1, stale: boolean): readonly Co
     ]),
   })
   const clients = orderedEndpoints(status).map((endpoint) => Object.freeze({
-    id: `opcua-client:${endpoint.endpointId}`, component: 'OPC UA Client', state: humanize(endpoint.phase),
+    id: `opcua-client:${endpoint.endpointId}`, component: 'OPC UA Client', state: retainedValue(humanize(endpoint.phase), rowFreshness)!,
+    freshness: rowFreshness,
     endpoint: endpoint.endpointUrl, lastUpdateAtMs: endpoint.lastNotificationAtMs ?? status.observedAtMs,
-    quality: endpoint.lastValueQuality, error: errorOrNull(endpoint.lastError),
+    quality: retainedValue(endpoint.lastValueQuality, rowFreshness), error: errorOrNull(endpoint.lastError),
     details: Object.freeze([
       detail('Endpoint ID', endpoint.endpointId),
       detail('Session', endpoint.sessionActive ? 'Active' : 'Inactive'),
@@ -158,7 +172,7 @@ function statusRows(status: RuntimeGatewayStatusV1, stale: boolean): readonly Co
 function diagnosticsRows(
   status: RuntimeGatewayStatusV1 | null,
   diagnostics: RuntimeIntegrationDiagnosticsV1 | null,
-  stale: boolean,
+  rowFreshness: Exclude<ConnectionMonitorFreshnessV1, 'unavailable'>,
 ): readonly ConnectionMonitorRowV1[] {
   if (status === null) return Object.freeze([
     unavailable('server-model', 'Server model', 'No decoded Runtime Gateway status.'),
@@ -172,7 +186,7 @@ function diagnosticsRows(
       unavailable('outgoing-command', 'Outgoing command', 'Diagnostics Project/revision/configuration do not match status.'),
     ])
   }
-  const freshness = statusFreshness(stale)
+  const freshness = statusFreshness(rowFreshness)
   const model = diagnostics.serverModel
   const modelFaulted = model.lastError !== null
     || model.standardNodeSets === 'faulted'
@@ -185,8 +199,9 @@ function diagnosticsRows(
     && model.roboticsModel === 'ready'
     && model.productModel === 'ready'
   const serverModel = Object.freeze({
-    id: 'server-model', component: 'Server model', state: modelFaulted ? 'Faulted' : modelDisabled ? 'Disabled' : modelReady ? 'Ready' : 'Loading', endpoint: null,
-    lastUpdateAtMs: diagnostics.observedAtMs, quality: modelReady ? 'GOOD' : null,
+    id: 'server-model', component: 'Server model', state: retainedValue(modelFaulted ? 'Faulted' : modelDisabled ? 'Disabled' : modelReady ? 'Ready' : 'Loading', rowFreshness)!, endpoint: null,
+    freshness: rowFreshness,
+    lastUpdateAtMs: diagnostics.observedAtMs, quality: retainedValue(modelReady ? 'GOOD' : null, rowFreshness),
     error: model.lastError === null ? null : Object.freeze({ code: 'SERVER_MODEL_ERROR', message: model.lastError, occurredAtMs: diagnostics.observedAtMs }),
     details: Object.freeze([
       detail('Standard NodeSet', model.standardNodeSets), detail('Robotics', model.roboticsModel), detail('Product', model.productModel),
@@ -195,8 +210,9 @@ function diagnosticsRows(
   })
   const publisher = diagnostics.browserPublisher
   const browserPublisher = Object.freeze({
-    id: 'browser-publisher', component: 'Browser publisher', state: humanize(publisher.phase), endpoint: null,
-    lastUpdateAtMs: diagnostics.observedAtMs, quality: publisher.phase === 'active' ? 'GOOD' : null, error: null,
+    id: 'browser-publisher', component: 'Browser publisher', state: retainedValue(humanize(publisher.phase), rowFreshness)!, endpoint: null,
+    freshness: rowFreshness,
+    lastUpdateAtMs: diagnostics.observedAtMs, quality: retainedValue(publisher.phase === 'active' ? 'GOOD' : null, rowFreshness), error: null,
     details: Object.freeze([
       detail('Publisher ID', publisher.publisherId ?? 'None'), detail('Generation', publisher.generation === null ? 'None' : String(publisher.generation)),
       timestampDetail('Expires', publisher.expiresAt), freshness,
@@ -207,12 +223,12 @@ function diagnosticsRows(
     && command.projectId === status.project.projectId
     && command.configRevision === status.project.configRevision
   const outgoingCommand = command === null
-    ? Object.freeze({ id: 'outgoing-command', component: 'Outgoing command', state: 'No command', endpoint: null, lastUpdateAtMs: diagnostics.observedAtMs, quality: null, error: null, details: Object.freeze([freshness]) })
+    ? Object.freeze({ id: 'outgoing-command', component: 'Outgoing command', freshness: rowFreshness, state: retainedValue('No command', rowFreshness)!, endpoint: null, lastUpdateAtMs: diagnostics.observedAtMs, quality: null, error: null, details: Object.freeze([freshness]) })
     : !commandMatches
       ? unavailable('outgoing-command', 'Outgoing command', 'Command Project/configuration does not match status.')
       : Object.freeze({
-        id: 'outgoing-command', component: 'Outgoing command', state: `${command.acknowledgement} / ${command.executionState}`, endpoint: null,
-        lastUpdateAtMs: command.completedAt, quality: command.acknowledgement,
+    id: 'outgoing-command', component: 'Outgoing command', freshness: rowFreshness, state: `${command.acknowledgement} / ${command.executionState}`, endpoint: null,
+        lastUpdateAtMs: command.completedAt, quality: retainedValue(command.acknowledgement, rowFreshness),
         error: command.failureCode === null ? null : Object.freeze({ code: command.failureCode, message: command.message, occurredAtMs: command.completedAt ?? diagnostics.observedAtMs }),
         details: Object.freeze([
           detail('Project ID', command.projectId),
@@ -226,7 +242,8 @@ function diagnosticsRows(
 
 export function connectionMonitorRowsV1(presentation: ConnectivityPresentationStateV1): readonly ConnectionMonitorRowV1[] {
   const status = presentation.status
-  const stale = presentation.transportError !== null
+  const rowFreshness: ConnectionMonitorFreshnessV1 = presentation.statusFreshness
+    ?? (presentation.transportError !== null ? status === null ? 'unavailable' : 'last-known' : status === null ? 'unavailable' : 'current')
   const proxy = proxyRow(presentation)
   if (status === null) {
     return Object.freeze([
@@ -234,10 +251,11 @@ export function connectionMonitorRowsV1(presentation: ConnectivityPresentationSt
       unavailable('gateway', 'Runtime Gateway', 'No decoded Runtime Gateway status.'),
       unavailable('project', 'Project', 'No decoded Runtime Gateway status.'),
       unavailable('opcua-server', 'OPC UA Server', 'No decoded Runtime Gateway status.'),
-      ...diagnosticsRows(null, null, false),
+      ...diagnosticsRows(null, null, 'current'),
     ])
   }
-  const [gateway, project, server, ...clients] = statusRows(status, stale)
-  const [serverModel, browserPublisher, outgoingCommand] = diagnosticsRows(status, presentation.integrationDiagnostics, stale)
+  const retainedFreshness = rowFreshness === 'unavailable' ? 'last-known' : rowFreshness
+  const [gateway, project, server, ...clients] = statusRows(status, retainedFreshness)
+  const [serverModel, browserPublisher, outgoingCommand] = diagnosticsRows(status, presentation.integrationDiagnostics, retainedFreshness)
   return Object.freeze([proxy, gateway!, project!, server!, serverModel!, browserPublisher!, ...clients, outgoingCommand!])
 }
