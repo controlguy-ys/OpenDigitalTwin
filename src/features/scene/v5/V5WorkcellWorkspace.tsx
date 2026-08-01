@@ -103,6 +103,16 @@ const IDENTITY_POSE: RigidTransformV5 = {
   quaternion: [0, 0, 0, 1],
 }
 
+export function workcellProxyUserDataV5(
+  geometryKey?: string,
+  proxyKind?: 'collision-box' | 'diagnostic-wireframe' | 'logical-part',
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    ...(geometryKey === undefined ? {} : { geometryKey }),
+    ...(proxyKind === undefined ? {} : { proxyKind }),
+  })
+}
+
 function WorldPoseGroup({ readPose, children, geometryKey, selectionKey = null, localCenter = [0, 0, 0], radius = 0.06, onGeometrySample, proxyKind }: {
   readonly readPose: () => RigidTransformV5 | null
   readonly children: ReactNode
@@ -141,9 +151,8 @@ function WorldPoseGroup({ readPose, children, geometryKey, selectionKey = null, 
     group.quaternion.set(...pose.quaternion)
   })
   return <group
-    data-proxy-kind={proxyKind}
-    data-testid={geometryKey === undefined ? undefined : `v5-geometry-proxy-${geometryKey}`}
     ref={groupRef}
+    userData={workcellProxyUserDataV5(geometryKey, proxyKind)}
     visible={initialPose !== null}
     {...transformProps(initialPose ?? IDENTITY_POSE)}
   >{children}</group>

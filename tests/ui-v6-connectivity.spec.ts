@@ -165,6 +165,8 @@ test('V6 labels retained runtime state offline and Retry now performs GET-only r
   await monitor.getByRole('button', { name: 'Retry now' }).click()
   await expect(monitor).toContainText('Offline')
   await expect(monitor).toContainText('Last known')
+  expect(retryRequests.length).toBeGreaterThan(0)
+  expect(retryRequests.map(({ url }) => new URL(url).pathname)).toEqual(expect.arrayContaining(['/runtime/status', '/runtime/integration-diagnostics']))
   expect(retryRequests.every(({ method, url }) => method === 'GET' && (url.endsWith('/runtime/status') || url.endsWith('/runtime/integration-diagnostics')))).toBe(true)
   await page.keyboard.press('Escape')
   await expect(trigger).toBeFocused()

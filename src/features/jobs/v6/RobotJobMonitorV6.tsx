@@ -59,12 +59,12 @@ function MonitorContent({ project, jobId, playback, onOpenEditor, jobStates }: R
 
 function CompactStatusContent({ project, jobId, jobStates }: RobotJobCompactStatusV6Props & { readonly jobStates: JobRuntimeStoreV5['byRobotId'] }): ReactNode {
   const job = project.jobs.find((candidate) => candidate.id === jobId) ?? null
-  if (job === null) return <section aria-label="Job Monitor" className="v6-job-compact-status"><strong>Job Monitor</strong><span className="v6-job-state-badge" data-state="IDLE">IDLE</span></section>
+  if (job === null) return <span className="v6-job-compact-status" role="status"><strong>Job Monitor</strong><span className="v6-job-state-badge" data-state="IDLE">IDLE</span></span>
   const state = jobStates[job.robotId]
   const runtimeState = state?.state ?? 'IDLE'
   const current = state?.stepIndex ?? null
   const instruction = current === null ? null : job.instructions[current] ?? null
   const message = state?.message || 'Ready'
   const conciseMessage = runtimeState === 'IDLE' ? 'Ready' : message
-  return <section aria-label="Job Monitor" className="v6-job-compact-status" data-state={runtimeState}><strong>Job Monitor</strong><span>{job.name}</span><span className="v6-job-state-badge" data-state={runtimeState}>{runtimeState}</span><span>{current === null ? 'No current step' : `Step ${current + 1}: ${instruction?.kind ?? 'unknown'}`}</span><span aria-label={message}>{conciseMessage}</span></section>
+  return <span className="v6-job-compact-status" data-state={runtimeState} role="status"><strong>Job Monitor</strong><span>{job.name}</span><span className="v6-job-state-badge" data-state={runtimeState}>{runtimeState}</span><span>{current === null ? 'No current step' : `Step ${current + 1}: ${instruction?.kind ?? 'unknown'}`}</span><span aria-label={message}>{conciseMessage}</span></span>
 }

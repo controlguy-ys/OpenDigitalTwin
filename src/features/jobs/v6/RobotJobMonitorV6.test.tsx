@@ -59,13 +59,14 @@ describe('RobotJobMonitorV6', () => {
     for (const state of states) {
       const runtime = createStore<JobRuntimeStoreV5>()(() => ({ projectRevisionId: project.revisionId, configRevision: null, byRobotId: { [job.robotId]: state }, replaceProject: vi.fn(), reset: vi.fn(), setRobotState: vi.fn() }))
       const { unmount } = render(<RobotJobCompactStatusV6 jobId={job.id} project={project} runtime={runtime} />)
-      expect(screen.getByRole('region', { name: 'Job Monitor' })).toBeVisible()
+      expect(screen.getByRole('status')).toBeVisible()
       expect(screen.getByText(state.state)).toBeVisible()
       expect(screen.queryByRole('button')).toBeNull()
       unmount()
     }
     render(<RobotJobCompactStatusV6 jobId={job.id} project={project} />)
     expect(screen.getByText('IDLE')).toBeVisible()
+    expect(screen.getByRole('status')).toBeVisible()
     expect(screen.queryByRole('button')).toBeNull()
   })
 })

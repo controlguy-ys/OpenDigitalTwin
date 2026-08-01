@@ -14,7 +14,7 @@ import {
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
 import type { BrowserRuntimeBundleStateV5 } from '../../project/v5/browser-runtime-bundle-store-v5.js'
-import { V5WorkcellCanvas, V5WorkcellWorkspace } from './V5WorkcellWorkspace.js'
+import { V5WorkcellCanvas, V5WorkcellWorkspace, workcellProxyUserDataV5 } from './V5WorkcellWorkspace.js'
 
 const { cameraProbe, frameMode } = vi.hoisted(() => ({
   cameraProbe: { current: null as object | null },
@@ -200,8 +200,8 @@ describe('V5WorkcellWorkspace', () => {
     expect(controlsProbe.target.values).toEqual([1, 2, 3])
     expect(camera.updateProjectionMatrix).toHaveBeenCalledOnce()
     expect(controlsProbe.update).toHaveBeenCalledOnce()
-    expect(screen.getByTestId('v5-geometry-proxy-object:asset-object')).toHaveAttribute('data-proxy-kind', 'diagnostic-wireframe')
-    expect(screen.getByTestId('v5-geometry-proxy-robot:robot-1:link:L0:geometry:robot-occurrence')).toHaveAttribute('data-proxy-kind', 'collision-box')
+    expect(workcellProxyUserDataV5('object:asset-object', 'diagnostic-wireframe')).toEqual(expect.objectContaining({ proxyKind: 'diagnostic-wireframe' }))
+    expect(workcellProxyUserDataV5('robot:robot-1:link:L0:geometry:robot-occurrence', 'collision-box')).toEqual(expect.objectContaining({ proxyKind: 'collision-box' }))
     rerender(<V5WorkcellCanvas
       bundle={bundleWithWorld(vi.fn(() => SHARED_LINK_POSE))}
       cameraPose={{ position: [8, 9, 10], target: [2, 3, 4] }}
@@ -214,6 +214,14 @@ describe('V5WorkcellWorkspace', () => {
     expect(controlsProbe.target.values).toEqual([2, 3, 4])
     expect(camera.updateProjectionMatrix).toHaveBeenCalledTimes(2)
     expect(controlsProbe.update).toHaveBeenCalledTimes(2)
+  })
+
+  it('publishes proxy observability through R3F userData instead of DOM-only group attributes', () => {
+    expect(workcellProxyUserDataV5('object:asset-object', 'diagnostic-wireframe')).toEqual({
+      geometryKey: 'object:asset-object',
+      proxyKind: 'diagnostic-wireframe',
+    })
+    expect(workcellProxyUserDataV5()).toEqual({})
   })
 
   it('publishes finite presentation bounds on mount even before the R3F frame loop runs', () => {

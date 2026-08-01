@@ -238,7 +238,9 @@ describe('AppV6', () => {
     await user.click(within(monitor).getByRole('button', { name: 'Inspect failed step', hidden: true }))
     const editor = await screen.findByRole('dialog', { name: /Edit Job/u })
     expect(within(editor).getByRole('listitem')).toHaveAttribute('aria-current', 'step')
-    expect(within(screen.getByRole('region', { name: 'Job Monitor' })).queryAllByRole('button')).toHaveLength(0)
+    const compactStatus = document.querySelector('.v6-job-compact-status')
+    expect(compactStatus).not.toBeNull()
+    expect(compactStatus?.querySelectorAll('button')).toHaveLength(0)
   })
 
   it('does not fit stale finite bounds after a revision and runtime epoch change', async () => {
