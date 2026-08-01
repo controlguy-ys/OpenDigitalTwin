@@ -60,13 +60,13 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   const [operationError, setOperationError] = useState<string | null>(null)
   const [interactionMode, setInteractionMode] = useState<'select' | 'translate' | 'rotate'>('select')
   const [contextRequest, setContextRequest] = useState<SceneContextRequestV6 | null>(null)
-  const [scenePresentation, setScenePresentation] = useState<WorkcellScenePresentationV5 | null>(null)
+  const [scenePresentationState, setScenePresentationState] = useState<{ readonly identity: string | null; readonly value: WorkcellScenePresentationV5 } | null>(null)
   const [cameraVersion, setCameraVersion] = useState(0)
   const cameraPointsRef = useRef({
     camera: { position: [3.2, -4.2, 2.8] as [number, number, number], target: [0, 0, 0] as [number, number, number] },
     home: { position: [3.2, -4.2, 2.8] as [number, number, number], target: [0, 0, 0] as [number, number, number] },
   })
-  const latestScenePresentationRef = useRef<WorkcellScenePresentationV5 | null>(null)
+  const latestScenePresentationRef = useRef<{ readonly identity: string | null; readonly value: WorkcellScenePresentationV5 } | null>(null)
   const fittedSceneIdentityRef = useRef<string | null>(null)
   const monitorRef = useRef<ConnectionMonitorPanelControlV1>(null)
   const settingsTriggerRef = useRef<HTMLElement>(null)
@@ -128,31 +128,31 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
     openDialog: (request) => layout.getState().requestDialog(request),
     setInteractionMode,
   }), [layout, resources, selection])
+  const sceneIdentity = workspaceProject === null
+    ? null
+    : `${workspaceProject.revisionId}:${bundle?.runtimeEpoch ?? 'inactive'}`
   const camera = useMemo(() => createCameraControllerV6({
     camera: cameraPointsRef.current.camera,
     home: cameraPointsRef.current.home,
-    visibleBounds: () => latestScenePresentationRef.current?.visibleBounds ?? null,
-    selectionBounds: () => latestScenePresentationRef.current?.selectionBounds ?? null,
+    visibleBounds: () => latestScenePresentationRef.current?.identity === sceneIdentity ? latestScenePresentationRef.current.value.visibleBounds : null,
+    selectionBounds: () => latestScenePresentationRef.current?.identity === sceneIdentity ? latestScenePresentationRef.current.value.selectionBounds : null,
     update: () => setCameraVersion((version) => version + 1),
-  }), [cameraPointsRef])
+  }), [cameraPointsRef, sceneIdentity])
   const cameraPose = useMemo<WorkcellCameraPoseV5>(() => ({
     position: [...cameraPointsRef.current.camera.position] as [number, number, number],
     target: [...cameraPointsRef.current.camera.target] as [number, number, number],
   }), [cameraVersion])
-  const sceneIdentity = workspaceProject === null
-    ? null
-    : `${workspaceProject.revisionId}:${bundle?.runtimeEpoch ?? 'inactive'}`
   const onPresentationChange = useCallback((next: WorkcellScenePresentationV5) => {
-    latestScenePresentationRef.current = next
-    setScenePresentation(next)
-  }, [])
+    latestScenePresentationRef.current = { identity: sceneIdentity, value: next }
+    setScenePresentationState({ identity: sceneIdentity, value: next })
+  }, [sceneIdentity])
   useEffect(() => {
     if (sceneIdentity === null || fittedSceneIdentityRef.current === sceneIdentity) return
-    const bounds = scenePresentation?.visibleBounds
+    const bounds = scenePresentationState?.identity === sceneIdentity ? scenePresentationState.value.visibleBounds : null
     if (bounds === null || bounds === undefined || !Number.isFinite(bounds.radius) || !bounds.center.every(Number.isFinite)) return
     camera.fitAll()
     fittedSceneIdentityRef.current = sceneIdentity
-  }, [camera, sceneIdentity, scenePresentation])
+  }, [camera, sceneIdentity, scenePresentationState])
 
   const openBinding = useCallback((target: OpcUaProjectTargetV5, mappingId?: string, parent?: DialogParentV6) => {
     if (document.activeElement instanceof HTMLElement) bindingEditorTriggerRef.current = document.activeElement

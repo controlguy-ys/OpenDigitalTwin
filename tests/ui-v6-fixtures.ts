@@ -71,6 +71,9 @@ export async function loadV6Demo(page: Page): Promise<void> {
     const status = await response.json() as { readonly project?: { readonly phase?: string; readonly revisionId?: string | null } }
     return status.project?.phase === 'ready' && typeof status.project.revisionId === 'string'
   }), { message: 'Demo Project must be active in Runtime Gateway before interaction.' }).toBe(true)
+  await expect.poll(async () => page.getByTestId('v5-scene-presentation').textContent(), {
+    message: 'Demo scene must publish visible geometry before interaction.'
+  }).toMatch(/[1-9][0-9]* visible geometry/u)
 }
 
 export async function selectV6DemoRobot(page: Page): Promise<Locator> {

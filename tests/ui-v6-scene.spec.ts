@@ -36,13 +36,15 @@ test('V6 presents finite scene geometry and changes the real camera snapshot whe
   await loadV6Demo(page)
 
   const presentation = page.getByTestId('v5-scene-presentation')
-  await expect(presentation).toContainText(/visible geometry/u)
+  const visibleGeometryCount = async (): Promise<number> => Number((await presentation.textContent() ?? '').match(/^(\d+)/u)?.[1] ?? 0)
+  const initialVisibleGeometryCount = await visibleGeometryCount()
+  expect(initialVisibleGeometryCount).toBeGreaterThan(0)
   const expandObjects = page.getByRole('button', { name: 'Expand Objects' })
   if (await expandObjects.isVisible()) await expandObjects.click()
   await expect(page.getByRole('treeitem', { name: /Part/u })).toBeVisible()
   await page.getByRole('menuitem', { name: 'Model', exact: true }).click()
   await page.getByRole('menuitem', { name: 'Add Box', exact: true }).click()
-  await expect.poll(async () => presentation.textContent()).toMatch(/1 visible geometry|2 visible geometry/u)
+  await expect.poll(visibleGeometryCount).toBeGreaterThan(initialVisibleGeometryCount)
 
   const canvas = page.locator('.v5-scene-canvas')
   await page.getByRole('button', { name: 'Home view' }).click()

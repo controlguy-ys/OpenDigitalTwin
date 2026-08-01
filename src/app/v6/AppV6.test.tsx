@@ -20,7 +20,10 @@ vi.mock('../../features/scene/v5/V5WorkcellWorkspace.js', () => ({
     onPresentationChange?: (value: { readonly state: 'ready'; readonly visibleGeometryCount: number; readonly unresolvedPoseKeys: readonly string[]; readonly visibleBounds: { readonly center: readonly [number, number, number]; readonly radius: number }; readonly selectionBounds: { readonly center: readonly [number, number, number]; readonly radius: number } | null }) => void
   }) => <div data-testid="runtime-canvas" data-camera-position={JSON.stringify(cameraPose?.position ?? [])} data-camera-version={cameraVersion}>
     {project.revisionId} / Epoch {bundle?.runtimeEpoch ?? 'none'}
-    <button onClick={() => onPresentationChange?.({ state: 'ready', visibleGeometryCount: 1, unresolvedPoseKeys: [], visibleBounds: { center: [4, 5, 6], radius: 1 }, selectionBounds: { center: [7, 8, 9], radius: 0.5 } })} type="button">Publish finite scene bounds</button>
+    <button onClick={() => {
+      const offset = (bundle?.runtimeEpoch ?? 1) * 10
+      onPresentationChange?.({ state: 'ready', visibleGeometryCount: 1, unresolvedPoseKeys: [], visibleBounds: { center: [offset + 4, offset + 5, offset + 6], radius: 1 }, selectionBounds: { center: [offset + 7, offset + 8, offset + 9], radius: 0.5 } })
+    }} type="button">Publish finite scene bounds</button>
   </div>,
 }))
 vi.mock('../../features/connectivity/v5/ConnectionMonitorPanel.js', () => ({
@@ -203,7 +206,7 @@ describe('AppV6', () => {
     expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([3.2, -4.2, 2.8])
 
     await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
-    await waitFor(() => expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([6.4, 2.6, 8.4]))
+    await waitFor(() => expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([16.4, 12.6, 18.4]))
     const fitVersion = canvas.getAttribute('data-camera-version')
     await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
     expect(canvas.getAttribute('data-camera-version')).toBe(fitVersion)
@@ -236,5 +239,22 @@ describe('AppV6', () => {
     const editor = await screen.findByRole('dialog', { name: /Edit Job/u })
     expect(within(editor).getByRole('listitem')).toHaveAttribute('aria-current', 'step')
     expect(within(screen.getByRole('region', { name: 'Job Monitor' })).queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('does not fit stale finite bounds after a revision and runtime epoch change', async () => {
+    const user = userEvent.setup()
+    const harness = await resourcesHarness()
+    render(<AppV6 resources={harness.resources} />)
+    const canvas = await screen.findByTestId('runtime-canvas')
+    await waitFor(() => expect(canvas).toHaveTextContent('Epoch 1'))
+    await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
+    await waitFor(() => expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([16.4, 12.6, 18.4]))
+
+    await harness.resources.mutations.replace({ candidate: project('revision-app-b'), description: 'Replace AppV6 identity test Project' })
+    await waitFor(() => expect(canvas).toHaveTextContent('revision-app-b / Epoch 2'))
+    expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([16.4, 12.6, 18.4])
+
+    await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
+    await waitFor(() => expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([26.4, 22.6, 28.4]))
   })
 })

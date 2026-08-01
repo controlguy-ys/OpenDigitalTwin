@@ -48,10 +48,11 @@ const SHARED_LINK_POSE: RigidTransformV5 = Object.freeze({
   quaternion: Object.freeze([0, 0, 0, 1] as const),
 })
 
-function project(): WorkcellProjectV5 {
+function project(revisionId = 'revision-1'): WorkcellProjectV5 {
   const base = makeMinimalWorkcellProjectV5()
   return validateWorkcellProjectV5({
     ...base,
+    revisionId,
     spatialEntities: [{
       id: 'box',
       name: 'Workpiece',
@@ -229,6 +230,30 @@ describe('V5WorkcellWorkspace', () => {
     const latest = onPresentationChange.mock.calls.at(-1)?.[0]
     expect(latest?.state).toBe('ready')
     expect(latest?.visibleBounds?.radius).toBeGreaterThan(0)
+    frameMode.enabled = true
+  })
+
+  it('invalidates the previous presentation before repopulating after a scene identity change', () => {
+    frameMode.enabled = false
+    const onPresentationChange = vi.fn()
+    const firstBundle = bundleWithWorld(vi.fn(() => SHARED_LINK_POSE), () => SHARED_LINK_POSE)
+    const { rerender } = render(<V5WorkcellCanvas
+      bundle={firstBundle}
+      onPresentationChange={onPresentationChange}
+      onSelect={vi.fn()}
+      project={project()}
+      selection={null}
+    />)
+    onPresentationChange.mockClear()
+    rerender(<V5WorkcellCanvas
+      bundle={{ ...firstBundle, runtimeEpoch: 2, project: project('revision-next') }}
+      onPresentationChange={onPresentationChange}
+      onSelect={vi.fn()}
+      project={project('revision-next')}
+      selection={null}
+    />)
+    expect(onPresentationChange.mock.calls.some(([value]) => value.state === 'degraded')).toBe(true)
+    expect(onPresentationChange.mock.calls.at(-1)?.[0].state).toBe('ready')
     frameMode.enabled = true
   })
 })

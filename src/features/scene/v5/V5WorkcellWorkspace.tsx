@@ -7,7 +7,7 @@ import {
   PerspectiveCamera,
 } from '@react-three/drei'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react'
 import { PerspectiveCamera as ThreePerspectiveCamera, type Group } from 'three'
 import { useStore } from 'zustand'
 
@@ -340,15 +340,15 @@ export function V5WorkcellCanvas({
   const presentationRef = useRef(initialPresentation)
   const [presentation, setPresentation] = useState(initialPresentation)
   const sceneIdentity = `${bundle?.runtimeEpoch ?? 'inactive'}:${project.revisionId}:${expectedCount}:${selectedKey ?? 'none'}`
-  if (sceneIdentityRef.current === null) {
-    sceneIdentityRef.current = sceneIdentity
-  } else if (sceneIdentityRef.current !== sceneIdentity) {
+  useLayoutEffect(() => {
+    if (sceneIdentityRef.current === sceneIdentity) return
     sceneIdentityRef.current = sceneIdentity
     samplesRef.current.clear()
     const next = reduceWorkcellScenePresentationV5([], expectedCount, selectedKey)
     presentationRef.current = next
     setPresentation(next)
-  }
+    onPresentationChange?.(next)
+  }, [expectedCount, onPresentationChange, sceneIdentity, selectedKey])
   const publishPresentation = useCallback((sample: WorkcellSceneGeometrySampleV5): void => {
     samplesRef.current.set(sample.key, sample)
     const next = reduceWorkcellScenePresentationV5([...samplesRef.current.values()], expectedCount, selectedKey)
