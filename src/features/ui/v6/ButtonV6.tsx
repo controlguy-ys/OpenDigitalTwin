@@ -26,4 +26,3 @@ export const ButtonV6 = forwardRef<HTMLButtonElement, ButtonV6Props>(function Bu
     type={type}
   >{children}</button>
 })
-
