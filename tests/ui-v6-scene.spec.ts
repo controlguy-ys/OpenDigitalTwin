@@ -59,5 +59,5 @@ test('V6 presents finite scene geometry and changes the real camera snapshot whe
   const before = await canvas.getAttribute('data-camera-position')
   await page.getByRole('button', { name: 'Fit all visible geometry' }).click()
   await expect.poll(async () => canvas.getAttribute('data-camera-position')).not.toBe(before)
-  expect(runtimeErrors.join('\n')).not.toMatch(/Cannot set data-testid|removeChild/u)
+  expect(runtimeErrors).toEqual([])
 })
