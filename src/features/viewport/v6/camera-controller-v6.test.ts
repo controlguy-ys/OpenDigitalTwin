@@ -29,4 +29,24 @@ describe('CameraControllerV6', () => {
     for (const orientation of ['isometric', 'top', 'front', 'right', 'back', 'left', 'bottom'] as const) subject.setOrientation(orientation)
     expect(update).toHaveBeenCalledTimes(10)
   })
+
+  it('returns immutable camera snapshots and leaves the pose unchanged when bounds are unavailable', () => {
+    const camera = { position: [9, 9, 9] as [number, number, number], target: [0, 0, 0] as [number, number, number] }
+    const update = vi.fn()
+    const subject = createCameraControllerV6({
+      camera,
+      home: { position: [2, 3, 4], target: [1, 1, 1] },
+      visibleBounds: () => null,
+      selectionBounds: () => null,
+      update,
+    })
+    const before = subject.snapshot()
+    expect(Object.isFrozen(before)).toBe(true)
+    expect(Object.isFrozen(before.position)).toBe(true)
+    expect(Object.isFrozen(before.target)).toBe(true)
+    subject.fitAll()
+    subject.focusSelection()
+    expect(subject.snapshot()).toEqual(before)
+    expect(update).not.toHaveBeenCalled()
+  })
 })

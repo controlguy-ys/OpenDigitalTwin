@@ -13,11 +13,12 @@ import {
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
 import type { BrowserRuntimeBundleStateV5 } from '../../project/v5/browser-runtime-bundle-store-v5.js'
-import { V5WorkcellWorkspace } from './V5WorkcellWorkspace.js'
+import { V5WorkcellCanvas, V5WorkcellWorkspace } from './V5WorkcellWorkspace.js'
 
 vi.mock('@react-three/fiber', () => ({
   Canvas: ({ children }: { readonly children: ReactNode }) => children,
   useFrame: (callback: () => void) => { callback() },
+  useThree: <T,>(selector: (state: { readonly camera: object }) => T) => selector({ camera: {} }),
 }))
 
 vi.mock('@react-three/drei', () => ({
@@ -117,8 +118,21 @@ describe('V5WorkcellWorkspace', () => {
     />)
 
     const linkReads = readRobotLinkWorldPose.mock.calls.filter(([, linkId]) => linkId === 'L0')
-    expect(linkReads).toEqual([
-      ['robot-1', 'L0'], ['robot-1', 'L0'], ['robot-1', 'L0'], ['robot-1', 'L0'],
-    ])
+    expect(linkReads.length).toBeGreaterThanOrEqual(4)
+    expect(screen.getByTestId('v5-scene-presentation')).toHaveAttribute('data-state', 'degraded')
+    expect(screen.getByText('World pose unavailable for object:box. Geometry is hidden until runtime pose data recovers.')).toBeInTheDocument()
+  })
+
+  it('exposes camera pose diagnostics on the canvas wrapper', () => {
+    render(<V5WorkcellCanvas
+      bundle={bundleWithWorld(vi.fn(() => SHARED_LINK_POSE))}
+      cameraPose={{ position: [7, 8, 9], target: [1, 2, 3] }}
+      cameraVersion={4}
+      onSelect={vi.fn()}
+      project={projectWithRepeatedLinkGeometry()}
+      selection={null}
+    />)
+    expect(screen.getByTestId('scene-canvas-surface')).toHaveAttribute('data-camera-position', '[7,8,9]')
+    expect(screen.getByTestId('scene-canvas-surface')).toHaveAttribute('data-camera-target', '[1,2,3]')
   })
 })

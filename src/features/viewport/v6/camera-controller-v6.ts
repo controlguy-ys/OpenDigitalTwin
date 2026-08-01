@@ -10,11 +10,17 @@ export interface CameraBoundsV6 {
   readonly radius: number
 }
 
+export interface CameraSnapshotV6 {
+  readonly position: readonly [number, number, number]
+  readonly target: readonly [number, number, number]
+}
+
 export interface CameraControllerV6 {
   home(): void
   fitAll(): void
   focusSelection(): void
   setOrientation(value: CameraOrientationV6): void
+  snapshot?(): CameraSnapshotV6
 }
 
 export const V6_CAMERA_MOUSE_MAPPING = Object.freeze({
@@ -50,7 +56,7 @@ function frameBounds(options: CameraControllerV6Options, bounds: CameraBoundsV6 
   options.update()
 }
 
-export function createCameraControllerV6(options: CameraControllerV6Options): CameraControllerV6 {
+export function createCameraControllerV6(options: CameraControllerV6Options): CameraControllerV6 & { snapshot(): CameraSnapshotV6 } {
   return Object.freeze({
     home() {
       copyPoint(options.camera.position, options.home.position)
@@ -70,6 +76,12 @@ export function createCameraControllerV6(options: CameraControllerV6Options): Ca
       const scale = distance / Math.hypot(dx, dy, dz)
       copyPoint(options.camera.position, [x + dx * scale, y + dy * scale, z + dz * scale])
       options.update()
+    },
+    snapshot(): CameraSnapshotV6 {
+      return Object.freeze({
+        position: Object.freeze([...options.camera.position]) as readonly [number, number, number],
+        target: Object.freeze([...options.camera.target]) as readonly [number, number, number],
+      })
     },
   })
 }
