@@ -131,7 +131,6 @@
   bottom: 0;
   height: var(--v6-bottom-overlay-height);
   left: var(--v6-toolbox-width);
-  max-height: 45%;
   position: absolute;
   right: 0;
   pointer-events: auto;

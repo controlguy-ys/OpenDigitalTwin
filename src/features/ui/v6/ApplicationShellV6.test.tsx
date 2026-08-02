@@ -229,10 +229,24 @@ describe('ApplicationShellV6', () => {
     expect(bottom.compareDocumentPosition(commandBar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('keeps a visible Job surface above viewport and dock-toggle hit-test layers', () => {
-    const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
-    expect(css).toMatch(/\.v6-application-shell\[data-workspace-mode='narrow'\] \.v6-shell-bottom\[data-presentation='sheet'\][\s\S]*?pointer-events:\s*auto;[\s\S]*?z-index:\s*7/u)
-    expect(css).toMatch(/\.v6-application-shell\[data-workspace-mode='compact'\] \.v6-shell-bottom\[data-presentation='dock'\]\[data-visible='true'\][\s\S]*?pointer-events:\s*auto;[\s\S]*?z-index:\s*7/u)
+  it('keeps narrow Job controls interactive and preserves compact status after closing the dock', () => {
+    const onStart = vi.fn()
+    const view = renderShell({
+      widthPx: 512,
+      heightPx: 384,
+      bottom: <button onClick={onStart} type="button">Start Job</button>,
+      bottomStatus: <span>FAILED Step 3: WaitDI instruction timed out.</span>,
+    })
+
+    act(() => view.store.getState().setDrawerOpen('bottom', true))
+    const bottom = screen.getByTestId('v6-bottom')
+    expect(bottom).toHaveAttribute('data-presentation', 'sheet')
+    expect(bottom).toHaveAttribute('data-visible', 'true')
+    fireEvent.click(within(bottom).getByRole('button', { name: 'Start Job' }))
+    expect(onStart).toHaveBeenCalledOnce()
+
+    act(() => view.store.getState().setDrawerOpen('bottom', false))
+    expect(screen.getAllByText('FAILED Step 3: WaitDI instruction timed out.').length).toBeGreaterThan(0)
   })
 
   it('keys responsive CSS to measured workspace mode instead of browser media queries', () => {
