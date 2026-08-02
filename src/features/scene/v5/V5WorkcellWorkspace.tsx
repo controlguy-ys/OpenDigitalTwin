@@ -70,7 +70,6 @@ export function viewCubeSafeMarginV5(size: ViewCubeCanvasSizeV5 | null | undefin
   const fittingMargin = Math.max(0, (shortestSide - VIEW_CUBE_SIZE_PX_V5) / 2)
   return Math.max(0, Math.min(
     VIEW_CUBE_SAFE_MARGIN_PX_V5,
-    Math.floor(shortestSide * 0.12),
     Math.floor(fittingMargin),
   ))
 }

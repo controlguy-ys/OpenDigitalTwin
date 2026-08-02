@@ -2,6 +2,7 @@ import {
   useEffect,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
 } from 'react'
 
 import type {
@@ -12,6 +13,7 @@ import type { V6WorkcellSelection } from '../../interaction/v6/workcell-selectio
 import { ConnectivityMenuV6, type ConnectivityMenuV6Props } from '../../connectivity/v6/ConnectivityMenuV6.js'
 import {
   isEditableMenuTargetV6,
+  MENU_COMMAND_GROUPS_V6,
   MENU_COMMANDS_V6,
   MENU_NAMES_V6,
   MENU_SURFACES_V6,
@@ -255,6 +257,23 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [contextMenu, narrowSurface, openMenu, overflowOpen, registry, transientUi])
 
+  const renderCommandGroups = (
+    menu: string,
+    commandIds: readonly AppCommandIdV6[],
+    surfaceKey: string,
+    renderCommand: (id: AppCommandIdV6) => ReactNode,
+  ): ReactNode => {
+    const groups = MENU_COMMAND_GROUPS_V6[menu]
+    if (groups === undefined) return commandIds.map(renderCommand)
+    return groups.map((group) => {
+      const headingId = `v6-${surfaceKey}-${group.id}`
+      return <div aria-labelledby={headingId} className="v6-menu-command-group" key={group.id} role="group">
+        <h3 className="v6-menu-command-group-heading" id={headingId}>{group.label}</h3>
+        {group.commands.map(renderCommand)}
+      </div>
+    })
+  }
+
   const renderOverflowMenu = () => {
     if (overflowMenu === null) {
       return MENU_NAMES_V6.map((menu) => <ButtonV6
@@ -318,7 +337,7 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
             }}
             presentation="menu"
           />
-        : commandIds.map((id) => surface === undefined ? null : <CommandSurfaceControlV6
+        : renderCommandGroups(menu, commandIds, 'overflow', (id) => surface === undefined ? null : <CommandSurfaceControlV6
             commandId={id}
             key={id}
             onInvoked={() => {
@@ -382,9 +401,7 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
                     }}
                     presentation="menu"
                   />
-                : commandIds.map((id) => {
-                if (surface === undefined) return null
-                return <CommandSurfaceControlV6
+                : renderCommandGroups(menu, commandIds, menu.toLowerCase(), (id) => surface === undefined ? null : <CommandSurfaceControlV6
                   commandId={id}
                   key={id}
                   onInvoked={() => {
@@ -396,8 +413,7 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
                   registry={registry}
                   surface={surface}
                   tabIndex={-1}
-                />
-              })}
+                />)}
             </div>}
           </span>
         })}

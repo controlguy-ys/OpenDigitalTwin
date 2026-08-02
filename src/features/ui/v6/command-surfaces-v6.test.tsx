@@ -24,7 +24,7 @@ function command(
 }
 
 describe('V6 command surfaces', () => {
-  it('keeps Add Group on the direct Model menu while preserving distinct primitive commands', () => {
+  it('groups Model commands by Structure and Primitives while preserving distinct keyboard menu items', () => {
     const registry = createAppCommandRegistryV6([
       command('model.addGroup', 'Add Group'),
       command('model.addBox', 'Add Box'),
@@ -34,9 +34,17 @@ describe('V6 command surfaces', () => {
 
     fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }))
     const menu = screen.getByRole('menu', { name: 'Model menu' })
+    const structure = within(menu).getByRole('group', { name: 'Structure' })
+    const primitives = within(menu).getByRole('group', { name: 'Primitives' })
+    expect(within(structure).getByRole('heading', { level: 3, name: 'Structure' })).toBeVisible()
+    expect(within(primitives).getByRole('heading', { level: 3, name: 'Primitives' })).toBeVisible()
     expect(within(menu).getByRole('menuitem', { name: 'Add Group' })).toHaveAttribute('data-command-id', 'model.addGroup')
     expect(within(menu).getByRole('menuitem', { name: 'Add Box' })).toHaveAttribute('data-command-id', 'model.addBox')
     expect(within(menu).getByRole('menuitem', { name: 'Add Cylinder' })).toHaveAttribute('data-command-id', 'model.addCylinder')
+    expect(within(structure).getByRole('menuitem', { name: 'Add Group' })).toBeVisible()
+    expect(within(structure).queryByRole('menuitem', { name: 'Add Box' })).toBeNull()
+    expect(within(primitives).getByRole('menuitem', { name: 'Add Box' })).toBeVisible()
+    expect(within(primitives).getByRole('menuitem', { name: 'Add Cylinder' })).toBeVisible()
   })
 
   it('uses the same registry IDs for Model menu, Toolbox, and empty-viewport context seams', async () => {

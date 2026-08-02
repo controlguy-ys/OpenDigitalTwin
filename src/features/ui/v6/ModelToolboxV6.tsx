@@ -16,9 +16,14 @@ const TOOLBOX_SECTIONS: readonly {
     commands: ['tool.select', 'tool.translate', 'tool.rotate'],
   },
   {
-    id: 'v6-toolbox-geometry',
-    label: 'Geometry',
-    commands: ['model.addGroup', 'model.addBox', 'model.addCylinder'],
+    id: 'v6-toolbox-structure',
+    label: 'Structure',
+    commands: ['model.addGroup'],
+  },
+  {
+    id: 'v6-toolbox-primitives',
+    label: 'Primitives',
+    commands: ['model.addBox', 'model.addCylinder'],
   },
   {
     id: 'v6-toolbox-camera',

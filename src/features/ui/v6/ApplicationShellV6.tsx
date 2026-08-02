@@ -86,6 +86,7 @@ export function ApplicationShellV6({
   const bottomVisible = bottomPresentation === 'dock'
     ? state.preferences.visibleByMode[state.mode].bottom
     : state.drawers.bottom
+  const hasBottomStatus = state.mode === 'narrow' && bottomStatus !== undefined && bottomStatus !== null
   const toolboxVisible = !state.preferences.toolboxCollapsed
   const explorerHandleVisible = explorerPresentation === 'dock' && explorerVisible
   const inspectorHandleVisible = inspectorPresentation === 'dock' && inspectorVisible
@@ -145,6 +146,9 @@ export function ApplicationShellV6({
         data-presentation={explorerPresentation}
         data-testid="v6-explorer"
         data-visible={explorerVisible}
+        style={explorerPresentation === 'drawer'
+          ? { width: `${state.preferences.explorerWidthPx}px` }
+          : undefined}
         {...visibilityAttributes(maximized || !explorerVisible)}
       >
         {explorer}
@@ -186,6 +190,9 @@ export function ApplicationShellV6({
         data-presentation={inspectorPresentation}
         data-testid="v6-inspector"
         data-visible={inspectorVisible}
+        style={inspectorPresentation === 'drawer'
+          ? { width: `${state.preferences.inspectorWidthPx}px` }
+          : undefined}
         {...visibilityAttributes(maximized || !inspectorVisible)}
       >
         {inspector}
@@ -214,8 +221,14 @@ export function ApplicationShellV6({
       >
         {bottom}
       </section>
-      {!maximized && <nav aria-label="Workspace docks" className="v6-workspace-dock-toggles" data-testid="v6-narrow-command-bar">
-        {state.mode === 'narrow' && bottomStatus !== undefined && bottomStatus !== null && <div className="v6-narrow-job-status" data-testid="v6-narrow-job-status">{bottomStatus}</div>}
+      {!maximized && <nav
+        aria-label="Workspace docks"
+        className="v6-workspace-dock-toggles"
+        data-command-region="true"
+        data-has-status={hasBottomStatus}
+        data-testid="v6-narrow-command-bar"
+      >
+        {hasBottomStatus && <div className="v6-narrow-job-status" data-testid="v6-narrow-job-status">{bottomStatus}</div>}
         <ButtonV6
           aria-pressed={explorerVisible}
           onClick={() => explorerPresentation === 'dock'

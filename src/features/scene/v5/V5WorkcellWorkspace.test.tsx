@@ -148,6 +148,7 @@ describe('V5WorkcellWorkspace', () => {
     const margin = viewCubeSafeMarginV5({ width: 128, height: 96 })
     expect(margin).toBeGreaterThanOrEqual(0)
     expect(72 + margin * 2).toBeLessThanOrEqual(96)
+    expect(viewCubeSafeMarginV5({ width: 464, height: 216 })).toBe(72)
     expect(viewCubeSafeMarginV5(undefined)).toBe(96)
   })
 

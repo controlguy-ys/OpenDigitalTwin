@@ -122,3 +122,68 @@ test('V6 keeps the floating Project menu anchored and all primary controls at ta
     await page.keyboard.press('Escape')
   }
 })
+
+test('V6 overlays the compact Inspector and reserves compact/narrow dock commands outside the renderer', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 })
+  await loadV6Demo(page)
+  await selectV6DemoRobot(page)
+
+  const shell = page.getByTestId('v6-application-shell')
+  const canvasHost = page.getByTestId('v6-canvas-host')
+  const inspector = page.getByTestId('v6-inspector')
+  const commandBar = page.getByRole('navigation', { name: 'Workspace docks' })
+
+  await page.setViewportSize({ width: 1000, height: 768 })
+  await expect(shell).toHaveAttribute('data-workspace-mode', 'compact')
+  const compactCanvasBefore = await bounds(canvasHost)
+  await page.getByRole('button', { name: 'Show Inspector' }).click()
+  await expect(inspector).toHaveAttribute('data-presentation', 'drawer')
+  await expect(inspector).toHaveAttribute('data-visible', 'true')
+  await expect(inspector).toContainText('NED2')
+  const compactCanvasAfter = await bounds(canvasHost)
+  const compactInspector = await bounds(inspector)
+  const compactCommands = await bounds(commandBar)
+  expect(compactCanvasAfter.width).toBe(compactCanvasBefore.width)
+  expect(compactCanvasAfter.height).toBe(compactCanvasBefore.height)
+  expect(compactInspector.width).toBeGreaterThan(0)
+  expect(compactInspector.x).toBeLessThan(compactCanvasAfter.x + compactCanvasAfter.width)
+  expect(compactCommands.y).toBeGreaterThanOrEqual(compactCanvasAfter.y + compactCanvasAfter.height)
+  expect(await commandBar.getByRole('button')).toHaveCount(3)
+
+  await page.setViewportSize({ width: 512, height: 384 })
+  await expect(shell).toHaveAttribute('data-workspace-mode', 'narrow')
+  const narrowCanvas = await bounds(canvasHost)
+  const narrowCommands = await bounds(commandBar)
+  expect(narrowCommands.left).toBe(narrowCanvas.left)
+  expect(narrowCommands.right).toBe(narrowCanvas.right)
+  expect(narrowCanvas.y + narrowCanvas.height).toBeLessThanOrEqual(narrowCommands.y)
+  expect(narrowCommands.height).toBeLessThanOrEqual(56)
+  const commandBoxes = await commandBar.getByRole('button').evaluateAll((elements) => elements.map((element) => {
+    const rect = element.getBoundingClientRect()
+    return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
+  }))
+  for (let index = 0; index < commandBoxes.length; index += 1) {
+    const first = commandBoxes[index]!
+    expect(first.left).toBeGreaterThanOrEqual(narrowCommands.left)
+    expect(first.right).toBeLessThanOrEqual(narrowCommands.right)
+    expect(first.top).toBeGreaterThanOrEqual(narrowCommands.top)
+    expect(first.bottom).toBeLessThanOrEqual(narrowCommands.bottom)
+    for (let next = index + 1; next < commandBoxes.length; next += 1) {
+      const second = commandBoxes[next]!
+      const horizontalOverlap = first.left < second.right && second.left < first.right
+      const verticalOverlap = first.top < second.bottom && second.top < first.bottom
+      expect(horizontalOverlap && verticalOverlap, `dock controls ${index} and ${next} overlap`).toBe(false)
+    }
+  }
+
+  const overflow = page.getByRole('menuitem', { name: 'More menus' })
+  await overflow.click()
+  const overflowMenu = page.getByRole('menu', { name: 'More menus' })
+  await overflowMenu.getByRole('menuitem', { name: 'Model', exact: true }).click()
+  const modelMenu = page.getByRole('menu', { name: 'More menus' })
+  await expect(modelMenu.getByRole('heading', { name: 'Structure', level: 3 })).toBeVisible()
+  await expect(modelMenu.getByRole('heading', { name: 'Primitives', level: 3 })).toBeVisible()
+  await expect(modelMenu.getByRole('menuitem', { name: 'Add Group' })).toBeVisible()
+  await expect(modelMenu.getByRole('menuitem', { name: 'Add Box' })).toBeVisible()
+  await expect(modelMenu.getByRole('menuitem', { name: 'Add Cylinder' })).toBeVisible()
+})

@@ -25,7 +25,7 @@ function command(id: AppCommandIdV6, label: string, execute: () => void): AppCom
 }
 
 describe('ModelToolboxV6', () => {
-  it('exposes semantic Interaction, Geometry, and Camera sections without merging primitive actions', async () => {
+  it('exposes semantic Interaction, Structure, Primitives, and Camera sections without merging model actions', async () => {
     const executes = new Map<AppCommandIdV6, ReturnType<typeof vi.fn>>()
     const registry = createAppCommandRegistryV6(TOOLBOX_COMMANDS.map(({ id, label }) => {
       const execute = vi.fn()
@@ -36,10 +36,16 @@ describe('ModelToolboxV6', () => {
     render(<ModelToolboxV6 registry={registry} />)
 
     const toolbox = screen.getByRole('complementary', { name: 'Model toolbox' })
-    for (const heading of ['Interaction', 'Geometry', 'Camera']) {
+    for (const heading of ['Interaction', 'Structure', 'Primitives', 'Camera']) {
       expect(within(toolbox).getByRole('heading', { level: 2, name: heading })).toBeVisible()
       expect(within(toolbox).getByRole('region', { name: heading })).toBeVisible()
     }
+    const structure = within(toolbox).getByRole('region', { name: 'Structure' })
+    const primitives = within(toolbox).getByRole('region', { name: 'Primitives' })
+    expect(within(structure).getByRole('button', { name: 'Add Group' })).toBeVisible()
+    expect(within(structure).queryByRole('button', { name: 'Add Box' })).toBeNull()
+    expect(within(primitives).getByRole('button', { name: 'Add Box' })).toBeVisible()
+    expect(within(primitives).getByRole('button', { name: 'Add Cylinder' })).toBeVisible()
     expect(within(toolbox).getByRole('button', { name: 'Add Box' })).toHaveAttribute('data-command-id', 'model.addBox')
     expect(within(toolbox).getByRole('button', { name: 'Add Cylinder' })).toHaveAttribute('data-command-id', 'model.addCylinder')
     expect(within(toolbox).getByRole('button', { name: 'Add Box' })).not.toHaveAttribute('data-command-id', 'model.addCylinder')
