@@ -413,7 +413,7 @@ export function V5WorkcellCanvas({
       {bundle === null
         ? <div className="v5-empty-state">Project runtime is not active.</div>
         : <Canvas
-          aria-label="Interactive 3D ViewCube"
+          aria-label="3D workcell scene"
           data-view-cube-size={VIEW_CUBE_SIZE_PX_V5}
           data-view-cube-surface="interactive-3d"
           onPointerMissed={() => undefined}

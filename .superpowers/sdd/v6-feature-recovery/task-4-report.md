@@ -36,7 +36,9 @@ SHA-pinned verification summary: `.omo/evidence/task-4-viewcube-verification.md`
 
 - `src/features/scene/v5/V5WorkcellWorkspace.tsx` contains one rendered
   `GizmoViewcube`, inside one `GizmoHelper`, with the fixed six-face array and
-  `data-view-cube-surface="interactive-3d"` Canvas marker.
+  `data-view-cube-surface="interactive-3d"` Canvas marker. The Canvas itself
+  is accurately labeled `3D workcell scene`; the keyboard-accessible standard
+  orientation buttons provide the non-Canvas accessibility path.
 - `src/features/viewport/v6/ViewportOverlayV6.tsx` contains no HTML cube
   element or `data-testid="v6-view-cube"`; the overlay keeps only the standard
   camera command buttons.

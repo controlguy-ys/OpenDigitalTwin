@@ -200,13 +200,23 @@ describe('V5WorkcellWorkspace', () => {
     const click = viewCubeProbe.current?.onClick
     expect(click).toEqual(expect.any(Function))
     const stopPropagation = vi.fn()
-
-    click?.({ face: { normal: new Vector3(1, 0, 0) }, object: { position: new Vector3() }, stopPropagation })
+    const faceDirections = [
+      ['right', [1, 0, 0]],
+      ['left', [-1, 0, 0]],
+      ['back', [0, 1, 0]],
+      ['front', [0, -1, 0]],
+      ['top', [0, 0, 1]],
+      ['bottom', [0, 0, -1]],
+    ] as const
+    for (const [, direction] of faceDirections) {
+      click?.({ face: { normal: new Vector3(...direction) }, object: { position: new Vector3() }, stopPropagation })
+    }
     click?.({ face: { normal: new Vector3(0, 0, -1) }, object: { position: new Vector3(1, -1, 1) }, stopPropagation })
 
-    expect(stopPropagation).toHaveBeenCalledTimes(2)
-    expect(onCameraOrientation).toHaveBeenNthCalledWith(1, 'right')
-    expect(onCameraOrientation).toHaveBeenNthCalledWith(2, 'isometric')
+    expect(stopPropagation).toHaveBeenCalledTimes(7)
+    expect(onCameraOrientation.mock.calls.map(([orientation]) => orientation)).toEqual([
+      'right', 'left', 'back', 'front', 'top', 'bottom', 'isometric',
+    ])
   })
 
   it('synchronizes the supplied camera version and exposes collision and diagnostic proxy surfaces', () => {
