@@ -212,6 +212,23 @@ describe('createApplicationKinematicsServiceV1', () => {
     }))
   })
 
+  it('accepts one-ULP quaternion normalization drift from composed Solver transforms', () => {
+    const spy = spySolver({ alterResult: (value) => Object.freeze({
+      ...value,
+      bodyWorldPoses: record([
+        ['arm', Object.freeze({
+          positionM: identityPose.positionM,
+          quaternion: Object.freeze([0, 0, 0, 1 + Number.EPSILON] as [number, number, number, number]),
+        })],
+        ['base', identityPose],
+      ]),
+    }) })
+    const service = createApplicationKinematicsServiceV1(createSolverRegistryV1([spy.solver]))
+    const compiled = service.compile(definition())
+
+    expect(() => compiled.evaluateForward({ rootWorldPose: identityPose, coordinatesByStableId: { 'joint-1': 0 } })).not.toThrow()
+  })
+
   it('accepts exactly requested Frame and Motion Group result filters', () => {
     const spy = spySolver()
     const source = definition()

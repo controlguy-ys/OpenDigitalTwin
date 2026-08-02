@@ -1,4 +1,5 @@
 import { configRevisionForProjectV5, validateWorkcellProjectV5 } from '../../../core/project-v5/index.js'
+import { computeSerialRobotPoseV5 } from '../../../core/robot-runtime-v5/serial-kinematics.js'
 import { describe, expect, it } from 'vitest'
 
 import { decodeProjectV5, encodeProjectV5 } from './project-v5-codec.js'
@@ -89,5 +90,20 @@ describe('logical I/O Job Project V5 sample', () => {
     const json = JSON.stringify(project)
     expect(json).not.toMatch(/"(?:quality|statusCode|sourceTimestamp|publishedTimestamp|owner)"/u)
     await expect(configRevisionForProjectV5(project)).resolves.toMatch(/^[0-9a-f]{64}$/u)
+  })
+
+  it('keeps interpolated MoveJoint poses valid for the serial kinematics runtime', () => {
+    const project = createLogicalIoJobSampleV5(IDENTITY)
+    const definition = project.robotDefinitions[0]!
+    const first = project.jobs[0]!.instructions[0]!
+    const second = project.jobs[0]!.instructions[1]!
+    if (first.kind !== 'move-joint' || second.kind !== 'move-joint') throw new Error('Expected leading MoveJoint instructions.')
+    const progress = 0.2376
+    const interpolated = Object.fromEntries(definition.joints.map((joint) => [
+      joint.id,
+      first.jointValues[joint.id]! + (second.jointValues[joint.id]! - first.jointValues[joint.id]!) * progress,
+    ]))
+
+    expect(() => computeSerialRobotPoseV5(definition, interpolated)).not.toThrow()
   })
 })

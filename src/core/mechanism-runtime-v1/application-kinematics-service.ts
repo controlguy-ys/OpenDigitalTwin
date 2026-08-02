@@ -152,6 +152,12 @@ function stableIds(ids: readonly string[]): readonly string[] {
   return Object.freeze([...new Set(ids)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0))
 }
 
+function nearlySameComponent(left: number, right: number): boolean {
+  if (Object.is(left, right)) return true
+  const scale = Math.max(1, Math.abs(left), Math.abs(right))
+  return Math.abs(left - right) <= 8 * Number.EPSILON * scale
+}
+
 function frozenPose(value: unknown, path: string): RigidTransformV1 {
   const record = dataRecord(value, path, ['positionM', 'quaternion'])
   const position = dataArray(record.positionM, `${path}.positionM`)
@@ -169,8 +175,8 @@ function frozenPose(value: unknown, path: string): RigidTransformV1 {
     return invalidResult(path)
   }
   const canonical = (component: number): number => component === 0 ? 0 : component
-  if (!raw.positionM.every((component, index) => Object.is(component, canonical(normalized.positionM[index]!)))
-    || !raw.quaternion.every((component, index) => Object.is(component, canonical(normalized.quaternion[index]!)))) {
+  if (!raw.positionM.every((component, index) => nearlySameComponent(component, canonical(normalized.positionM[index]!)))
+    || !raw.quaternion.every((component, index) => nearlySameComponent(component, canonical(normalized.quaternion[index]!)))) {
     invalidResult(path, 'Solver transform must already be finite and normalized.')
   }
   return Object.freeze({
