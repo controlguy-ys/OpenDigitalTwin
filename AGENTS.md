@@ -31,6 +31,7 @@
 - Run browser QA at desktop, 1024x768, and a 200%-zoom-equivalent viewport. A feature is not preserved if it exists in code but is clipped, obscured, unreachable, or unusable at a required viewport.
 
 ## Sub-agent Development
-- Delegate bounded, pattern-following UI implementation to the `lazycodex-worker-low` role, configured as `gpt-5.6-luna` with `model_reasoning_effort = "xhigh"`. Do not lower its effort for implementation work.
-- Give each implementation worker explicit file ownership, the feature-preservation matrix, and the rule that other agents share the worktree and unrelated edits must not be reverted.
-- A parent agent must independently review the worker diff and regression evidence before integration. Final UI/UX release validation remains a separate SOL review after implementation and browser QA are complete.
+- Delegate independent, substantial investigation and implementation tasks to the `luna_worker` role, configured as `gpt-5.6-luna` with `model_reasoning_effort = "max"`. Parallelize only tasks with non-overlapping ownership.
+- Give every `luna_worker` a separate bounded assignment containing explicit file ownership, the expected user-visible result, acceptance criteria, the feature-preservation matrix, and the exact validation evidence to return.
+- Tell every worker that other agents share the worktree, unrelated edits must not be reverted, and no existing user-facing function may be removed without explicit current-task approval.
+- Keep SOL responsible for architecture, integration decisions, independent diff review, and final UI/UX release validation after implementation and browser QA are complete.
