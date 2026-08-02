@@ -198,7 +198,8 @@ test('V6 overlays the compact Inspector and reserves compact/narrow dock command
   const emptyCommands = await bounds(commandBar)
   const emptySheet = await bounds(bottom)
   expect(emptySheet.left).toBe(narrowCanvas.left)
-  expect(emptySheet.right).toBe(emptyCommands.right)
+  expect(emptySheet.right).toBeLessThanOrEqual(narrowCanvas.right - 124)
+  expect(emptySheet.right).toBeLessThanOrEqual(emptyCommands.right - 124)
   expect(emptySheet.height).toBeLessThanOrEqual(80)
   expect(emptySheet.bottom).toBeLessThanOrEqual(emptyCommands.top)
 

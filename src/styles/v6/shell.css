@@ -329,6 +329,8 @@
 }
 
 .v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom[data-presentation='sheet']:has(.v6-job-monitor--empty) {
+  pointer-events: none;
+  right: 124px;
   height: 64px;
 }
 
