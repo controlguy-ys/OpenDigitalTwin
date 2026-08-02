@@ -1,6 +1,7 @@
 .v6-application-shell {
   display: grid;
   height: 100%;
+  --v6-narrow-command-height: 76px;
   grid-template-columns:
     var(--v6-toolbox-width)
     var(--v6-explorer-width)
@@ -22,7 +23,15 @@
 .v6-shell-header {
   grid-column: 1 / -1;
   grid-row: 1;
+  min-width: 0;
+  position: relative;
+  z-index: 8;
 }
+
+.v6-shell-header > * { min-width: 0; }
+.v6-shell-header > .v6-app-header > nav { min-width: 0; }
+.v6-shell-header [role='menubar'] { min-width: 0; }
+.v6-shell-header .v6-menu-overflow-anchor { display: none; }
 
 .v6-shell-toolbox,
 .v6-shell-explorer,
@@ -156,6 +165,178 @@
 .v6-dock-toggle-status {
   color: var(--v6-color-muted);
   font-size: 0.75rem;
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-shell-header > .v6-app-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-shell-header > .v6-app-header > strong {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-shell-header > .v6-app-header > nav {
+  grid-column: 2;
+  grid-row: 1;
+  overflow: hidden;
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-shell-header > .v6-app-header > .v6-header-status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  width: 100%;
+  margin-left: 0 !important;
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-shell-header [role='menubar'] {
+  display: flex;
+  flex-wrap: wrap;
+  overflow: hidden;
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-workspace-dock-toggles {
+  right: 8px;
+  bottom: calc(var(--v6-bottom-height) + 8px);
+  left: var(--v6-toolbox-width);
+  max-width: calc(100% - var(--v6-toolbox-width) - 8px);
+  flex-wrap: wrap;
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-workspace-dock-toggles .v6-button {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header > .v6-app-header {
+  display: grid;
+  grid-template-areas:
+    'brand menu'
+    'status status';
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header > .v6-app-header > strong {
+  grid-area: brand;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header > .v6-app-header > nav {
+  grid-area: menu;
+  overflow: visible;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header > .v6-app-header > .v6-header-status {
+  grid-area: status;
+  width: 100%;
+  margin-left: 0 !important;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header [role='menubar'] {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow: visible;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header .v6-menu-anchor:not(:first-child):not(.v6-menu-overflow-anchor) {
+  display: none;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header .v6-menu-overflow-anchor {
+  display: inline-flex;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-menu-overflow-surface {
+  right: 0;
+  left: auto;
+  min-width: min(220px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 80px);
+  overflow: auto;
+}
+
+.v6-overflow-menu-item {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.v6-overflow-menu-heading {
+  padding: 4px 10px;
+  color: var(--v6-color-muted);
+  font-size: .75rem;
+  font-weight: 700;
+}
+
+.v6-narrow-job-status { display: none; }
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom[data-presentation='sheet'] {
+  bottom: var(--v6-narrow-command-height);
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-workspace-dock-toggles {
+  right: 0;
+  bottom: 0;
+  left: var(--v6-toolbox-width);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 28px) minmax(0, 40px);
+  align-items: stretch;
+  min-height: var(--v6-narrow-command-height);
+  max-width: calc(100% - var(--v6-toolbox-width));
+  padding: 4px;
+  background: var(--v6-color-panel);
+  border-top: 1px solid var(--v6-color-border);
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-narrow-job-status {
+  display: block;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
+  max-height: 28px;
+  overflow: hidden;
+  color: var(--v6-color-muted);
+  font-size: .75rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-workspace-dock-toggles .v6-button {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-dock-toggle-status {
+  display: none;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom .v6-job-monitor {
+  gap: 4px;
+  padding: 6px 8px;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom .v6-job-monitor header,
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom .v6-job-monitor-actions {
+  gap: 4px;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom .v6-job-monitor dl {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
 }
 
 .v6-application-shell[data-workspace-mode='compact'] {

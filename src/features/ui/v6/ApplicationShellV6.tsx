@@ -209,7 +209,8 @@ export function ApplicationShellV6({
       >
         {bottom}
       </section>
-      {!maximized && <nav aria-label="Workspace docks" className="v6-workspace-dock-toggles">
+      {!maximized && <nav aria-label="Workspace docks" className="v6-workspace-dock-toggles" data-testid="v6-narrow-command-bar">
+        {state.mode === 'narrow' && bottomStatus !== undefined && bottomStatus !== null && <div className="v6-narrow-job-status" data-testid="v6-narrow-job-status">{bottomStatus}</div>}
         <ButtonV6
           aria-pressed={explorerVisible}
           onClick={() => explorerPresentation === 'dock'
@@ -235,7 +236,7 @@ export function ApplicationShellV6({
           variant="ghost"
         >
           {bottomVisible ? 'Hide' : 'Show'} Job Monitor
-          {bottomStatus !== undefined && <span className="v6-dock-toggle-status">{bottomStatus}</span>}
+          {bottomStatus !== undefined && <span aria-hidden="true" className="v6-dock-toggle-status">{bottomStatus}</span>}
         </ButtonV6>
       </nav>}
       <div className="v6-viewport-safe-area" data-safe-area={`${safeArea.top},${safeArea.right},${safeArea.bottom},${safeArea.left}`} />

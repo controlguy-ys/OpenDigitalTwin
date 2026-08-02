@@ -94,3 +94,74 @@ test('V6 keeps keyboard recovery, target semantics, live Job failure, and zoom o
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await expectNoSeriousOrCritical(page)
 })
+
+test('V6 exposes a compact menu command surface at the zoom-equivalent shell width', async ({ page }) => {
+  await page.setViewportSize({ width: 512, height: 384 })
+  await loadV6Demo(page)
+
+  const shell = page.getByTestId('v6-application-shell')
+  const header = page.getByTestId('v6-header')
+  const overflow = page.getByRole('menuitem', { name: 'More menus' })
+  await expect(shell).toHaveAttribute('data-workspace-mode', 'narrow')
+  await expect(header).toBeVisible()
+  await expect(overflow).toBeVisible()
+  const headerBox = await header.boundingBox()
+  expect(headerBox).not.toBeNull()
+  expect((headerBox?.y ?? 0) + (headerBox?.height ?? 0)).toBeLessThanOrEqual(384)
+
+  await overflow.click()
+  const compactMenu = page.getByRole('menu', { name: 'More menus' })
+  await expect(compactMenu).toBeVisible()
+  for (const menuName of ['Project', 'Home', 'Model', 'Job', 'Simulation', 'Connectivity', 'View', 'Help']) {
+    await expect(compactMenu.getByRole('menuitem', { name: menuName, exact: true })).toBeVisible()
+  }
+  await page.keyboard.press('Escape')
+  await expect(overflow).toBeFocused()
+})
+
+test('V6 keeps failed-step recovery above the narrow bottom-sheet edge at compact and zoom-equivalent sizes', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await loadV6Demo(page)
+
+  const viewports = [
+    { width: 1024, height: 768 },
+    { width: 512, height: 384 },
+  ] as const
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport)
+    const shell = page.getByTestId('v6-application-shell')
+    const header = page.getByTestId('v6-header')
+    await expect(header).toBeVisible()
+    const headerBox = await header.boundingBox()
+    expect(headerBox).not.toBeNull()
+    expect((headerBox?.y ?? 0) + (headerBox?.height ?? 0)).toBeLessThanOrEqual(viewport.height)
+
+    const docks = page.getByRole('navigation', { name: 'Workspace docks' })
+    const dockButtons = docks.getByRole('button')
+    const dockBoxes = await dockButtons.evaluateAll((elements) => elements.map((element) => {
+      const rect = element.getBoundingClientRect()
+      return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }
+    }))
+    for (let index = 0; index < dockBoxes.length; index += 1) {
+      for (let next = index + 1; next < dockBoxes.length; next += 1) {
+        const first = dockBoxes[index]!
+        const second = dockBoxes[next]!
+        const horizontalOverlap = first.left < second.right && second.left < first.right
+        const verticalOverlap = first.top < second.bottom && second.top < first.bottom
+        expect(horizontalOverlap && verticalOverlap, `dock controls ${index} and ${next} overlap`).toBe(false)
+      }
+    }
+
+    await expect(shell).toBeVisible()
+  }
+
+  await page.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u }).click()
+  const monitor = page.getByTestId('v6-bottom')
+  await monitor.getByRole('button', { name: 'Start Job' }).click()
+  await expect(monitor).toContainText('FAILED', { timeout: 20_000 })
+  const inspect = monitor.getByRole('button', { name: 'Inspect failed step' })
+  await expect(inspect).toBeVisible()
+  const inspectBox = await inspect.boundingBox()
+  expect(inspectBox).not.toBeNull()
+  expect((inspectBox?.y ?? 0) + (inspectBox?.height ?? 0)).toBeLessThanOrEqual(384)
+})

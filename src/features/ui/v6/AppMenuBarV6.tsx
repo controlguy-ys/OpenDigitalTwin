@@ -45,7 +45,11 @@ export interface AppMenuBarV6Props {
 
 export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity }: AppMenuBarV6Props) {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [overflowOpen, setOverflowOpen] = useState(false)
+  const [overflowMenu, setOverflowMenu] = useState<string | null>(null)
   const [activeMenuIndex, setActiveMenuIndex] = useState(0)
+  const [narrowSurface, setNarrowSurface] = useState(false)
+  const overflowTriggerId = 'v6-menu-overflow-trigger'
   const invoke = async (id: AppCommandIdV6, trigger?: HTMLElement) => {
     await invokeCommandSurfaceV6(registry, id)
     if (trigger !== undefined) {
@@ -57,6 +61,13 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
     (index + MENU_NAMES_V6.length) % MENU_NAMES_V6.length
   )
   const focusMenuTrigger = (index: number, keepMenuOpen: boolean) => {
+    if (narrowSurface) {
+      setOpenMenu(null)
+      setOverflowOpen(keepMenuOpen)
+      setOverflowMenu(null)
+      requestAnimationFrame(focusOverflowTrigger)
+      return
+    }
     const nextIndex = normalizedMenuIndex(index)
     const nextMenu = MENU_NAMES_V6[nextIndex]!
     setActiveMenuIndex(nextIndex)
@@ -70,6 +81,67 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
         `#v6-menu-${menu.toLowerCase()} [role^="menuitem"]`,
       )?.focus()
     })
+  }
+  const focusOverflowTrigger = () => {
+    document.getElementById(overflowTriggerId)?.focus()
+  }
+  const openOverflowMenu = () => {
+    setOverflowOpen(true)
+    setOverflowMenu(null)
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>('#v6-menu-overflow [role="menuitem"]')?.focus()
+    })
+  }
+  const openOverflowSubmenu = (menu: string) => {
+    setOverflowOpen(true)
+    setOverflowMenu(menu)
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(
+        `#v6-menu-overflow [role="menuitem"]:not([data-overflow-back])`,
+      )?.focus()
+    })
+  }
+  const onOverflowTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      if (overflowOpen) {
+        setOverflowOpen(false)
+        setOverflowMenu(null)
+      }
+      else openOverflowMenu()
+      return
+    }
+    if (event.key === 'Escape' && overflowOpen) {
+      event.preventDefault()
+      setOverflowOpen(false)
+      setOverflowMenu(null)
+      event.currentTarget.focus()
+    }
+  }
+  const onOverflowItemKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setOverflowOpen(false)
+      setOverflowMenu(null)
+      focusOverflowTrigger()
+      return
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const menu = event.currentTarget.closest<HTMLElement>('[role="menu"]')
+      const items = menu === null
+        ? []
+        : Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      const index = items.indexOf(event.currentTarget)
+      if (index >= 0 && items.length > 0) {
+        items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus()
+      }
+      return
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && event.currentTarget.dataset.overflowMenu !== undefined) {
+      event.preventDefault()
+      openOverflowSubmenu(event.currentTarget.dataset.overflowMenu)
+    }
   }
   const onTopLevelKeyDown = (
     event: ReactKeyboardEvent<HTMLButtonElement>,
@@ -119,6 +191,16 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
   }
 
   useEffect(() => {
+    const shell = document.querySelector<HTMLElement>('[data-testid="v6-application-shell"]')
+    if (shell === null) return undefined
+    const update = () => setNarrowSurface(shell.dataset.workspaceMode === 'narrow')
+    update()
+    const observer = new MutationObserver(update)
+    observer.observe(shell, { attributes: true, attributeFilter: ['data-workspace-mode'] })
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat || event.isComposing) return
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 's') {
@@ -142,6 +224,11 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
         if (openMenu !== null) {
           event.preventDefault()
           setOpenMenu(null)
+        } else if (overflowOpen) {
+          event.preventDefault()
+          setOverflowOpen(false)
+          setOverflowMenu(null)
+          requestAnimationFrame(focusOverflowTrigger)
         } else if (transientUi?.hasActiveTransient() === true) {
           event.preventDefault()
           transientUi.closeActiveTransient()
@@ -161,7 +248,86 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [contextMenu, openMenu, registry, transientUi])
+  }, [contextMenu, narrowSurface, openMenu, overflowOpen, registry, transientUi])
+
+  const renderOverflowMenu = () => {
+    if (overflowMenu === null) {
+      return MENU_NAMES_V6.map((menu) => <ButtonV6
+        className="v6-overflow-menu-item"
+        data-overflow-menu={menu}
+        key={menu}
+        onClick={() => openOverflowSubmenu(menu)}
+        onKeyDown={onOverflowItemKeyDown}
+        role="menuitem"
+        size="compact"
+        tabIndex={-1}
+        variant="ghost"
+      >{menu}</ButtonV6>)
+    }
+    const menu = overflowMenu
+    const commandIds = MENU_COMMANDS_V6[menu] ?? []
+    const surface = MENU_SURFACES_V6[menu]
+    return <>
+      <ButtonV6
+        aria-label="Back to More menus"
+        className="v6-overflow-menu-item"
+        data-overflow-back="true"
+        onClick={() => {
+          setOverflowMenu(null)
+          requestAnimationFrame(() => document.querySelector<HTMLElement>('#v6-menu-overflow [role="menuitem"]')?.focus())
+        }}
+        onKeyDown={onOverflowItemKeyDown}
+        role="menuitem"
+        size="compact"
+        tabIndex={-1}
+        variant="ghost"
+      >Back to menus</ButtonV6>
+      <span aria-hidden="true" className="v6-overflow-menu-heading">{menu}</span>
+      {menu === 'Connectivity' && connectivity !== undefined
+        ? <ConnectivityMenuV6
+            {...connectivity}
+            onMenuItemKeyDown={onOverflowItemKeyDown}
+            onOpenBindingOverview={(opener) => {
+              connectivity.onOpenBindingOverview(stableMenuTrigger(overflowTriggerId, opener))
+              setOverflowOpen(false)
+              setOverflowMenu(null)
+              requestAnimationFrame(focusOverflowTrigger)
+            }}
+            onOpenConnectionMonitor={(opener) => {
+              connectivity.onOpenConnectionMonitor(stableMenuTrigger(overflowTriggerId, opener))
+              setOverflowOpen(false)
+              setOverflowMenu(null)
+              requestAnimationFrame(focusOverflowTrigger)
+            }}
+            onOpenDockerRunGuide={(opener) => {
+              connectivity.onOpenDockerRunGuide(stableMenuTrigger(overflowTriggerId, opener))
+              setOverflowOpen(false)
+              setOverflowMenu(null)
+              requestAnimationFrame(focusOverflowTrigger)
+            }}
+            onOpenOpcUaSettings={(opener) => {
+              connectivity.onOpenOpcUaSettings(stableMenuTrigger(overflowTriggerId, opener))
+              setOverflowOpen(false)
+              setOverflowMenu(null)
+              requestAnimationFrame(focusOverflowTrigger)
+            }}
+            presentation="menu"
+          />
+        : commandIds.map((id) => surface === undefined ? null : <CommandSurfaceControlV6
+            commandId={id}
+            key={id}
+            onInvoked={() => {
+              setOverflowOpen(false)
+              setOverflowMenu(null)
+              requestAnimationFrame(focusOverflowTrigger)
+            }}
+            onKeyDown={onOverflowItemKeyDown}
+            registry={registry}
+            surface={surface}
+            tabIndex={-1}
+          />)}
+    </>
+  }
 
   return (
     <nav aria-label="Application commands">
@@ -229,6 +395,27 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
             </div>}
           </span>
         })}
+        <span className="v6-menu-anchor v6-menu-overflow-anchor">
+          <ButtonV6
+            aria-expanded={overflowOpen}
+            aria-haspopup="menu"
+            aria-label="More menus"
+            className="v6-menu-trigger v6-menu-overflow-trigger"
+            id={overflowTriggerId}
+            onClick={() => overflowOpen ? setOverflowOpen(false) : openOverflowMenu()}
+            onKeyDown={onOverflowTriggerKeyDown}
+            role="menuitem"
+            size="compact"
+            tabIndex={narrowSurface ? 0 : -1}
+            variant="ghost"
+          >More</ButtonV6>
+          {overflowOpen && <div
+            aria-label="More menus"
+            className="v6-menu-surface v6-menu-overflow-surface"
+            id="v6-menu-overflow"
+            role="menu"
+          >{renderOverflowMenu()}</div>}
+        </span>
       </div>
     </nav>
   )

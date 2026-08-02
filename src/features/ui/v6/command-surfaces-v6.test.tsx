@@ -69,6 +69,28 @@ describe('V6 command surfaces', () => {
     expect(menu.parentElement).toBe(anchor)
   })
 
+  it('provides a narrow More menus surface without removing any top-level menu', () => {
+    const registry = createAppCommandRegistryV6([
+      command('project.new', 'New Project'),
+      command('tool.select', 'Select'),
+      command('model.addBox', 'Add Box'),
+      command('job.start', 'Start Job'),
+      command('view.fitAll', 'Fit All'),
+      command('help.controls', 'Controls'),
+    ])
+    render(<AppMenuBarV6 registry={registry} />)
+
+    const overflow = screen.getByRole('menuitem', { name: 'More menus' })
+    fireEvent.click(overflow)
+    const menu = screen.getByRole('menu', { name: 'More menus' })
+    for (const menuName of ['Project', 'Home', 'Model', 'Job', 'Simulation', 'Connectivity', 'View', 'Help']) {
+      expect(within(menu).getByRole('menuitem', { name: new RegExp(`^${menuName}$`, 'u') })).toBeVisible()
+    }
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /^Project$/u }))
+    expect(within(menu).getByRole('menuitem', { name: /^New Project$/u })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: /^Project$/u })).toBeInTheDocument()
+  })
+
   it('shares checked Main View state and returns focus to the View menu trigger', async () => {
     let maximized = false
     const registry = createAppCommandRegistryV6([createMainViewMaximizeCommandV6({

@@ -177,6 +177,20 @@ describe('ApplicationShellV6', () => {
     expect(narrow.store.getState().getSnapshot().viewportSafeArea.bottom).toBe(192)
   })
 
+  it('reserves a narrow command bar below the Job sheet and keeps its recovery status seam', () => {
+    renderShell({
+      widthPx: 512,
+      heightPx: 384,
+      bottomStatus: <span>FAILED Step 3: WaitDI instruction timed out.</span>,
+    })
+    const shell = screen.getByTestId('v6-application-shell')
+    expect(shell).toHaveAttribute('data-workspace-mode', 'narrow')
+    expect(screen.getByTestId('v6-narrow-command-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('v6-narrow-job-status')).toHaveTextContent('FAILED Step 3')
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
+    expect(css).toMatch(/\.v6-application-shell\[data-workspace-mode='narrow'\] \.v6-shell-bottom\[data-presentation='sheet'\]\s*\{[^}]*bottom:\s*var\(--v6-narrow-command-height\)/u)
+  })
+
   it('keys responsive CSS to measured workspace mode instead of browser media queries', () => {
     const browserWidth = window.innerWidth
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
