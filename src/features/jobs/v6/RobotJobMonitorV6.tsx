@@ -41,7 +41,8 @@ function SubscribedCompactStatus(props: RobotJobCompactStatusV6Props & { readonl
 function MonitorContent({ project, jobId, playback, onOpenEditor, onSelectJob, jobStates }: RobotJobMonitorV6Props & { readonly jobStates: JobRuntimeStoreV5['byRobotId'] }): ReactNode {
   const job = project.jobs.find((candidate) => candidate.id === jobId) ?? null
   if (job === null) return <section aria-label="Job monitor" className="v6-job-monitor"><p>No Jobs in this Project.</p></section>
-  const state = jobStates[job.robotId]
+  const candidateState = jobStates[job.robotId]
+  const state = candidateState?.jobId === job.id ? candidateState : undefined
   const runtimeState = state?.state ?? 'IDLE'
   const current = state?.stepIndex ?? null
   const instruction = current === null ? null : job.instructions[current] ?? null
@@ -61,7 +62,8 @@ function MonitorContent({ project, jobId, playback, onOpenEditor, onSelectJob, j
 function CompactStatusContent({ project, jobId, jobStates }: RobotJobCompactStatusV6Props & { readonly jobStates: JobRuntimeStoreV5['byRobotId'] }): ReactNode {
   const job = project.jobs.find((candidate) => candidate.id === jobId) ?? null
   if (job === null) return <span className="v6-job-compact-status" role="status"><strong>Job Monitor</strong><span className="v6-job-state-badge" data-state="IDLE">IDLE</span></span>
-  const state = jobStates[job.robotId]
+  const candidateState = jobStates[job.robotId]
+  const state = candidateState?.jobId === job.id ? candidateState : undefined
   const runtimeState = state?.state ?? 'IDLE'
   const current = state?.stepIndex ?? null
   const instruction = current === null ? null : job.instructions[current] ?? null

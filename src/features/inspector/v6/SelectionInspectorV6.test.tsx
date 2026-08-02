@@ -32,7 +32,8 @@ describe('SelectionInspectorV6', () => {
   it('routes Group selection to the Group inspector and applies one atomic Group patch', () => {
     const project = projectWithGroupAndFrame()
     const updateGroup = vi.fn<SceneCommandServiceV6['updateGroup']>().mockResolvedValue(undefined)
-    const sceneCommands: Pick<SceneCommandServiceV6, 'updateGroup'> = { updateGroup }
+    const updateSceneFrame = vi.fn<SceneCommandServiceV6['updateSceneFrame']>().mockResolvedValue(undefined)
+    const sceneCommands: Pick<SceneCommandServiceV6, 'updateGroup' | 'updateSceneFrame'> = { updateGroup, updateSceneFrame }
     render(<SelectionInspectorV6 project={project} sceneCommands={sceneCommands} selection={{ kind: 'group', id: 'child' }} />)
 
     expect(screen.getByRole('heading', { name: 'Child Group' })).toBeVisible()
@@ -46,8 +47,9 @@ describe('SelectionInspectorV6', () => {
 
   it('routes Scene Frame selection to a pose inspector and keeps World read-only', () => {
     const project = projectWithGroupAndFrame()
+    const updateGroup = vi.fn<SceneCommandServiceV6['updateGroup']>().mockResolvedValue(undefined)
     const updateSceneFrame = vi.fn<SceneCommandServiceV6['updateSceneFrame']>().mockResolvedValue(undefined)
-    const sceneCommands: Pick<SceneCommandServiceV6, 'updateSceneFrame'> = { updateSceneFrame }
+    const sceneCommands: Pick<SceneCommandServiceV6, 'updateGroup' | 'updateSceneFrame'> = { updateGroup, updateSceneFrame }
     const { rerender } = render(<SelectionInspectorV6 project={project} sceneCommands={sceneCommands} selection={{ kind: 'frame', id: 'custom-frame' }} />)
 
     expect(screen.getByRole('heading', { name: 'Custom Frame' })).toBeVisible()

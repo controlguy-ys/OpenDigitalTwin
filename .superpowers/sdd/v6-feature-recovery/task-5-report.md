@@ -24,14 +24,18 @@ The pre-implementation run failed in all three focused files: 6 expected failure
 
 ### GREEN and static validation
 
-The parent integration runner reports the focused four-file Task 5 suite green with 29 tests, full TypeScript checking green, and targeted oxlint green. The local TypeScript check was also run:
+The parent integration runner reports the focused four-file Task 5 suite green with the follow-up same-Robot multi-Job and App revision-selection tests included, full TypeScript checking green, and targeted oxlint green. The exact command output, exit codes, final SHA, and scope evidence are recorded in the actual Task 5 artifact:
 
 ```text
-npx tsc --noEmit --project tsconfig.app.json
-exit code: 0
+.omo/evidence/task-5-green-actual.txt
 ```
 
-The sealed verification artifact is referenced at [task-5-group-frame-job-verification.md](../../../.omo/evidence/task-5-group-frame-job-verification.md) and is expected to contain the exact command output and final SHA evidence.
+The earlier baseline summary remains available at [task-5-group-frame-job-verification.md](../../../.omo/evidence/task-5-group-frame-job-verification.md); the `task-5-green-actual.txt` artifact is authoritative for this follow-up.
+
+### Follow-up recovery evidence
+
+- `RobotJobMonitorV6` now accepts runtime state only when `state.jobId === selectedJob.id`; a same-Robot state owned by another Job renders the selected Job as `IDLE` and cannot expose the other Job's retry, cancel, or failed-step details.
+- `AppV6` coverage verifies that a selected Job survives a Project revision while still present and deterministically falls back to the first Job when the selected Job is removed, with resource and preference cleanup isolated in the test.
 
 ## Feature-preservation matrix
 

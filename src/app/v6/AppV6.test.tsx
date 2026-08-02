@@ -9,6 +9,7 @@ import { validateRuntimeGatewayStatusV1, type RuntimeGatewayStatusV1 } from '../
 import { createBrowserProjectApplicationResourcesV5, type BrowserProjectApplicationResourcesV5 } from '../../features/project/v5/browser-project-resources-v5.js'
 import { createBrowserProjectRuntimeV5 } from '../../features/project/v5/browser-project-runtime-v5.js'
 import { ProjectDatabaseV5 } from '../../features/project/v5/project-v5-db.js'
+import { WORKSPACE_PREFERENCES_STORAGE_KEY_V6 } from '../../features/ui/v6/workspace-layout-store-v6.js'
 import type { CameraOrientationV6 } from '../../features/viewport/v6/camera-controller-v6.js'
 import { AppV6 } from './AppV6.js'
 
@@ -43,6 +44,19 @@ function project(revisionId = 'revision-app-a'): WorkcellProjectV5 {
   return validateWorkcellProjectV5({ ...makeMinimalWorkcellProjectV5(), revisionId })
 }
 
+function projectWithJobs(revisionId: string, includeSecondJob: boolean): WorkcellProjectV5 {
+  const base = project(revisionId)
+  const firstJob = base.jobs[0]
+  if (firstJob === undefined) throw new Error('AppV6 fixture did not expose a first Job.')
+  const secondJob = {
+    ...firstJob,
+    id: 'job-second',
+    name: 'Second Job',
+    instructions: firstJob.instructions.map((instruction) => ({ ...instruction, id: `${instruction.id}-second` })),
+  }
+  return validateWorkcellProjectV5({ ...base, jobs: includeSecondJob ? [firstJob, secondJob] : [firstJob] })
+}
+
 function inactiveGatewayStatus(): RuntimeGatewayStatusV1 {
   return validateRuntimeGatewayStatusV1({
     type: 'runtime-gateway-status-v1', protocolVersion: 1, observedAtMs: 1,
@@ -66,7 +80,7 @@ function isActivation(value: unknown): value is { readonly project: WorkcellProj
   return typeof record.configRevision === 'string' && typeof record.activationAttemptId === 'string' && record.project !== null && typeof record.project === 'object'
 }
 
-async function resourcesHarness() {
+async function resourcesHarness(candidate: WorkcellProjectV5 = project()) {
   let gatewayStatus = inactiveGatewayStatus()
   const fetch = async (input: string, init: RequestInit): Promise<Response> => {
     if (input.endsWith('/status')) return new Response(JSON.stringify(gatewayStatus), { headers: { 'Content-Type': 'application/json' } })
@@ -99,7 +113,7 @@ async function resourcesHarness() {
     runtime: { ...actual.runtime, startGatewayStream },
     dispose,
   }) satisfies BrowserProjectApplicationResourcesV5
-  await resources.mutations.replace({ candidate: project(), description: 'Seed AppV6 test Project' })
+  await resources.mutations.replace({ candidate, description: 'Seed AppV6 test Project' })
   return { dispose, resources, startGatewayStream, startHeader }
 }
 
@@ -130,6 +144,42 @@ describe('AppV6', () => {
     await harness.resources.mutations.replace({ candidate: project('revision-app-b'), description: 'Replace AppV6 test Project' })
 
     await waitFor(() => expect(screen.getByTestId('runtime-canvas')).toHaveTextContent('revision-app-b / Epoch 2'))
+  })
+
+  it('preserves a selected Job across revisions and falls back to the first Job when it is removed', async () => {
+    const user = userEvent.setup()
+    const storedPreferences = localStorage.getItem(WORKSPACE_PREFERENCES_STORAGE_KEY_V6)
+    localStorage.removeItem(WORKSPACE_PREFERENCES_STORAGE_KEY_V6)
+    const harness = await resourcesHarness(projectWithJobs('revision-jobs-a', true))
+    const view = render(<AppV6 resources={harness.resources} />)
+    try {
+      const canvas = await screen.findByTestId('runtime-canvas')
+      await waitFor(() => expect(canvas).toHaveTextContent('revision-jobs-a / Epoch 1'))
+
+      const monitorToggle = screen.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u })
+      if (monitorToggle.getAttribute('aria-pressed') !== 'true') await user.click(monitorToggle)
+      const getMonitor = () => within(screen.getByTestId('v6-bottom')).getByRole('region', { name: 'Job monitor', hidden: true })
+      const monitor = getMonitor()
+      const selector = within(monitor).getByRole('combobox', { name: 'Active Job', hidden: true })
+      await user.selectOptions(selector, 'job-second')
+      await waitFor(() => expect(within(getMonitor()).getByRole('combobox', { name: 'Active Job', hidden: true })).toHaveValue('job-second'))
+      expect(getMonitor()).toHaveTextContent('Second Job')
+
+      await harness.resources.mutations.replace({ candidate: projectWithJobs('revision-jobs-b', true), description: 'Keep selected Job across revision' })
+      await waitFor(() => expect(canvas).toHaveTextContent('revision-jobs-b / Epoch 2'))
+      await waitFor(() => expect(within(getMonitor()).getByRole('combobox', { name: 'Active Job', hidden: true })).toHaveValue('job-second'))
+      expect(getMonitor()).toHaveTextContent('Second Job')
+
+      await harness.resources.mutations.replace({ candidate: projectWithJobs('revision-jobs-c', false), description: 'Remove selected Job' })
+      await waitFor(() => expect(canvas).toHaveTextContent('revision-jobs-c / Epoch 3'))
+      await waitFor(() => expect(within(getMonitor()).queryByRole('combobox', { name: 'Active Job', hidden: true })).toBeNull())
+      expect(getMonitor()).toHaveTextContent('Home')
+    } finally {
+      view.unmount()
+      await waitFor(() => expect(harness.dispose).toHaveBeenCalledOnce())
+      if (storedPreferences === null) localStorage.removeItem(WORKSPACE_PREFERENCES_STORAGE_KEY_V6)
+      else localStorage.setItem(WORKSPACE_PREFERENCES_STORAGE_KEY_V6, storedPreferences)
+    }
   })
 
   it('keeps one-shot resources alive through the StrictMode probe and disposes on final unmount', async () => {

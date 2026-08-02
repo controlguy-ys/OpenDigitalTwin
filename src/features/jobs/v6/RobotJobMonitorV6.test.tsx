@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { createStore } from 'zustand/vanilla'
 
@@ -7,6 +7,32 @@ import { createLogicalIoJobSampleV5, LOGICAL_IO_JOB_SAMPLE_IDS_V5 } from '../../
 import { RobotJobCompactStatusV6, RobotJobMonitorV6 } from './RobotJobMonitorV6.js'
 
 describe('RobotJobMonitorV6', () => {
+  it('does not surface another same-Robot Job failure when the active Job changes', () => {
+    const project = createLogicalIoJobSampleV5({ projectId: 'same-robot-project', revisionId: 'same-robot-revision', nowIso: '2026-07-30T00:00:00.000Z' })
+    const firstJob = project.jobs[0]
+    if (firstJob === undefined) throw new Error('Expected the logical I/O fixture Job.')
+    const secondJob = { ...firstJob, id: 'job-second', name: 'Second Job' }
+    const message = 'First Job failed.'
+    const runtime = createStore<JobRuntimeStoreV5>()(() => ({ projectRevisionId: project.revisionId, configRevision: null, byRobotId: { [firstJob.robotId]: { robotId: firstJob.robotId, jobId: firstJob.id, runId: 'first-run', state: 'FAILED', stepIndex: 2, startedAtSimulationMs: 0, completedAtSimulationMs: 5_000, failureCode: 'WAIT_DI_TIMEOUT', message } }, replaceProject: vi.fn(), reset: vi.fn(), setRobotState: vi.fn() }))
+    const playback = { startJob: vi.fn(), cancelRobotJob: vi.fn() }
+    const onOpenEditor = vi.fn()
+    render(<RobotJobMonitorV6 jobId={secondJob.id} onOpenEditor={onOpenEditor} playback={playback} project={{ ...project, jobs: [firstJob, secondJob] }} runtime={runtime} />)
+
+    const monitor = screen.getByRole('region', { name: 'Job monitor' })
+    const headerTitle = monitor.querySelector('header strong')
+    expect(headerTitle).not.toBeNull()
+    expect(headerTitle).toHaveTextContent('Second Job')
+    expect(within(monitor).getByRole('status', { name: 'Job monitor status' })).toHaveTextContent('IDLE')
+    expect(within(monitor).queryByText(message)).toBeNull()
+    expect(within(monitor).queryByRole('button', { name: 'Retry Job' })).toBeNull()
+    expect(within(monitor).queryByRole('button', { name: 'Inspect failed step' })).toBeNull()
+    expect(within(monitor).getByRole('button', { name: 'Start Job' })).toBeEnabled()
+    expect(within(monitor).getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    fireEvent.click(within(monitor).getByRole('button', { name: 'Start Job' }))
+    expect(playback.startJob).toHaveBeenCalledWith(secondJob.id)
+    expect(onOpenEditor).not.toHaveBeenCalled()
+  })
+
   it('exposes an accessible Active Job selector only for multi-Job projects', () => {
     const project = createLogicalIoJobSampleV5({ projectId: 'selector-project', revisionId: 'selector-revision', nowIso: '2026-07-30T00:00:00.000Z' })
     const firstJob = project.jobs[0]
