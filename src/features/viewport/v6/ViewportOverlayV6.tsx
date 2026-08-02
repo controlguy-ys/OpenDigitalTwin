@@ -41,11 +41,12 @@ export interface ViewportOverlayV6Props {
 }
 
 interface OrientationControlV6 {
-  readonly value: Exclude<CameraOrientationV6, 'isometric'>
+  readonly value: CameraOrientationV6
   readonly Icon: typeof ArrowUp
 }
 
 const ORIENTATION_CONTROLS: readonly OrientationControlV6[] = Object.freeze([
+  { value: 'isometric', Icon: Rotate3D },
   { value: 'top', Icon: ArrowUp },
   { value: 'front', Icon: Compass },
   { value: 'right', Icon: ArrowRight },
@@ -60,15 +61,7 @@ export function ViewportOverlayV6({ camera, tcpMarker, transformControl }: Viewp
   const translateExplanation = transformControl?.explanation
     ?? 'Translation is unavailable until a manual transform controller is connected.'
   return <div aria-label="Viewport controls" className="v6-viewport-overlay">
-    <button
-      aria-label="Set isometric view"
-      className="v6-view-cube"
-      data-testid="v6-view-cube"
-      onClick={() => camera.setOrientation('isometric')}
-      title="Set isometric view"
-      type="button"
-    ><Rotate3D aria-hidden="true" size={20} /></button>
-    <div aria-label="Standard camera orientations" className="v6-camera-orientations">
+    <div aria-label="Standard camera orientations" className="v6-camera-orientations" data-safe-placement="outside-view-cube" data-testid="v6-camera-orientations">
       {ORIENTATION_CONTROLS.map(({ Icon, value }) => <button
         aria-label={`Set ${value} view`}
         key={value}
@@ -77,7 +70,7 @@ export function ViewportOverlayV6({ camera, tcpMarker, transformControl }: Viewp
         type="button"
       ><Icon aria-hidden="true" size={16} /></button>)}
     </div>
-    <div className="v6-camera-controls" data-safe-placement="below-cube" data-testid="v6-camera-controls">
+    <div className="v6-camera-controls" data-safe-placement="below-view-cube" data-testid="v6-camera-controls">
       <button aria-label="Home view" onClick={() => camera.home()} title="Home view" type="button"><Home aria-hidden="true" size={18} /></button>
       <button aria-label="Fit all visible geometry" onClick={() => camera.fitAll()} title="Fit all visible geometry" type="button"><Maximize aria-hidden="true" size={18} /></button>
       <button aria-label="Focus selection" onClick={() => camera.focusSelection()} title="Focus selection" type="button"><Crosshair aria-hidden="true" size={18} /></button>

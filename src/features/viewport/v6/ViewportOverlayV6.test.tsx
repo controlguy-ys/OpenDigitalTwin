@@ -9,7 +9,7 @@ const cameraControllerPort = () => ({
 })
 
 describe('ViewportOverlayV6', () => {
-  it('keeps camera controls below the interactive View Cube and exposes all standard orientations', () => {
+  it('keeps one real ViewCube surface while exposing all seven keyboard camera commands outside its safe area', () => {
     const camera = cameraControllerPort()
     render(<ViewportOverlayV6 camera={camera} />)
     fireEvent.click(screen.getByRole('button', { name: 'Home view' }))
@@ -27,8 +27,9 @@ describe('ViewportOverlayV6', () => {
     expect(camera.setOrientation).toHaveBeenCalledWith('back')
     expect(camera.setOrientation).toHaveBeenCalledWith('left')
     expect(camera.setOrientation).toHaveBeenCalledWith('bottom')
-    expect(screen.getByTestId('v6-view-cube')).toHaveAccessibleName('Set isometric view')
-    expect(screen.getByTestId('v6-camera-controls')).toHaveAttribute('data-safe-placement', 'below-cube')
+    expect(screen.queryByTestId('v6-view-cube')).toBeNull()
+    expect(screen.getByTestId('v6-camera-orientations')).toHaveAttribute('data-safe-placement', 'outside-view-cube')
+    expect(screen.getByTestId('v6-camera-controls')).toHaveAttribute('data-safe-placement', 'below-view-cube')
   })
 
   it('renders an eligible TCP marker and makes Translate functional only through an enabled manual port', () => {

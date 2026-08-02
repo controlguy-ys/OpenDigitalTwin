@@ -253,6 +253,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
         bundle={bundle}
         cameraPose={cameraPose}
         cameraVersion={cameraVersion}
+        onCameraOrientation={camera.setOrientation}
         onPresentationChange={onPresentationChange}
         onSelect={setSelection}
         project={workspaceProject}

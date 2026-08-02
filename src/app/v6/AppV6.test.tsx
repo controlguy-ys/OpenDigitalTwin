@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -9,22 +9,31 @@ import { validateRuntimeGatewayStatusV1, type RuntimeGatewayStatusV1 } from '../
 import { createBrowserProjectApplicationResourcesV5, type BrowserProjectApplicationResourcesV5 } from '../../features/project/v5/browser-project-resources-v5.js'
 import { createBrowserProjectRuntimeV5 } from '../../features/project/v5/browser-project-runtime-v5.js'
 import { ProjectDatabaseV5 } from '../../features/project/v5/project-v5-db.js'
+import type { CameraOrientationV6 } from '../../features/viewport/v6/camera-controller-v6.js'
 import { AppV6 } from './AppV6.js'
 
+const viewCubeProbe = vi.hoisted(() => ({
+  onCameraOrientation: null as ((orientation: CameraOrientationV6) => void) | null,
+}))
+
 vi.mock('../../features/scene/v5/V5WorkcellWorkspace.js', () => ({
-  V5WorkcellCanvas: ({ project, bundle, cameraPose, cameraVersion, onPresentationChange }: {
+  V5WorkcellCanvas: ({ project, bundle, cameraPose, cameraVersion, onCameraOrientation, onPresentationChange }: {
     project: WorkcellProjectV5
     bundle: { readonly runtimeEpoch: number } | null
     cameraPose?: { readonly position: readonly number[]; readonly target: readonly number[] }
     cameraVersion?: number
+    onCameraOrientation?: (orientation: CameraOrientationV6) => void
     onPresentationChange?: (value: { readonly state: 'ready'; readonly visibleGeometryCount: number; readonly unresolvedPoseKeys: readonly string[]; readonly visibleBounds: { readonly center: readonly [number, number, number]; readonly radius: number }; readonly selectionBounds: { readonly center: readonly [number, number, number]; readonly radius: number } | null }) => void
-  }) => <div data-testid="runtime-canvas" data-camera-position={JSON.stringify(cameraPose?.position ?? [])} data-camera-version={cameraVersion}>
+  }) => {
+    viewCubeProbe.onCameraOrientation = onCameraOrientation ?? null
+    return <div data-testid="runtime-canvas" data-camera-position={JSON.stringify(cameraPose?.position ?? [])} data-camera-version={cameraVersion}>
     {project.revisionId} / Epoch {bundle?.runtimeEpoch ?? 'none'}
     <button onClick={() => {
       const offset = (bundle?.runtimeEpoch ?? 1) * 10
       onPresentationChange?.({ state: 'ready', visibleGeometryCount: 1, unresolvedPoseKeys: [], visibleBounds: { center: [offset + 4, offset + 5, offset + 6], radius: 1 }, selectionBounds: { center: [offset + 7, offset + 8, offset + 9], radius: 0.5 } })
     }} type="button">Publish finite scene bounds</button>
-  </div>,
+    </div>
+  },
 }))
 vi.mock('../../features/connectivity/v5/ConnectionMonitorPanel.js', () => ({
   ConnectionMonitorPanel: () => <div>Connection Monitor Surface</div>,
@@ -210,6 +219,21 @@ describe('AppV6', () => {
     const fitVersion = canvas.getAttribute('data-camera-version')
     await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
     expect(canvas.getAttribute('data-camera-version')).toBe(fitVersion)
+  })
+
+  it('routes the real ViewCube orientation callback through the shared camera controller', async () => {
+    const harness = await resourcesHarness()
+    render(<AppV6 resources={harness.resources} />)
+    const canvas = await screen.findByTestId('runtime-canvas')
+    await waitFor(() => expect(canvas).toHaveTextContent('Epoch 1'))
+    expect(viewCubeProbe.onCameraOrientation).toEqual(expect.any(Function))
+    act(() => viewCubeProbe.onCameraOrientation?.('right'))
+    await waitFor(() => {
+      const position = JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]') as number[]
+      expect(position[0]).toBeGreaterThan(0)
+      expect(position[1]).toBe(0)
+      expect(position[2]).toBe(0)
+    })
   })
 
   it('forwards the failed instruction id into the editor and keeps compact status noninteractive', async () => {

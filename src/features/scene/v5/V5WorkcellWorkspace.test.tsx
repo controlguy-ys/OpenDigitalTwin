@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { forwardRef, type ReactNode } from 'react'
-import { PerspectiveCamera } from 'three'
+import { PerspectiveCamera, Vector3 } from 'three'
 import { describe, expect, it, vi } from 'vitest'
 import { createStore } from 'zustand/vanilla'
 
@@ -16,9 +16,10 @@ import {
 import type { BrowserRuntimeBundleStateV5 } from '../../project/v5/browser-runtime-bundle-store-v5.js'
 import { V5WorkcellCanvas, V5WorkcellWorkspace, workcellProxyUserDataV5 } from './V5WorkcellWorkspace.js'
 
-const { cameraProbe, frameMode } = vi.hoisted(() => ({
+const { cameraProbe, frameMode, viewCubeProbe } = vi.hoisted(() => ({
   cameraProbe: { current: null as object | null },
   frameMode: { enabled: true },
+  viewCubeProbe: { current: null as { readonly onClick?: (event: { readonly face?: { readonly normal: Vector3 }; readonly object: { readonly position: Vector3 }; stopPropagation(): void }) => null; readonly faces?: readonly string[] } | null },
 }))
 const controlsProbe = {
   target: { values: [0, 0, 0] as [number, number, number], set(...values: [number, number, number]) { this.values = values } },
@@ -33,7 +34,10 @@ vi.mock('@react-three/fiber', () => ({
 
 vi.mock('@react-three/drei', () => ({
   GizmoHelper: ({ children }: { readonly children: ReactNode }) => children,
-  GizmoViewcube: () => null,
+  GizmoViewcube: (props: { readonly onClick?: (event: { readonly face?: { readonly normal: Vector3 }; readonly object: { readonly position: Vector3 }; stopPropagation(): void }) => null; readonly faces?: readonly string[] }) => {
+    viewCubeProbe.current = props
+    return null
+  },
   Grid: () => null,
   Html: ({ children }: { readonly children: ReactNode }) => children,
   OrbitControls: forwardRef((_, ref) => {
@@ -179,6 +183,30 @@ describe('V5WorkcellWorkspace', () => {
     />)
     expect(screen.getByTestId('scene-canvas-surface')).toHaveAttribute('data-camera-position', '[7,8,9]')
     expect(screen.getByTestId('scene-canvas-surface')).toHaveAttribute('data-camera-target', '[1,2,3]')
+  })
+
+  it('keeps one dominant real ViewCube and routes face and edge clicks to the shared orientation port', () => {
+    const onCameraOrientation = vi.fn()
+    const { container } = render(<V5WorkcellCanvas
+      bundle={bundleWithWorld(vi.fn(() => SHARED_LINK_POSE))}
+      onCameraOrientation={onCameraOrientation}
+      onSelect={vi.fn()}
+      project={projectWithRepeatedLinkGeometry()}
+      selection={null}
+    />)
+
+    expect(viewCubeProbe.current?.faces).toEqual(['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom'])
+    expect(container.querySelector('group')).toHaveAttribute('scale', String(88 / 60))
+    const click = viewCubeProbe.current?.onClick
+    expect(click).toEqual(expect.any(Function))
+    const stopPropagation = vi.fn()
+
+    click?.({ face: { normal: new Vector3(1, 0, 0) }, object: { position: new Vector3() }, stopPropagation })
+    click?.({ face: { normal: new Vector3(0, 0, -1) }, object: { position: new Vector3(1, -1, 1) }, stopPropagation })
+
+    expect(stopPropagation).toHaveBeenCalledTimes(2)
+    expect(onCameraOrientation).toHaveBeenNthCalledWith(1, 'right')
+    expect(onCameraOrientation).toHaveBeenNthCalledWith(2, 'isometric')
   })
 
   it('synchronizes the supplied camera version and exposes collision and diagnostic proxy surfaces', () => {

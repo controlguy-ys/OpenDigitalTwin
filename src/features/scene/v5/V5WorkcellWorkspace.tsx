@@ -6,7 +6,7 @@ import {
   OrbitControls,
   PerspectiveCamera,
 } from '@react-three/drei'
-import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react'
 import { PerspectiveCamera as ThreePerspectiveCamera, type Group } from 'three'
 import { useStore } from 'zustand'
@@ -23,6 +23,7 @@ import {
   type WorkcellSceneGeometrySampleV5,
   type WorkcellScenePresentationV5,
 } from './workcell-scene-presentation-v5.js'
+import type { CameraOrientationV6 } from '../../viewport/v6/camera-controller-v6.js'
 
 export interface V5WorkcellSelection {
   readonly kind: 'robot' | 'entity'
@@ -35,6 +36,7 @@ export interface V5WorkcellWorkspaceProps {
   readonly selection: V5WorkcellSelection | null
   readonly onSelect: (selection: V5WorkcellSelection) => void
   readonly onOpenBinding: (target: OpcUaProjectTargetV5) => void
+  readonly onCameraOrientation?: (orientation: CameraOrientationV6) => void
 }
 
 export interface V5WorkcellCanvasProps {
@@ -44,7 +46,27 @@ export interface V5WorkcellCanvasProps {
   readonly onSelect: (selection: V5WorkcellSelection) => void
   readonly cameraPose?: WorkcellCameraPoseV5
   readonly cameraVersion?: number
+  readonly onCameraOrientation?: (orientation: CameraOrientationV6) => void
   readonly onPresentationChange?: (value: WorkcellScenePresentationV5) => void
+}
+
+const VIEW_CUBE_FACES_V5: string[] = ['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom']
+const VIEW_CUBE_SIZE_PX_V5 = 88
+const VIEW_CUBE_BASE_SIZE_PX_V5 = 60
+const VIEW_CUBE_SAFE_MARGIN_PX_V5 = 104
+
+export function cameraOrientationFromViewCubeDirectionV5(
+  direction: readonly [number, number, number],
+): CameraOrientationV6 {
+  const [x, y, z] = direction
+  const activeAxes = [x, y, z].filter((value) => Math.abs(value) > 1e-8).length
+  if (activeAxes !== 1) return 'isometric'
+  if (x > 0) return 'right'
+  if (x < 0) return 'left'
+  if (y > 0) return 'back'
+  if (y < 0) return 'front'
+  if (z > 0) return 'top'
+  return 'bottom'
 }
 
 export interface WorkcellCameraPoseV5 {
@@ -320,6 +342,7 @@ export function V5WorkcellWorkspace({
   selection,
   onSelect,
   onOpenBinding,
+  onCameraOrientation,
 }: V5WorkcellWorkspaceProps): ReactNode {
   const target = selection === null ? null : selectionTarget(project, selection)
   return <main aria-busy={bundle === null} aria-label="3D viewport" className="v5-workcell">
@@ -328,7 +351,13 @@ export function V5WorkcellWorkspace({
       <span>{project.spatialEntities.length} Objects</span>
       <button disabled={target === null} onClick={() => { if (target !== null) onOpenBinding(target) }} type="button">Open Binding…</button>
     </div>
-    <V5WorkcellCanvas bundle={bundle} onSelect={onSelect} project={project} selection={selection} />
+    <V5WorkcellCanvas
+      bundle={bundle}
+      onSelect={onSelect}
+      project={project}
+      selection={selection}
+      {...(onCameraOrientation === undefined ? {} : { onCameraOrientation })}
+    />
   </main>
 }
 
@@ -339,6 +368,7 @@ export function V5WorkcellCanvas({
   onSelect,
   cameraPose,
   cameraVersion,
+  onCameraOrientation,
   onPresentationChange,
 }: V5WorkcellCanvasProps): ReactNode {
   const expectedCount = useMemo(() => expectedVisibleGeometryCount(project), [project])
@@ -371,10 +401,24 @@ export function V5WorkcellCanvas({
   const positionText = JSON.stringify(appliedPose.position)
   const targetText = JSON.stringify(appliedPose.target)
   const firstUnresolvedKey = presentation.unresolvedPoseKeys[0]
+  const onViewCubeClick = useCallback((event: ThreeEvent<MouseEvent>): null => {
+    event.stopPropagation()
+    if (onCameraOrientation === undefined) return null
+    const source = event.object.position.lengthSq() > 1e-8 ? event.object.position : event.face?.normal
+    if (source === undefined || source.lengthSq() <= 1e-8) return null
+    onCameraOrientation(cameraOrientationFromViewCubeDirectionV5([source.x, source.y, source.z]))
+    return null
+  }, [onCameraOrientation])
   return <div className="v5-scene-canvas" data-camera-position={positionText} data-camera-target={targetText} data-testid="scene-canvas-surface">
       {bundle === null
         ? <div className="v5-empty-state">Project runtime is not active.</div>
-        : <Canvas onPointerMissed={() => undefined} shadows>
+        : <Canvas
+          aria-label="Interactive 3D ViewCube"
+          data-view-cube-size={VIEW_CUBE_SIZE_PX_V5}
+          data-view-cube-surface="interactive-3d"
+          onPointerMissed={() => undefined}
+          shadows
+        >
           <color attach="background" args={['#09121d']} />
           <ambientLight intensity={1.4} />
           <directionalLight castShadow intensity={2.2} position={[4, -3, 6]} />
@@ -383,14 +427,17 @@ export function V5WorkcellCanvas({
           {cameraPose !== undefined && cameraVersion !== undefined
             ? <CameraPoseSynchronizer controlsRef={controlsRef} pose={cameraPose} version={cameraVersion} />
             : null}
-          <GizmoHelper alignment="top-right" margin={[58, 58]}>
-            <GizmoViewcube
-              color="#d9e2e8"
-              faces={['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom']}
-              hoverColor="#38bdf8"
-              strokeColor="#526674"
-              textColor="#17232d"
-            />
+          <GizmoHelper alignment="top-right" margin={[VIEW_CUBE_SAFE_MARGIN_PX_V5, VIEW_CUBE_SAFE_MARGIN_PX_V5]}>
+            <group scale={VIEW_CUBE_SIZE_PX_V5 / VIEW_CUBE_BASE_SIZE_PX_V5}>
+              <GizmoViewcube
+                color="#d9e2e8"
+                faces={VIEW_CUBE_FACES_V5}
+                hoverColor="#38bdf8"
+                {...(onCameraOrientation === undefined ? {} : { onClick: onViewCubeClick })}
+                strokeColor="#526674"
+                textColor="#17232d"
+              />
+            </group>
           </GizmoHelper>
           <Grid args={[20, 20]} cellColor="#284158" cellSize={0.25} fadeDistance={18} infiniteGrid sectionColor="#3f647e" sectionSize={1} />
           <axesHelper args={[0.5]} />
