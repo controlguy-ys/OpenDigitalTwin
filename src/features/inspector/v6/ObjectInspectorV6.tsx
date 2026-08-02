@@ -4,6 +4,7 @@ import {
   quaternionToRpyDegreesV5,
   rpyDegreesToQuaternionV5,
   type OpcUaProjectTargetV5,
+  type SpatialGeometryV5,
   type SpatialEntityV5,
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
@@ -22,6 +23,11 @@ export interface ObjectInspectorV6Props {
 }
 
 type PoseDraft = Readonly<{ x: string; y: string; z: string; roll: string; pitch: string; yaw: string }>
+type BoxGeometryDraft = Readonly<{ kind: 'box'; width: string; depth: string; height: string }>
+type CylinderGeometryDraft = Readonly<{ kind: 'cylinder'; radius: string; height: string }>
+type GeometryDraft = BoxGeometryDraft | CylinderGeometryDraft | Readonly<{ kind: 'asset' }>
+
+const EMPTY_GEOMETRY_DRAFT: GeometryDraft = Object.freeze({ kind: 'asset' })
 
 function draftFor(entity: SpatialEntityV5): PoseDraft {
   const rpy = quaternionToRpyDegreesV5(entity.localPose.quaternion)
@@ -31,6 +37,22 @@ function draftFor(entity: SpatialEntityV5): PoseDraft {
 function samePose(entity: SpatialEntityV5, values: readonly [number, number, number, number, number, number]): boolean {
   const rpy = quaternionToRpyDegreesV5(entity.localPose.quaternion)
   return entity.localPose.positionM.every((value, index) => value === values[index]) && rpy.every((value, index) => value === values[index + 3])
+}
+
+function geometryDraftFor(geometry: SpatialGeometryV5): GeometryDraft {
+  if (geometry.kind === 'box') {
+    return Object.freeze({ kind: 'box', width: String(geometry.dimensionsM[0]), depth: String(geometry.dimensionsM[1]), height: String(geometry.dimensionsM[2]) })
+  }
+  if (geometry.kind === 'cylinder') {
+    return Object.freeze({ kind: 'cylinder', radius: String(geometry.radiusM), height: String(geometry.heightM) })
+  }
+  return EMPTY_GEOMETRY_DRAFT
+}
+
+function positiveFinite(value: string): number | null {
+  if (value.trim().length === 0) return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
 function ownershipDescription(owner: SpatialEntityV5['transformOwner']): string {
@@ -52,14 +74,23 @@ export function ObjectInspectorV6({ project, entityId, mutations, onOpenBinding 
   const key = `${entityId}:${project.revisionId}`
   const [draft, setDraft] = useState<PoseDraft>(() => entity === undefined ? Object.freeze({ x: '', y: '', z: '', roll: '', pitch: '', yaw: '' }) : draftFor(entity))
   const [draftKey, setDraftKey] = useState(key)
+  const geometryKey = `${key}:${entity?.geometry.kind ?? 'missing'}`
+  const [geometryDraft, setGeometryDraft] = useState<GeometryDraft>(() => entity === undefined ? EMPTY_GEOMETRY_DRAFT : geometryDraftFor(entity.geometry))
+  const [geometryDraftKey, setGeometryDraftKey] = useState(geometryKey)
   if (draftKey !== key) {
     setDraftKey(key)
     setDraft(entity === undefined ? Object.freeze({ x: '', y: '', z: '', roll: '', pitch: '', yaw: '' }) : draftFor(entity))
+  }
+  if (geometryDraftKey !== geometryKey) {
+    setGeometryDraftKey(geometryKey)
+    setGeometryDraft(entity === undefined ? EMPTY_GEOMETRY_DRAFT : geometryDraftFor(entity.geometry))
   }
   if (entity === undefined) return <section className="v6-selection-inspector" aria-live="polite"><p>Selected Object is no longer available.</p></section>
   const manual = entity.transformOwner === 'manual'
   const comms = entityCommsDisplayStateV1(project, entity)
   const update = (patch: Partial<PoseDraft>): void => setDraft((current) => Object.freeze({ ...current, ...patch }))
+  const updateBoxGeometry = (field: 'width' | 'depth' | 'height', value: string): void => setGeometryDraft((current) => current.kind === 'box' ? Object.freeze({ ...current, [field]: value }) : current)
+  const updateCylinderGeometry = (field: 'radius' | 'height', value: string): void => setGeometryDraft((current) => current.kind === 'cylinder' ? Object.freeze({ ...current, [field]: value }) : current)
   const applyTransform = (): void => {
     if (!manual || mutations === undefined) return
     const rawValues = [draft.x, draft.y, draft.z, draft.roll, draft.pitch, draft.yaw]
@@ -94,6 +125,47 @@ export function ObjectInspectorV6({ project, entityId, mutations, onOpenBinding 
     if (published === null) return
     void mutations.mutate({ expectedRevisionId: published.revisionId, description: 'Update Object communications', recipe: (active) => updateEntityCommsV1(active, entityId, patch) })
   }
+  const applyGeometry = (): void => {
+    if (mutations === undefined) return
+    if (geometryDraft.kind === 'box') {
+      if (entity.geometry.kind !== 'box') return
+      const width = positiveFinite(geometryDraft.width)
+      const depth = positiveFinite(geometryDraft.depth)
+      const height = positiveFinite(geometryDraft.height)
+      if (width === null || depth === null || height === null) return
+      if (entity.geometry.dimensionsM[0] === width && entity.geometry.dimensionsM[1] === depth && entity.geometry.dimensionsM[2] === height) return
+      const published = mutations.readPublished()
+      if (published === null) return
+      void mutations.mutate({
+        expectedRevisionId: published.revisionId,
+        description: 'Update Object geometry',
+        recipe: (active) => ({
+          ...active,
+          spatialEntities: active.spatialEntities.map((candidate) => candidate.id !== entityId || candidate.geometry.kind !== 'box'
+            ? candidate
+            : { ...candidate, geometry: { ...candidate.geometry, dimensionsM: [width, depth, height] } }),
+        }),
+      })
+      return
+    }
+    if (geometryDraft.kind !== 'cylinder' || entity.geometry.kind !== 'cylinder') return
+    const radius = positiveFinite(geometryDraft.radius)
+    const height = positiveFinite(geometryDraft.height)
+    if (radius === null || height === null) return
+    if (entity.geometry.radiusM === radius && entity.geometry.heightM === height) return
+    const published = mutations.readPublished()
+    if (published === null) return
+    void mutations.mutate({
+      expectedRevisionId: published.revisionId,
+      description: 'Update Object geometry',
+      recipe: (active) => ({
+        ...active,
+        spatialEntities: active.spatialEntities.map((candidate) => candidate.id !== entityId || candidate.geometry.kind !== 'cylinder'
+          ? candidate
+          : { ...candidate, geometry: { ...candidate.geometry, radiusM: radius, heightM: height } }),
+      }),
+    })
+  }
   const movingFrame = entity.movingFrames[0]
   const bindingTarget: OpcUaProjectTargetV5 = movingFrame === undefined
     ? { type: 'entity-status', entityId }
@@ -105,7 +177,23 @@ export function ObjectInspectorV6({ project, entityId, mutations, onOpenBinding 
       ['x', 'X (m)'], ['y', 'Y (m)'], ['z', 'Z (m)'], ['roll', 'Roll (deg)'], ['pitch', 'Pitch (deg)'], ['yaw', 'Yaw (deg)'],
     ] as const).map(([field, label]) => <label key={field}>{label}<input aria-label={label} disabled={!manual} inputMode="decimal" onChange={(event) => update({ [field]: event.currentTarget.value })} type="number" value={draft[field]} /></label>)}</div>
       <div className="v6-inspector-actions"><button disabled={!manual} onClick={applyTransform} type="button">Apply Transform</button><button onClick={() => setDraft(draftFor(entity))} type="button">Reset</button></div></Section>
-    <Section title="Geometry"><dl><div><dt>Kind</dt><dd>{entity.geometry.kind}</dd></div><div><dt>Visible</dt><dd>{entity.visible ? 'Visible' : 'Hidden'}</dd></div></dl></Section>
+    <Section title="Geometry"><dl><div><dt>Kind</dt><dd>{entity.geometry.kind}</dd></div><div><dt>Visible</dt><dd>{entity.visible ? 'Visible' : 'Hidden'}</dd></div></dl>
+      {entity.geometry.kind === 'box' && geometryDraft.kind === 'box' ? <>
+        <div className="v6-inspector-grid v6-geometry-editor">
+          <label>Width (m)<input aria-label="Width (m)" inputMode="decimal" min="0" onChange={(event) => updateBoxGeometry('width', event.currentTarget.value)} step="any" type="number" value={geometryDraft.width} /></label>
+          <label>Depth (m)<input aria-label="Depth (m)" inputMode="decimal" min="0" onChange={(event) => updateBoxGeometry('depth', event.currentTarget.value)} step="any" type="number" value={geometryDraft.depth} /></label>
+          <label>Height (m)<input aria-label="Height (m)" inputMode="decimal" min="0" onChange={(event) => updateBoxGeometry('height', event.currentTarget.value)} step="any" type="number" value={geometryDraft.height} /></label>
+        </div>
+        <div className="v6-inspector-actions"><button onClick={applyGeometry} type="button">Apply Geometry</button><button onClick={() => setGeometryDraft(geometryDraftFor(entity.geometry))} type="button">Reset Geometry</button></div>
+      </> : entity.geometry.kind === 'cylinder' && geometryDraft.kind === 'cylinder' ? <>
+        <div className="v6-inspector-grid v6-geometry-editor">
+          <label>Radius (m)<input aria-label="Radius (m)" inputMode="decimal" min="0" onChange={(event) => updateCylinderGeometry('radius', event.currentTarget.value)} step="any" type="number" value={geometryDraft.radius} /></label>
+          <label>Height (m)<input aria-label="Height (m)" inputMode="decimal" min="0" onChange={(event) => updateCylinderGeometry('height', event.currentTarget.value)} step="any" type="number" value={geometryDraft.height} /></label>
+        </div>
+        <dl><div><dt>Axis</dt><dd>{entity.geometry.axis}</dd></div><div><dt>Radial segments</dt><dd>{entity.geometry.radialSegments}</dd></div></dl>
+        <div className="v6-inspector-actions"><button onClick={applyGeometry} type="button">Apply Geometry</button><button onClick={() => setGeometryDraft(geometryDraftFor(entity.geometry))} type="button">Reset Geometry</button></div>
+      </> : <p>Asset geometry is read-only.</p>}
+    </Section>
     <Section title="Status"><dl><div><dt>Value</dt><dd>{entity.numericStatus.value}</dd></div><div><dt>Owner</dt><dd>{entity.numericStatus.sourceOwnership}</dd></div></dl></Section>
     <Section title="Communications"><p>{comms.enabled ? `Enabled · ${comms.mappingCount} mappings` : `Disabled · ${comms.mappingCount} mappings`}</p>
       <label className="v6-switch-field"><input aria-label="Enable Object communications" checked={comms.enabled} onChange={(event) => updateComms({ enableComms: event.currentTarget.checked })} type="checkbox" /><span>Enable communications<span className="v6-switch-field-description">Enabling stores Object metadata only; it creates no OPC UA binding.</span></span></label>
