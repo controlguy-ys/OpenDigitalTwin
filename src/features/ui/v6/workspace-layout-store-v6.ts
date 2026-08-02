@@ -12,6 +12,10 @@ import {
 
 export const WORKSPACE_PREFERENCES_STORAGE_KEY_V6 = 'opendigitaltwin.ui-v6.preferences.v1'
 
+export const DEFAULT_EXPLORER_WIDTH_PX_V6 = 248
+export const DEFAULT_INSPECTOR_WIDTH_PX_V6 = 320
+export const DEFAULT_BOTTOM_HEIGHT_PX_V6 = 180
+
 export type WorkspaceLayoutModeV6 = 'wide' | 'compact' | 'narrow'
 export type WorkspaceDockV6 = 'explorer' | 'inspector' | 'bottom'
 export type MainViewPresentationV6 = 'workspace' | 'maximized'
@@ -78,12 +82,12 @@ function defaults(): WorkspacePreferencesV6 {
   return {
     version: 1,
     theme: 'system',
-    explorerWidthPx: 280,
-    inspectorWidthPx: 360,
-    bottomHeightPx: 180,
+    explorerWidthPx: DEFAULT_EXPLORER_WIDTH_PX_V6,
+    inspectorWidthPx: DEFAULT_INSPECTOR_WIDTH_PX_V6,
+    bottomHeightPx: DEFAULT_BOTTOM_HEIGHT_PX_V6,
     toolboxCollapsed: true,
     visibleByMode: {
-      wide: { explorer: true, inspector: true, bottom: true },
+      wide: { explorer: true, inspector: false, bottom: false },
       compact: { explorer: true, inspector: false, bottom: false },
       narrow: { explorer: false, inspector: false, bottom: false },
     },

@@ -16,9 +16,10 @@ import {
 import type { BrowserRuntimeBundleStateV5 } from '../../project/v5/browser-runtime-bundle-store-v5.js'
 import { V5WorkcellCanvas, V5WorkcellWorkspace, workcellProxyUserDataV5 } from './V5WorkcellWorkspace.js'
 
-const { cameraProbe, frameMode, viewCubeProbe } = vi.hoisted(() => ({
+const { cameraProbe, frameMode, gizmoHelperProbe, viewCubeProbe } = vi.hoisted(() => ({
   cameraProbe: { current: null as object | null },
   frameMode: { enabled: true },
+  gizmoHelperProbe: { current: null as { readonly alignment: string | undefined; readonly margin: readonly [number, number] | undefined } | null },
   viewCubeProbe: { current: null as { readonly onClick?: (event: { readonly face?: { readonly normal: Vector3 }; readonly object: { readonly position: Vector3 }; stopPropagation(): void }) => null; readonly faces?: readonly string[] } | null },
 }))
 const controlsProbe = {
@@ -33,7 +34,10 @@ vi.mock('@react-three/fiber', () => ({
 }))
 
 vi.mock('@react-three/drei', () => ({
-  GizmoHelper: ({ children }: { readonly children: ReactNode }) => children,
+  GizmoHelper: ({ alignment, children, margin }: { readonly alignment?: string; readonly children: ReactNode; readonly margin?: readonly [number, number] }) => {
+    gizmoHelperProbe.current = { alignment, margin }
+    return children
+  },
   GizmoViewcube: (props: { readonly onClick?: (event: { readonly face?: { readonly normal: Vector3 }; readonly object: { readonly position: Vector3 }; stopPropagation(): void }) => null; readonly faces?: readonly string[] }) => {
     viewCubeProbe.current = props
     return null
@@ -207,7 +211,9 @@ describe('V5WorkcellWorkspace', () => {
     />)
 
     expect(viewCubeProbe.current?.faces).toEqual(['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom'])
-    expect(container.querySelector('group')).toHaveAttribute('scale', String(88 / 60))
+    expect(gizmoHelperProbe.current).toEqual({ alignment: 'bottom-right', margin: [48, 48] })
+    expect(container.querySelector('[data-view-cube-alignment="bottom-right"]')).toBeInTheDocument()
+    expect(container.querySelector('group')).toHaveAttribute('scale', String(72 / 60))
     const click = viewCubeProbe.current?.onClick
     expect(click).toEqual(expect.any(Function))
     const stopPropagation = vi.fn()

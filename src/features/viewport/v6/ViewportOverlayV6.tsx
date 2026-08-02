@@ -6,11 +6,13 @@ import {
   Box,
   Compass,
   Crosshair,
+  ChevronDown,
   Home,
   Maximize,
   Move,
   Rotate3D,
 } from 'lucide-react'
+import { useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import type { CameraControllerV6, CameraOrientationV6 } from './camera-controller-v6.js'
 
@@ -56,33 +58,97 @@ const ORIENTATION_CONTROLS: readonly OrientationControlV6[] = Object.freeze([
 ])
 
 export function ViewportOverlayV6({ camera, tcpMarker, transformControl }: ViewportOverlayV6Props) {
+  const [cameraViewsOpen, setCameraViewsOpen] = useState(false)
+  const cameraViewsTriggerRef = useRef<HTMLButtonElement>(null)
+  const cameraViewsMenuId = useId()
   const marker = tcpMarker === undefined ? null : selectedTcpMarkerV6(tcpMarker)
   const translateAvailable = transformControl?.enabled === true
   const translateExplanation = transformControl?.explanation
     ?? 'Translation is unavailable until a manual transform controller is connected.'
+  const focusFirstCameraView = () => {
+    requestAnimationFrame(() => {
+      document.getElementById(cameraViewsMenuId)?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+    })
+  }
+  const closeCameraViews = (restoreFocus: boolean) => {
+    setCameraViewsOpen(false)
+    if (restoreFocus) requestAnimationFrame(() => cameraViewsTriggerRef.current?.focus())
+  }
+  const openCameraViews = () => {
+    setCameraViewsOpen(true)
+    focusFirstCameraView()
+  }
+  const onCameraViewsTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      openCameraViews()
+    } else if (event.key === 'Escape' && cameraViewsOpen) {
+      event.preventDefault()
+      closeCameraViews(true)
+    }
+  }
+  const onCameraViewKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeCameraViews(true)
+      return
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return
+    event.preventDefault()
+    const menu = event.currentTarget.closest<HTMLElement>('[role="menu"]')
+    const items = menu === null ? [] : Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    if (items.length === 0) return
+    const currentIndex = items.indexOf(event.currentTarget)
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? items.length - 1
+        : (currentIndex + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+    items[nextIndex]?.focus()
+  }
   return <div aria-label="Viewport controls" className="v6-viewport-overlay">
-    <div aria-label="Standard camera orientations" className="v6-camera-orientations" data-safe-placement="outside-view-cube" data-testid="v6-camera-orientations">
-      {ORIENTATION_CONTROLS.map(({ Icon, value }) => <button
-        aria-label={`Set ${value} view`}
-        key={value}
-        onClick={() => camera.setOrientation(value)}
-        title={`Set ${value} view`}
-        type="button"
-      ><Icon aria-hidden="true" size={16} /></button>)}
-    </div>
-    <div className="v6-camera-controls" data-safe-placement="below-view-cube" data-testid="v6-camera-controls">
-      <button aria-label="Home view" onClick={() => camera.home()} title="Home view" type="button"><Home aria-hidden="true" size={18} /></button>
-      <button aria-label="Fit all visible geometry" onClick={() => camera.fitAll()} title="Fit all visible geometry" type="button"><Maximize aria-hidden="true" size={18} /></button>
-      <button aria-label="Focus selection" onClick={() => camera.focusSelection()} title="Focus selection" type="button"><Crosshair aria-hidden="true" size={18} /></button>
-      <button
-        aria-describedby="v6-translate-explanation"
-        aria-label="Translate selection"
-        disabled={!translateAvailable}
-        onClick={() => transformControl?.translate()}
-        title="Translate selection"
-        type="button"
-      ><Move aria-hidden="true" size={18} /></button>
-      {!translateAvailable && <span className="v6-transform-explanation" id="v6-translate-explanation">{translateExplanation}</span>}
+    <div aria-label="Camera controls" className="v6-camera-toolbar" data-testid="v6-camera-toolbar" role="toolbar">
+      <div className="v6-camera-views" data-safe-placement="top-toolbar" data-testid="v6-camera-views">
+        <button
+          aria-controls={cameraViewsMenuId}
+          aria-expanded={cameraViewsOpen}
+          aria-haspopup="menu"
+          aria-label="Camera views"
+          className="v6-camera-views-trigger"
+          onClick={() => cameraViewsOpen ? closeCameraViews(false) : openCameraViews()}
+          onKeyDown={onCameraViewsTriggerKeyDown}
+          ref={cameraViewsTriggerRef}
+          title="Camera views"
+          type="button"
+        ><Rotate3D aria-hidden="true" size={18} /><ChevronDown aria-hidden="true" size={12} /></button>
+        {cameraViewsOpen && <div aria-label="Camera views" className="v6-camera-views-menu" id={cameraViewsMenuId} role="menu">
+          {ORIENTATION_CONTROLS.map(({ Icon, value }) => <button
+            key={value}
+            onClick={() => {
+              camera.setOrientation(value)
+              closeCameraViews(true)
+            }}
+            onKeyDown={onCameraViewKeyDown}
+            role="menuitem"
+            title={`Set ${value} view`}
+            type="button"
+          ><Icon aria-hidden="true" size={16} /><span>{`Set ${value} view`}</span></button>)}
+        </div>}
+      </div>
+      <div className="v6-camera-controls" data-safe-placement="top-toolbar" data-testid="v6-camera-controls">
+        <button aria-label="Home view" onClick={() => camera.home()} title="Home view" type="button"><Home aria-hidden="true" size={18} /></button>
+        <button aria-label="Fit all visible geometry" onClick={() => camera.fitAll()} title="Fit all visible geometry" type="button"><Maximize aria-hidden="true" size={18} /></button>
+        <button aria-label="Focus selection" onClick={() => camera.focusSelection()} title="Focus selection" type="button"><Crosshair aria-hidden="true" size={18} /></button>
+        <button
+          aria-describedby={translateAvailable ? undefined : 'v6-translate-explanation'}
+          aria-label="Translate selection"
+          disabled={!translateAvailable}
+          onClick={() => transformControl?.translate()}
+          title={translateAvailable ? 'Translate selection' : translateExplanation}
+          type="button"
+        ><Move aria-hidden="true" size={18} /></button>
+        {!translateAvailable && <span className="visually-hidden" id="v6-translate-explanation">{translateExplanation}</span>}
+      </div>
     </div>
     {marker !== null && <output aria-label={`Selected TCP ${marker.robotId} ${marker.frameId}`} className="v6-tcp-marker" data-testid="v6-tcp-marker">{marker.robotId} / {marker.frameId}</output>}
   </div>

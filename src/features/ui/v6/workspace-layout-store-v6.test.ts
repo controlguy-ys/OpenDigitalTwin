@@ -28,6 +28,34 @@ describe('WorkspaceLayoutStoreV6', () => {
     expect(store.getState().mode).toBe('narrow')
   })
 
+  it('uses balanced desktop defaults while preserving explicit stored preferences', () => {
+    const fresh = createWorkspaceLayoutStoreV6({ storage: null })
+    expect(fresh.getState().preferences.explorerWidthPx).toBe(248)
+    expect(fresh.getState().preferences.inspectorWidthPx).toBe(320)
+    expect(fresh.getState().preferences.visibleByMode.wide.inspector).toBe(false)
+    expect(fresh.getState().preferences.visibleByMode.wide.bottom).toBe(false)
+
+    const storage = new MemoryStorage()
+    storage.values.set(WORKSPACE_PREFERENCES_STORAGE_KEY_V6, JSON.stringify({
+      version: 1,
+      theme: 'dark',
+      explorerWidthPx: 376,
+      inspectorWidthPx: 432,
+      bottomHeightPx: 240,
+      toolboxCollapsed: false,
+      visibleByMode: {
+        wide: { explorer: false, inspector: true, bottom: true },
+        compact: { explorer: true, inspector: true, bottom: true },
+        narrow: { explorer: true, inspector: true, bottom: true },
+      },
+    }))
+
+    const restored = createWorkspaceLayoutStoreV6({ storage })
+    expect(restored.getState().preferences.explorerWidthPx).toBe(376)
+    expect(restored.getState().preferences.inspectorWidthPx).toBe(432)
+    expect(restored.getState().preferences.visibleByMode.wide).toEqual({ explorer: false, inspector: true, bottom: true })
+  })
+
   it('clamps each persisted dock size and the measured bottom maximum', () => {
     const store = createWorkspaceLayoutStoreV6({ storage: new MemoryStorage() })
     store.getState().setWorkspaceBounds(1440, 400)
@@ -125,8 +153,11 @@ describe('WorkspaceLayoutStoreV6', () => {
 
     expect(store.getState().preferences.theme).toBe('light')
     expect(store.getState().activeBottomTab).toBe('diagnostics')
-    expect(store.getState().preferences.explorerWidthPx).toBe(280)
+    expect(store.getState().preferences.explorerWidthPx).toBe(248)
+    expect(store.getState().preferences.inspectorWidthPx).toBe(320)
     expect(store.getState().preferences.visibleByMode.wide.explorer).toBe(true)
+    expect(store.getState().preferences.visibleByMode.wide.inspector).toBe(false)
+    expect(store.getState().preferences.visibleByMode.wide.bottom).toBe(false)
     expect(store.getState().drawers).toEqual({ explorer: false, inspector: false, bottom: false })
     expect(store.getState().openDialog).toBeNull()
     expect(store.getState().mainViewPresentation).toBe('workspace')

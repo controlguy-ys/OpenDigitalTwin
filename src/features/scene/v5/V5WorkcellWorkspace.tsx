@@ -51,9 +51,9 @@ export interface V5WorkcellCanvasProps {
 }
 
 const VIEW_CUBE_FACES_V5: string[] = ['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom']
-const VIEW_CUBE_SIZE_PX_V5 = 88
+const VIEW_CUBE_SIZE_PX_V5 = 72
 const VIEW_CUBE_BASE_SIZE_PX_V5 = 60
-const VIEW_CUBE_SAFE_MARGIN_PX_V5 = 104
+const VIEW_CUBE_SAFE_MARGIN_PX_V5 = 48
 
 export function cameraOrientationFromViewCubeDirectionV5(
   direction: readonly [number, number, number],
@@ -414,6 +414,7 @@ export function V5WorkcellCanvas({
         ? <div className="v5-empty-state">Project runtime is not active.</div>
         : <Canvas
           aria-label="3D workcell scene"
+          data-view-cube-alignment="bottom-right"
           data-view-cube-size={VIEW_CUBE_SIZE_PX_V5}
           data-view-cube-surface="interactive-3d"
           onPointerMissed={() => undefined}
@@ -428,7 +429,7 @@ export function V5WorkcellCanvas({
           {cameraPose !== undefined && cameraVersion !== undefined
             ? <CameraPoseSynchronizer controlsRef={controlsRef} pose={cameraPose} version={cameraVersion} />
             : null}
-          <GizmoHelper alignment="top-right" margin={[VIEW_CUBE_SAFE_MARGIN_PX_V5, VIEW_CUBE_SAFE_MARGIN_PX_V5]}>
+          <GizmoHelper alignment="bottom-right" margin={[VIEW_CUBE_SAFE_MARGIN_PX_V5, VIEW_CUBE_SAFE_MARGIN_PX_V5]}>
             <group scale={VIEW_CUBE_SIZE_PX_V5 / VIEW_CUBE_BASE_SIZE_PX_V5}>
               <GizmoViewcube
                 color="#d9e2e8"

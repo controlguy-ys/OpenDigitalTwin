@@ -50,6 +50,7 @@
 .v6-shell-main { grid-column: 4; grid-row: 2; display: grid; grid-template-rows: minmax(0, 1fr); }
 .v6-shell-inspector { grid-column: 6; grid-row: 2; }
 .v6-shell-bottom { grid-column: 4; grid-row: 4; }
+.v6-shell-bottom:has(.v6-job-monitor--empty) { background: var(--v6-color-canvas); }
 
 .v6-shell-toolbox[data-visible='false'],
 .v6-shell-explorer[data-visible='false'],

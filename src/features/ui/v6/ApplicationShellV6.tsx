@@ -7,7 +7,12 @@ import {
   dockSizeLimitsV6,
   resolveWorkspaceLayoutV6,
 } from './workspace-layout-geometry-v6.js'
-import type { WorkspaceLayoutStoreV6 } from './workspace-layout-store-v6.js'
+import {
+  DEFAULT_EXPLORER_WIDTH_PX_V6,
+  DEFAULT_INSPECTOR_WIDTH_PX_V6,
+  DEFAULT_BOTTOM_HEIGHT_PX_V6,
+  type WorkspaceLayoutStoreV6,
+} from './workspace-layout-store-v6.js'
 import { ButtonV6 } from './ButtonV6.js'
 
 export interface ApplicationShellV6Props {
@@ -152,7 +157,7 @@ export function ApplicationShellV6({
           max={explorerMax}
           min={explorerMin}
           onChange={(value) => store.getState().setDockSize('explorer', value)}
-          onReset={() => store.getState().setDockSize('explorer', 280)}
+          onReset={() => store.getState().setDockSize('explorer', DEFAULT_EXPLORER_WIDTH_PX_V6)}
           orientation="vertical"
           value={state.preferences.explorerWidthPx}
           valueFromPointerDelta={(start, delta) => start + delta}
@@ -169,7 +174,7 @@ export function ApplicationShellV6({
           max={inspectorMax}
           min={inspectorMin}
           onChange={(value) => store.getState().setDockSize('inspector', value)}
-          onReset={() => store.getState().setDockSize('inspector', 360)}
+          onReset={() => store.getState().setDockSize('inspector', DEFAULT_INSPECTOR_WIDTH_PX_V6)}
           orientation="vertical"
           value={state.preferences.inspectorWidthPx}
           valueFromPointerDelta={(start, delta) => start + delta}
@@ -193,7 +198,7 @@ export function ApplicationShellV6({
           max={bottomMax}
           min={bottomMin}
           onChange={(value) => store.getState().setDockSize('bottom', value)}
-          onReset={() => store.getState().setDockSize('bottom', 180)}
+          onReset={() => store.getState().setDockSize('bottom', DEFAULT_BOTTOM_HEIGHT_PX_V6)}
           orientation="horizontal"
           value={state.preferences.bottomHeightPx}
           valueFromPointerDelta={(start, delta) => start + delta}

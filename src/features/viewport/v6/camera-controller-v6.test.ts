@@ -49,4 +49,25 @@ describe('CameraControllerV6', () => {
     expect(subject.snapshot()).toEqual(before)
     expect(update).not.toHaveBeenCalled()
   })
+
+  it('frames bounds at a normalized isometric distance so the model fills the viewport', () => {
+    const camera = { position: [0, 0, 0] as [number, number, number], target: [0, 0, 0] as [number, number, number] }
+    const subject = createCameraControllerV6({
+      camera,
+      home: { position: [0, 0, 0], target: [0, 0, 0] },
+      visibleBounds: () => ({ center: [1, 2, 3], radius: 2 }),
+      selectionBounds: () => null,
+      update: vi.fn(),
+    })
+
+    subject.fitAll()
+
+    expect(camera.target).toEqual([1, 2, 3])
+    const [px, py, pz] = camera.position
+    const [tx, ty, tz] = camera.target
+    const offset = [px - tx, py - ty, pz - tz] as const
+    expect(Math.hypot(...offset)).toBeCloseTo(5.6)
+    expect(offset[0]).toBeCloseTo(-offset[1])
+    expect(offset[0]).toBeCloseTo(offset[2])
+  })
 })

@@ -7,6 +7,18 @@ import { createLogicalIoJobSampleV5, LOGICAL_IO_JOB_SAMPLE_IDS_V5 } from '../../
 import { RobotJobCompactStatusV6, RobotJobMonitorV6 } from './RobotJobMonitorV6.js'
 
 describe('RobotJobMonitorV6', () => {
+  it('renders a compact purposeful empty state without inventing a Job action', () => {
+    const project = createLogicalIoJobSampleV5({ projectId: 'empty-monitor-project', revisionId: 'empty-monitor-revision', nowIso: '2026-07-30T00:00:00.000Z' })
+    const emptyProject = { ...project, jobs: [] }
+    render(<RobotJobMonitorV6 jobId="missing-job" project={emptyProject} />)
+
+    const monitor = screen.getByRole('region', { name: 'Job monitor' })
+    expect(monitor).toHaveClass('v6-job-monitor--empty')
+    expect(within(monitor).getByText('No Jobs in this Project.')).toBeVisible()
+    expect(within(monitor).getByText(/execution details when a Job is available/u)).toBeVisible()
+    expect(within(monitor).queryByRole('button')).toBeNull()
+  })
+
   it('does not surface another same-Robot Job failure when the active Job changes', () => {
     const project = createLogicalIoJobSampleV5({ projectId: 'same-robot-project', revisionId: 'same-robot-revision', nowIso: '2026-07-30T00:00:00.000Z' })
     const firstJob = project.jobs[0]

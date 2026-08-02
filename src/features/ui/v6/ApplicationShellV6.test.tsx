@@ -54,7 +54,11 @@ describe('ApplicationShellV6', () => {
       expect(button).toHaveAttribute('aria-pressed')
       expect(button).toHaveAttribute('data-size', 'compact')
     }
+    expect(screen.getByTestId('v6-bottom')).toHaveAttribute('data-visible', 'false')
+    expect(buttons[2]).toHaveTextContent('Show Job Monitor')
     expect(screen.getByText('Queue: idle')).toBeVisible()
+    act(() => view.store.getState().setDockVisible('wide', 'bottom', true))
+    expect(screen.getByTestId('v6-bottom')).toHaveAttribute('data-visible', 'true')
     act(() => view.store.getState().setDockVisible('wide', 'bottom', false))
     expect(screen.getByText('Queue: idle')).toBeVisible()
   })
@@ -125,14 +129,14 @@ describe('ApplicationShellV6', () => {
     fireEvent.pointerDown(handle, { button: 0, clientX: 100, pointerId: 4 })
     fireEvent.pointerMove(handle, { clientX: 124, pointerId: 4 })
     expect(capture).toHaveBeenCalledWith(4)
-    expect(view.store.getState().preferences.explorerWidthPx).toBe(304)
+    expect(view.store.getState().preferences.explorerWidthPx).toBe(272)
     fireEvent.keyDown(handle, { key: 'ArrowRight' })
     fireEvent.keyDown(handle, { key: 'ArrowRight', shiftKey: true })
-    expect(view.store.getState().preferences.explorerWidthPx).toBe(336)
+    expect(view.store.getState().preferences.explorerWidthPx).toBe(304)
     fireEvent.keyDown(handle, { key: 'Escape' })
     expect(release).toHaveBeenCalledWith(4)
     fireEvent.doubleClick(handle)
-    expect(view.store.getState().preferences.explorerWidthPx).toBe(280)
+    expect(view.store.getState().preferences.explorerWidthPx).toBe(248)
   })
 
   it('fully masks a collapsed dock from layout, input, and the accessibility tree', () => {
@@ -160,7 +164,7 @@ describe('ApplicationShellV6', () => {
     expect(compactInspector).toHaveAttribute('data-presentation', 'drawer')
     expect(compactInspector).toHaveAttribute('data-visible', 'true')
     expect(compactInspector).toBeVisible()
-    expect(compact.store.getState().getSnapshot().viewportSafeArea.right).toBe(372)
+    expect(compact.store.getState().getSnapshot().viewportSafeArea.right).toBe(332)
   })
 
   it('renders every narrow overlay using the measured 400px workspace height', () => {
@@ -281,7 +285,11 @@ describe('ApplicationShellV6', () => {
   })
 
   it('provides 32px handle hit targets and aligns Bottom to the central Main View column', () => {
-    renderShell()
+    const view = renderShell()
+    act(() => {
+      view.store.getState().setDockVisible('wide', 'inspector', true)
+      view.store.getState().setDockVisible('wide', 'bottom', true)
+    })
     expect(screen.getByRole('separator', { name: 'Resize Scene Explorer' })).toBeInTheDocument()
     expect(screen.getByRole('separator', { name: 'Resize Job Monitor' })).toBeInTheDocument()
 

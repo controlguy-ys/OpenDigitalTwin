@@ -268,13 +268,13 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
   return <div className="v6-app-root">
     {visibleError !== null && <div className="v6-operation-error" role="alert">{visibleError}</div>}
     <ApplicationShellV6
-      bottom={workspaceProject === null || selectedJob === null ? <section aria-label="Job monitor">No Jobs in this Project.</section> : bundle === null ? <RobotJobMonitorV6
-        jobId={selectedJob.id}
+      bottom={workspaceProject === null ? null : bundle === null ? <RobotJobMonitorV6
+        jobId={selectedJob?.id ?? ''}
         onOpenEditor={openJobEditor}
         onSelectJob={setJobId}
         project={workspaceProject}
       /> : <RobotJobMonitorV6
-        jobId={selectedJob.id}
+        jobId={selectedJob?.id ?? ''}
         onOpenEditor={openJobEditor}
         onSelectJob={setJobId}
         playback={bundle.runtimeGraph.playback}

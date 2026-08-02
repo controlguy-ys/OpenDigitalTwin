@@ -7,6 +7,10 @@ async function bounds(locator: import('@playwright/test').Locator): Promise<DOMR
 test('V6 resizes and restores docks without remounting Main View or losing the active Project state', async ({ page, request }) => {
   await page.setViewportSize({ width: 1712, height: 1368 })
   await loadV6Demo(page)
+  const inspectorToggle = page.getByRole('button', { name: /Show Inspector|Hide Inspector/u })
+  if (await inspectorToggle.getAttribute('aria-pressed') !== 'true') await inspectorToggle.click()
+  const monitorToggle = page.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u })
+  if (await monitorToggle.getAttribute('aria-pressed') !== 'true') await monitorToggle.click()
 
   const shell = page.getByTestId('v6-application-shell')
   const header = page.locator('.v6-app-header')
@@ -57,7 +61,8 @@ test('V6 resizes and restores docks without remounting Main View or losing the a
     await expect(page.getByTestId(label === 'Scene Explorer' ? 'v6-explorer' : label === 'Inspector' ? 'v6-inspector' : 'v6-bottom')).toHaveAttribute('data-visible', 'true')
   }
 
-  await page.getByRole('button', { name: 'Set front view' }).click()
+  await page.getByRole('button', { name: 'Camera views' }).click()
+  await page.getByRole('menuitem', { name: 'Set front view' }).click()
   await page.getByRole('button', { name: 'Maximize Main View' }).click()
   await expect(shell).toHaveAttribute('data-main-view-presentation', 'maximized')
   await expect(canvas).toHaveAttribute('data-v6-canvas-identity', canvasId)

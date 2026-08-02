@@ -40,7 +40,7 @@ export interface CameraControllerV6Options {
 }
 
 const orientationDirection: Readonly<Record<CameraOrientationV6, readonly [number, number, number]>> = Object.freeze({
-  isometric: [1, -1, 1], top: [0, 0, 1], front: [0, -1, 0], right: [1, 0, 0], back: [0, 1, 0], left: [-1, 0, 0], bottom: [0, 0, -1],
+  isometric: [1 / Math.sqrt(3), -1 / Math.sqrt(3), 1 / Math.sqrt(3)], top: [0, 0, 1], front: [0, -1, 0], right: [1, 0, 0], back: [0, 1, 0], left: [-1, 0, 0], bottom: [0, 0, -1],
 })
 
 function copyPoint(target: [number, number, number], source: readonly [number, number, number]): void {
@@ -50,9 +50,10 @@ function copyPoint(target: [number, number, number], source: readonly [number, n
 function frameBounds(options: CameraControllerV6Options, bounds: CameraBoundsV6 | null): void {
   if (bounds === null) return
   const [x, y, z] = bounds.center
-  const distance = Math.max(bounds.radius * 2.4, 0.25)
+  const distance = Math.max(bounds.radius * 2.8, 0.25)
+  const [dx, dy, dz] = orientationDirection.isometric
   copyPoint(options.camera.target, bounds.center)
-  copyPoint(options.camera.position, [x + distance, y - distance, z + distance])
+  copyPoint(options.camera.position, [x + dx * distance, y + dy * distance, z + dz * distance])
   options.update()
 }
 

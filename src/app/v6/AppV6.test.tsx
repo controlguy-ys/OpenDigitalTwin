@@ -17,6 +17,14 @@ const viewCubeProbe = vi.hoisted(() => ({
   onCameraOrientation: null as ((orientation: CameraOrientationV6) => void) | null,
 }))
 
+const ISOMETRIC_FRAME_OFFSET_V6 = 2.8 / Math.sqrt(3)
+
+function expectIsometricFrame(position: readonly number[], center: readonly [number, number, number]): void {
+  expect(position[0]).toBeCloseTo(center[0] + ISOMETRIC_FRAME_OFFSET_V6)
+  expect(position[1]).toBeCloseTo(center[1] - ISOMETRIC_FRAME_OFFSET_V6)
+  expect(position[2]).toBeCloseTo(center[2] + ISOMETRIC_FRAME_OFFSET_V6)
+}
+
 vi.mock('../../features/scene/v5/V5WorkcellWorkspace.js', () => ({
   V5WorkcellCanvas: ({ project, bundle, cameraPose, cameraVersion, onCameraOrientation, onPresentationChange }: {
     project: WorkcellProjectV5
@@ -55,6 +63,10 @@ function projectWithJobs(revisionId: string, includeSecondJob: boolean): Workcel
     instructions: firstJob.instructions.map((instruction) => ({ ...instruction, id: `${instruction.id}-second` })),
   }
   return validateWorkcellProjectV5({ ...base, jobs: includeSecondJob ? [firstJob, secondJob] : [firstJob] })
+}
+
+function projectWithoutJobs(revisionId = 'revision-app-empty-jobs'): WorkcellProjectV5 {
+  return validateWorkcellProjectV5({ ...project(revisionId), jobs: [] })
 }
 
 function inactiveGatewayStatus(): RuntimeGatewayStatusV1 {
@@ -134,6 +146,26 @@ describe('AppV6', () => {
     expect(screen.getByRole('main', { name: '3D viewport' })).toBeVisible()
     expect(screen.getByRole('tree', { name: 'Scene Explorer' })).toBeVisible()
     expect(screen.queryByText('Project V5', { exact: true })).not.toBeInTheDocument()
+  })
+
+  it('routes a loaded zero-Job Project through the styled Job Monitor empty state', async () => {
+    const user = userEvent.setup()
+    const harness = await resourcesHarness(projectWithoutJobs())
+    const view = render(<AppV6 resources={harness.resources} />)
+    try {
+      await waitFor(() => expect(screen.getByTestId('runtime-canvas')).toHaveTextContent('revision-app-empty-jobs / Epoch 1'))
+
+      const monitorToggle = screen.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u })
+      if (monitorToggle.getAttribute('aria-pressed') !== 'true') await user.click(monitorToggle)
+      const monitor = within(screen.getByTestId('v6-bottom')).getByRole('region', { name: 'Job monitor' })
+      expect(monitor).toHaveClass('v6-job-monitor--empty')
+      expect(within(monitor).getByText('No Jobs in this Project.')).toBeVisible()
+      expect(within(monitor).getByText(/execution details when a Job is available/u)).toBeVisible()
+      expect(within(monitor).queryByRole('button')).toBeNull()
+    } finally {
+      view.unmount()
+      await waitFor(() => expect(harness.dispose).toHaveBeenCalledOnce())
+    }
   })
 
   it('renders the replacement runtime Project before the project-store observer catches up', async () => {
@@ -231,7 +263,8 @@ describe('AppV6', () => {
     await user.click(within(dockerGuide).getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(dockerTrigger).toHaveFocus())
 
-    await user.click(screen.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u }))
+    const monitorToggle = screen.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u })
+    if (monitorToggle.getAttribute('aria-pressed') !== 'true') await user.click(monitorToggle)
     const jobTrigger = screen.getByRole('button', { name: 'Edit Job' })
     await user.click(jobTrigger)
     const editor = await screen.findByRole('dialog', { name: 'Edit Job: Home' })
@@ -265,7 +298,7 @@ describe('AppV6', () => {
     expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([3.2, -4.2, 2.8])
 
     await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
-    await waitFor(() => expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([16.4, 12.6, 18.4]))
+    await waitFor(() => expectIsometricFrame(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]') as number[], [14, 15, 16]))
     const fitVersion = canvas.getAttribute('data-camera-version')
     await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
     expect(canvas.getAttribute('data-camera-version')).toBe(fitVersion)
@@ -324,13 +357,13 @@ describe('AppV6', () => {
     const canvas = await screen.findByTestId('runtime-canvas')
     await waitFor(() => expect(canvas).toHaveTextContent('Epoch 1'))
     await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
-    await waitFor(() => expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([16.4, 12.6, 18.4]))
+    await waitFor(() => expectIsometricFrame(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]') as number[], [14, 15, 16]))
 
     await harness.resources.mutations.replace({ candidate: project('revision-app-b'), description: 'Replace AppV6 identity test Project' })
     await waitFor(() => expect(canvas).toHaveTextContent('revision-app-b / Epoch 2'))
-    expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([16.4, 12.6, 18.4])
+    expectIsometricFrame(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]') as number[], [14, 15, 16])
 
     await user.click(screen.getByRole('button', { name: 'Publish finite scene bounds' }))
-    await waitFor(() => expect(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]')).toEqual([26.4, 22.6, 28.4]))
+    await waitFor(() => expectIsometricFrame(JSON.parse(canvas.getAttribute('data-camera-position') ?? '[]') as number[], [24, 25, 26]))
   })
 })

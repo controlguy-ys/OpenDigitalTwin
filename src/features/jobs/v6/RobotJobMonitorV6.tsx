@@ -40,7 +40,15 @@ function SubscribedCompactStatus(props: RobotJobCompactStatusV6Props & { readonl
 
 function MonitorContent({ project, jobId, playback, onOpenEditor, onSelectJob, jobStates }: RobotJobMonitorV6Props & { readonly jobStates: JobRuntimeStoreV5['byRobotId'] }): ReactNode {
   const job = project.jobs.find((candidate) => candidate.id === jobId) ?? null
-  if (job === null) return <section aria-label="Job monitor" className="v6-job-monitor"><p>No Jobs in this Project.</p></section>
+  if (job === null) return <section aria-label="Job monitor" className="v6-job-monitor v6-job-monitor--empty">
+    <div className="v6-job-monitor-empty-card">
+      <span aria-hidden="true" className="v6-job-monitor-empty-mark">—</span>
+      <div className="v6-job-monitor-empty-copy">
+        <strong>No Jobs in this Project.</strong>
+        <span>Job Monitor will show execution details when a Job is available.</span>
+      </div>
+    </div>
+  </section>
   const candidateState = jobStates[job.robotId]
   const state = candidateState?.jobId === job.id ? candidateState : undefined
   const runtimeState = state?.state ?? 'IDLE'

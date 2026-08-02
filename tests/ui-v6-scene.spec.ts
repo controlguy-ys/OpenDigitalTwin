@@ -3,6 +3,8 @@ import { expect, loadV6Demo, selectV6DemoRobot, test } from './ui-v6-fixtures.js
 test('V6 keeps Scene Explorer selection keyboard-operable and routes right clicks to scene actions instead of camera input', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 })
   await loadV6Demo(page)
+  const inspectorToggle = page.getByRole('button', { name: /Show Inspector|Hide Inspector/u })
+  if (await inspectorToggle.getAttribute('aria-pressed') !== 'true') await inspectorToggle.click()
 
   const tree = page.getByRole('tree', { name: 'Scene Explorer' })
   const canvasHost = page.getByTestId('v6-canvas-host')
@@ -60,4 +62,30 @@ test('V6 presents finite scene geometry and changes the real camera snapshot whe
   await page.getByRole('button', { name: 'Fit all visible geometry' }).click()
   await expect.poll(async () => canvas.getAttribute('data-camera-position')).not.toBe(before)
   expect(runtimeErrors).toEqual([])
+})
+
+test('V6 keeps the narrow and compact camera toolbar in one row beside the reserved scene-status lane', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await loadV6Demo(page)
+
+  const shell = page.getByTestId('v6-application-shell')
+  const toolbar = page.getByTestId('v6-camera-toolbar')
+  const presentation = page.getByTestId('v5-scene-presentation')
+  await page.setViewportSize({ width: 959, height: 900 })
+  await expect(shell).toHaveAttribute('data-workspace-mode', 'narrow')
+  await expect(toolbar).toHaveCSS('flex-wrap', 'nowrap')
+  const toolbarBox = await toolbar.boundingBox()
+  const presentationBox = await presentation.boundingBox()
+  expect(toolbarBox).not.toBeNull()
+  expect(presentationBox).not.toBeNull()
+  expect((presentationBox?.x ?? 0) + (presentationBox?.width ?? 0)).toBeLessThanOrEqual(toolbarBox?.x ?? 0)
+
+  await page.setViewportSize({ width: 1199, height: 900 })
+  await expect(shell).toHaveAttribute('data-workspace-mode', 'compact')
+  await expect(toolbar).toHaveCSS('flex-wrap', 'nowrap')
+  const compactToolbarBox = await toolbar.boundingBox()
+  const compactPresentationBox = await presentation.boundingBox()
+  expect(compactToolbarBox).not.toBeNull()
+  expect(compactPresentationBox).not.toBeNull()
+  expect((compactPresentationBox?.x ?? 0) + (compactPresentationBox?.width ?? 0)).toBeLessThanOrEqual(compactToolbarBox?.x ?? 0)
 })

@@ -57,7 +57,7 @@ describe('workspace layout geometry V6', () => {
       workspaceHeightPx: 600,
     })
 
-    expect(safeArea).toEqual({ top: 0, right: 372, bottom: 192, left: 292 })
+    expect(safeArea).toEqual({ top: 0, right: 332, bottom: 192, left: 260 })
     expect(preferences).toEqual(before)
   })
 

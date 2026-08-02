@@ -1,8 +1,17 @@
+import type { Page } from '@playwright/test'
+
 import { expect, loadV6Demo, test } from './ui-v6-fixtures.js'
+
+async function openJobMonitor(page: Page): Promise<void> {
+  const toggle = page.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u })
+  await expect(toggle).toBeVisible()
+  if (await toggle.getAttribute('aria-pressed') !== 'true') await toggle.click()
+}
 
 test('V6 Job monitor starts, follows, cancels, and opens its 17-step editor without horizontal overflow', async ({ page }) => {
   await page.setViewportSize({ width: 1712, height: 1368 })
   await loadV6Demo(page)
+  await openJobMonitor(page)
 
   const monitor = page.getByTestId('v6-bottom')
   const start = monitor.getByRole('button', { name: 'Start' })
@@ -31,6 +40,7 @@ test('V6 Job monitor starts, follows, cancels, and opens its 17-step editor with
 test('V6 exposes deterministic WaitDI recovery context in the live monitor, failed-step editor, and compact dock status', async ({ page }) => {
   await page.setViewportSize({ width: 1712, height: 1368 })
   await loadV6Demo(page)
+  await openJobMonitor(page)
   const monitor = page.getByTestId('v6-bottom')
   await monitor.getByRole('button', { name: 'Start Job' }).click()
   await expect(monitor).toContainText('FAILED', { timeout: 15_000 })

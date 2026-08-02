@@ -76,6 +76,8 @@ test('V6 opens a real Binding Editor, deterministically browses nested OPC UA ad
   await mockConnectedBrowseSession(page)
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await loadV6Demo(page)
+  const inspectorToggle = page.getByRole('button', { name: /Show Inspector|Hide Inspector/u })
+  if (await inspectorToggle.getAttribute('aria-pressed') !== 'true') await inspectorToggle.click()
 
   await (await openConnectivityMenu(page)).getByRole('menuitem', { name: 'OPC UA Settings' }).click()
   const settings = page.getByRole('dialog', { name: 'OPC UA Settings' })
