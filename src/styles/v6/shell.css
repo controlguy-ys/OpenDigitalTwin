@@ -331,7 +331,7 @@
 .v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom[data-presentation='sheet']:has(.v6-job-monitor--empty) {
   pointer-events: none;
   right: 124px;
-  height: 64px;
+  height: 80px;
 }
 
 .v6-application-shell[data-workspace-mode='compact'] .v6-shell-bottom[data-presentation='dock'][data-visible='true'] {
@@ -405,6 +405,10 @@
 .v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom .v6-job-monitor {
   gap: 4px;
   padding: 6px 8px;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom .v6-job-monitor--empty {
+  padding-block: 5px;
 }
 
 .v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom .v6-job-monitor header,

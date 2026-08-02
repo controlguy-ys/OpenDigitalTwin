@@ -202,6 +202,16 @@ test('V6 overlays the compact Inspector and reserves compact/narrow dock command
   expect(emptySheet.right).toBeLessThanOrEqual(emptyCommands.right - 124)
   expect(emptySheet.height).toBeLessThanOrEqual(80)
   expect(emptySheet.bottom).toBeLessThanOrEqual(emptyCommands.top)
+  const emptySheetContent = await bottom.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  expect(emptySheetContent.scrollHeight).toBeLessThanOrEqual(emptySheetContent.clientHeight)
+  const emptyJobContent = await bottom.locator('.v6-job-monitor--empty').evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  expect(emptyJobContent.scrollHeight).toBeLessThanOrEqual(emptyJobContent.clientHeight)
 
   await overflow.click()
   const modelOverflowMenu = page.getByRole('menu', { name: 'More menus' })
