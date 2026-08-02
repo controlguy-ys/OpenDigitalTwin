@@ -6,12 +6,14 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { ConnectivityPresentationStateV1 } from '../../connectivity/v5/connectivity-presentation-store.js'
 import { createAppCommandRegistryV6, createMainViewMaximizeCommandV6, type AppCommandSnapshotV6 } from '../../commands/v6/app-command-v6.js'
+import { ApplicationShellV6 } from './ApplicationShellV6.js'
 import { AppMenuBarV6 } from './AppMenuBarV6.js'
 import { MainViewPaneToolbarCommandV6 } from './AppMenuBarV6.js'
 import { CommandSurfaceControlV6 } from './CommandSurfaceControlV6.js'
 import { HeaderStatusV6 } from './HeaderStatusV6.js'
 import { HelpOverlayV6 } from './HelpOverlayV6.js'
 import { ModelToolboxV6 } from './ModelToolboxV6.js'
+import { createWorkspaceLayoutStoreV6 } from './workspace-layout-store-v6.js'
 
 function command(
   id: AppCommandSnapshotV6['id'],
@@ -89,6 +91,44 @@ describe('V6 command surfaces', () => {
     fireEvent.click(within(menu).getByRole('menuitem', { name: /^Project$/u }))
     expect(within(menu).getByRole('menuitem', { name: /^New Project$/u })).toBeVisible()
     expect(screen.getByRole('menuitem', { name: /^Project$/u })).toBeInTheDocument()
+  })
+
+  it('mounts the narrow menu in the measured shell with More as its sole tab stop', async () => {
+    const registry = createAppCommandRegistryV6([
+      command('project.new', 'New Project'),
+      command('tool.select', 'Select'),
+      command('model.addBox', 'Add Box'),
+      command('job.start', 'Start Job'),
+      command('view.fitAll', 'Fit All'),
+      command('help.controls', 'Controls'),
+    ])
+    const store = createWorkspaceLayoutStoreV6({ storage: null })
+    render(<ApplicationShellV6
+      bottom={<div>Job monitor</div>}
+      explorer={<div>Explorer</div>}
+      header={<AppMenuBarV6 registry={registry} />}
+      inspector={<div>Inspector</div>}
+      store={store}
+      toolbox={<div>Toolbox</div>}
+      viewport={<div>Viewport</div>}
+      workspaceHeightPx={384}
+      workspaceWidthPx={512}
+    />)
+
+    await vi.waitFor(() => expect(screen.getByTestId('v6-application-shell')).toHaveAttribute('data-workspace-mode', 'narrow'))
+    const directTriggers = ['Project', 'Home', 'Model', 'Job', 'Simulation', 'Connectivity', 'View', 'Help']
+      .map((name) => screen.getByRole('menuitem', { hidden: true, name: new RegExp(`^${name}$`, 'u') }))
+    await vi.waitFor(() => expect(directTriggers[0]).toHaveAttribute('aria-hidden', 'true'))
+    for (const trigger of directTriggers) {
+      expect(trigger).toHaveAttribute('aria-hidden', 'true')
+      expect(trigger).toHaveAttribute('tabindex', '-1')
+    }
+    const overflow = screen.getByRole('menuitem', { name: 'More menus' })
+    expect(overflow).toHaveAttribute('tabindex', '0')
+    expect(screen.getAllByRole('menuitem', { hidden: true }).filter((item) => item.getAttribute('tabindex') === '0')).toEqual([overflow])
+    fireEvent.keyDown(overflow, { key: 'ArrowRight' })
+    await vi.waitFor(() => expect(screen.getByRole('menu', { name: 'More menus' })).toBeVisible())
+    expect(within(screen.getByRole('menu', { name: 'More menus' })).getByRole('menuitem', { name: /^Project$/u })).toBeVisible()
   })
 
   it('shares checked Main View state and returns focus to the View menu trigger', async () => {

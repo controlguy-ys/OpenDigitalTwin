@@ -31,7 +31,7 @@ An escalated Playwright retry was stopped after approximately 313 seconds withou
 
 - Added a responsive `More menus` menuitem to `AppMenuBarV6`. It exposes Project, Home, Model, Job, Simulation, Connectivity, View, and Help, then renders the existing registry-backed command surfaces or Connectivity actions in a nested compact surface.
 - Preserved desktop top-level menu markup, menu roles, roving focus, Escape behavior, Shift+F10 dispatch, and trigger focus restoration. Narrow mode observes the shell's measured `data-workspace-mode` and routes horizontal menu navigation to the compact trigger.
-- Reflowed compact headers into a two-row grid and narrow headers into brand/menu/status rows. Narrow mode keeps Project as the direct entry point and exposes all other menus through the overflow surface.
+- Reflowed compact headers into a two-row grid and narrow headers into brand/menu/status rows. Narrow mode removes all direct menu triggers from the accessibility tree and exposes all eight menus through the overflow surface.
 - Reserved a 76 px narrow command bar below the Job sheet. Dock toggles use a constrained three-column grid, and the compact Job status is presented in a dedicated status row while the existing inline status text remains for desktop/compact compatibility.
 - Moved the narrow Job sheet above the command bar and tightened only shell-scoped Job monitor spacing so the existing `Inspect failed step` action remains in the initial visible sheet region.
 
@@ -41,7 +41,7 @@ The focused Vitest command was rerun after the role-query correction:
 
 ```text
 npm run test:run -- src/features/ui/v6/ApplicationShellV6.test.tsx src/features/ui/v6/command-surfaces-v6.test.tsx
-2 files passed; 24 tests passed; 0 failed
+2 files passed; 25 tests passed; 0 failed
 ```
 
 Additional static checks:
@@ -87,3 +87,11 @@ The new Playwright accessibility checks were not run in this environment because
 - Live Playwright geometry and the full V6 E2E suite still need to be rerun in an environment where the preview/Gateway process can start without Windows `spawn EPERM`. This report does not claim live screenshot acceptance.
 - `npm run verify` was not run; focused Vitest, TypeScript, lint, and diff checks are the available evidence for this change.
 - The narrow status row intentionally duplicates the React status node: the legacy inline copy is `aria-hidden` and the dedicated row is the visible accessible copy.
+
+## Follow-up review fixes
+
+- Review RED command: `npm run test:run -- src/features/ui/v6/ApplicationShellV6.test.tsx src/features/ui/v6/command-surfaces-v6.test.tsx` reported 1 failing and 24 passing tests. The failure was the new narrow single-tab-stop assertion, which correctly exposed that direct triggers had no `aria-hidden` state before this follow-up.
+- `AppMenuBarV6` now sets every direct top-level trigger to `aria-hidden="true"` and `tabIndex=-1` in measured narrow mode; `shell.css` removes those anchors from the narrow layout. More menus is the sole narrow menubar tab stop. Wide/compact desktop roving focus remains unchanged.
+- The narrow menu unit test now mounts `AppMenuBarV6` inside `ApplicationShellV6` at measured 512 x 384 bounds and waits for the mode observer before asserting accessibility state. The shell unit test uses DOM ordering/status assertions instead of a CSS-regex geometry assertion.
+- The accessibility E2E now loads at 1024 x 768 before resizing to 512 x 384, checks page horizontal overflow at both dimensions, and checks failed-step recovery at both dimensions where the bottom monitor is shown.
+- Follow-up GREEN command: `npm run test:run -- src/features/ui/v6/ApplicationShellV6.test.tsx src/features/ui/v6/command-surfaces-v6.test.tsx` reported 2 files passed, 25 tests passed, 0 failed. `npx tsc -b --pretty false --noEmit` also passed.

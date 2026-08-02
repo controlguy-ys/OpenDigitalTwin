@@ -96,8 +96,9 @@ test('V6 keeps keyboard recovery, target semantics, live Job failure, and zoom o
 })
 
 test('V6 exposes a compact menu command surface at the zoom-equivalent shell width', async ({ page }) => {
-  await page.setViewportSize({ width: 512, height: 384 })
+  await page.setViewportSize({ width: 1024, height: 768 })
   await loadV6Demo(page)
+  await page.setViewportSize({ width: 512, height: 384 })
 
   const shell = page.getByTestId('v6-application-shell')
   const header = page.getByTestId('v6-header')
@@ -135,6 +136,7 @@ test('V6 keeps failed-step recovery above the narrow bottom-sheet edge at compac
     const headerBox = await header.boundingBox()
     expect(headerBox).not.toBeNull()
     expect((headerBox?.y ?? 0) + (headerBox?.height ?? 0)).toBeLessThanOrEqual(viewport.height)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 
     const docks = page.getByRole('navigation', { name: 'Workspace docks' })
     const dockButtons = docks.getByRole('button')
@@ -164,4 +166,13 @@ test('V6 keeps failed-step recovery above the narrow bottom-sheet edge at compac
   const inspectBox = await inspect.boundingBox()
   expect(inspectBox).not.toBeNull()
   expect((inspectBox?.y ?? 0) + (inspectBox?.height ?? 0)).toBeLessThanOrEqual(384)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await page.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u }).click()
+  await expect(monitor.getByRole('button', { name: 'Inspect failed step' })).toBeVisible()
+  const compactInspectBox = await inspect.boundingBox()
+  expect(compactInspectBox).not.toBeNull()
+  expect((compactInspectBox?.y ?? 0) + (compactInspectBox?.height ?? 0)).toBeLessThanOrEqual(768)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })

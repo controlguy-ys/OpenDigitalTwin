@@ -102,6 +102,11 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
     })
   }
   const onOverflowTriggerKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault()
+      if (!overflowOpen) openOverflowMenu()
+      return
+    }
     if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       if (overflowOpen) {
@@ -339,6 +344,7 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
           return <span className="v6-menu-anchor" key={menu}>
             <ButtonV6
               aria-expanded={open}
+              aria-hidden={narrowSurface ? true : undefined}
               aria-haspopup="menu"
               className="v6-menu-trigger"
               id={triggerId}
@@ -349,7 +355,7 @@ export function AppMenuBarV6({ registry, transientUi, contextMenu, connectivity 
               onFocus={() => setActiveMenuIndex(index)}
               onKeyDown={(event) => onTopLevelKeyDown(event, menu, index)}
               role="menuitem"
-              tabIndex={activeMenuIndex === index ? 0 : -1}
+              tabIndex={narrowSurface ? -1 : activeMenuIndex === index ? 0 : -1}
               size="compact"
               variant="ghost"
             >{menu}</ButtonV6>

@@ -185,10 +185,12 @@ describe('ApplicationShellV6', () => {
     })
     const shell = screen.getByTestId('v6-application-shell')
     expect(shell).toHaveAttribute('data-workspace-mode', 'narrow')
-    expect(screen.getByTestId('v6-narrow-command-bar')).toBeInTheDocument()
-    expect(screen.getByTestId('v6-narrow-job-status')).toHaveTextContent('FAILED Step 3')
-    const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
-    expect(css).toMatch(/\.v6-application-shell\[data-workspace-mode='narrow'\] \.v6-shell-bottom\[data-presentation='sheet'\]\s*\{[^}]*bottom:\s*var\(--v6-narrow-command-height\)/u)
+    const commandBar = screen.getByTestId('v6-narrow-command-bar')
+    const bottom = screen.getByTestId('v6-bottom')
+    expect(commandBar).toBeInTheDocument()
+    expect(commandBar).toContainElement(screen.getByTestId('v6-narrow-job-status'))
+    expect(bottom).toHaveAttribute('data-presentation', 'sheet')
+    expect(bottom.compareDocumentPosition(commandBar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('keys responsive CSS to measured workspace mode instead of browser media queries', () => {

@@ -246,7 +246,7 @@
   overflow: visible;
 }
 
-.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header .v6-menu-anchor:not(:first-child):not(.v6-menu-overflow-anchor) {
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-header .v6-menu-anchor:not(.v6-menu-overflow-anchor) {
   display: none;
 }
 
