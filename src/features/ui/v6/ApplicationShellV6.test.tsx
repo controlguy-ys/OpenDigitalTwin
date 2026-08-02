@@ -11,6 +11,7 @@ interface RenderShellOptions {
   readonly storage?: WorkspaceStorageV6 | null
   readonly widthPx?: number
   readonly heightPx?: number
+  readonly header?: ReactNode
   readonly explorer?: ReactNode
   readonly inspector?: ReactNode
   readonly bottom?: ReactNode
@@ -30,7 +31,7 @@ function renderShell(options: RenderShellOptions = {}) {
       store={store}
       workspaceHeightPx={options.heightPx ?? 800}
       workspaceWidthPx={options.widthPx ?? 1440}
-      header={<div>Header</div>}
+      header={options.header ?? <div>Header</div>}
       explorer={options.explorer ?? <div>Explorer</div>}
       inspector={options.inspector ?? <div>Inspector</div>}
       bottom={options.bottom ?? <div>Bottom</div>}
@@ -175,6 +176,41 @@ describe('ApplicationShellV6', () => {
     expect(screen.getByTestId('v6-bottom')).toHaveAttribute('data-presentation', 'sheet')
     expect(screen.getByTestId('v6-bottom')).toHaveAttribute('data-visible', 'true')
     expect(narrow.store.getState().getSnapshot().viewportSafeArea.bottom).toBe(192)
+  })
+
+  it('keeps compact menu containers width-contained while letting menu surfaces escape overflow', () => {
+    const style = document.createElement('style')
+    style.textContent = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
+    document.head.append(style)
+    try {
+      renderShell({
+        header: <div className="v6-app-header">
+          <strong>OpenDigitalTwin</strong>
+          <nav>
+            <div role="menubar">
+              <span className="v6-menu-anchor">
+                <button type="button">Project</button>
+                <div role="menu">Load Demo</div>
+              </span>
+            </div>
+          </nav>
+          <div className="v6-header-status">Status</div>
+        </div>,
+        widthPx: 1000,
+      })
+      const shell = screen.getByTestId('v6-application-shell')
+      expect(shell).toHaveAttribute('data-workspace-mode', 'compact')
+      const nav = shell.querySelector<HTMLElement>('.v6-app-header > nav')
+      const menubar = nav?.querySelector<HTMLElement>('[role="menubar"]')
+      expect(nav).not.toBeNull()
+      expect(menubar).not.toBeNull()
+      expect(getComputedStyle(nav!).overflow).toBe('visible')
+      expect(getComputedStyle(menubar!).overflow).toBe('visible')
+      expect(getComputedStyle(nav!).maxWidth).toBe('100%')
+      expect(getComputedStyle(menubar!).maxWidth).toBe('100%')
+    } finally {
+      style.remove()
+    }
   })
 
   it('reserves a narrow command bar below the Job sheet and keeps its recovery status seam', () => {

@@ -182,7 +182,8 @@
 .v6-application-shell[data-workspace-mode='compact'] .v6-shell-header > .v6-app-header > nav {
   grid-column: 2;
   grid-row: 1;
-  overflow: hidden;
+  max-width: 100%;
+  overflow: visible;
 }
 
 .v6-application-shell[data-workspace-mode='compact'] .v6-shell-header > .v6-app-header > .v6-header-status {
@@ -195,7 +196,8 @@
 .v6-application-shell[data-workspace-mode='compact'] .v6-shell-header [role='menubar'] {
   display: flex;
   flex-wrap: wrap;
-  overflow: hidden;
+  max-width: 100%;
+  overflow: visible;
 }
 
 .v6-application-shell[data-workspace-mode='compact'] .v6-workspace-dock-toggles {

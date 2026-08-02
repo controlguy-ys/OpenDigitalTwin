@@ -95,3 +95,9 @@ The new Playwright accessibility checks were not run in this environment because
 - The narrow menu unit test now mounts `AppMenuBarV6` inside `ApplicationShellV6` at measured 512 x 384 bounds and waits for the mode observer before asserting accessibility state. The shell unit test uses DOM ordering/status assertions instead of a CSS-regex geometry assertion.
 - The accessibility E2E now loads at 1024 x 768 before resizing to 512 x 384, checks page horizontal overflow at both dimensions, and checks failed-step recovery at both dimensions where the bottom monitor is shown.
 - Follow-up GREEN command: `npm run test:run -- src/features/ui/v6/ApplicationShellV6.test.tsx src/features/ui/v6/command-surfaces-v6.test.tsx` reported 2 files passed, 25 tests passed, 0 failed. `npx tsc -b --pretty false --noEmit` also passed.
+
+## Compact dropdown clipping review fix
+
+- Review RED command: `npm run test:run -- src/features/ui/v6/ApplicationShellV6.test.tsx` reported 1 failing and 13 passing tests before the CSS correction.
+- The compact header navigation and menubar now keep `max-width: 100%` while allowing visible overflow, so absolutely positioned Project, Connectivity, and other menu surfaces are not clipped below the header.
+- Final focused GREEN command: `npm run test:run -- src/features/ui/v6/ApplicationShellV6.test.tsx src/features/ui/v6/command-surfaces-v6.test.tsx` reported 2 files passed, 26 tests passed, 0 failed.
