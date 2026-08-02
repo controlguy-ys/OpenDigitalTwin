@@ -104,6 +104,24 @@ describe('createAppCommandCompositionV6', () => {
     expect(harness.setSelection).toHaveBeenCalledExactlyOnceWith({ kind: 'entity', id: 'entity-created' })
   })
 
+  it('exposes Add Group as one atomic Project V5 command and selects the new root Group', async () => {
+    const harness = createHarness()
+    const registry = createAppCommandCompositionV6(harness.context)
+
+    await registry.invoke('model.addGroup')
+
+    expect(harness.mutate).toHaveBeenCalledOnce()
+    expect(harness.mutate).toHaveBeenCalledWith(expect.objectContaining({
+      expectedRevisionId: harness.project.revisionId,
+      description: 'Create Group',
+    }))
+    const request = harness.mutate.mock.calls[0]![0]
+    expect(request.recipe(harness.project).sceneGroups).toContainEqual({
+      id: 'entity-created', name: 'Group', parentGroupId: null, visible: true,
+    })
+    expect(harness.setSelection).toHaveBeenCalledExactlyOnceWith({ kind: 'group', id: 'entity-created' })
+  })
+
   it('propagates a stale-revision rejection without selecting the primitive', async () => {
     const harness = createHarness()
     const stale = new Error('PROJECT_ACTIVE_REVISION_CHANGED')

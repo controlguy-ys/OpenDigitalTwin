@@ -37,6 +37,27 @@ function mutations(active: WorkcellProjectV5) {
 }
 
 describe('createSceneCommandServiceV6', () => {
+  it('creates and selects one visible root Group through one atomic current-revision mutation', async () => {
+    const state = mutations(project())
+    const setSelection = vi.fn()
+    const service = createSceneCommandServiceV6({
+      mutations: state.mutations,
+      createId: vi.fn().mockReturnValue('new-group'),
+      onSelectionChange: setSelection,
+    })
+
+    await expect(service.createGroup()).resolves.toBe('new-group')
+    expect(state.mutate).toHaveBeenCalledOnce()
+    expect(state.mutate).toHaveBeenCalledWith(expect.objectContaining({
+      expectedRevisionId: 'revision-1',
+      description: 'Create Group',
+    }))
+    expect(state.current().sceneGroups.at(-1)).toEqual({
+      id: 'new-group', name: 'Group', parentGroupId: null, visible: true,
+    })
+    expect(setSelection).toHaveBeenCalledExactlyOnceWith({ kind: 'group', id: 'new-group' })
+  })
+
   it('uses one current-revision mutation for rename and visibility changes', async () => {
     const state = mutations(project())
     const service = createSceneCommandServiceV6({ mutations: state.mutations, createId: vi.fn() })

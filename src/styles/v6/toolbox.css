@@ -1,0 +1,29 @@
+.v6-model-toolbox {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+  padding: 12px 8px;
+}
+
+.v6-model-toolbox-section {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.v6-model-toolbox-section h2 {
+  margin: 0;
+  color: var(--v6-color-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.v6-model-toolbox-section-controls {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}

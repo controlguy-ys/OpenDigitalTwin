@@ -2,7 +2,7 @@ export type AppCommandIdV6 =
   | 'project.new' | 'project.loadDemo' | 'project.save'
   | 'project.export' | 'project.import'
   | 'tool.select' | 'tool.translate' | 'tool.rotate'
-  | 'model.addBox' | 'model.addCylinder'
+  | 'model.addBox' | 'model.addCylinder' | 'model.addGroup'
   | 'view.focusSelection' | 'view.fitAll'
   | 'view.main.maximize'
   | 'scene.toggleVisibility' | 'scene.rename'
@@ -143,8 +143,10 @@ export const V6_COMMAND_PLACEMENTS: readonly AppCommandPlacementV6[] = Object.fr
   { commandId: 'tool.rotate', surface: 'toolbox' },
   { commandId: 'model.addBox', surface: 'model-menu' },
   { commandId: 'model.addCylinder', surface: 'model-menu' },
+  { commandId: 'model.addGroup', surface: 'model-menu' },
   { commandId: 'model.addBox', surface: 'toolbox' },
   { commandId: 'model.addCylinder', surface: 'toolbox' },
+  { commandId: 'model.addGroup', surface: 'toolbox' },
   { commandId: 'view.focusSelection', surface: 'toolbox' },
   { commandId: 'view.fitAll', surface: 'toolbox' },
   { commandId: 'job.openEditor', surface: 'job-menu' },

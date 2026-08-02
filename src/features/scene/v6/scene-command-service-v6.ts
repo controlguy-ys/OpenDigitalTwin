@@ -5,6 +5,7 @@ import type { ProjectV5MutationService } from '../../project/v5/project-v5-mutat
 export interface SceneCommandServiceV6 {
   rename(selection: Extract<V6WorkcellSelection, { readonly kind: 'robot' | 'entity' | 'group' }>, name: string): Promise<void>
   setVisibility(selection: Extract<V6WorkcellSelection, { readonly kind: 'robot' | 'entity' | 'group' }>, visible: boolean): Promise<void>
+  createGroup(): Promise<string>
   duplicateEntity(entityId: string): Promise<string>
   deleteEntity(entityId: string): Promise<void>
   deleteGroup(groupId: string): Promise<void>
@@ -44,6 +45,7 @@ function requireGroup(project: WorkcellProjectV5, id: string) {
 function assertFreshId(project: WorkcellProjectV5, id: string): void {
   const allIds = new Set([
     ...project.spatialEntities.map((entity) => entity.id),
+    ...project.sceneGroups.map((group) => group.id),
     ...project.scene.frames.map((frame) => frame.id),
     ...project.spatialEntities.flatMap((entity) => [...entity.graspFrames, ...entity.movingFrames].map((frame) => frame.frameId)),
   ])
@@ -106,6 +108,24 @@ export function createSceneCommandServiceV6(options: SceneCommandServiceV6Option
         requireGroup(active, selection.id)
         return { ...active, sceneGroups: active.sceneGroups.map((group) => group.id === selection.id ? { ...group, visible } : group) }
       })
+    },
+
+    async createGroup() {
+      const active = activePublication(options.mutations)
+      const groupId = options.createId()
+      assertFreshId(active.project, groupId)
+      await mutate(active.revisionId, 'Create Group', (candidate) => {
+        assertFreshId(candidate, groupId)
+        return {
+          ...candidate,
+          sceneGroups: [
+            ...candidate.sceneGroups,
+            { id: groupId, name: 'Group', parentGroupId: null, visible: true },
+          ],
+        }
+      })
+      options.onSelectionChange?.({ kind: 'group', id: groupId })
+      return groupId
     },
 
     async duplicateEntity(entityId: string) {

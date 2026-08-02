@@ -6,7 +6,7 @@ import type {
 export const MENU_COMMANDS_V6: Readonly<Record<string, readonly AppCommandIdV6[]>> = Object.freeze({
   Project: ['project.new', 'project.loadDemo', 'project.save', 'project.export', 'project.import'],
   Home: ['tool.select', 'tool.translate', 'tool.rotate', 'view.focusSelection', 'view.fitAll'],
-  Model: ['model.addBox', 'model.addCylinder'],
+  Model: ['model.addGroup', 'model.addBox', 'model.addCylinder'],
   Job: ['job.openEditor', 'job.start', 'job.cancel'],
   Simulation: [],
   Connectivity: [],

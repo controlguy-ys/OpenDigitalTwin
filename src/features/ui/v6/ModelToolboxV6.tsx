@@ -5,20 +5,44 @@ export interface ModelToolboxV6Props {
   readonly registry: AppCommandRegistryV6
 }
 
-const TOOLBOX_COMMANDS: readonly AppCommandIdV6[] = [
-  'tool.select', 'tool.translate', 'tool.rotate',
-  'model.addBox', 'model.addCylinder', 'view.focusSelection', 'view.fitAll',
+const TOOLBOX_SECTIONS: readonly {
+  readonly id: string
+  readonly label: string
+  readonly commands: readonly AppCommandIdV6[]
+}[] = [
+  {
+    id: 'v6-toolbox-interaction',
+    label: 'Interaction',
+    commands: ['tool.select', 'tool.translate', 'tool.rotate'],
+  },
+  {
+    id: 'v6-toolbox-geometry',
+    label: 'Geometry',
+    commands: ['model.addGroup', 'model.addBox', 'model.addCylinder'],
+  },
+  {
+    id: 'v6-toolbox-camera',
+    label: 'Camera',
+    commands: ['view.focusSelection', 'view.fitAll'],
+  },
 ]
 
 export function ModelToolboxV6({ registry }: ModelToolboxV6Props) {
-  return <aside aria-label="Model toolbox">
-    {TOOLBOX_COMMANDS.map((id) => (
-      <CommandSurfaceControlV6
-        commandId={id}
-        key={id}
-        registry={registry}
-        surface="toolbox"
-      />
+  return <aside aria-label="Model toolbox" className="v6-model-toolbox">
+    {TOOLBOX_SECTIONS.map(({ commands, id, label }) => (
+      <section aria-labelledby={id} className="v6-model-toolbox-section" key={id}>
+        <h2 id={id}>{label}</h2>
+        <div className="v6-model-toolbox-section-controls">
+          {commands.map((commandId) => (
+            <CommandSurfaceControlV6
+              commandId={commandId}
+              key={commandId}
+              registry={registry}
+              surface="toolbox"
+            />
+          ))}
+        </div>
+      </section>
     ))}
   </aside>
 }

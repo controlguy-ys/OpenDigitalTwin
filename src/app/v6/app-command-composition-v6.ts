@@ -7,6 +7,7 @@ import {
 import type { V6WorkcellSelection } from '../../features/interaction/v6/workcell-selection-v6.js'
 import type { DialogRequestV6 } from '../../features/ui/v6/dialog-request-v6.js'
 import type { WorkspaceLayoutStoreV6 } from '../../features/ui/v6/workspace-layout-store-v6.js'
+import { createSceneCommandServiceV6 } from '../../features/scene/v6/scene-command-service-v6.js'
 import {
   createAppCommandRegistryV6,
   createMainViewMaximizeCommandV6,
@@ -74,6 +75,23 @@ function createPrimitiveCommand(
       })
       context.setSelection({ kind: 'entity', id })
     },
+  }
+}
+
+function createGroupCommand(context: AppCommandCompositionContextV6): AppCommandSnapshotV6 {
+  const sceneCommands = createSceneCommandServiceV6({
+    mutations: context.resources.mutations,
+    createId: () => context.createEntityId?.() ?? `group-${crypto.randomUUID()}`,
+    onSelectionChange: context.setSelection,
+  })
+  return {
+    id: 'model.addGroup',
+    label: 'Add Group',
+    get enabled() {
+      return projectIsReady(context) && context.resources.mutations.readPublished() !== null
+    },
+    visible: true,
+    execute: () => sceneCommands.createGroup().then(() => undefined),
   }
 }
 
@@ -150,6 +168,7 @@ export function createAppCommandCompositionV6(
     command('tool.rotate', 'Rotate', () => context.setInteractionMode('rotate')),
     createPrimitiveCommand(context, 'box'),
     createPrimitiveCommand(context, 'cylinder'),
+    createGroupCommand(context),
     createMainViewMaximizeCommandV6({
       isMainViewMaximized: () => context.layout.getState().mainViewPresentation === 'maximized',
       toggleMainView: () => context.layout.getState().toggleMainViewMaximized(),
