@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -11,19 +9,6 @@ const cameraControllerPort = () => ({
 })
 
 describe('ViewportOverlayV6', () => {
-  it('collision-fits Camera views with a bounded internal scroll region', () => {
-    const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/viewport.css'), 'utf8')
-    const menuRule = css.match(/\.v6-camera-views-menu\s*\{([^}]*)\}/u)?.[1] ?? ''
-    const menuButtonRule = css.match(/\.v6-camera-views-menu button\s*\{([^}]*)\}/u)?.[1] ?? ''
-
-    expect(menuRule).toContain('inline-size: min(220px, calc(100vw - 16px));')
-    expect(menuRule).toContain('max-height: min(280px, calc(100dvh - 76px));')
-    expect(menuRule).toContain('overflow-y: auto;')
-    expect(menuRule).toContain('overscroll-behavior: contain;')
-    expect(menuButtonRule).toContain('white-space: normal;')
-    expect(menuButtonRule).toContain('overflow-wrap: anywhere;')
-  })
-
   it('keeps one real ViewCube surface while grouping all seven camera commands behind one accessible menu', () => {
     const camera = cameraControllerPort()
     render(<ViewportOverlayV6 camera={camera} />)

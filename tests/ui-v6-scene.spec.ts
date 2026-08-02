@@ -89,3 +89,86 @@ test('V6 keeps the narrow and compact camera toolbar in one row beside the reser
   expect(compactPresentationBox).not.toBeNull()
   expect((compactPresentationBox?.x ?? 0) + (compactPresentationBox?.width ?? 0)).toBeLessThanOrEqual(compactToolbarBox?.x ?? 0)
 })
+
+test('V6 keeps the ViewCube, status chip, toolbar, and Camera views inside short and wide viewport bounds', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await loadV6Demo(page)
+
+  const viewports = [
+    { width: 1440, height: 900 },
+    { width: 512, height: 384 },
+  ] as const
+  const canvasHost = page.getByTestId('v6-canvas-host')
+  const renderer = page.locator('.v5-scene-renderer')
+  const presentation = page.getByTestId('v5-scene-presentation')
+  const toolbar = page.getByTestId('v6-camera-toolbar')
+  const cameraViewsTrigger = page.getByRole('button', { name: 'Camera views' })
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport)
+    await expect(canvasHost).toBeVisible()
+    await expect(renderer).toBeVisible()
+    await expect(presentation).toBeVisible()
+    await expect(toolbar).toBeVisible()
+
+    const hostBox = await canvasHost.boundingBox()
+    const rendererBox = await renderer.boundingBox()
+    const presentationBox = await presentation.boundingBox()
+    const toolbarBox = await toolbar.boundingBox()
+    expect(hostBox).not.toBeNull()
+    expect(rendererBox).not.toBeNull()
+    expect(presentationBox).not.toBeNull()
+    expect(toolbarBox).not.toBeNull()
+    if (hostBox === null || rendererBox === null || presentationBox === null || toolbarBox === null) continue
+
+    expect(rendererBox.x).toBeGreaterThanOrEqual(hostBox.x)
+    expect(rendererBox.y).toBeGreaterThanOrEqual(hostBox.y)
+    expect(rendererBox.x + rendererBox.width).toBeLessThanOrEqual(hostBox.x + hostBox.width)
+    expect(rendererBox.y + rendererBox.height).toBeLessThanOrEqual(hostBox.y + hostBox.height)
+
+    expect(presentationBox.x).toBeGreaterThanOrEqual(rendererBox.x)
+    expect(presentationBox.y).toBeGreaterThanOrEqual(rendererBox.y)
+    expect(presentationBox.x + presentationBox.width).toBeLessThanOrEqual(rendererBox.x + rendererBox.width)
+    expect(presentationBox.y + presentationBox.height).toBeLessThanOrEqual(rendererBox.y + rendererBox.height)
+    expect(presentationBox.width).toBeLessThan(rendererBox.width)
+    expect(presentationBox.height).toBeLessThan(rendererBox.height)
+
+    expect(toolbarBox.x).toBeGreaterThanOrEqual(hostBox.x)
+    expect(toolbarBox.y).toBeGreaterThanOrEqual(hostBox.y)
+    expect(toolbarBox.x + toolbarBox.width).toBeLessThanOrEqual(hostBox.x + hostBox.width)
+    expect(toolbarBox.y + toolbarBox.height).toBeLessThanOrEqual(hostBox.y + hostBox.height)
+
+    const cubeSize = Number(await renderer.getAttribute('data-view-cube-size'))
+    const cubeSafeMargin = Number(await renderer.getAttribute('data-view-cube-safe-margin'))
+    expect(await renderer.getAttribute('data-view-cube-alignment')).toBe('bottom-right')
+    expect(cubeSize).toBe(72)
+    expect(cubeSafeMargin).toBe(48)
+    expect(rendererBox.width).toBeGreaterThanOrEqual(cubeSize + cubeSafeMargin * 2)
+    expect(rendererBox.height).toBeGreaterThanOrEqual(cubeSize + cubeSafeMargin * 2)
+
+    await cameraViewsTrigger.click()
+    const menu = page.getByRole('menu', { name: 'Camera views' })
+    await expect(menu).toBeVisible()
+    const menuBox = await menu.boundingBox()
+    expect(menuBox).not.toBeNull()
+    if (menuBox === null) continue
+    expect(menuBox.x).toBeGreaterThanOrEqual(hostBox.x)
+    expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(hostBox.x + hostBox.width)
+    expect(menuBox.y).toBeGreaterThanOrEqual(hostBox.y)
+    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(viewport.height)
+    expect(await menu.getByRole('menuitem')).toHaveCount(7)
+
+    const menuScroll = await menu.evaluate((element) => {
+      const scrollable = element as HTMLElement
+      scrollable.scrollTop = scrollable.scrollHeight
+      return { clientHeight: scrollable.clientHeight, scrollHeight: scrollable.scrollHeight, scrollTop: scrollable.scrollTop }
+    })
+    expect(menuScroll.scrollHeight).toBeGreaterThanOrEqual(menuScroll.clientHeight)
+    if (viewport.height <= 384) {
+      expect(menuScroll.scrollHeight).toBeGreaterThan(menuScroll.clientHeight)
+      expect(menuScroll.scrollTop).toBeGreaterThan(0)
+    }
+    await page.keyboard.press('Escape')
+    await expect(menu).toBeHidden()
+  }
+})

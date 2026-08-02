@@ -25,3 +25,16 @@
 ## Commit
 
 Commit SHA: see the final `git rev-parse HEAD` handoff value.
+
+## Fix Round 1
+
+The independent review rejected source-text CSS assertions. The source-text checks were removed from `src/features/scene/v5/V5WorkcellWorkspace.test.tsx` and `src/features/viewport/v6/ViewportOverlayV6.test.tsx`. Behavior-facing coverage now lives in `tests/ui-v6-scene.spec.ts` and exercises 1440x900 plus 512x384.
+
+- Canvas/status/toolbar rectangles are asserted inside the live viewport.
+- The live renderer's machine-consumed ViewCube size, safe-margin, and bottom-right alignment attributes are used to verify the 72px Cube footprint fits at both viewports.
+- Camera views is opened at both sizes; its menu rectangle is asserted inside the host/viewport, all seven menu items are present, and the short viewport drives `scrollTop` to verify an internal scroll region.
+
+Validation output:
+
+- `npm run test:run -- src/features/scene/v5/V5WorkcellWorkspace.test.tsx src/features/viewport/v6/ViewportOverlayV6.test.tsx` — 2 files, 18 tests passed.
+- `npx playwright test tests/ui-v6-scene.spec.ts` — 4 tests passed, including the new viewport bounds/menu scroll test.

@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { forwardRef, type ReactNode } from 'react'
 import { PerspectiveCamera, Vector3 } from 'three'
@@ -145,18 +143,6 @@ function bundleWithWorld(readRobotLinkWorldPose: ReturnType<typeof vi.fn>, readO
 }
 
 describe('V5WorkcellWorkspace', () => {
-  it('keeps the renderer full-size without turning the status chip into a canvas layer', () => {
-    const globalCss = readFileSync(resolve(process.cwd(), 'src/styles/global.css'), 'utf8')
-    const viewportCss = readFileSync(resolve(process.cwd(), 'src/styles/v6/viewport.css'), 'utf8')
-
-    expect(globalCss).toContain('.v6-main-view-canvas-host .v5-scene-canvas > .v5-scene-renderer')
-    expect(globalCss).toContain('.v5-scene-canvas > .v5-scene-renderer canvas')
-    expect(globalCss).not.toMatch(/\.v6-main-view-canvas-host\s+\.v5-scene-canvas,\s*\.v6-main-view-canvas-host\s+\.v5-scene-canvas\s*>\s*div/u)
-    expect(globalCss).not.toContain('.v5-scene-canvas > div,')
-    expect(viewportCss).toMatch(/\.v5-scene-presentation\s*\{[^}]*height:\s*auto;/u)
-    expect(viewportCss).toMatch(/\.v5-scene-presentation\s*\{[^}]*width:\s*fit-content;/u)
-  })
-
   it('clamps responsive ViewCube margins so the 72px surface fits the renderer', () => {
     expect(viewCubeSafeMarginV5({ width: 1440, height: 900 })).toBe(48)
     const margin = viewCubeSafeMarginV5({ width: 128, height: 96 })

@@ -455,6 +455,7 @@ export function V5WorkcellCanvas({
           aria-label="3D workcell scene"
           className="v5-scene-renderer"
           data-view-cube-alignment="bottom-right"
+          data-view-cube-safe-margin={VIEW_CUBE_SAFE_MARGIN_PX_V5}
           data-view-cube-size={VIEW_CUBE_SIZE_PX_V5}
           data-view-cube-surface="interactive-3d"
           onPointerMissed={() => undefined}
