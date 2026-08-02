@@ -91,10 +91,16 @@ export function SceneExplorerV6({
       return
     }
     if (event.key === 'ArrowRight' && hasSceneTreeChildrenV6(rows, current.key)) {
-      event.preventDefault(); setExpanded((value) => new Set(value).add(current.key)); return
+      event.preventDefault()
+      if (!searching) setExpanded((value) => new Set(value).add(current.key))
+      return
     }
     if (event.key === 'ArrowLeft') {
       event.preventDefault()
+      if (searching) {
+        if (current.parentKey !== null) { setActiveKey(current.parentKey); focusRow(current.parentKey) }
+        return
+      }
       if (expanded.has(current.key)) { setExpanded((value) => { const next = new Set(value); next.delete(current.key); return next }) }
       else if (current.parentKey !== null) { setActiveKey(current.parentKey); focusRow(current.parentKey) }
       return
