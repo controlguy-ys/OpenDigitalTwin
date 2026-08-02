@@ -117,8 +117,9 @@ export function SceneExplorerV6({
       {visibleRows.map((row) => {
         const hasChildren = hasSceneTreeChildrenV6(rows, row.key)
         const isExpanded = expanded.has(row.key)
+        const effectiveExpanded = searching || isExpanded
         return <div
-          aria-expanded={hasChildren ? (searching ? true : isExpanded) : undefined}
+          aria-expanded={hasChildren ? effectiveExpanded : undefined}
           aria-level={row.depth + 1}
           aria-selected={selectionMatches(row, selection)}
           className="v6-scene-tree-row"
@@ -134,13 +135,15 @@ export function SceneExplorerV6({
           title={row.name}
         >
           {hasChildren ? <button
-            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${row.name}`}
-            aria-expanded={isExpanded}
+            aria-expanded={effectiveExpanded}
+            aria-label={`${effectiveExpanded ? 'Collapse' : 'Expand'} ${row.name}`}
             className="v6-scene-tree-disclosure"
-            onClick={(event) => { event.stopPropagation(); toggle(row.key) }}
+            disabled={searching}
+            onClick={(event) => { event.stopPropagation(); if (!searching) toggle(row.key) }}
+            title={searching ? 'Expansion is fixed while filtering' : undefined}
             type="button"
           >
-            <ChevronRight aria-hidden="true" className={isExpanded ? 'is-expanded' : undefined} size={16} strokeWidth={1.75} />
+            <ChevronRight aria-hidden="true" className={effectiveExpanded ? 'is-expanded' : undefined} size={16} strokeWidth={1.75} />
           </button> : <span aria-hidden="true" className="v6-scene-tree-disclosure-placeholder" />}
           <span className="v6-scene-tree-name">{row.name}</span>
           {row.ownerLabel === null ? null : <span className="v6-scene-tree-owner">{row.ownerLabel}</span>}
