@@ -23,7 +23,7 @@ Root reran the same focused file after the production change:
 
 ```text
 npm run test:run -- src/features/inspector/v6/ObjectInspectorV6.test.tsx
-1 file; 8 passed, 0 failed
+1 file; 10 passed, 0 failed
 ```
 
 Additional static validation:
@@ -33,7 +33,14 @@ npm run typecheck -- --pretty false
 exit code 0
 ```
 
-The focused tests cover independent Box dimensions, one revision-fenced mutation, Cylinder radius/height with axis and radial-segment preservation, simulation-owned Transform with geometry still editable, positive finite validation without publication, and asset read-only behavior.
+```text
+npx oxlint src/features/inspector/v6/ObjectInspectorV6.tsx src/features/inspector/v6/ObjectInspectorV6.test.tsx
+exit code 0
+```
+
+The focused tests cover independent Box dimensions, one revision-fenced mutation, latest published revision and concurrent entity preservation, geometry-draft reset on revision change, Cylinder radius/height with axis and radial-segment preservation, simulation-owned Transform with geometry still editable, positive finite validation without publication, and asset read-only behavior.
+
+Root will record the SHA-pinned focused command and final changed-file verification in `.omo/evidence/task-3-primitive-inspector-verification.md`.
 
 ## Preservation matrix
 

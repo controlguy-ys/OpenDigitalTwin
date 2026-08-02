@@ -95,6 +95,39 @@ describe('ObjectInspectorV6', () => {
     })
   })
 
+  it('uses the latest published revision and preserves concurrent Object fields and entities while applying geometry', () => {
+    const project = projectWithObject()
+    const latestBox = box({ name: 'Latest Box', enableComms: true, geometry: { kind: 'box', dimensionsM: [0.1, 0.2, 0.3], color: '#ff0000' } })
+    const latest = { ...project, revisionId: 'revision-new', spatialEntities: [latestBox, cylinder()] }
+    const mutate = vi.fn<(request: MutationRequest) => Promise<void>>(() => Promise.resolve())
+    render(<ObjectInspectorV6 entityId="box" mutations={{ readPublished: () => ({ project: latest, revisionId: latest.revisionId }), mutate }} project={project} />)
+    fireEvent.change(screen.getByLabelText('Width (m)'), { target: { value: '0.4' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Geometry' }))
+    const request = mutate.mock.calls[0]?.[0]
+    expect(request?.expectedRevisionId).toBe('revision-new')
+    if (request === undefined) throw new Error('Expected one geometry mutation request.')
+    const updated = request.recipe(latest)
+    expect(updated.spatialEntities).toHaveLength(2)
+    expect(updated.spatialEntities.find((entity) => entity.id === 'box')).toMatchObject({
+      name: 'Latest Box', enableComms: true,
+      geometry: { kind: 'box', dimensionsM: [0.4, 0.2, 0.3], color: '#ff0000' },
+    })
+    expect(updated.spatialEntities.find((entity) => entity.id === 'cylinder')?.geometry.kind).toBe('cylinder')
+  })
+
+  it('resets a geometry draft when its selected Object receives a new published revision', () => {
+    const project = projectWithObject()
+    const { rerender } = render(<ObjectInspectorV6 entityId="box" project={project} />)
+    fireEvent.change(screen.getByLabelText('Width (m)'), { target: { value: '0.4' } })
+    fireEvent.change(screen.getByLabelText('Depth (m)'), { target: { value: '0.5' } })
+    fireEvent.change(screen.getByLabelText('Height (m)'), { target: { value: '0.6' } })
+    const revised = projectWithObject(box({ geometry: { kind: 'box', dimensionsM: [0.9, 0.8, 0.7], color: '#00ff00' } }))
+    rerender(<ObjectInspectorV6 entityId="box" project={{ ...revised, revisionId: 'revision-2' }} />)
+    expect(screen.getByLabelText('Width (m)')).toHaveValue(0.9)
+    expect(screen.getByLabelText('Depth (m)')).toHaveValue(0.8)
+    expect(screen.getByLabelText('Height (m)')).toHaveValue(0.7)
+  })
+
   it('edits Cylinder radius and height while preserving axis and radial segments even when Transform is owned by simulation', () => {
     const project = projectWithObject(cylinder())
     const { mutate, port } = mutationPort(project)
