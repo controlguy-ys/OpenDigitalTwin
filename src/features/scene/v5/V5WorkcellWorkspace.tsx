@@ -55,6 +55,26 @@ const VIEW_CUBE_SIZE_PX_V5 = 72
 const VIEW_CUBE_BASE_SIZE_PX_V5 = 60
 const VIEW_CUBE_SAFE_MARGIN_PX_V5 = 48
 
+interface ViewCubeCanvasSizeV5 {
+  readonly width?: number
+  readonly height?: number
+}
+
+export function viewCubeSafeMarginV5(size: ViewCubeCanvasSizeV5 | null | undefined): number {
+  const width = size?.width
+  const height = size?.height
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width === undefined || height === undefined) {
+    return VIEW_CUBE_SAFE_MARGIN_PX_V5
+  }
+  const shortestSide = Math.max(0, Math.min(width, height))
+  const fittingMargin = Math.max(0, (shortestSide - VIEW_CUBE_SIZE_PX_V5) / 2)
+  return Math.max(0, Math.min(
+    VIEW_CUBE_SAFE_MARGIN_PX_V5,
+    Math.floor(shortestSide * 0.12),
+    Math.floor(fittingMargin),
+  ))
+}
+
 export function cameraOrientationFromViewCubeDirectionV5(
   direction: readonly [number, number, number],
 ): CameraOrientationV6 {
@@ -198,6 +218,25 @@ function CameraPoseSynchronizer({ pose, version, controlsRef }: {
     controls.update()
   }, [camera, controlsRef, pose, version])
   return null
+}
+
+function WorkcellViewCube({ onClick }: {
+  readonly onClick?: (event: ThreeEvent<MouseEvent>) => null
+}): ReactNode {
+  const size = useThree((state) => state.size)
+  const margin = viewCubeSafeMarginV5(size)
+  return <GizmoHelper alignment="bottom-right" margin={[margin, margin]}>
+    <group scale={VIEW_CUBE_SIZE_PX_V5 / VIEW_CUBE_BASE_SIZE_PX_V5}>
+      <GizmoViewcube
+        color="#d9e2e8"
+        faces={VIEW_CUBE_FACES_V5}
+        hoverColor="#38bdf8"
+        {...(onClick === undefined ? {} : { onClick })}
+        strokeColor="#526674"
+        textColor="#17232d"
+      />
+    </group>
+  </GizmoHelper>
 }
 
 function MappedRobotFrameMarker({ bundle, robotId, robotName, frameId, frameName }: {
@@ -414,6 +453,7 @@ export function V5WorkcellCanvas({
         ? <div className="v5-empty-state">Project runtime is not active.</div>
         : <Canvas
           aria-label="3D workcell scene"
+          className="v5-scene-renderer"
           data-view-cube-alignment="bottom-right"
           data-view-cube-size={VIEW_CUBE_SIZE_PX_V5}
           data-view-cube-surface="interactive-3d"
@@ -429,18 +469,7 @@ export function V5WorkcellCanvas({
           {cameraPose !== undefined && cameraVersion !== undefined
             ? <CameraPoseSynchronizer controlsRef={controlsRef} pose={cameraPose} version={cameraVersion} />
             : null}
-          <GizmoHelper alignment="bottom-right" margin={[VIEW_CUBE_SAFE_MARGIN_PX_V5, VIEW_CUBE_SAFE_MARGIN_PX_V5]}>
-            <group scale={VIEW_CUBE_SIZE_PX_V5 / VIEW_CUBE_BASE_SIZE_PX_V5}>
-              <GizmoViewcube
-                color="#d9e2e8"
-                faces={VIEW_CUBE_FACES_V5}
-                hoverColor="#38bdf8"
-                {...(onCameraOrientation === undefined ? {} : { onClick: onViewCubeClick })}
-                strokeColor="#526674"
-                textColor="#17232d"
-              />
-            </group>
-          </GizmoHelper>
+          <WorkcellViewCube {...(onCameraOrientation === undefined ? {} : { onClick: onViewCubeClick })} />
           <Grid args={[20, 20]} cellColor="#284158" cellSize={0.25} fadeDistance={18} infiniteGrid sectionColor="#3f647e" sectionSize={1} />
           <axesHelper args={[0.5]} />
           {project.robots.map((robot) => <RobotGeometry

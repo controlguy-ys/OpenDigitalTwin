@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { forwardRef, type ReactNode } from 'react'
 import { PerspectiveCamera, Vector3 } from 'three'
@@ -14,7 +16,7 @@ import {
   type WorkcellProjectV5,
 } from '../../../core/project-v5/index.js'
 import type { BrowserRuntimeBundleStateV5 } from '../../project/v5/browser-runtime-bundle-store-v5.js'
-import { V5WorkcellCanvas, V5WorkcellWorkspace, workcellProxyUserDataV5 } from './V5WorkcellWorkspace.js'
+import { V5WorkcellCanvas, V5WorkcellWorkspace, viewCubeSafeMarginV5, workcellProxyUserDataV5 } from './V5WorkcellWorkspace.js'
 
 const { cameraProbe, frameMode, gizmoHelperProbe, viewCubeProbe } = vi.hoisted(() => ({
   cameraProbe: { current: null as object | null },
@@ -143,6 +145,26 @@ function bundleWithWorld(readRobotLinkWorldPose: ReturnType<typeof vi.fn>, readO
 }
 
 describe('V5WorkcellWorkspace', () => {
+  it('keeps the renderer full-size without turning the status chip into a canvas layer', () => {
+    const globalCss = readFileSync(resolve(process.cwd(), 'src/styles/global.css'), 'utf8')
+    const viewportCss = readFileSync(resolve(process.cwd(), 'src/styles/v6/viewport.css'), 'utf8')
+
+    expect(globalCss).toContain('.v6-main-view-canvas-host .v5-scene-canvas > .v5-scene-renderer')
+    expect(globalCss).toContain('.v5-scene-canvas > .v5-scene-renderer canvas')
+    expect(globalCss).not.toMatch(/\.v6-main-view-canvas-host\s+\.v5-scene-canvas,\s*\.v6-main-view-canvas-host\s+\.v5-scene-canvas\s*>\s*div/u)
+    expect(globalCss).not.toContain('.v5-scene-canvas > div,')
+    expect(viewportCss).toMatch(/\.v5-scene-presentation\s*\{[^}]*height:\s*auto;/u)
+    expect(viewportCss).toMatch(/\.v5-scene-presentation\s*\{[^}]*width:\s*fit-content;/u)
+  })
+
+  it('clamps responsive ViewCube margins so the 72px surface fits the renderer', () => {
+    expect(viewCubeSafeMarginV5({ width: 1440, height: 900 })).toBe(48)
+    const margin = viewCubeSafeMarginV5({ width: 128, height: 96 })
+    expect(margin).toBeGreaterThanOrEqual(0)
+    expect(72 + margin * 2).toBeLessThanOrEqual(96)
+    expect(viewCubeSafeMarginV5(undefined)).toBe(48)
+  })
+
   it('keeps binding available for a selected Object even before runtime activation', () => {
     const onOpenBinding = vi.fn()
     render(<V5WorkcellWorkspace
@@ -213,6 +235,7 @@ describe('V5WorkcellWorkspace', () => {
     expect(viewCubeProbe.current?.faces).toEqual(['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom'])
     expect(gizmoHelperProbe.current).toEqual({ alignment: 'bottom-right', margin: [48, 48] })
     expect(container.querySelector('[data-view-cube-alignment="bottom-right"]')).toBeInTheDocument()
+    expect(container.querySelector('.v5-scene-renderer')).toBeInTheDocument()
     expect(container.querySelector('group')).toHaveAttribute('scale', String(72 / 60))
     const click = viewCubeProbe.current?.onClick
     expect(click).toEqual(expect.any(Function))

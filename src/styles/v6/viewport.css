@@ -23,19 +23,19 @@
 .v6-camera-toolbar { align-items: flex-start; background: color-mix(in srgb, var(--v6-color-overlay) 88%, transparent); border: 1px solid var(--v6-color-border); border-radius: 5px; display: flex; flex-wrap: nowrap; gap: 4px; justify-content: flex-end; max-width: calc(100% - 24px); overflow: visible; padding: 4px; pointer-events: none; position: absolute; right: 12px; top: 12px; width: max-content; }
 .v6-camera-views { pointer-events: auto; position: relative; }
 .v6-camera-views-trigger { align-items: center; display: inline-flex; gap: 2px; justify-content: center; }
-.v6-camera-views-menu { background: var(--v6-color-panel); border: 1px solid var(--v6-color-border); border-radius: 4px; box-shadow: 0 8px 20px color-mix(in srgb, #000 32%, transparent); display: grid; gap: 4px; min-width: 180px; padding: 4px; position: absolute; right: 0; top: calc(100% + 4px); z-index: 6; }
-.v6-camera-views-menu button { align-items: center; display: flex; gap: 8px; justify-content: flex-start; min-height: 32px; padding: 0 8px; text-align: left; white-space: nowrap; }
+.v6-camera-views-menu { background: var(--v6-color-panel); border: 1px solid var(--v6-color-border); border-radius: 4px; box-shadow: 0 8px 20px color-mix(in srgb, #000 32%, transparent); display: grid; gap: 4px; inline-size: min(220px, calc(100vw - 16px)); max-height: min(280px, calc(100dvh - 76px)); min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 4px; position: absolute; right: 0; top: calc(100% + 4px); z-index: 6; }
+.v6-camera-views-menu button { align-items: center; display: flex; gap: 8px; justify-content: flex-start; min-height: 32px; min-width: 0; padding: 0 8px; text-align: left; white-space: normal; width: 100%; overflow-wrap: anywhere; }
 .v6-camera-controls { display: flex; flex-wrap: nowrap; gap: 4px; pointer-events: auto; }
 .v6-camera-controls button,
-.v6-camera-views-trigger,
-.v6-camera-views-menu button { background: color-mix(in srgb, var(--v6-color-panel) 92%, transparent); border: 1px solid var(--v6-color-border); border-radius: 4px; color: var(--v6-color-text); cursor: pointer; min-height: 32px; min-width: 32px; padding: 0; }
+.v6-camera-views-trigger { background: color-mix(in srgb, var(--v6-color-panel) 92%, transparent); border: 1px solid var(--v6-color-border); border-radius: 4px; color: var(--v6-color-text); cursor: pointer; min-height: 32px; min-width: 32px; padding: 0; }
+.v6-camera-views-menu button { background: color-mix(in srgb, var(--v6-color-panel) 92%, transparent); border: 1px solid var(--v6-color-border); border-radius: 4px; color: var(--v6-color-text); cursor: pointer; min-height: 32px; min-width: 32px; }
 .v6-camera-toolbar button:hover:not(:disabled) { border-color: var(--v6-color-accent); color: var(--v6-color-accent); }
 .v6-camera-toolbar button:focus-visible { outline: 2px solid var(--v6-color-focus); outline-offset: 2px; }
 .v6-camera-toolbar button:disabled { color: var(--v6-color-muted); cursor: not-allowed; opacity: 0.65; }
 .v6-tcp-marker { background: var(--v6-color-overlay); border: 1px solid var(--v6-color-selection); color: var(--v6-color-text); left: 12px; padding: 4px 8px; pointer-events: none; position: absolute; top: 12px; }
 
 .v5-scene-canvas { min-height: 0; min-width: 0; position: relative; }
-.v5-scene-presentation { background: color-mix(in srgb, var(--v6-color-overlay) 92%, transparent); border: 1px solid var(--v6-color-border); color: var(--v6-color-text); display: grid; gap: 2px; left: 12px; max-width: min(34rem, calc(100% - 24px)); padding: 6px 8px; pointer-events: none; position: absolute; top: 12px; }
+.v5-scene-presentation { background: color-mix(in srgb, var(--v6-color-overlay) 92%, transparent); border: 1px solid var(--v6-color-border); color: var(--v6-color-text); display: grid; gap: 2px; height: auto; left: 12px; max-width: min(34rem, calc(100% - 24px)); min-height: 0; padding: 6px 8px; pointer-events: none; position: absolute; top: 12px; width: fit-content; }
 .v5-scene-presentation[data-state='degraded'] { border-color: var(--v6-color-selection); }
 
 .v6-application-shell[data-workspace-mode='compact'] .v6-tcp-marker,
