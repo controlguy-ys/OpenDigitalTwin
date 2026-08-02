@@ -26,6 +26,8 @@ npm run test:run -- src/features/ui/v6/ModelToolboxV6.test.tsx src/features/scen
 
 Result: 4 files passed, 27 tests passed, 0 failed.
 
+Follow-up regression coverage adds three focused checks: stale Group mutation rejection does not select, native Enter/Space activation invokes Add Group once per activation, and the direct Model menu exposes Add Group while keeping Box/Cylinder IDs distinct. Root will record the follow-up focused run in `.omo/evidence/task-2-toolbox-verification.md`.
+
 Additional static evidence: `npm run typecheck` and `git diff --check` both passed with no reported errors.
 
 ## Feature-preservation matrix

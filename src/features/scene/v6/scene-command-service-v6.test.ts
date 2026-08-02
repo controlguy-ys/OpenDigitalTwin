@@ -58,6 +58,22 @@ describe('createSceneCommandServiceV6', () => {
     expect(setSelection).toHaveBeenCalledExactlyOnceWith({ kind: 'group', id: 'new-group' })
   })
 
+  it('does not select a Group when its current-revision mutation rejects as stale', async () => {
+    const state = mutations(project())
+    const stale = new Error('PROJECT_ACTIVE_REVISION_CHANGED')
+    state.mutate.mockRejectedValueOnce(stale)
+    const setSelection = vi.fn()
+    const service = createSceneCommandServiceV6({
+      mutations: state.mutations,
+      createId: vi.fn().mockReturnValue('stale-group'),
+      onSelectionChange: setSelection,
+    })
+
+    await expect(service.createGroup()).rejects.toBe(stale)
+    expect(state.mutate).toHaveBeenCalledOnce()
+    expect(setSelection).not.toHaveBeenCalled()
+  })
+
   it('uses one current-revision mutation for rename and visibility changes', async () => {
     const state = mutations(project())
     const service = createSceneCommandServiceV6({ mutations: state.mutations, createId: vi.fn() })

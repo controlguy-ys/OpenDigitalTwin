@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -47,5 +48,22 @@ describe('ModelToolboxV6', () => {
       fireEvent.click(within(toolbox).getByRole('button', { name: label }))
       await vi.waitFor(() => expect(executes.get(id)).toHaveBeenCalledOnce())
     }
+  })
+
+  it('activates Add Group once for each native Enter and Space keyboard activation', async () => {
+    const execute = vi.fn()
+    const registry = createAppCommandRegistryV6([
+      command('model.addGroup', 'Add Group', execute),
+    ])
+    const user = userEvent.setup()
+
+    render(<ModelToolboxV6 registry={registry} />)
+    const addGroup = screen.getByRole('button', { name: 'Add Group' })
+    addGroup.focus()
+
+    await user.keyboard('{Enter}')
+    expect(execute).toHaveBeenCalledOnce()
+    await user.keyboard(' ')
+    expect(execute).toHaveBeenCalledTimes(2)
   })
 })

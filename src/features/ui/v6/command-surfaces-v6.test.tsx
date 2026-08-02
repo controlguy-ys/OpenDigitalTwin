@@ -24,6 +24,21 @@ function command(
 }
 
 describe('V6 command surfaces', () => {
+  it('keeps Add Group on the direct Model menu while preserving distinct primitive commands', () => {
+    const registry = createAppCommandRegistryV6([
+      command('model.addGroup', 'Add Group'),
+      command('model.addBox', 'Add Box'),
+      command('model.addCylinder', 'Add Cylinder'),
+    ])
+    render(<AppMenuBarV6 registry={registry} />)
+
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }))
+    const menu = screen.getByRole('menu', { name: 'Model menu' })
+    expect(within(menu).getByRole('menuitem', { name: 'Add Group' })).toHaveAttribute('data-command-id', 'model.addGroup')
+    expect(within(menu).getByRole('menuitem', { name: 'Add Box' })).toHaveAttribute('data-command-id', 'model.addBox')
+    expect(within(menu).getByRole('menuitem', { name: 'Add Cylinder' })).toHaveAttribute('data-command-id', 'model.addCylinder')
+  })
+
   it('uses the same registry IDs for Model menu, Toolbox, and empty-viewport context seams', async () => {
     const addBox = command('model.addBox', 'Add Box')
     const addCylinder = command('model.addCylinder', 'Add Cylinder')
