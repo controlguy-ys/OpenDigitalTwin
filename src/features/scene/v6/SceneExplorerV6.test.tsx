@@ -24,7 +24,11 @@ describe('SceneExplorerV6', () => {
   it('really collapses, restores local expansion after search, and retains matching ancestors', () => {
     render(<SceneExplorerV6 onSelectionChange={vi.fn()} project={project()} selection={null} />)
     const fixtures = screen.getByRole('treeitem', { name: /Fixtures/u })
-    fireEvent.click(screen.getByRole('button', { name: 'Collapse Fixtures' }))
+    const disclosure = screen.getByRole('button', { name: 'Collapse Fixtures' })
+    expect(disclosure.querySelector('svg')).toHaveClass('lucide-chevron-right', 'is-expanded')
+    expect(disclosure.textContent).toBe('')
+    fireEvent.click(disclosure)
+    expect(disclosure.querySelector('svg')).not.toHaveClass('is-expanded')
     expect(screen.queryByRole('treeitem', { name: /Searchable workpiece/u })).toBeNull()
 
     const search = screen.getByRole('searchbox', { name: 'Search scene' })
@@ -34,6 +38,25 @@ describe('SceneExplorerV6', () => {
     fireEvent.change(search, { target: { value: '' } })
     expect(fixtures).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByRole('treeitem', { name: /Searchable workpiece/u })).toBeNull()
+  })
+
+  it('renders visibility icon controls without visible action text and preserves their pointer action', async () => {
+    const user = userEvent.setup()
+    const onToggleVisibility = vi.fn()
+    const hiddenProject = project()
+    render(<SceneExplorerV6
+      onSelectionChange={vi.fn()}
+      onToggleVisibility={onToggleVisibility}
+      project={{ ...hiddenProject, robots: hiddenProject.robots.map((robot) => ({ ...robot, visible: false })) }}
+      selection={null}
+    />)
+
+    const visibility = screen.getByRole('button', { name: 'Show Robot 1' })
+    expect(visibility.textContent).toBe('')
+    expect(visibility.querySelector('svg')).toHaveClass('lucide-eye-off')
+    expect(visibility.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    await user.click(visibility)
+    expect(onToggleVisibility).toHaveBeenCalledExactlyOnceWith({ kind: 'robot', id: 'robot-1' }, true)
   })
 
   it('uses tree keyboard semantics, pointer selection, visibility, and Shift+F10 context routing', () => {

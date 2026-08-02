@@ -5,7 +5,13 @@
 .v6-scene-tree-row { align-items: center; box-sizing: border-box; cursor: default; display: flex; gap: 6px; min-height: 32px; min-width: 0; padding: 0 8px 0 calc(8px + var(--v6-tree-depth) * 16px); }
 .v6-scene-tree-row[aria-selected='true'], .v6-scene-tree-row[data-active] { background: var(--v6-color-selection-bg); }
 .v6-scene-tree-row:focus-visible { outline: 2px solid var(--v6-color-focus); outline-offset: -2px; }
-.v6-scene-tree-disclosure, .v6-scene-tree-visibility { align-items: center; display: inline-flex; flex: 0 0 32px; height: 32px; justify-content: center; padding: 0; width: 32px; }
+.v6-scene-tree-disclosure, .v6-scene-tree-visibility { align-items: center; background: transparent; border: 1px solid transparent; border-radius: 4px; color: var(--v6-color-muted); cursor: pointer; display: inline-flex; flex: 0 0 32px; height: 32px; justify-content: center; min-height: 32px; min-width: 32px; padding: 0; transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease; width: 32px; }
+.v6-scene-tree-disclosure:hover:not(:disabled), .v6-scene-tree-visibility:hover:not(:disabled) { background: color-mix(in srgb, var(--v6-color-accent) 14%, transparent); border-color: var(--v6-color-accent); color: var(--v6-color-accent); }
+.v6-scene-tree-disclosure:focus-visible, .v6-scene-tree-visibility:focus-visible { outline: 2px solid var(--v6-color-focus); outline-offset: 1px; }
+.v6-scene-tree-disclosure:active:not(:disabled), .v6-scene-tree-visibility:active:not(:disabled) { background: color-mix(in srgb, var(--v6-color-selection) 24%, transparent); border-color: var(--v6-color-selection); color: var(--v6-color-selection); }
+.v6-scene-tree-disclosure:disabled, .v6-scene-tree-visibility:disabled { color: var(--v6-color-muted); cursor: not-allowed; opacity: 0.65; }
+.v6-scene-tree-disclosure svg { transition: transform 120ms ease; }
+.v6-scene-tree-disclosure svg.is-expanded { transform: rotate(90deg); }
 .v6-scene-tree-disclosure-placeholder { flex: 0 0 32px; }
 .v6-scene-tree-name, .v6-scene-tree-owner { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v6-scene-tree-name { flex: 1 1 auto; }

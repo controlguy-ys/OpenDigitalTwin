@@ -1,4 +1,5 @@
 import { useMemo, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { ChevronRight, Eye, EyeOff } from 'lucide-react'
 
 import type { WorkcellProjectV5 } from '../../../core/project-v5/index.js'
 import type { V6WorkcellSelection } from '../../interaction/v6/workcell-selection-v6.js'
@@ -134,10 +135,13 @@ export function SceneExplorerV6({
         >
           {hasChildren ? <button
             aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${row.name}`}
+            aria-expanded={isExpanded}
             className="v6-scene-tree-disclosure"
             onClick={(event) => { event.stopPropagation(); toggle(row.key) }}
             type="button"
-          >{isExpanded ? '⌄' : '›'}</button> : <span className="v6-scene-tree-disclosure-placeholder" />}
+          >
+            <ChevronRight aria-hidden="true" className={isExpanded ? 'is-expanded' : undefined} size={16} strokeWidth={1.75} />
+          </button> : <span aria-hidden="true" className="v6-scene-tree-disclosure-placeholder" />}
           <span className="v6-scene-tree-name">{row.name}</span>
           {row.ownerLabel === null ? null : <span className="v6-scene-tree-owner">{row.ownerLabel}</span>}
           {row.visible === null ? null : <button
@@ -149,7 +153,9 @@ export function SceneExplorerV6({
               if (item?.kind === 'robot' || item?.kind === 'entity' || item?.kind === 'group') onToggleVisibility?.(item, !row.visible)
             }}
             type="button"
-          >{row.visible ? 'Hide' : 'Show'}</button>}
+          >
+            {row.visible ? <Eye aria-hidden="true" size={16} strokeWidth={1.75} /> : <EyeOff aria-hidden="true" size={16} strokeWidth={1.75} />}
+          </button>}
         </div>
       })}
     </div>
