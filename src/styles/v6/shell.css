@@ -134,7 +134,8 @@
   max-height: 45%;
   position: absolute;
   right: 0;
-  z-index: 5;
+  pointer-events: auto;
+  z-index: 7;
 }
 
 .v6-application-shell[data-main-view-presentation='maximized'] {
@@ -282,6 +283,19 @@
 
 .v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom[data-presentation='sheet'] {
   bottom: var(--v6-narrow-command-height);
+}
+
+.v6-application-shell[data-workspace-mode='compact'] .v6-shell-bottom[data-presentation='dock'][data-visible='true'] {
+  isolation: isolate;
+  pointer-events: auto;
+  position: relative;
+  z-index: 7;
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom[data-presentation='sheet'][data-visible='true'] {
+  isolation: isolate;
+  pointer-events: auto;
+  z-index: 7;
 }
 
 .v6-application-shell[data-workspace-mode='narrow'] .v6-workspace-dock-toggles {

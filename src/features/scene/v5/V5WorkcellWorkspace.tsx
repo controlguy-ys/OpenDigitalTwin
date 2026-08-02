@@ -417,6 +417,7 @@ export function V5WorkcellCanvas({
           data-view-cube-size={VIEW_CUBE_SIZE_PX_V5}
           data-view-cube-surface="interactive-3d"
           onPointerMissed={() => undefined}
+          role="region"
           shadows
         >
           <color attach="background" args={['#09121d']} />

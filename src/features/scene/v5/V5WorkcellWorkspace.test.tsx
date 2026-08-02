@@ -27,7 +27,7 @@ const controlsProbe = {
 }
 
 vi.mock('@react-three/fiber', () => ({
-  Canvas: ({ children }: { readonly children: ReactNode }) => children,
+  Canvas: ({ children, ...props }: { readonly children: ReactNode; readonly [key: string]: unknown }) => <div {...props}>{children}</div>,
   useFrame: (callback: () => void) => { if (frameMode.enabled) callback() },
   useThree: <T,>(selector: (state: { readonly camera: object | null }) => T) => selector({ camera: cameraProbe.current }),
 }))
@@ -183,6 +183,17 @@ describe('V5WorkcellWorkspace', () => {
     />)
     expect(screen.getByTestId('scene-canvas-surface')).toHaveAttribute('data-camera-position', '[7,8,9]')
     expect(screen.getByTestId('scene-canvas-surface')).toHaveAttribute('data-camera-target', '[1,2,3]')
+  })
+
+  it('gives the interactive workcell scene a permitted accessible name', () => {
+    render(<V5WorkcellCanvas
+      bundle={bundleWithWorld(vi.fn(() => SHARED_LINK_POSE))}
+      onSelect={vi.fn()}
+      project={projectWithRepeatedLinkGeometry()}
+      selection={null}
+    />)
+
+    expect(screen.getByRole('region', { name: '3D workcell scene' })).toBeInTheDocument()
   })
 
   it('keeps one dominant real ViewCube and routes face and edge clicks to the shared orientation port', () => {

@@ -229,6 +229,12 @@ describe('ApplicationShellV6', () => {
     expect(bottom.compareDocumentPosition(commandBar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('keeps a visible Job surface above viewport and dock-toggle hit-test layers', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/styles/v6/shell.css'), 'utf8')
+    expect(css).toMatch(/\.v6-application-shell\[data-workspace-mode='narrow'\] \.v6-shell-bottom\[data-presentation='sheet'\][\s\S]*?pointer-events:\s*auto;[\s\S]*?z-index:\s*7/u)
+    expect(css).toMatch(/\.v6-application-shell\[data-workspace-mode='compact'\] \.v6-shell-bottom\[data-presentation='dock'\]\[data-visible='true'\][\s\S]*?pointer-events:\s*auto;[\s\S]*?z-index:\s*7/u)
+  })
+
   it('keys responsive CSS to measured workspace mode instead of browser media queries', () => {
     const browserWidth = window.innerWidth
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 })
