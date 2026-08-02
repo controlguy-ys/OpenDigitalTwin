@@ -1,4 +1,104 @@
-import { expect, loadV6Demo, selectV6DemoRobot, test } from './ui-v6-fixtures.js'
+import { inflateSync } from 'node:zlib'
+import { expect, type Locator } from '@playwright/test'
+
+import { loadV6Demo, selectV6DemoRobot, test } from './ui-v6-fixtures.js'
+
+interface ViewCubePixelSample {
+  readonly canvasWidth: number
+  readonly canvasHeight: number
+  readonly pixelCount: number
+  readonly minX: number
+  readonly maxX: number
+  readonly minY: number
+  readonly maxY: number
+}
+
+function decodePng(buffer: Buffer): { readonly width: number; readonly height: number; readonly channels: number; readonly pixels: Buffer } | null {
+  if (buffer.length < 33 || buffer.readUInt32BE(0) !== 0x89504e47) return null
+  let offset = 8
+  let width = 0
+  let height = 0
+  let channels = 0
+  const imageData: Buffer[] = []
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset)
+    const type = buffer.toString('ascii', offset + 4, offset + 8)
+    const data = buffer.subarray(offset + 8, offset + 8 + length)
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0)
+      height = data.readUInt32BE(4)
+      if (data[8] !== 8 || data[10] !== 0 || data[11] !== 0) return null
+      channels = data[9] === 2 ? 3 : data[9] === 6 ? 4 : 0
+    } else if (type === 'IDAT') imageData.push(data)
+    else if (type === 'IEND') break
+    offset += length + 12
+  }
+  if (width === 0 || height === 0 || channels === 0) return null
+  const rowBytes = width * channels
+  const decoded = inflateSync(Buffer.concat(imageData))
+  const pixels = Buffer.alloc(height * rowBytes)
+  let decodedOffset = 0
+  let previousRow = Buffer.alloc(rowBytes)
+  for (let y = 0; y < height; y += 1) {
+    const filter = decoded[decodedOffset++] ?? 0
+    const row = Buffer.alloc(rowBytes)
+    for (let index = 0; index < rowBytes; index += 1) {
+      const left = index >= channels ? row[index - channels] ?? 0 : 0
+      const above = previousRow[index] ?? 0
+      const upperLeft = index >= channels ? previousRow[index - channels] ?? 0 : 0
+      const value = decoded[decodedOffset++] ?? 0
+      let predictor = 0
+      if (filter === 1) predictor = left
+      else if (filter === 2) predictor = above
+      else if (filter === 3) predictor = Math.floor((left + above) / 2)
+      else if (filter === 4) {
+        const estimate = left + above - upperLeft
+        const leftDistance = Math.abs(estimate - left)
+        const aboveDistance = Math.abs(estimate - above)
+        const upperLeftDistance = Math.abs(estimate - upperLeft)
+        predictor = leftDistance <= aboveDistance && leftDistance <= upperLeftDistance
+          ? left
+          : aboveDistance <= upperLeftDistance ? above : upperLeft
+      }
+      row[index] = (value + predictor) & 0xff
+    }
+    row.copy(pixels, y * rowBytes)
+    previousRow = row
+  }
+  return { width, height, channels, pixels }
+}
+
+async function readViewCubePixels(renderer: Locator): Promise<ViewCubePixelSample | null> {
+  const decoded = decodePng(await renderer.screenshot())
+  if (decoded === null) return null
+  const { channels, height, pixels, width } = decoded
+  let pixelCount = 0
+  let minX = width
+  let maxX = -1
+  let minY = height
+  let maxY = -1
+  const regionLeft = Math.max(0, width - 220)
+  const regionTop = Math.max(0, height - 220)
+  for (let y = regionTop; y < height; y += 1) {
+    for (let x = regionLeft; x < width; x += 1) {
+      const offset = (y * width + x) * channels
+      const red = pixels[offset] ?? 0
+      const green = pixels[offset + 1] ?? 0
+      const blue = pixels[offset + 2] ?? 0
+      const neutralLight = red > 150
+        && green > 160
+        && blue > 165
+        && Math.max(red, green, blue) - Math.min(red, green, blue) < 42
+      if (!neutralLight) continue
+      pixelCount += 1
+      minX = Math.min(minX, x)
+      maxX = Math.max(maxX, x)
+      minY = Math.min(minY, y)
+      maxY = Math.max(maxY, y)
+    }
+  }
+  return { canvasWidth: width, canvasHeight: height, pixelCount, minX, maxX, minY, maxY }
+}
 
 test('V6 keeps Scene Explorer selection keyboard-operable and routes right clicks to scene actions instead of camera input', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 })
@@ -139,12 +239,20 @@ test('V6 keeps the ViewCube, status chip, toolbar, and Camera views inside short
     expect(toolbarBox.y + toolbarBox.height).toBeLessThanOrEqual(hostBox.y + hostBox.height)
 
     const cubeSize = Number(await renderer.getAttribute('data-view-cube-size'))
-    const cubeSafeMargin = Number(await renderer.getAttribute('data-view-cube-safe-margin'))
+    const cubePixels = await readViewCubePixels(renderer)
     expect(await renderer.getAttribute('data-view-cube-alignment')).toBe('bottom-right')
     expect(cubeSize).toBe(72)
-    expect(cubeSafeMargin).toBe(48)
-    expect(rendererBox.width).toBeGreaterThanOrEqual(cubeSize + cubeSafeMargin * 2)
-    expect(rendererBox.height).toBeGreaterThanOrEqual(cubeSize + cubeSafeMargin * 2)
+    expect(cubePixels).not.toBeNull()
+    if (cubePixels === null) continue
+    expect(cubePixels.pixelCount).toBeGreaterThan(100)
+    expect(cubePixels.maxX).toBeGreaterThan(cubePixels.minX)
+    expect(cubePixels.maxY).toBeGreaterThan(cubePixels.minY)
+    expect(cubePixels.minX).toBeGreaterThanOrEqual(0)
+    expect(cubePixels.minY).toBeGreaterThanOrEqual(8)
+    expect(cubePixels.canvasWidth - 1 - cubePixels.maxX).toBeGreaterThanOrEqual(8)
+    expect(cubePixels.canvasHeight - 1 - cubePixels.maxY).toBeGreaterThanOrEqual(8)
+    expect(cubePixels.maxX - cubePixels.minX).toBeGreaterThanOrEqual(cubeSize / 2)
+    expect(cubePixels.maxY - cubePixels.minY).toBeGreaterThanOrEqual(cubeSize / 2)
 
     await cameraViewsTrigger.click()
     const menu = page.getByRole('menu', { name: 'Camera views' })

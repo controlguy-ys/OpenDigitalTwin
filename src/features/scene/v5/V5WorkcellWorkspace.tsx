@@ -53,7 +53,7 @@ export interface V5WorkcellCanvasProps {
 const VIEW_CUBE_FACES_V5: string[] = ['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom']
 const VIEW_CUBE_SIZE_PX_V5 = 72
 const VIEW_CUBE_BASE_SIZE_PX_V5 = 60
-const VIEW_CUBE_SAFE_MARGIN_PX_V5 = 48
+const VIEW_CUBE_SAFE_MARGIN_PX_V5 = 96
 
 interface ViewCubeCanvasSizeV5 {
   readonly width?: number
@@ -455,7 +455,6 @@ export function V5WorkcellCanvas({
           aria-label="3D workcell scene"
           className="v5-scene-renderer"
           data-view-cube-alignment="bottom-right"
-          data-view-cube-safe-margin={VIEW_CUBE_SAFE_MARGIN_PX_V5}
           data-view-cube-size={VIEW_CUBE_SIZE_PX_V5}
           data-view-cube-surface="interactive-3d"
           onPointerMissed={() => undefined}

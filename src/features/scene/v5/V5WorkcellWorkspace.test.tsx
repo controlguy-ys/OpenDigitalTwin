@@ -144,11 +144,11 @@ function bundleWithWorld(readRobotLinkWorldPose: ReturnType<typeof vi.fn>, readO
 
 describe('V5WorkcellWorkspace', () => {
   it('clamps responsive ViewCube margins so the 72px surface fits the renderer', () => {
-    expect(viewCubeSafeMarginV5({ width: 1440, height: 900 })).toBe(48)
+    expect(viewCubeSafeMarginV5({ width: 1440, height: 900 })).toBe(96)
     const margin = viewCubeSafeMarginV5({ width: 128, height: 96 })
     expect(margin).toBeGreaterThanOrEqual(0)
     expect(72 + margin * 2).toBeLessThanOrEqual(96)
-    expect(viewCubeSafeMarginV5(undefined)).toBe(48)
+    expect(viewCubeSafeMarginV5(undefined)).toBe(96)
   })
 
   it('keeps binding available for a selected Object even before runtime activation', () => {
@@ -219,7 +219,7 @@ describe('V5WorkcellWorkspace', () => {
     />)
 
     expect(viewCubeProbe.current?.faces).toEqual(['Right', 'Left', 'Back', 'Front', 'Top', 'Bottom'])
-    expect(gizmoHelperProbe.current).toEqual({ alignment: 'bottom-right', margin: [48, 48] })
+    expect(gizmoHelperProbe.current).toEqual({ alignment: 'bottom-right', margin: [96, 96] })
     expect(container.querySelector('[data-view-cube-alignment="bottom-right"]')).toBeInTheDocument()
     expect(container.querySelector('.v5-scene-renderer')).toBeInTheDocument()
     expect(container.querySelector('group')).toHaveAttribute('scale', String(72 / 60))
