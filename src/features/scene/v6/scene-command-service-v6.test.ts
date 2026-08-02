@@ -84,6 +84,51 @@ describe('createSceneCommandServiceV6', () => {
     expect(state.current().spatialEntities[0]).toMatchObject({ name: 'Renamed', visible: false })
   })
 
+  it('updates Group name, parent, and persisted visibility through one atomic current-revision mutation', async () => {
+    const source = project()
+    const state = mutations({
+      ...source,
+      sceneGroups: [
+        ...source.sceneGroups,
+        { id: 'child', name: 'Child', parentGroupId: 'empty', visible: true },
+      ],
+    })
+    const service = createSceneCommandServiceV6({ mutations: state.mutations, createId: vi.fn() })
+
+    await service.updateGroup('child', { name: 'Renamed Child', parentGroupId: 'non-empty', visible: false })
+
+    expect(state.mutate).toHaveBeenCalledOnce()
+    expect(state.mutate).toHaveBeenCalledWith(expect.objectContaining({ expectedRevisionId: 'revision-1', description: 'Update Group' }))
+    expect(state.current().sceneGroups.find((group) => group.id === 'child')).toEqual({ id: 'child', name: 'Renamed Child', parentGroupId: 'non-empty', visible: false })
+  })
+
+  it('rejects Group parent cycles before publishing', async () => {
+    const source = project()
+    const state = mutations({
+      ...source,
+      sceneGroups: [
+        ...source.sceneGroups,
+        { id: 'child', name: 'Child', parentGroupId: 'empty', visible: true },
+      ],
+    })
+    const service = createSceneCommandServiceV6({ mutations: state.mutations, createId: vi.fn() })
+
+    await expect(service.updateGroup('empty', { name: 'Empty', parentGroupId: 'child', visible: true })).rejects.toThrow(/cycle/u)
+    expect(state.mutate).not.toHaveBeenCalled()
+  })
+
+  it('updates an editable Scene Frame pose atomically and keeps World read-only', async () => {
+    const state = mutations(project())
+    const service = createSceneCommandServiceV6({ mutations: state.mutations, createId: vi.fn() })
+
+    await service.updateSceneFrame('mcp', { positionM: [1, 2, 3], quaternion: [0, 0, 0, 1] })
+    expect(state.mutate).toHaveBeenCalledOnce()
+    expect(state.current().scene.frames.find((frame) => frame.id === 'mcp')?.localPose.positionM).toEqual([1, 2, 3])
+
+    await expect(service.updateSceneFrame('world', { positionM: [1, 0, 0], quaternion: [0, 0, 0, 1] })).rejects.toThrow(/read-only/u)
+    expect(state.mutate).toHaveBeenCalledOnce()
+  })
+
   it('deletes a removable Object with mapping leaves and invalid bridge routes atomically', async () => {
     const state = mutations(project())
     const service = createSceneCommandServiceV6({ mutations: state.mutations, createId: vi.fn() })

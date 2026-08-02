@@ -271,10 +271,12 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
       bottom={workspaceProject === null || selectedJob === null ? <section aria-label="Job monitor">No Jobs in this Project.</section> : bundle === null ? <RobotJobMonitorV6
         jobId={selectedJob.id}
         onOpenEditor={openJobEditor}
+        onSelectJob={setJobId}
         project={workspaceProject}
       /> : <RobotJobMonitorV6
         jobId={selectedJob.id}
         onOpenEditor={openJobEditor}
+        onSelectJob={setJobId}
         playback={bundle.runtimeGraph.playback}
         project={workspaceProject}
         runtime={bundle.runtimeGraph.jobs}
@@ -297,6 +299,7 @@ export function AppV6({ resources: injectedResources }: AppV6Props): ReactNode {
         onOpenBinding={openBinding}
         project={workspaceProject}
         runtime={bundle === null ? undefined : { robots: bundle.runtimeGraph.robots, jobs: bundle.runtimeGraph.jobs }}
+        sceneCommands={sceneCommands}
         selection={selection}
       />}
       store={layout}

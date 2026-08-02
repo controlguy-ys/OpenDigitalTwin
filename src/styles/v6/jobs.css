@@ -1,5 +1,8 @@
 .v6-job-monitor { display: grid; gap: 10px; min-width: 0; padding: 10px 14px; border-top: 1px solid var(--v6-color-border); background: var(--v6-color-panel); }
 .v6-job-monitor header, .v6-job-monitor-actions, .v6-job-editor-header, .v6-job-editor-footer { display: flex; align-items: center; gap: 10px; justify-content: space-between; min-width: 0; flex-wrap: wrap; }
+.v6-job-monitor-header-actions { display: flex; align-items: end; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.v6-job-monitor-header-actions label { display: grid; gap: 3px; min-width: min(180px, 100%); color: var(--v6-color-muted); font-size: .75rem; }
+.v6-job-monitor-header-actions select { min-height: 32px; min-width: 0; }
 .v6-job-monitor header div { display: grid; min-width: 0; }.v6-job-monitor header span, .v6-job-monitor dt { color: var(--v6-color-muted); font-size: .75rem; }.v6-job-monitor dd { overflow-wrap: anywhere; }
 .v6-job-monitor-status { min-width: 0; overflow-wrap: anywhere; color: var(--v6-color-muted); font-size: .875rem; }
 .v6-job-state-badge { display: inline-flex; width: fit-content; align-items: center; padding: 2px 7px; border: 1px solid var(--v6-color-border); border-radius: 999px; font-size: .75rem; font-weight: 700; letter-spacing: .03em; }

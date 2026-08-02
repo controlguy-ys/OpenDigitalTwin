@@ -1,10 +1,12 @@
-import type { WorkcellProjectV5 } from '../../../core/project-v5/index.js'
+import type { RigidTransformV5, WorkcellProjectV5 } from '../../../core/project-v5/index.js'
 import type { V6WorkcellSelection } from '../../interaction/v6/workcell-selection-v6.js'
 import type { ProjectV5MutationService } from '../../project/v5/project-v5-mutation-service.js'
 
 export interface SceneCommandServiceV6 {
   rename(selection: Extract<V6WorkcellSelection, { readonly kind: 'robot' | 'entity' | 'group' }>, name: string): Promise<void>
   setVisibility(selection: Extract<V6WorkcellSelection, { readonly kind: 'robot' | 'entity' | 'group' }>, visible: boolean): Promise<void>
+  updateGroup(groupId: string, update: { readonly name: string; readonly parentGroupId: string | null; readonly visible: boolean }): Promise<void>
+  updateSceneFrame(frameId: string, localPose: RigidTransformV5): Promise<void>
   createGroup(): Promise<string>
   duplicateEntity(entityId: string): Promise<string>
   deleteEntity(entityId: string): Promise<void>
@@ -40,6 +42,23 @@ function requireRobot(project: WorkcellProjectV5, id: string) {
 function requireGroup(project: WorkcellProjectV5, id: string) {
   const group = project.sceneGroups.find((candidate) => candidate.id === id)
   return group ?? fail(`Group ${id} does not exist.`)
+}
+
+function requireSceneFrame(project: WorkcellProjectV5, id: string) {
+  const frame = project.scene.frames.find((candidate) => candidate.id === id)
+  return frame ?? fail(`Scene Frame ${id} does not exist.`)
+}
+
+function assertGroupParentAllowed(project: WorkcellProjectV5, groupId: string, parentGroupId: string | null): void {
+  if (parentGroupId === null) return
+  const visited = new Set<string>()
+  let current: string | null = parentGroupId
+  while (current !== null) {
+    if (current === groupId) fail(`Cannot parent Group ${groupId}; the requested parent would create a cycle.`)
+    if (visited.has(current)) fail(`Cannot parent Group ${groupId}; the existing Group graph contains a cycle.`)
+    visited.add(current)
+    current = requireGroup(project, current).parentGroupId
+  }
 }
 
 function assertFreshId(project: WorkcellProjectV5, id: string): void {
@@ -107,6 +126,42 @@ export function createSceneCommandServiceV6(options: SceneCommandServiceV6Option
         if (selection.kind === 'entity') { requireEntity(active, selection.id); return { ...active, spatialEntities: active.spatialEntities.map((entity) => entity.id === selection.id ? { ...entity, visible } : entity) } }
         requireGroup(active, selection.id)
         return { ...active, sceneGroups: active.sceneGroups.map((group) => group.id === selection.id ? { ...group, visible } : group) }
+      })
+    },
+
+    async updateGroup(groupId: string, update: { readonly name: string; readonly parentGroupId: string | null; readonly visible: boolean }) {
+      if (update.name.trim().length === 0) fail('Scene names must not be empty.')
+      const active = activePublication(options.mutations)
+      requireGroup(active.project, groupId)
+      if (update.parentGroupId !== null) requireGroup(active.project, update.parentGroupId)
+      assertGroupParentAllowed(active.project, groupId, update.parentGroupId)
+      await mutate(active.revisionId, 'Update Group', (candidate) => {
+        const current = requireGroup(candidate, groupId)
+        if (update.parentGroupId !== null) requireGroup(candidate, update.parentGroupId)
+        assertGroupParentAllowed(candidate, groupId, update.parentGroupId)
+        return {
+          ...candidate,
+          sceneGroups: candidate.sceneGroups.map((entry) => entry.id === current.id
+            ? { ...entry, name: update.name, parentGroupId: update.parentGroupId, visible: update.visible }
+            : entry),
+        }
+      })
+    },
+
+    async updateSceneFrame(frameId: string, localPose: RigidTransformV5) {
+      const active = activePublication(options.mutations)
+      const frame = requireSceneFrame(active.project, frameId)
+      if (frame.role === 'world') fail('World Frame is read-only.')
+      await mutate(active.revisionId, 'Update Scene Frame pose', (candidate) => {
+        const current = requireSceneFrame(candidate, frameId)
+        if (current.role === 'world') fail('World Frame is read-only.')
+        return {
+          ...candidate,
+          scene: {
+            ...candidate.scene,
+            frames: candidate.scene.frames.map((entry) => entry.id === frameId ? { ...entry, localPose } : entry),
+          },
+        }
       })
     },
 

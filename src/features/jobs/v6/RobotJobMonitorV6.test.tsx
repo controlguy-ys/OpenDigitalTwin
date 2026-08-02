@@ -7,6 +7,23 @@ import { createLogicalIoJobSampleV5, LOGICAL_IO_JOB_SAMPLE_IDS_V5 } from '../../
 import { RobotJobCompactStatusV6, RobotJobMonitorV6 } from './RobotJobMonitorV6.js'
 
 describe('RobotJobMonitorV6', () => {
+  it('exposes an accessible Active Job selector only for multi-Job projects', () => {
+    const project = createLogicalIoJobSampleV5({ projectId: 'selector-project', revisionId: 'selector-revision', nowIso: '2026-07-30T00:00:00.000Z' })
+    const firstJob = project.jobs[0]
+    if (firstJob === undefined) throw new Error('Expected the logical I/O fixture Job.')
+    const secondJob = { ...firstJob, id: 'job-second', name: 'Second Job' }
+    const onSelectJob = vi.fn()
+    const { rerender } = render(<RobotJobMonitorV6 jobId={firstJob.id} onSelectJob={onSelectJob} project={{ ...project, jobs: [firstJob, secondJob] }} />)
+
+    const selector = screen.getByRole('combobox', { name: 'Active Job' })
+    expect(selector).toHaveValue(firstJob.id)
+    fireEvent.change(selector, { target: { value: secondJob.id } })
+    expect(onSelectJob).toHaveBeenCalledWith(secondJob.id)
+
+    rerender(<RobotJobMonitorV6 jobId={firstJob.id} project={project} />)
+    expect(screen.queryByRole('combobox', { name: 'Active Job' })).toBeNull()
+  })
+
   it('shows the selected job, runtime status, and playback-only actions', () => {
     const project = createLogicalIoJobSampleV5({ projectId: 'monitor-project', revisionId: 'monitor-revision', nowIso: '2026-07-30T00:00:00.000Z' })
     const job = project.jobs[0]

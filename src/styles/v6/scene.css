@@ -29,7 +29,7 @@
 .v6-inspector-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .v6-geometry-editor { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
 .v6-inspector-grid label, .v6-inspector-section-body > label, .v6-robot-joints label { display: grid; gap: 4px; min-width: 0; color: var(--v6-color-muted); font-size: 12px; }
-.v6-inspector-grid input, .v6-inspector-section-body > label input { min-width: 0; min-height: 32px; box-sizing: border-box; }
+.v6-inspector-grid input, .v6-inspector-section-body > label input, .v6-inspector-section-body > label select { min-width: 0; min-height: 32px; box-sizing: border-box; }
 .v6-inspector-actions { position: sticky; bottom: -8px; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 0 0; background: var(--v6-color-panel); }
 .v6-inspector-actions button, .v6-inspector-section-body > button { min-height: 32px; padding: 6px 10px; }
 .v6-robot-joints { display: grid; gap: 8px; }

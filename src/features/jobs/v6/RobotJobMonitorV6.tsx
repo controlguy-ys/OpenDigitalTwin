@@ -13,6 +13,7 @@ export interface RobotJobMonitorV6Props {
   readonly runtime?: StoreApi<JobRuntimeStoreV5>
   readonly playback?: Pick<RobotJobPlaybackControllerV5, 'startJob' | 'cancelRobotJob'>
   readonly onOpenEditor?: (instructionId?: string) => void
+  readonly onSelectJob?: (jobId: string) => void
 }
 
 export type RobotJobCompactStatusV6Props = Pick<RobotJobMonitorV6Props, 'project' | 'jobId' | 'runtime'>
@@ -37,7 +38,7 @@ function SubscribedCompactStatus(props: RobotJobCompactStatusV6Props & { readonl
   return <CompactStatusContent {...props} jobStates={jobStates} />
 }
 
-function MonitorContent({ project, jobId, playback, onOpenEditor, jobStates }: RobotJobMonitorV6Props & { readonly jobStates: JobRuntimeStoreV5['byRobotId'] }): ReactNode {
+function MonitorContent({ project, jobId, playback, onOpenEditor, onSelectJob, jobStates }: RobotJobMonitorV6Props & { readonly jobStates: JobRuntimeStoreV5['byRobotId'] }): ReactNode {
   const job = project.jobs.find((candidate) => candidate.id === jobId) ?? null
   if (job === null) return <section aria-label="Job monitor" className="v6-job-monitor"><p>No Jobs in this Project.</p></section>
   const state = jobStates[job.robotId]
@@ -50,7 +51,7 @@ function MonitorContent({ project, jobId, playback, onOpenEditor, jobStates }: R
   const actionLabel = runtimeState === 'FAILED' ? 'Retry Job' : 'Start Job'
   const statusSummary = `${runtimeState}${current === null ? '' : ` Step ${current + 1}: ${instruction?.kind ?? 'unknown'}`}${message === 'Ready' ? '' : ` ${message}`}`
   return <section aria-label="Job monitor" className="v6-job-monitor" data-state={runtimeState}>
-    <header><div><span>Job</span><strong>{job.name}</strong></div><button disabled={runtimeState === 'RUNNING'} onClick={() => onOpenEditor?.()} type="button">Edit Job</button></header>
+    <header><div><span>Job</span><strong>{job.name}</strong></div><div className="v6-job-monitor-header-actions">{project.jobs.length > 1 && <label>Active Job<select aria-label="Active Job" onChange={(event) => onSelectJob?.(event.currentTarget.value)} value={job.id}>{project.jobs.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label>}<button disabled={runtimeState === 'RUNNING'} onClick={() => onOpenEditor?.()} type="button">Edit Job</button></div></header>
     <div className="v6-job-monitor-actions"><button disabled={!canStart} onClick={() => playback?.startJob(job.id)} type="button">{actionLabel}</button><button disabled={!canCancel} onClick={() => playback?.cancelRobotJob(job.robotId, 'Operator cancelled the Job.')} type="button">Cancel</button>{runtimeState === 'FAILED' && instruction !== null && <button onClick={() => onOpenEditor?.(instruction.id)} type="button">Inspect failed step</button>}<strong>Current Step {current === null ? '—' : current + 1} / {job.instructions.length}</strong></div>
     <div aria-atomic="true" aria-label="Job monitor status" aria-live="polite" className="v6-job-monitor-status" role="status">{statusSummary}</div>
     <dl><div><dt>Kind</dt><dd>{instruction?.kind ?? '—'}</dd></div><div><dt>Summary</dt><dd>{instruction === null ? 'Ready' : jobInstructionSummaryV6(instruction, project)}</dd></div><div><dt>State</dt><dd><span className="v6-job-state-badge" data-state={runtimeState}>{runtimeState}</span></dd></div><div><dt>Message</dt><dd>{message}</dd></div></dl>
