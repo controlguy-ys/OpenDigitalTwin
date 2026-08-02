@@ -140,6 +140,8 @@
   bottom: 0;
   height: var(--v6-bottom-overlay-height);
   left: var(--v6-toolbox-width);
+  grid-column: 1 / -1;
+  grid-row: 2;
   position: absolute;
   right: 0;
   pointer-events: auto;
@@ -324,6 +326,10 @@
 
 .v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom[data-presentation='sheet'] {
   bottom: var(--v6-narrow-command-height);
+}
+
+.v6-application-shell[data-workspace-mode='narrow'] .v6-shell-bottom[data-presentation='sheet']:has(.v6-job-monitor--empty) {
+  height: 64px;
 }
 
 .v6-application-shell[data-workspace-mode='compact'] .v6-shell-bottom[data-presentation='dock'][data-visible='true'] {

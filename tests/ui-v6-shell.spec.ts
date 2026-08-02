@@ -131,6 +131,7 @@ test('V6 overlays the compact Inspector and reserves compact/narrow dock command
   const shell = page.getByTestId('v6-application-shell')
   const canvasHost = page.getByTestId('v6-canvas-host')
   const inspector = page.getByTestId('v6-inspector')
+  const bottom = page.getByTestId('v6-bottom')
   const commandBar = page.getByRole('navigation', { name: 'Workspace docks' })
 
   await page.setViewportSize({ width: 1000, height: 768 })
@@ -176,10 +177,34 @@ test('V6 overlays the compact Inspector and reserves compact/narrow dock command
     }
   }
 
+  const jobMonitorToggle = page.getByRole('button', { name: /Show Job Monitor|Hide Job Monitor/u })
+  if (await jobMonitorToggle.getAttribute('aria-pressed') !== 'true') await jobMonitorToggle.click()
+  await expect(bottom).toHaveAttribute('data-visible', 'true')
+  await expect(bottom.locator('.v6-job-monitor')).toBeVisible()
+  const populatedSheet = await bounds(bottom)
+  expect(populatedSheet.left).toBe(narrowCanvas.left)
+  expect(populatedSheet.right).toBe(narrowCommands.right)
+  expect(populatedSheet.bottom).toBeLessThanOrEqual(narrowCommands.top)
+  expect(populatedSheet.height).toBeGreaterThan(80)
+
   const overflow = page.getByRole('menuitem', { name: 'More menus' })
   await overflow.click()
   const overflowMenu = page.getByRole('menu', { name: 'More menus' })
-  await overflowMenu.getByRole('menuitem', { name: 'Model', exact: true }).click()
+  await overflowMenu.getByRole('menuitem', { name: 'Project', exact: true }).click()
+  const projectMenu = page.getByRole('menu', { name: 'More menus' })
+  await projectMenu.getByRole('menuitem', { name: 'New Project', exact: true }).click()
+  await expect(bottom.locator('.v6-job-monitor--empty')).toBeVisible()
+  await expect(bottom).toContainText('No Jobs in this Project.')
+  const emptyCommands = await bounds(commandBar)
+  const emptySheet = await bounds(bottom)
+  expect(emptySheet.left).toBe(narrowCanvas.left)
+  expect(emptySheet.right).toBe(emptyCommands.right)
+  expect(emptySheet.height).toBeLessThanOrEqual(80)
+  expect(emptySheet.bottom).toBeLessThanOrEqual(emptyCommands.top)
+
+  await overflow.click()
+  const modelOverflowMenu = page.getByRole('menu', { name: 'More menus' })
+  await modelOverflowMenu.getByRole('menuitem', { name: 'Model', exact: true }).click()
   const modelMenu = page.getByRole('menu', { name: 'More menus' })
   await expect(modelMenu.getByRole('heading', { name: 'Structure', level: 3 })).toBeVisible()
   await expect(modelMenu.getByRole('heading', { name: 'Primitives', level: 3 })).toBeVisible()
